@@ -17,14 +17,14 @@ export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>(
   }
 ) {}
 
-interface Interface {
+interface TrackerGraphReaderService {
   readonly read: (
     target: FixtureTarget
   ) => Effect.Effect<TrackerSnapshot, TrackerReadError>
 }
 
 // eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
-export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Interface>()(
+export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
   "@dalph/TrackerGraphReader"
 ) {}
 

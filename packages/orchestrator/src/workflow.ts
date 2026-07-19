@@ -17,14 +17,14 @@ export type WorkflowOutcome = typeof WorkflowOutcome.Type
 
 const observedTaskIds = (snapshot: TrackerSnapshot): ReadonlyArray<TaskId> => snapshot.tasks.map((task) => task.id)
 
-interface WorkflowInterpreterInterface {
+interface WorkflowInterpreterService {
   readonly execute: (
     operation: WorkflowOperation
   ) => Effect.Effect<WorkflowOutcome, TrackerReadError>
 }
 
 // eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
-export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterInterface>()(
+export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
   "@dalph/WorkflowInterpreter"
 ) {}
 
