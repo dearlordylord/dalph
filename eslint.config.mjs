@@ -71,6 +71,47 @@ const effectImportDiscipline = [
   }
 ]
 
+const effectClassInheritanceRule = {
+  meta: {
+    docs: {
+      description: "Allow class inheritance only for Effect service tags and typed errors."
+    },
+    messages: {
+      forbidden: "Class inheritance is restricted to Context.Service and Schema.TaggedErrorClass."
+    },
+    schema: [],
+    type: "problem"
+  },
+  create: (context) => {
+    const isAllowedEffectFactory = (superClass) => {
+      if (superClass?.type !== "CallExpression") return false
+
+      const factoryCall = superClass.callee
+      if (factoryCall?.type !== "CallExpression") return false
+
+      const factory = factoryCall.callee
+      if (factory?.type !== "MemberExpression" || factory.computed) return false
+      if (factory.object.type !== "Identifier" || factory.property.type !== "Identifier") return false
+
+      return (
+        (factory.object.name === "Context" && factory.property.name === "Service") ||
+        (factory.object.name === "Schema" && factory.property.name === "TaggedErrorClass")
+      )
+    }
+
+    const checkInheritance = (node) => {
+      if (node.superClass !== null && !isAllowedEffectFactory(node.superClass)) {
+        context.report({ messageId: "forbidden", node })
+      }
+    }
+
+    return {
+      ClassDeclaration: checkInheritance,
+      ClassExpression: checkInheritance
+    }
+  }
+}
+
 const productionRestrictions = [
   ...clockReads,
   ...moduleMocks,
@@ -137,6 +178,11 @@ export default [
       sourceType: "module"
     },
     plugins: {
+      dalph: {
+        rules: {
+          "effect-class-inheritance-only": effectClassInheritanceRule
+        }
+      },
       functional,
       import: fixupPluginRules(importPlugin),
       "sort-destructure-keys": sortDestructureKeys
@@ -163,6 +209,7 @@ export default [
       ...functional.configs.recommended.rules,
       "functional/immutable-data": "warn",
       "functional/no-classes": "off",
+      "functional/no-class-inheritance": "off",
       "functional/no-conditional-statements": "off",
       "functional/no-expression-statements": "off",
       "functional/no-let": "off",
@@ -174,6 +221,7 @@ export default [
       "import/first": "error",
       "import/no-duplicates": "error",
       "import/newline-after-import": "off",
+      "dalph/effect-class-inheritance-only": "error",
       "max-lines": ["error", { max: 420, skipBlankLines: true, skipComments: true }],
       "no-console": "error",
       "no-magic-numbers": ["warn", {

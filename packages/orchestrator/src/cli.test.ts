@@ -1,12 +1,15 @@
+import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, PlatformError, Ref, Sink, Stdio } from "effect"
 import { expect } from "vitest"
 import {
   CliUsageError,
   FixtureTarget,
   runCli,
+  runCliFromStdio,
   TraceOutput,
   TraceOutputError,
+  traceOutputStdioLayer,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   trackerWorkflowInterpreterLayer
@@ -33,7 +36,7 @@ const expectedTrace = (
   JSON.stringify({ _tag: "RunCompleted" })
 ]
 
-const runAndCollect = (target: string) =>
+const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
   Effect.gen(function*() {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const outputLayer = Layer.succeed(
@@ -45,14 +48,17 @@ const runAndCollect = (target: string) =>
       })
     )
 
-    yield* runCli(["run", target, "--dry"]).pipe(
+    yield* runCli(args).pipe(
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer)
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(NodeServices.layer)
     )
 
     return yield* Ref.get(lines)
   })
+
+const runAndCollect = (target: string) => runArgumentsAndCollect(["run", target, "--dry"])
 
 const discardOutputLayer = Layer.succeed(
   TraceOutput,
@@ -85,12 +91,77 @@ it.effect("runs a singleton fixture deterministically through the dry workflow",
     expect(second).toEqual(first)
   }))
 
-it.effect("rejects arguments outside the dry run command", () =>
+it.effect("parses the dry flag independently of its argument position", () =>
+  Effect.gen(function*() {
+    const target = fixture("singleton")
+    const lines = yield* runArgumentsAndCollect(["run", "--dry", target])
+
+    expect(lines).toEqual(
+      expectedTrace(target, "fixture-singleton-v1", ["task-only"])
+    )
+  }))
+
+it.effect("runs the CLI entrypoint through injected Stdio and application services", () =>
+  Effect.gen(function*() {
+    const target = fixture("singleton")
+    const chunks = yield* Ref.make<ReadonlyArray<string>>([])
+    const stdioLayer = Stdio.layerTest({
+      args: Effect.succeed(["run", "--dry", target]),
+      stdout: () =>
+        Sink.forEach((chunk: string | Uint8Array) =>
+          Ref.update(chunks, (current) => [
+            ...current,
+            typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)
+          ])
+        )
+    })
+
+    yield* runCliFromStdio.pipe(
+      Effect.provide(traceOutputStdioLayer),
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(stdioLayer),
+      Effect.provide(NodeServices.layer)
+    )
+
+    expect(yield* Ref.get(chunks)).toEqual(
+      expectedTrace(target, "fixture-singleton-v1", ["task-only"]).map(
+        (line) => `${line}\n`
+      )
+    )
+  }))
+
+it.effect("maps injected Stdio write failures to a typed trace error", () =>
+  Effect.gen(function*() {
+    const platformFailure = PlatformError.systemError({
+      _tag: "WriteZero",
+      module: "Stdio",
+      method: "write"
+    })
+    const stdioLayer = Stdio.layerTest({
+      stdout: () => Sink.fail(platformFailure)
+    })
+    const error = yield* Effect.gen(function*() {
+      const output = yield* TraceOutput
+      yield* output.writeLine("trace")
+    }).pipe(
+      Effect.provide(traceOutputStdioLayer),
+      Effect.provide(stdioLayer),
+      Effect.flip,
+      Effect.orDie
+    )
+
+    expect(error).toBeInstanceOf(TraceOutputError)
+    expect(error.detail).toContain("WriteZero")
+  }))
+
+it.effect("requires the dry flag", () =>
   Effect.gen(function*() {
     const error = yield* runCli(["run", fixture("empty")]).pipe(
       Effect.provide(discardOutputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(NodeServices.layer),
       Effect.flip,
       Effect.orDie
     )
@@ -134,6 +205,7 @@ it.effect("propagates typed trace output failures", () =>
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(NodeServices.layer),
       Effect.flip,
       Effect.orDie
     )

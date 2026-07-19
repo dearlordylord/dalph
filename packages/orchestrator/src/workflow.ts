@@ -23,7 +23,6 @@ interface WorkflowInterpreterService {
   ) => Effect.Effect<WorkflowOutcome, TrackerReadError>
 }
 
-// eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
 export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
   "@dalph/WorkflowInterpreter"
 ) {}

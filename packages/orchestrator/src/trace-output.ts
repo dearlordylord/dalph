@@ -1,7 +1,5 @@
-import type { Effect } from "effect"
-import { Context, Schema } from "effect"
+import { Context, Effect, Layer, Schema, Stdio, Stream } from "effect"
 
-// eslint-disable-next-line functional/no-class-inheritance -- Effect typed errors use Schema.TaggedErrorClass inheritance.
 export class TraceOutputError extends Schema.TaggedErrorClass<TraceOutputError>()(
   "TraceOutput.TraceOutputError",
   { detail: Schema.String }
@@ -13,7 +11,22 @@ interface TraceOutputService {
   ) => Effect.Effect<void, TraceOutputError>
 }
 
-// eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
 export class TraceOutput extends Context.Service<TraceOutput, TraceOutputService>()(
   "@dalph/TraceOutput"
 ) {}
+
+export const traceOutputStdioLayer = Layer.effect(
+  TraceOutput,
+  Effect.gen(function*() {
+    const stdio = yield* Stdio.Stdio
+    return TraceOutput.of({
+      writeLine: (line) =>
+        Stream.make(`${line}\n`).pipe(
+          Stream.run(stdio.stdout()),
+          Effect.mapError(
+            (cause) => new TraceOutputError({ detail: String(cause) })
+          )
+        )
+    })
+  })
+)

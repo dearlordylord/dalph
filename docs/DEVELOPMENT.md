@@ -65,3 +65,8 @@ The empty `.eslintrc` file is a compatibility sentinel consumed by
 `import-x/no-unused-modules` while ESLint itself uses the flat
 `eslint.config.mjs` configuration. Keep the sentinel until the pinned plugin no
 longer requires it for flat-config file discovery.
+
+The repository-wide `dalph/effect-class-inheritance-only` rule permits class
+inheritance only for Effect `Context.Service` tags and
+`Schema.TaggedErrorClass` failures. Other inheritance remains forbidden; do not
+replace this policy with per-class suppressions.

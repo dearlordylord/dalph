@@ -8,7 +8,6 @@ const TrackerReadOperation = Schema.Literals([
   "TrackerGraphReader.decode"
 ])
 
-// eslint-disable-next-line functional/no-class-inheritance -- Effect typed errors use Schema.TaggedErrorClass inheritance.
 export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>()(
   "TrackerGraphReader.TrackerReadError",
   {
@@ -23,7 +22,6 @@ interface TrackerGraphReaderService {
   ) => Effect.Effect<TrackerSnapshot, TrackerReadError>
 }
 
-// eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
   "@dalph/TrackerGraphReader"
 ) {}
