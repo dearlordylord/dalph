@@ -2,6 +2,7 @@ import * as fc from "fast-check"
 import { expect, it } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import { TaskId } from "./domain.js"
+import { projectTaskDagWire } from "./task-dag.js"
 
 const open = { _tag: "Open" } as const
 
@@ -47,7 +48,12 @@ it("preserves canonical construction and traversal laws across bounded DAGs", ()
         ...wire,
         tasks: [...wire.tasks].reverse()
       })
-      const roundTripped = validSnapshot(JSON.parse(graph.canonicalJson()))
+      const roundTripResult = projectTaskDagWire(
+        JSON.parse(graph.canonicalJson())
+      )
+      expect(roundTripResult._tag).toBe("Valid")
+      if (roundTripResult._tag === "Invalid") return
+      const roundTripped = roundTripResult.snapshot
       const positions = new Map(
         graph.topologicalOrder().map((taskId, position) => [taskId, position])
       )
@@ -55,6 +61,7 @@ it("preserves canonical construction and traversal laws across bounded DAGs", ()
       expect(graph.taskIds()).toEqual(wire.tasks.map((task) => task.id))
       expect(reversed.canonicalJson()).toBe(graph.canonicalJson())
       expect(roundTripped.canonicalJson()).toBe(graph.canonicalJson())
+      expect(roundTripped.toWire().schemaVersion).toBe(1)
       for (const task of wire.tasks) {
         const dependantPosition = positions.get(TaskId.make(task.id))
         expect(dependantPosition).toBeDefined()

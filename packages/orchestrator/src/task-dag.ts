@@ -23,6 +23,13 @@ export class GraphProjectionError extends Schema.TaggedErrorClass<GraphProjectio
   { issues: Schema.Array(ProjectionIssue) }
 ) {}
 
+export const TaskDagWire = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  revision: TrackerSnapshot.fields.revision,
+  tasks: TrackerSnapshot.fields.tasks
+})
+export type TaskDagWire = typeof TaskDagWire.Type
+
 type ProjectionResult =
   | {
     readonly _tag: "Invalid"
@@ -64,8 +71,10 @@ const taskProjection = (
   taskId: TaskId
 ): Option.Option<TaskProjection> => HashMap.get(tasks, taskId)
 
-const mapValue = <Key, Value>(values: Map<Key, Value>, key: Key): Value =>
-  Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
+const getMapValueOrThrow = <Key, Value>(
+  values: Map<Key, Value>,
+  key: Key
+): Value => Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
 
 const stronglyConnectedCycles = (
   tasks: HashMap.HashMap<TaskId, TaskProjection>
@@ -92,22 +101,25 @@ const stronglyConnectedCycles = (
         lowLinks.set(
           taskId,
           Math.min(
-            mapValue(lowLinks, taskId),
-            mapValue(lowLinks, prerequisite)
+            getMapValueOrThrow(lowLinks, taskId),
+            getMapValueOrThrow(lowLinks, prerequisite)
           )
         )
       } else if (onStack.has(prerequisite)) {
         lowLinks.set(
           taskId,
           Math.min(
-            mapValue(lowLinks, taskId),
-            mapValue(indexes, prerequisite)
+            getMapValueOrThrow(lowLinks, taskId),
+            getMapValueOrThrow(indexes, prerequisite)
           )
         )
       }
     }
 
-    if (mapValue(lowLinks, taskId) !== mapValue(indexes, taskId)) return
+    if (
+      getMapValueOrThrow(lowLinks, taskId)
+        !== getMapValueOrThrow(indexes, taskId)
+    ) return
 
     const component: Array<TaskId> = []
     while (stack.length > 0) {
@@ -247,7 +259,7 @@ export class TaskDagSnapshot {
       const taskId = Option.getOrThrow(Option.fromUndefinedOr(ready.shift()))
       order.push(taskId)
       for (const dependant of this.dependantsOf(taskId)) {
-        const remaining = mapValue(remainingPrerequisites, dependant) - 1
+        const remaining = getMapValueOrThrow(remainingPrerequisites, dependant) - 1
         remainingPrerequisites.set(dependant, remaining)
         if (remaining === 0) {
           ready.push(dependant)
@@ -275,8 +287,9 @@ export class TaskDagSnapshot {
     })
   }
 
-  toWire(): typeof TrackerSnapshot.Type {
+  toWire(): TaskDagWire {
     return {
+      schemaVersion: 1,
       revision: this.revision,
       tasks: this.taskIds().map((id) => {
         const projection = HashMap.getUnsafe(this.tasks, id)
@@ -292,14 +305,15 @@ export class TaskDagSnapshot {
 
   canonicalJson(): string {
     return JSON.stringify(
-      Schema.encodeUnknownSync(TrackerSnapshot)(this.toWire())
+      Schema.encodeUnknownSync(TaskDagWire)(this.toWire())
     )
   }
 }
 
-export const projectTrackerSnapshot = (input: unknown): ProjectionResult => {
-  const decoded = Schema.decodeUnknownResult(TrackerSnapshot)(input)
-  return Result.isFailure(decoded)
+const projectDecodedSnapshot = (
+  decoded: Result.Result<typeof TrackerSnapshot.Type, unknown>
+): ProjectionResult =>
+  Result.isFailure(decoded)
     ? {
       _tag: "Invalid",
       issues: [
@@ -309,4 +323,9 @@ export const projectTrackerSnapshot = (input: unknown): ProjectionResult => {
       ]
     }
     : TaskDagSnapshot.project(decoded.success)
-}
+
+export const projectTrackerSnapshot = (input: unknown): ProjectionResult =>
+  projectDecodedSnapshot(Schema.decodeUnknownResult(TrackerSnapshot)(input))
+
+export const projectTaskDagWire = (input: unknown): ProjectionResult =>
+  projectDecodedSnapshot(Schema.decodeUnknownResult(TaskDagWire)(input))

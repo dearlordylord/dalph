@@ -2,7 +2,7 @@ import { Option } from "effect"
 import { expect, it } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import { TaskId } from "./domain.js"
-import { projectTrackerSnapshot } from "./task-dag.js"
+import { projectTaskDagWire, projectTrackerSnapshot } from "./task-dag.js"
 
 const open = { _tag: "Open" } as const
 
@@ -146,6 +146,12 @@ it("keeps grouping independent while traversing and deriving diamond eligibility
   })
   expect(satisfied.eligibleTaskIds()).toEqual(["group", "join"])
   expect(permuted.canonicalJson()).toBe(graph.canonicalJson())
+  expect(
+    projectTaskDagWire({ ...graph.toWire(), schemaVersion: 2 })
+  ).toMatchObject({
+    _tag: "Invalid",
+    issues: [{ _tag: "BoundaryDecodeFailed" }]
+  })
 
   const missing = TaskId.make("missing-task")
   expect(Option.isNone(graph.lifecycleOf(missing))).toBe(true)
