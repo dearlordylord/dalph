@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@dalph/orchestrator':
+        specifier: workspace:*
+        version: link:packages/orchestrator
       '@effect/eslint-plugin':
         specifier: 0.3.2
         version: 0.3.2
@@ -77,6 +80,12 @@ importers:
       vitest:
         specifier: 4.0.18
         version: 4.0.18(@types/node@24.10.1)(yaml@2.9.0)
+
+  packages/orchestrator:
+    dependencies:
+      effect:
+        specifier: 4.0.0-beta.99
+        version: 4.0.0-beta.99
 
 packages:
 

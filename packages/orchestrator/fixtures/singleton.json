@@ -1,0 +1,8 @@
+{
+  "revision": "fixture-singleton-v1",
+  "tasks": [
+    {
+      "id": "task-only"
+    }
+  ]
+}

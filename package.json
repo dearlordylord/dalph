@@ -36,6 +36,7 @@
     ]
   },
   "devDependencies": {
+    "@dalph/orchestrator": "workspace:*",
     "@effect/eslint-plugin": "0.3.2",
     "@effect/language-service": "0.73.1",
     "@effect/vitest": "4.0.0-beta.99",
