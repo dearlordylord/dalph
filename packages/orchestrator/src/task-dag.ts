@@ -22,7 +22,13 @@ export const ProjectionIssue = Schema.TaggedUnion({
     prerequisite: TaskId
   },
   SelfPrerequisite: { taskId: TaskId },
-  Cycle: { taskIds: Schema.Array(TaskId) }
+  MissingParent: {
+    child: TaskId,
+    parent: TaskId
+  },
+  SelfParent: { taskId: TaskId },
+  Cycle: { taskIds: Schema.Array(TaskId) },
+  ContainmentCycle: { taskIds: Schema.Array(TaskId) }
 })
 export type ProjectionIssue = typeof ProjectionIssue.Type
 
@@ -93,9 +99,13 @@ const getMapValueOrThrow = <Key, Value>(
   key: Key
 ): Value => Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
 
-const stronglyConnectedCycles = (
-  tasks: HashMap.HashMap<TaskId, TaskProjection>
-): ReadonlyArray<ProjectionIssue> => {
+const stronglyConnectedComponents = (
+  tasks: HashMap.HashMap<TaskId, TaskProjection>,
+  adjacentTaskIds: (
+    taskId: TaskId,
+    projection: TaskProjection
+  ) => Iterable<TaskId>
+): ReadonlyArray<ReadonlyArray<TaskId>> => {
   let nextIndex = 0
   const indexes = new Map<TaskId, number>()
   const lowLinks = new Map<TaskId, number>()
@@ -111,23 +121,23 @@ const stronglyConnectedCycles = (
     onStack.add(taskId)
 
     const projection = HashMap.getUnsafe(tasks, taskId)
-    for (const prerequisite of sorted(projection.prerequisiteIds)) {
-      if (!HashMap.has(tasks, prerequisite)) continue
-      if (!indexes.has(prerequisite)) {
-        visit(prerequisite)
+    for (const adjacentTaskId of sorted(adjacentTaskIds(taskId, projection))) {
+      if (!HashMap.has(tasks, adjacentTaskId)) continue
+      if (!indexes.has(adjacentTaskId)) {
+        visit(adjacentTaskId)
         lowLinks.set(
           taskId,
           Math.min(
             getMapValueOrThrow(lowLinks, taskId),
-            getMapValueOrThrow(lowLinks, prerequisite)
+            getMapValueOrThrow(lowLinks, adjacentTaskId)
           )
         )
-      } else if (onStack.has(prerequisite)) {
+      } else if (onStack.has(adjacentTaskId)) {
         lowLinks.set(
           taskId,
           Math.min(
             getMapValueOrThrow(lowLinks, taskId),
-            getMapValueOrThrow(indexes, prerequisite)
+            getMapValueOrThrow(indexes, adjacentTaskId)
           )
         )
       }
@@ -152,7 +162,7 @@ const stronglyConnectedCycles = (
     if (!indexes.has(taskId)) visit(taskId)
   }
 
-  return components.map((taskIds) => ProjectionIssue.cases.Cycle.make({ taskIds }))
+  return components
 }
 
 export class TaskDagSnapshot {
@@ -211,6 +221,20 @@ export class TaskDagSnapshot {
         }
       }
 
+      if (record.parentTaskId === taskId) {
+        issues.push(ProjectionIssue.cases.SelfParent.make({ taskId }))
+      } else if (
+        record.parentTaskId !== null
+        && !recordsById.has(record.parentTaskId)
+      ) {
+        issues.push(
+          ProjectionIssue.cases.MissingParent.make({
+            child: taskId,
+            parent: record.parentTaskId
+          })
+        )
+      }
+
       tasks = HashMap.set(tasks, taskId, {
         lifecycle: record.lifecycle,
         parentTaskId: record.parentTaskId,
@@ -218,7 +242,19 @@ export class TaskDagSnapshot {
       })
     }
 
-    issues.push(...stronglyConnectedCycles(tasks))
+    issues.push(
+      ...stronglyConnectedComponents(
+        tasks,
+        (_taskId, projection) => projection.prerequisiteIds
+      ).map((taskIds) => ProjectionIssue.cases.Cycle.make({ taskIds })),
+      ...stronglyConnectedComponents(
+        tasks,
+        (_taskId, projection) =>
+          projection.parentTaskId === null
+            ? []
+            : [projection.parentTaskId]
+      ).map((taskIds) => ProjectionIssue.cases.ContainmentCycle.make({ taskIds }))
+    )
     return issues.length > 0
       ? { _tag: "Invalid", issues }
       : {

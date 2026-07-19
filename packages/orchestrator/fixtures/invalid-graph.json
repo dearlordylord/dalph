@@ -10,7 +10,7 @@
     {
       "id": "task-a",
       "lifecycle": { "_tag": "Open" },
-      "parentTaskId": "external-group",
+      "parentTaskId": "task-b",
       "prerequisiteIds": []
     },
     {
@@ -36,6 +36,30 @@
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-d"]
+    },
+    {
+      "id": "task-f",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "missing-parent",
+      "prerequisiteIds": []
+    },
+    {
+      "id": "task-g",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "task-g",
+      "prerequisiteIds": []
+    },
+    {
+      "id": "task-h",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "task-i",
+      "prerequisiteIds": []
+    },
+    {
+      "id": "task-i",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "task-h",
+      "prerequisiteIds": []
     }
   ]
 }

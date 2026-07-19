@@ -263,8 +263,11 @@ it.effect("rejects every structural graph issue without exposing a snapshot", ()
         "MissingPrerequisite",
         "DuplicatePrerequisite",
         "SelfPrerequisite",
+        "MissingParent",
+        "SelfParent",
         "Cycle",
-        "Cycle"
+        "Cycle",
+        "ContainmentCycle"
       ])
     }
   }).pipe(Effect.provide(trackerGraphReaderFileLayer)))

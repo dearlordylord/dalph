@@ -19,7 +19,7 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
       {
         id: "task-a",
         lifecycle: open,
-        parentTaskId: "external-group",
+        parentTaskId: "task-b",
         prerequisiteIds: []
       },
       {
@@ -45,6 +45,30 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
         lifecycle: open,
         parentTaskId: null,
         prerequisiteIds: ["task-d"]
+      },
+      {
+        id: "task-f",
+        lifecycle: open,
+        parentTaskId: "missing-parent",
+        prerequisiteIds: []
+      },
+      {
+        id: "task-g",
+        lifecycle: open,
+        parentTaskId: "task-g",
+        prerequisiteIds: []
+      },
+      {
+        id: "task-h",
+        lifecycle: open,
+        parentTaskId: "task-i",
+        prerequisiteIds: []
+      },
+      {
+        id: "task-i",
+        lifecycle: open,
+        parentTaskId: "task-h",
+        prerequisiteIds: []
       }
     ]
   }
@@ -69,8 +93,15 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
         prerequisite: "missing"
       },
       { _tag: "SelfPrerequisite", taskId: "task-c" },
+      {
+        _tag: "MissingParent",
+        child: "task-f",
+        parent: "missing-parent"
+      },
+      { _tag: "SelfParent", taskId: "task-g" },
       { _tag: "Cycle", taskIds: ["task-a", "task-b"] },
-      { _tag: "Cycle", taskIds: ["task-d", "task-e"] }
+      { _tag: "Cycle", taskIds: ["task-d", "task-e"] },
+      { _tag: "ContainmentCycle", taskIds: ["task-h", "task-i"] }
     ]
   })
   expect(reversed).toEqual(result)
