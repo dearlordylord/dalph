@@ -55,7 +55,7 @@ const expectedTrace = (
     ...runnableTaskIds.map((taskId) => ({
       _tag: "TaskExecutionOutcomeObserved",
       operation: { _tag: "ExecuteTask", taskId },
-      outcome: { _tag: "TaskExecuted", taskId }
+      outcome: { _tag: "TaskExecuted" }
     })),
     { _tag: "RunCompleted" }
   ].map((item) => JSON.stringify(item))

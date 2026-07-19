@@ -178,11 +178,25 @@ it.effect("keeps semantic trace order stable when tasks complete in reverse", ()
     yield* Deferred.succeed(secondGate, undefined)
     yield* Deferred.succeed(firstGate, undefined)
     yield* Fiber.join(run)
-    const executed = (yield* Ref.get(traces)).flatMap((item) =>
+    const items = yield* Ref.get(traces)
+    const selected = items.flatMap((item) =>
       item._tag === "OperationSelected" && item.operation._tag === "ExecuteTask"
         ? [item.operation.taskId]
         : []
     )
+    const observed = items.flatMap((item) =>
+      item._tag === "TaskExecutionOutcomeObserved"
+        ? [item.operation.taskId]
+        : []
+    )
+    const lastSelectionIndex = items.findLastIndex(
+      (item) => item._tag === "OperationSelected"
+    )
+    const firstTaskObservationIndex = items.findIndex(
+      (item) => item._tag === "TaskExecutionOutcomeObserved"
+    )
 
-    expect(executed).toEqual(["group", "root"])
+    expect(selected).toEqual(["group", "root"])
+    expect(observed).toEqual(["group", "root"])
+    expect(firstTaskObservationIndex).toBeGreaterThan(lastSelectionIndex)
   }))

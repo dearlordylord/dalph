@@ -17,7 +17,7 @@ export const WorkflowOutcome = Schema.TaggedUnion({
     revision: TrackerRevision,
     taskIds: Schema.Array(TaskId)
   },
-  TaskExecuted: { taskId: TaskId }
+  TaskExecuted: {}
 })
 export type WorkflowOutcome = typeof WorkflowOutcome.Type
 
@@ -52,7 +52,7 @@ export const trackerWorkflowInterpreterLayer = Layer.effect(
       taskId: TaskId
     ) {
       yield* taskExecution.execute(taskId)
-      return WorkflowOutcome.cases.TaskExecuted.make({ taskId })
+      return WorkflowOutcome.cases.TaskExecuted.make({})
     })
 
     return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
