@@ -3,7 +3,6 @@ import { Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import type { TaskId, TraceItem } from "./index.js"
 import {
-  capabilityAuditLayer,
   FixtureTarget,
   runWorkflow,
   TaskExecution,
@@ -72,7 +71,6 @@ it.effect("capacity 2 admits both controlled tasks before either gate releases",
       TaskExecutionCapacity.make(2)
     ).pipe(
       Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -97,7 +95,6 @@ it.effect("capacity 1 never holds two task permits", () =>
       TaskExecutionCapacity.make(1)
     ).pipe(
       Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -122,7 +119,6 @@ it.effect("bounds and deterministically orders the wide retained frontier", () =
       TaskExecutionCapacity.make(2)
     ).pipe(
       Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -171,7 +167,6 @@ it.effect("keeps semantic trace order stable when tasks complete in reverse", ()
       TaskExecutionCapacity.make(2)
     ).pipe(
       Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),

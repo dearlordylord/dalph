@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { CapabilityAudit } from "./capability-audit.js"
 import type { TaskExecutionCapacity } from "./domain.js"
 import { FixtureTarget, TaskId, TrackerRevision } from "./domain.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
@@ -45,19 +44,16 @@ const taskExecutingWorkflowInterpreterLayer = (
   Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
-      const audit = yield* CapabilityAudit
       const reader = yield* TrackerGraphReader
       const taskExecution = yield* TaskExecution
       const readTrackerGraph = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
       )(function*(target: FixtureTarget) {
-        yield* audit.trackerGraphRead()
         return yield* reader.read(target)
       })
       const executeTask = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.executeTask`
       )(function*(taskId: TaskId) {
-        yield* audit.writeAttempted("Process")
         yield* taskExecution.execute(taskId)
         return WorkflowOutcome.cases.TaskExecuted.make({})
       })
@@ -75,16 +71,14 @@ export const trackerWorkflowInterpreterLayer = liveFakeWorkflowInterpreterLayer
 export const dryRunWorkflowInterpreterLayer: Layer.Layer<
   WorkflowInterpreter,
   never,
-  CapabilityAudit | TrackerGraphReader
+  TrackerGraphReader
 > = Layer.effect(
   WorkflowInterpreter,
   Effect.gen(function*() {
-    const audit = yield* CapabilityAudit
     const reader = yield* TrackerGraphReader
     const readTrackerGraph = Effect.fn(
       "WorkflowInterpreter.DryRun.readTrackerGraph"
     )(function*(target: FixtureTarget) {
-      yield* audit.trackerGraphRead()
       return yield* reader.read(target)
     })
     const executeTask = Effect.fn("WorkflowInterpreter.DryRun.executeTask")(function*(

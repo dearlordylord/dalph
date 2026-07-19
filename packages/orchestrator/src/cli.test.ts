@@ -4,7 +4,6 @@ import { Effect, Layer, Option, PlatformError, Ref, Schema, Sink, Stdio } from "
 import { readFile } from "node:fs/promises"
 import { expect } from "vitest"
 import {
-  capabilityAuditLayer,
   CliUsageError,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
@@ -76,7 +75,6 @@ const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer)
     )
@@ -185,7 +183,6 @@ it.effect("runs the CLI entrypoint through injected Stdio and application servic
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(traceOutputStdioLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(stdioLayer),
       Effect.provide(NodeServices.layer)
@@ -228,7 +225,6 @@ it.effect("requires the dry flag", () =>
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(discardOutputLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,
@@ -358,7 +354,6 @@ it.effect("propagates typed trace output failures", () =>
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,

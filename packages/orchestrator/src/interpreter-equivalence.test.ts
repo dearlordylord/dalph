@@ -1,10 +1,8 @@
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import type { CapabilityAudit, TraceItem, TrackerGraphReader, WorkflowInterpreter } from "./index.js"
+import type { TraceItem, TrackerGraphReader, WorkflowInterpreter } from "./index.js"
 import {
-  CapabilityAuditTest,
-  capabilityAuditTestLayer,
   deterministicTestWorkflowInterpreterLayer,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
@@ -14,22 +12,21 @@ import {
   TaskExecution,
   TaskExecutionCapacity,
   trackerGraphReaderFileLayer,
-  WorkflowTrace,
-  WriteAuthority
+  WorkflowTrace
 } from "./index.js"
 
 type IsExactly<A, B> = [A] extends [B] ? [B] extends [A] ? true
   : false
   : false
 type Assert<T extends true> = T
-type DryRunHasOnlyReadAndAuditRequirements = Assert<
+type DryRunHasOnlyReadRequirements = Assert<
   IsExactly<
     Layer.Services<typeof dryRunWorkflowInterpreterLayer>,
-    CapabilityAudit | TrackerGraphReader
+    TrackerGraphReader
   >
 >
 
-const dryRunRequirementsAreReadOnly: DryRunHasOnlyReadAndAuditRequirements = true
+const dryRunRequirementsAreReadOnly: DryRunHasOnlyReadRequirements = true
 
 const fixture = (
   name: "diamond" | "empty" | "singleton" | "wayfinder-105"
@@ -57,7 +54,7 @@ const runWith = (
   interpreterLayer: Layer.Layer<
     WorkflowInterpreter,
     never,
-    CapabilityAudit | TrackerGraphReader
+    TrackerGraphReader
   >
 ) =>
   Effect.gen(function*() {
@@ -83,44 +80,24 @@ for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) 
   it.effect(`${name} has one semantic trace under every interpreter`, () =>
     Effect.gen(function*() {
       const target = fixture(name)
-      const liveFake = yield* runWith(target, liveFakeLayer).pipe(
-        Effect.provide(capabilityAuditTestLayer)
-      )
-      const dryRun = yield* runWith(target, dryRunWorkflowInterpreterLayer).pipe(
-        Effect.provide(capabilityAuditTestLayer)
-      )
+      const liveFake = yield* runWith(target, liveFakeLayer)
+      const dryRun = yield* runWith(target, dryRunWorkflowInterpreterLayer)
       const deterministicTest = yield* runWith(
         target,
         deterministicTestLayer
-      ).pipe(Effect.provide(capabilityAuditTestLayer))
+      )
 
       expect(dryRun).toEqual(liveFake)
       expect(deterministicTest).toEqual(liveFake)
     }))
 }
 
-it.effect("dry-run audits no authority writes across the complete retained graph", () =>
+it.effect("dry-run traverses the complete graph with only its read port", () =>
   Effect.gen(function*() {
-    const audit = yield* CapabilityAuditTest
-
     yield* runWith(
       fixture("wayfinder-105"),
       dryRunWorkflowInterpreterLayer
     )
 
-    const entries = yield* audit.entries()
-    const writes = entries.filter((entry) => entry._tag === "WriteAttempted")
     expect(dryRunRequirementsAreReadOnly).toBe(true)
-    expect(writes).toEqual([])
-    expect(WriteAuthority.literals).toEqual([
-      "Journal",
-      "Filesystem",
-      "Git",
-      "TrackerMutation",
-      "Process",
-      "Evidence",
-      "Cleanup",
-      "Lock",
-      "PolicyWrite"
-    ])
-  }).pipe(Effect.provide(capabilityAuditTestLayer)))
+  }))

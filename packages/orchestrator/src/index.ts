@@ -1,11 +1,3 @@
-export {
-  CapabilityAudit,
-  CapabilityAuditEntry,
-  capabilityAuditLayer,
-  CapabilityAuditTest,
-  capabilityAuditTestLayer,
-  WriteAuthority
-} from "./capability-audit.js"
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
   FixtureTarget,
@@ -18,6 +10,7 @@ export {
   TrackerSnapshot,
   TrackerTask
 } from "./domain.js"
+export { dryCliEnvironmentLayer, dryRunCliApplication } from "./dry-run-application.js"
 export {
   GraphProjectionError,
   ProjectionIssue,
