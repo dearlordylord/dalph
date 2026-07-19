@@ -1,6 +1,14 @@
 /* eslint-disable functional/immutable-data -- Local builder and traversal scratch never escapes the opaque snapshot. */
 import { HashMap, HashSet, Option, Order, Result, Schema } from "effect"
-import { TaskId, type TaskLifecycle, type TrackerRevision, TrackerSnapshot, type TrackerTask } from "./domain.js"
+import {
+  isDependencySatisfied,
+  isTaskOpen,
+  TaskId,
+  TaskLifecycle,
+  TrackerRevision,
+  TrackerSnapshot,
+  type TrackerTask
+} from "./domain.js"
 
 export const ProjectionIssue = Schema.TaggedUnion({
   BoundaryDecodeFailed: { detail: Schema.String },
@@ -23,10 +31,19 @@ export class GraphProjectionError extends Schema.TaggedErrorClass<GraphProjectio
   { issues: Schema.Array(ProjectionIssue) }
 ) {}
 
+const taskDagSchemaVersion = 1 as const
+
+const TaskDagWireTaskV1 = Schema.Struct({
+  id: TaskId,
+  lifecycle: TaskLifecycle,
+  parentTaskId: Schema.NullOr(TaskId),
+  prerequisiteIds: Schema.Array(TaskId)
+})
+
 export const TaskDagWire = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  revision: TrackerSnapshot.fields.revision,
-  tasks: TrackerSnapshot.fields.tasks
+  schemaVersion: Schema.Literal(taskDagSchemaVersion),
+  revision: TrackerRevision,
+  tasks: Schema.Array(TaskDagWireTaskV1)
 })
 export type TaskDagWire = typeof TaskDagWire.Type
 
@@ -274,14 +291,14 @@ export class TaskDagSnapshot {
   eligibleTaskIds(): ReadonlyArray<TaskId> {
     return this.taskIds().filter((taskId) => {
       const lifecycle = this.lifecycleOf(taskId)
-      if (!Option.isSome(lifecycle) || lifecycle.value._tag !== "Open") {
+      if (!Option.isSome(lifecycle) || !isTaskOpen(lifecycle.value)) {
         return false
       }
       return this.prerequisitesOf(taskId).every((prerequisite) => {
         const prerequisiteLifecycle = this.lifecycleOf(prerequisite)
         return (
           Option.isSome(prerequisiteLifecycle)
-          && prerequisiteLifecycle.value._tag === "CompletedSuccessfully"
+          && isDependencySatisfied(prerequisiteLifecycle.value)
         )
       })
     })
@@ -289,7 +306,7 @@ export class TaskDagSnapshot {
 
   toWire(): TaskDagWire {
     return {
-      schemaVersion: 1,
+      schemaVersion: taskDagSchemaVersion,
       revision: this.revision,
       tasks: this.taskIds().map((id) => {
         const projection = HashMap.getUnsafe(this.tasks, id)

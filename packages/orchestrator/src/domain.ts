@@ -20,6 +20,10 @@ export const TaskLifecycle = Schema.TaggedUnion({
 })
 export type TaskLifecycle = typeof TaskLifecycle.Type
 
+export const isTaskOpen = (lifecycle: TaskLifecycle): boolean => lifecycle._tag === "Open"
+
+export const isDependencySatisfied = (lifecycle: TaskLifecycle): boolean => lifecycle._tag === "CompletedSuccessfully"
+
 export const TrackerTask = Schema.Struct({
   id: TaskId,
   lifecycle: TaskLifecycle,

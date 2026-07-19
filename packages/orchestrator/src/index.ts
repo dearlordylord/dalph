@@ -1,5 +1,14 @@
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
-export { FixtureTarget, TaskId, TaskLifecycle, TrackerRevision, TrackerSnapshot, TrackerTask } from "./domain.js"
+export {
+  FixtureTarget,
+  isDependencySatisfied,
+  isTaskOpen,
+  TaskId,
+  TaskLifecycle,
+  TrackerRevision,
+  TrackerSnapshot,
+  TrackerTask
+} from "./domain.js"
 export {
   GraphProjectionError,
   ProjectionIssue,
