@@ -1,0 +1,6 @@
+set -eu
+
+pnpm exec lint-staged
+pnpm typecheck
+pnpm check:circular
+gitleaks git --pre-commit --staged --redact --no-banner

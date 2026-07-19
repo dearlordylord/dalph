@@ -41,9 +41,10 @@
 - Use focused package tests while developing. Do not inherit target
   repositories' application-specific typecheck, model-checking, or MBT gates
   as Dalph implementation gates.
+- Follow `docs/DEVELOPMENT.md` and `docs/CODE_REVIEW.md`. Run
+  `pnpm check:all` before implementation handoff.
 - Every implementation ticket must preserve its declared acceptance scenarios
   and blocking edges.
 - After significant changes, repeat domain/spec, architecture/connascence, and
   code-review passes until no reasonable finding remains. Record a concrete
   reason for any rejected finding.
-

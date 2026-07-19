@@ -30,3 +30,9 @@ targets.
 Use pnpm. Work is performed on `master`; implementation tickets declare their
 blocking edges and acceptance evidence in GitHub.
 
+Install dependencies with `pnpm install`, use focused package tests while
+developing, and run `pnpm check:all` before handoff. The root harness enforces
+strict TypeScript and Effect-aware linting, dependency-cycle and duplication
+checks, enforced test coverage, and secret scanning. See
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) and
+[`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md).

@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "allowJs": false,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "exactOptionalPropertyTypes": true,
+    "incremental": true,
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleDetection": "force",
+    "moduleResolution": "NodeNext",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "outDir": "dist",
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ],
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["node"],
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "packages/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/coverage/**"
+  ]
+}

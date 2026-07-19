@@ -1,0 +1,63 @@
+{
+  "name": "@dalph/root",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=22.22.2",
+    "pnpm": ">=10.29.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "build": "pnpm --filter './packages/**' --if-present run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "pnpm lint:code && pnpm check:duplicates",
+    "lint:code": "eslint 'src/**/*.{ts,tsx}' 'packages/**/*.{ts,tsx}' 'scripts/**/*.{ts,mjs}' 'test/**/*.{ts,tsx}' '*.config.{ts,mjs}' --no-error-on-unmatched-pattern --max-warnings 0",
+    "lint:fix": "pnpm lint:code --fix",
+    "format": "pnpm lint:code --fix",
+    "check:format": "pnpm lint:code",
+    "check:circular": "node scripts/check-circular.mjs",
+    "check:duplicates": "jscpd .",
+    "check:secrets": "gitleaks git --redact --no-banner",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "check:all": "node scripts/run-quality-gate.mjs"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": "eslint --fix --max-warnings 0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "msgpackr-extract",
+      "unrs-resolver"
+    ]
+  },
+  "devDependencies": {
+    "@effect/eslint-plugin": "0.3.2",
+    "@effect/language-service": "0.73.1",
+    "@effect/vitest": "4.0.0-beta.99",
+    "@eslint/compat": "2.0.2",
+    "@eslint/js": "9.39.2",
+    "@types/node": "24.10.1",
+    "@typescript-eslint/parser": "8.54.0",
+    "@vitest/coverage-v8": "4.0.18",
+    "effect": "4.0.0-beta.99",
+    "eslint": "9.39.2",
+    "eslint-import-resolver-typescript": "4.4.4",
+    "eslint-plugin-functional": "9.0.2",
+    "eslint-plugin-import": "2.32.0",
+    "eslint-plugin-import-x": "4.16.1",
+    "eslint-plugin-sort-destructure-keys": "2.0.0",
+    "fast-check": "4.9.0",
+    "husky": "9.1.7",
+    "jscpd": "4.0.8",
+    "lint-staged": "16.2.7",
+    "madge": "8.0.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.54.0",
+    "vitest": "4.0.18"
+  }
+}
