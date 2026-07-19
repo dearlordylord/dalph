@@ -44,12 +44,20 @@ const taskExecutionLayer = Layer.succeed(
   })
 )
 
+const liveFakeLayer = liveFakeWorkflowInterpreterLayer.pipe(
+  Layer.provide(taskExecutionLayer)
+)
+
+const deterministicTestLayer = deterministicTestWorkflowInterpreterLayer.pipe(
+  Layer.provide(taskExecutionLayer)
+)
+
 const runWith = (
   target: FixtureTarget,
   interpreterLayer: Layer.Layer<
     WorkflowInterpreter,
     never,
-    CapabilityAudit | TaskExecution | TrackerGraphReader
+    CapabilityAudit | TrackerGraphReader
   >
 ) =>
   Effect.gen(function*() {
@@ -66,7 +74,6 @@ const runWith = (
     yield* runWorkflow(target, TaskExecutionCapacity.make(2)).pipe(
       Effect.provide(traceLayer),
       Effect.provide(interpreterLayer),
-      Effect.provide(taskExecutionLayer),
       Effect.provide(trackerGraphReaderFileLayer)
     )
     return semanticTrace(yield* Ref.get(items))
@@ -76,7 +83,7 @@ for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) 
   it.effect(`${name} has one semantic trace under every interpreter`, () =>
     Effect.gen(function*() {
       const target = fixture(name)
-      const liveFake = yield* runWith(target, liveFakeWorkflowInterpreterLayer).pipe(
+      const liveFake = yield* runWith(target, liveFakeLayer).pipe(
         Effect.provide(capabilityAuditTestLayer)
       )
       const dryRun = yield* runWith(target, dryRunWorkflowInterpreterLayer).pipe(
@@ -84,7 +91,7 @@ for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) 
       )
       const deterministicTest = yield* runWith(
         target,
-        deterministicTestWorkflowInterpreterLayer
+        deterministicTestLayer
       ).pipe(Effect.provide(capabilityAuditTestLayer))
 
       expect(dryRun).toEqual(liveFake)
