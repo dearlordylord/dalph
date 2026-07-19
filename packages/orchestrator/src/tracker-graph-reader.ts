@@ -2,10 +2,17 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { readFile } from "node:fs/promises"
 import { type FixtureTarget, TrackerSnapshot } from "./domain.js"
 
+const TrackerReadOperation = Schema.Literals([
+  "TrackerGraphReader.read",
+  "TrackerGraphReader.parse",
+  "TrackerGraphReader.decode"
+])
+
+// eslint-disable-next-line functional/no-class-inheritance -- Effect typed errors use Schema.TaggedErrorClass inheritance.
 export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>()(
   "TrackerGraphReader.TrackerReadError",
   {
-    operation: Schema.NonEmptyString,
+    operation: TrackerReadOperation,
     detail: Schema.String
   }
 ) {}
@@ -16,6 +23,7 @@ interface Interface {
   ) => Effect.Effect<TrackerSnapshot, TrackerReadError>
 }
 
+// eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Interface>()(
   "@dalph/TrackerGraphReader"
 ) {}

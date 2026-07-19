@@ -60,3 +60,8 @@ Treat `package.json`, `pnpm-workspace.yaml`, `tsconfig*.json`,
 hook files as one policy surface. Explain threshold reductions or exclusions
 in the change that introduces them; generated-code exclusions must be narrow
 and must not hide authored logic.
+
+The empty `.eslintrc` file is a compatibility sentinel consumed by
+`import-x/no-unused-modules` while ESLint itself uses the flat
+`eslint.config.mjs` configuration. Keep the sentinel until the pinned plugin no
+longer requires it for flat-config file discovery.

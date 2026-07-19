@@ -163,7 +163,6 @@ export default [
       ...functional.configs.recommended.rules,
       "functional/immutable-data": "warn",
       "functional/no-classes": "off",
-      "functional/no-class-inheritance": "off",
       "functional/no-conditional-statements": "off",
       "functional/no-expression-statements": "off",
       "functional/no-let": "off",

@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { FixtureTarget } from "./domain.js"
 import { TraceOutput } from "./trace-output.js"
-import { encodeTraceItem, runDryWorkflow } from "./workflow.js"
+import { encodeTraceItem, runWorkflow } from "./workflow.js"
 
 const DryRunArguments = Schema.Tuple([
   Schema.Literal("run"),
@@ -9,6 +9,7 @@ const DryRunArguments = Schema.Tuple([
   Schema.Literal("--dry")
 ])
 
+// eslint-disable-next-line functional/no-class-inheritance -- Effect typed errors use Schema.TaggedErrorClass inheritance.
 export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()(
   "Cli.CliUsageError",
   { usage: Schema.String, detail: Schema.String }
@@ -30,7 +31,7 @@ export const runCli = Effect.fn("Cli.run")(function*(
 ) {
   const [, target] = yield* decodeArguments(args)
   const output = yield* TraceOutput
-  const trace = yield* runDryWorkflow(target)
+  const trace = yield* runWorkflow(target)
 
   for (const item of trace) {
     yield* output.writeLine(encodeTraceItem(item))

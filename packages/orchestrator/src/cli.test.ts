@@ -8,7 +8,8 @@ import {
   TraceOutput,
   TraceOutputError,
   TrackerGraphReader,
-  trackerGraphReaderFileLayer
+  trackerGraphReaderFileLayer,
+  trackerWorkflowInterpreterLayer
 } from "./index.js"
 
 const fixture = (
@@ -46,6 +47,7 @@ const runAndCollect = (target: string) =>
 
     yield* runCli(["run", target, "--dry"]).pipe(
       Effect.provide(outputLayer),
+      Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer)
     )
 
@@ -87,6 +89,7 @@ it.effect("rejects arguments outside the dry run command", () =>
   Effect.gen(function*() {
     const error = yield* runCli(["run", fixture("empty")]).pipe(
       Effect.provide(discardOutputLayer),
+      Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.flip,
       Effect.orDie
@@ -129,6 +132,7 @@ it.effect("propagates typed trace output failures", () =>
     )
     const error = yield* runCli(["run", fixture("empty"), "--dry"]).pipe(
       Effect.provide(outputLayer),
+      Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.flip,
       Effect.orDie

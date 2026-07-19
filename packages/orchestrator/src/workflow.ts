@@ -1,6 +1,6 @@
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { FixtureTarget, TaskId, TrackerRevision, type TrackerSnapshot } from "./domain.js"
-import { TrackerGraphReader } from "./tracker-graph-reader.js"
+import { TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
 
 export const WorkflowOperation = Schema.TaggedUnion({
   ReadTrackerGraph: { target: FixtureTarget }
@@ -15,6 +15,41 @@ export const WorkflowOutcome = Schema.TaggedUnion({
 })
 export type WorkflowOutcome = typeof WorkflowOutcome.Type
 
+const observedTaskIds = (snapshot: TrackerSnapshot): ReadonlyArray<TaskId> => snapshot.tasks.map((task) => task.id)
+
+interface WorkflowInterpreterInterface {
+  readonly execute: (
+    operation: WorkflowOperation
+  ) => Effect.Effect<WorkflowOutcome, TrackerReadError>
+}
+
+// eslint-disable-next-line functional/no-class-inheritance -- Effect service tags use Context.Service inheritance.
+export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterInterface>()(
+  "@dalph/WorkflowInterpreter"
+) {}
+
+export const trackerWorkflowInterpreterLayer = Layer.effect(
+  WorkflowInterpreter,
+  Effect.gen(function*() {
+    const reader = yield* TrackerGraphReader
+    const execute = Effect.fn("WorkflowInterpreter.execute")((operation: WorkflowOperation) =>
+      WorkflowOperation.match(operation, {
+        ReadTrackerGraph: ({ target }) =>
+          reader.read(target).pipe(
+            Effect.map((snapshot) =>
+              WorkflowOutcome.cases.TrackerGraphObserved.make({
+                revision: snapshot.revision,
+                taskIds: observedTaskIds(snapshot)
+              })
+            )
+          )
+      })
+    )
+
+    return WorkflowInterpreter.of({ execute })
+  })
+)
+
 export const TraceItem = Schema.TaggedUnion({
   OperationSelected: { operation: WorkflowOperation },
   OperationOutcomeObserved: {
@@ -25,20 +60,13 @@ export const TraceItem = Schema.TaggedUnion({
 })
 export type TraceItem = typeof TraceItem.Type
 
-const observedTaskIds = (snapshot: TrackerSnapshot): ReadonlyArray<TaskId> => snapshot.tasks.map((task) => task.id)
-
-export const runDryWorkflow = Effect.fn("Workflow.runDry")(function*(
+export const runWorkflow = Effect.fn("Workflow.run")(function*(
   target: FixtureTarget
 ) {
-  const reader = yield* TrackerGraphReader
+  const interpreter = yield* WorkflowInterpreter
   const operation = WorkflowOperation.cases.ReadTrackerGraph.make({ target })
   const selected = TraceItem.cases.OperationSelected.make({ operation })
-  const snapshot = yield* reader.read(target)
-  const taskIds = observedTaskIds(snapshot)
-  const outcome = WorkflowOutcome.cases.TrackerGraphObserved.make({
-    revision: snapshot.revision,
-    taskIds
-  })
+  const outcome = yield* interpreter.execute(operation)
   const observed = TraceItem.cases.OperationOutcomeObserved.make({
     operation,
     outcome

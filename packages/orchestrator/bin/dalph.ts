@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { runCli } from "../src/cli.js"
 import { TraceOutput, TraceOutputError } from "../src/trace-output.js"
 import { trackerGraphReaderFileLayer } from "../src/tracker-graph-reader.js"
+import { trackerWorkflowInterpreterLayer } from "../src/workflow.js"
 
 const USER_ARGUMENT_OFFSET = 2
 
@@ -24,6 +25,7 @@ const stdoutLayer = Layer.effect(
 
 const program = runCli(process.argv.slice(USER_ARGUMENT_OFFSET)).pipe(
   Effect.provide(stdoutLayer),
+  Effect.provide(trackerWorkflowInterpreterLayer),
   Effect.provide(trackerGraphReaderFileLayer)
 )
 
