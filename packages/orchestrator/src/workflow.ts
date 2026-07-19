@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
+import { CapabilityAudit } from "./capability-audit.js"
 import type { TaskExecutionCapacity } from "./domain.js"
 import { FixtureTarget, TaskId, TrackerRevision } from "./domain.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
@@ -38,20 +39,58 @@ export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, Wo
   "@dalph/WorkflowInterpreter"
 ) {}
 
-export const trackerWorkflowInterpreterLayer = Layer.effect(
+const taskExecutingWorkflowInterpreterLayer = (
+  operationPrefix: "LiveFake" | "DeterministicTest"
+) =>
+  Layer.effect(
+    WorkflowInterpreter,
+    Effect.gen(function*() {
+      const audit = yield* CapabilityAudit
+      const reader = yield* TrackerGraphReader
+      const taskExecution = yield* TaskExecution
+      const readTrackerGraph = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
+      )(function*(target: FixtureTarget) {
+        yield* audit.trackerGraphRead()
+        return yield* reader.read(target)
+      })
+      const executeTask = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.executeTask`
+      )(function*(taskId: TaskId) {
+        yield* audit.writeAttempted("Process")
+        yield* taskExecution.execute(taskId)
+        return WorkflowOutcome.cases.TaskExecuted.make({})
+      })
+
+      return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
+    })
+  )
+
+export const liveFakeWorkflowInterpreterLayer = taskExecutingWorkflowInterpreterLayer("LiveFake")
+
+export const deterministicTestWorkflowInterpreterLayer = taskExecutingWorkflowInterpreterLayer("DeterministicTest")
+
+export const trackerWorkflowInterpreterLayer = liveFakeWorkflowInterpreterLayer
+
+export const dryRunWorkflowInterpreterLayer: Layer.Layer<
+  WorkflowInterpreter,
+  never,
+  CapabilityAudit | TrackerGraphReader
+> = Layer.effect(
   WorkflowInterpreter,
   Effect.gen(function*() {
+    const audit = yield* CapabilityAudit
     const reader = yield* TrackerGraphReader
-    const taskExecution = yield* TaskExecution
     const readTrackerGraph = Effect.fn(
-      "WorkflowInterpreter.readTrackerGraph"
+      "WorkflowInterpreter.DryRun.readTrackerGraph"
     )(function*(target: FixtureTarget) {
+      yield* audit.trackerGraphRead()
       return yield* reader.read(target)
     })
-    const executeTask = Effect.fn("WorkflowInterpreter.executeTask")(function*(
+    const executeTask = Effect.fn("WorkflowInterpreter.DryRun.executeTask")(function*(
       taskId: TaskId
     ) {
-      yield* taskExecution.execute(taskId)
+      yield* Effect.succeed(taskId)
       return WorkflowOutcome.cases.TaskExecuted.make({})
     })
 
@@ -72,6 +111,15 @@ export const TraceItem = Schema.TaggedUnion({
   RunCompleted: {}
 })
 export type TraceItem = typeof TraceItem.Type
+
+const SemanticTrace = Schema.Array(TraceItem)
+
+export const semanticTrace = (
+  items: ReadonlyArray<TraceItem>
+): ReadonlyArray<TraceItem> =>
+  Schema.decodeUnknownSync(SemanticTrace)(
+    Schema.encodeUnknownSync(SemanticTrace)(items)
+  )
 
 interface WorkflowTraceService {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>

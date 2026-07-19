@@ -4,11 +4,12 @@ import { Effect, Layer, Option, PlatformError, Ref, Schema, Sink, Stdio } from "
 import { readFile } from "node:fs/promises"
 import { expect } from "vitest"
 import {
+  capabilityAuditLayer,
   CliUsageError,
+  dryRunWorkflowInterpreterLayer,
   FixtureTarget,
   runCli,
   runCliFromStdio,
-  taskExecutionDryRunLayer,
   TaskId,
   TraceItem,
   TraceOutput,
@@ -17,7 +18,6 @@ import {
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   TrackerSnapshot,
-  trackerWorkflowInterpreterLayer,
   workflowTraceOutputLayer
 } from "./index.js"
 
@@ -75,8 +75,8 @@ const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
     yield* runCli(args).pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
-      Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(taskExecutionDryRunLayer),
+      Effect.provide(dryRunWorkflowInterpreterLayer),
+      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer)
     )
@@ -184,8 +184,8 @@ it.effect("runs the CLI entrypoint through injected Stdio and application servic
     yield* runCliFromStdio.pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(traceOutputStdioLayer),
-      Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(taskExecutionDryRunLayer),
+      Effect.provide(dryRunWorkflowInterpreterLayer),
+      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(stdioLayer),
       Effect.provide(NodeServices.layer)
@@ -227,8 +227,8 @@ it.effect("requires the dry flag", () =>
     const error = yield* runCli(["run", fixture("empty")]).pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(discardOutputLayer),
-      Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(taskExecutionDryRunLayer),
+      Effect.provide(dryRunWorkflowInterpreterLayer),
+      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,
@@ -357,8 +357,8 @@ it.effect("propagates typed trace output failures", () =>
     const error = yield* runCli(["run", fixture("empty"), "--dry"]).pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
-      Effect.provide(trackerWorkflowInterpreterLayer),
-      Effect.provide(taskExecutionDryRunLayer),
+      Effect.provide(dryRunWorkflowInterpreterLayer),
+      Effect.provide(capabilityAuditLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,
