@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data -- Local builder and traversal scratch never escapes the opaque snapshot. */
-import { HashMap, HashSet, Option, Result, Schema } from "effect"
+import { HashMap, HashSet, Option, Order, Result, Schema } from "effect"
 import { TaskId, type TaskLifecycle, type TrackerRevision, TrackerSnapshot, type TrackerTask } from "./domain.js"
 
 export const ProjectionIssue = Schema.TaggedUnion({
@@ -36,51 +36,36 @@ interface TaskProjection {
   readonly prerequisiteIds: HashSet.HashSet<TaskId>
 }
 
-const before = -1
-const compareCodeUnits = (left: string, right: string): number => left < right ? before : left > right ? 1 : 0
-
-const compareTaskIds = compareCodeUnits
+const compareTaskIds: Order.Order<TaskId> = Order.String
 
 const sorted = (taskIds: Iterable<TaskId>): ReadonlyArray<TaskId> => [...taskIds].sort(compareTaskIds)
 
-const compareTaskIdArrays = (
-  left: ReadonlyArray<TaskId>,
-  right: ReadonlyArray<TaskId>
-): number => {
-  const sharedLength = Math.min(left.length, right.length)
-  for (let index = 0; index < sharedLength; index++) {
-    const leftTaskId = left[index]
-    const rightTaskId = right[index]
-    if (leftTaskId === undefined || rightTaskId === undefined) continue
-    const taskIdOrder = compareTaskIds(leftTaskId, rightTaskId)
-    if (taskIdOrder !== 0) return taskIdOrder
-  }
-  return left.length < right.length ? before : left.length > right.length ? 1 : 0
-}
+const parentTaskIdOrder = Order.mapInput(
+  Order.Tuple([Order.Boolean, Order.String]),
+  (parentTaskId: TaskId | null) =>
+    [
+      parentTaskId !== null,
+      parentTaskId ?? ""
+    ] as const
+)
 
-const compareParentTaskIds = (left: TaskId | null, right: TaskId | null): number =>
-  left === null
-    ? right === null ? 0 : before
-    : right === null
-    ? 1
-    : compareTaskIds(left, right)
-
-const compareTrackerTasks = (left: TrackerTask, right: TrackerTask): number => {
-  const lifecycleOrder = compareCodeUnits(left.lifecycle._tag, right.lifecycle._tag)
-  if (lifecycleOrder !== 0) return lifecycleOrder
-  const parentOrder = compareParentTaskIds(left.parentTaskId, right.parentTaskId)
-  return parentOrder !== 0
-    ? parentOrder
-    : compareTaskIdArrays(
-      [...left.prerequisiteIds].sort(compareTaskIds),
-      [...right.prerequisiteIds].sort(compareTaskIds)
-    )
-}
+const compareTrackerTasks = Order.mapInput(
+  Order.Tuple([Order.String, parentTaskIdOrder, Order.Array(compareTaskIds)]),
+  (record: TrackerTask) =>
+    [
+      record.lifecycle._tag,
+      record.parentTaskId,
+      [...record.prerequisiteIds].sort(compareTaskIds)
+    ] as const
+)
 
 const taskProjection = (
   tasks: HashMap.HashMap<TaskId, TaskProjection>,
   taskId: TaskId
 ): Option.Option<TaskProjection> => HashMap.get(tasks, taskId)
+
+const mapValue = <Key, Value>(values: Map<Key, Value>, key: Key): Value =>
+  Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
 
 const stronglyConnectedCycles = (
   tasks: HashMap.HashMap<TaskId, TaskProjection>
@@ -99,37 +84,34 @@ const stronglyConnectedCycles = (
     stack.push(taskId)
     onStack.add(taskId)
 
-    const projection = taskProjection(tasks, taskId)
-    if (Option.isSome(projection)) {
-      for (const prerequisite of sorted(projection.value.prerequisiteIds)) {
-        if (!HashMap.has(tasks, prerequisite)) continue
-        if (!indexes.has(prerequisite)) {
-          visit(prerequisite)
-          lowLinks.set(
-            taskId,
-            Math.min(
-              lowLinks.get(taskId) ?? index,
-              lowLinks.get(prerequisite) ?? index
-            )
+    const projection = HashMap.getUnsafe(tasks, taskId)
+    for (const prerequisite of sorted(projection.prerequisiteIds)) {
+      if (!HashMap.has(tasks, prerequisite)) continue
+      if (!indexes.has(prerequisite)) {
+        visit(prerequisite)
+        lowLinks.set(
+          taskId,
+          Math.min(
+            mapValue(lowLinks, taskId),
+            mapValue(lowLinks, prerequisite)
           )
-        } else if (onStack.has(prerequisite)) {
-          lowLinks.set(
-            taskId,
-            Math.min(
-              lowLinks.get(taskId) ?? index,
-              indexes.get(prerequisite) ?? index
-            )
+        )
+      } else if (onStack.has(prerequisite)) {
+        lowLinks.set(
+          taskId,
+          Math.min(
+            mapValue(lowLinks, taskId),
+            mapValue(indexes, prerequisite)
           )
-        }
+        )
       }
     }
 
-    if (lowLinks.get(taskId) !== indexes.get(taskId)) return
+    if (mapValue(lowLinks, taskId) !== mapValue(indexes, taskId)) return
 
     const component: Array<TaskId> = []
     while (stack.length > 0) {
-      const member = stack.pop()
-      if (member === undefined) break
+      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
       onStack.delete(member)
       component.push(member)
       if (member === taskId) break
@@ -141,15 +123,7 @@ const stronglyConnectedCycles = (
     if (!indexes.has(taskId)) visit(taskId)
   }
 
-  return components
-    .sort((left, right) => {
-      const leftFirst = left[0]
-      const rightFirst = right[0]
-      if (leftFirst === undefined) return rightFirst === undefined ? 0 : before
-      if (rightFirst === undefined) return 1
-      return compareTaskIds(leftFirst, rightFirst)
-    })
-    .map((taskIds) => ProjectionIssue.cases.Cycle.make({ taskIds }))
+  return components.map((taskIds) => ProjectionIssue.cases.Cycle.make({ taskIds }))
 }
 
 export class TaskDagSnapshot {
@@ -243,13 +217,9 @@ export class TaskDagSnapshot {
   }
 
   childrenOf(parentTaskId: TaskId): ReadonlyArray<TaskId> {
-    return this.taskIds().filter((taskId) => {
-      const projection = taskProjection(this.tasks, taskId)
-      return (
-        Option.isSome(projection)
-        && projection.value.parentTaskId === parentTaskId
-      )
-    })
+    return this.taskIds().filter(
+      (taskId) => HashMap.getUnsafe(this.tasks, taskId).parentTaskId === parentTaskId
+    )
   }
 
   prerequisitesOf(taskId: TaskId): ReadonlyArray<TaskId> {
@@ -274,11 +244,10 @@ export class TaskDagSnapshot {
     const order: Array<TaskId> = []
 
     while (ready.length > 0) {
-      const taskId = ready.shift()
-      if (taskId === undefined) break
+      const taskId = Option.getOrThrow(Option.fromUndefinedOr(ready.shift()))
       order.push(taskId)
       for (const dependant of this.dependantsOf(taskId)) {
-        const remaining = (remainingPrerequisites.get(dependant) ?? 0) - 1
+        const remaining = mapValue(remainingPrerequisites, dependant) - 1
         remainingPrerequisites.set(dependant, remaining)
         if (remaining === 0) {
           ready.push(dependant)
@@ -309,18 +278,14 @@ export class TaskDagSnapshot {
   toWire(): typeof TrackerSnapshot.Type {
     return {
       revision: this.revision,
-      tasks: this.taskIds().flatMap((id) => {
-        const projection = taskProjection(this.tasks, id)
-        return Option.isSome(projection)
-          ? [
-            {
-              id,
-              lifecycle: projection.value.lifecycle,
-              parentTaskId: projection.value.parentTaskId,
-              prerequisiteIds: sorted(projection.value.prerequisiteIds)
-            }
-          ]
-          : []
+      tasks: this.taskIds().map((id) => {
+        const projection = HashMap.getUnsafe(this.tasks, id)
+        return {
+          id,
+          lifecycle: projection.lifecycle,
+          parentTaskId: projection.parentTaskId,
+          prerequisiteIds: sorted(projection.prerequisiteIds)
+        }
       })
     }
   }

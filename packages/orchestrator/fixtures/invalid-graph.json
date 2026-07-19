@@ -10,7 +10,7 @@
     {
       "id": "task-a",
       "lifecycle": { "_tag": "Open" },
-      "parentTaskId": null,
+      "parentTaskId": "external-group",
       "prerequisiteIds": []
     },
     {

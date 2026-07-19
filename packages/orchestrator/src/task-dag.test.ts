@@ -1,7 +1,7 @@
 import { Option } from "effect"
 import { expect, it } from "vitest"
+import { validSnapshot } from "../test/task-dag.js"
 import { TaskId } from "./domain.js"
-import { validSnapshot } from "./task-dag-test-support.js"
 import { projectTrackerSnapshot } from "./task-dag.js"
 
 const open = { _tag: "Open" } as const
@@ -19,7 +19,7 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
       {
         id: "task-a",
         lifecycle: open,
-        parentTaskId: null,
+        parentTaskId: "external-group",
         prerequisiteIds: []
       },
       {
@@ -69,6 +69,7 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
         prerequisite: "missing"
       },
       { _tag: "SelfPrerequisite", taskId: "task-c" },
+      { _tag: "Cycle", taskIds: ["task-a", "task-b"] },
       { _tag: "Cycle", taskIds: ["task-d", "task-e"] }
     ]
   })
@@ -145,4 +146,10 @@ it("keeps grouping independent while traversing and deriving diamond eligibility
   })
   expect(satisfied.eligibleTaskIds()).toEqual(["group", "join"])
   expect(permuted.canonicalJson()).toBe(graph.canonicalJson())
+
+  const missing = TaskId.make("missing-task")
+  expect(Option.isNone(graph.lifecycleOf(missing))).toBe(true)
+  expect(Option.isNone(graph.parentTaskIdOf(missing))).toBe(true)
+  expect(graph.childrenOf(missing)).toEqual([])
+  expect(graph.prerequisitesOf(missing)).toEqual([])
 })

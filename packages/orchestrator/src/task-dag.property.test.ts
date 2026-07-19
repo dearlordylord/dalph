@@ -1,7 +1,7 @@
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
+import { validSnapshot } from "../test/task-dag.js"
 import { TaskId } from "./domain.js"
-import { validSnapshot } from "./task-dag-test-support.js"
 
 const open = { _tag: "Open" } as const
 

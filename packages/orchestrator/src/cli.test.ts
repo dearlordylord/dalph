@@ -263,6 +263,7 @@ it.effect("rejects every structural graph issue without exposing a snapshot", ()
         "MissingPrerequisite",
         "DuplicatePrerequisite",
         "SelfPrerequisite",
+        "Cycle",
         "Cycle"
       ])
     }
