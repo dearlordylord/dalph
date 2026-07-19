@@ -8,6 +8,7 @@ import {
   FixtureTarget,
   runCli,
   runCliFromStdio,
+  taskExecutionDryRunLayer,
   TaskId,
   TraceItem,
   TraceOutput,
@@ -33,19 +34,32 @@ const fixture = (
 const expectedTrace = (
   target: string,
   revision: string,
-  taskIds: ReadonlyArray<string>
-): ReadonlyArray<string> => [
-  JSON.stringify({
-    _tag: "OperationSelected",
-    operation: { _tag: "ReadTrackerGraph", target }
-  }),
-  JSON.stringify({
-    _tag: "OperationOutcomeObserved",
-    operation: { _tag: "ReadTrackerGraph", target },
-    outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
-  }),
-  JSON.stringify({ _tag: "RunCompleted" })
-]
+  taskIds: ReadonlyArray<string>,
+  runnableTaskIds: ReadonlyArray<string> = taskIds
+): ReadonlyArray<string> =>
+  [
+    {
+      _tag: "OperationSelected",
+      operation: { _tag: "ReadTrackerGraph", target }
+    },
+    {
+      _tag: "OperationOutcomeObserved",
+      operation: { _tag: "ReadTrackerGraph", target },
+      outcome: { _tag: "TrackerGraphObserved", revision, taskIds, runnableTaskIds }
+    },
+    ...runnableTaskIds.flatMap((taskId) => [
+      {
+        _tag: "OperationSelected",
+        operation: { _tag: "ExecuteTask", taskId }
+      },
+      {
+        _tag: "OperationOutcomeObserved",
+        operation: { _tag: "ExecuteTask", taskId },
+        outcome: { _tag: "TaskExecuted", taskId }
+      }
+    ]),
+    { _tag: "RunCompleted" }
+  ].map((item) => JSON.stringify(item))
 
 const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
   Effect.gen(function*() {
@@ -62,6 +76,7 @@ const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
     yield* runCli(args).pipe(
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(taskExecutionDryRunLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer)
     )
@@ -115,7 +130,7 @@ it.effect("traverses a diamond deterministically through the dry workflow", () =
         "left",
         "right",
         "join"
-      ])
+      ], ["group", "root"])
     )
     expect(second).toEqual(first)
   }))
@@ -130,14 +145,18 @@ it.effect("traverses the retained 105-task snapshot through the same dry workflo
     )
 
     expect(second).toEqual(first)
-    expect(first).toHaveLength(3)
+    expect(first).toHaveLength(73)
     expect(observed._tag).toBe("OperationOutcomeObserved")
-    if (observed._tag === "OperationOutcomeObserved") {
+    if (
+      observed._tag === "OperationOutcomeObserved"
+      && observed.outcome._tag === "TrackerGraphObserved"
+    ) {
       expect(observed.outcome.revision).toBe(
         "tracker-revision:github-issue-12-04f996b64663a5e0"
       )
       expect(observed.outcome.taskIds).toHaveLength(105)
       expect(new Set(observed.outcome.taskIds)).toHaveLength(105)
+      expect(observed.outcome.runnableTaskIds).toHaveLength(35)
     }
   }))
 
@@ -169,6 +188,7 @@ it.effect("runs the CLI entrypoint through injected Stdio and application servic
     yield* runCliFromStdio.pipe(
       Effect.provide(traceOutputStdioLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(taskExecutionDryRunLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(stdioLayer),
       Effect.provide(NodeServices.layer)
@@ -210,6 +230,7 @@ it.effect("requires the dry flag", () =>
     const error = yield* runCli(["run", fixture("empty")]).pipe(
       Effect.provide(discardOutputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(taskExecutionDryRunLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,
@@ -338,6 +359,7 @@ it.effect("propagates typed trace output failures", () =>
     const error = yield* runCli(["run", fixture("empty"), "--dry"]).pipe(
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(taskExecutionDryRunLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(NodeServices.layer),
       Effect.flip,

@@ -3,6 +3,7 @@ export {
   FixtureTarget,
   isDependencySatisfied,
   isTaskOpen,
+  TaskExecutionCapacity,
   TaskId,
   TaskLifecycle,
   TrackerRevision,
@@ -17,6 +18,7 @@ export {
   TaskDagSnapshot,
   TaskDagWire
 } from "./task-dag.js"
+export { TaskExecution, taskExecutionDryRunLayer } from "./task-execution.js"
 export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
 export { TrackerGraphReader, trackerGraphReaderFileLayer, TrackerReadError } from "./tracker-graph-reader.js"
 export {

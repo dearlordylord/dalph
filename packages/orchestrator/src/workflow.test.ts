@@ -1,0 +1,147 @@
+import { it } from "@effect/vitest"
+import { Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
+import { expect } from "vitest"
+import type { TaskId } from "./index.js"
+import {
+  FixtureTarget,
+  runWorkflow,
+  TaskExecution,
+  TaskExecutionCapacity,
+  trackerGraphReaderFileLayer,
+  trackerWorkflowInterpreterLayer
+} from "./index.js"
+
+const fixture = (name: "diamond" | "wayfinder-105"): FixtureTarget =>
+  FixtureTarget.make(new URL(`../fixtures/${name}.json`, import.meta.url).pathname)
+
+const controlledExecutor = Effect.gen(function*() {
+  const started = yield* Queue.unbounded<TaskId>()
+  const releases = yield* Queue.unbounded<void>()
+  const active = yield* Ref.make(0)
+  const maximumActive = yield* Ref.make(0)
+  const service = TaskExecution.of({
+    execute: Effect.fn("TaskExecution.Test.execute")(function*(taskId) {
+      yield* Ref.update(active, (count) => count + 1)
+      const currentActive = yield* Ref.get(active)
+      yield* Ref.update(maximumActive, (maximum) => Math.max(maximum, currentActive))
+      yield* Queue.offer(started, taskId)
+      yield* Queue.take(releases).pipe(
+        Effect.ensuring(Ref.update(active, (count) => count - 1))
+      )
+    })
+  })
+
+  return { active, maximumActive, releases, service, started } as const
+})
+
+it.effect("capacity 2 admits both controlled tasks before either gate releases", () =>
+  Effect.gen(function*() {
+    const controlled = yield* controlledExecutor
+    const run = yield* runWorkflow(
+      fixture("diamond"),
+      TaskExecutionCapacity.make(2)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.forkScoped
+    )
+
+    expect(yield* Queue.take(controlled.started)).toBe("group")
+    expect(yield* Queue.take(controlled.started)).toBe("root")
+    expect(yield* Ref.get(controlled.active)).toBe(2)
+    expect(yield* Ref.get(controlled.maximumActive)).toBe(2)
+
+    yield* Queue.offerAll(controlled.releases, [undefined, undefined])
+    yield* Fiber.join(run)
+  }))
+
+it.effect("capacity 1 never holds two task permits", () =>
+  Effect.gen(function*() {
+    const controlled = yield* controlledExecutor
+    const run = yield* runWorkflow(
+      fixture("diamond"),
+      TaskExecutionCapacity.make(1)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.forkScoped
+    )
+
+    expect(yield* Queue.take(controlled.started)).toBe("group")
+    expect(yield* Queue.size(controlled.started)).toBe(0)
+    expect(yield* Ref.get(controlled.active)).toBe(1)
+    yield* Queue.offer(controlled.releases, undefined)
+    expect(yield* Queue.take(controlled.started)).toBe("root")
+    expect(yield* Ref.get(controlled.maximumActive)).toBe(1)
+    yield* Queue.offer(controlled.releases, undefined)
+    yield* Fiber.join(run)
+  }))
+
+it.effect("bounds and deterministically orders the wide retained frontier", () =>
+  Effect.gen(function*() {
+    const controlled = yield* controlledExecutor
+    const run = yield* runWorkflow(
+      fixture("wayfinder-105"),
+      TaskExecutionCapacity.make(2)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.forkScoped
+    )
+    const admitted: Array<TaskId> = []
+
+    admitted.push(yield* Queue.take(controlled.started))
+    admitted.push(yield* Queue.take(controlled.started))
+    expect(yield* Queue.size(controlled.started)).toBe(0)
+    expect(yield* Ref.get(controlled.active)).toBe(2)
+
+    while (admitted.length < 35) {
+      yield* Queue.offer(controlled.releases, undefined)
+      admitted.push(yield* Queue.take(controlled.started))
+    }
+    yield* Queue.offerAll(controlled.releases, [undefined, undefined])
+    const trace = yield* Fiber.join(run)
+
+    expect(admitted).toEqual([...admitted].sort())
+    expect(new Set(admitted)).toHaveLength(35)
+    expect(yield* Ref.get(controlled.maximumActive)).toBe(2)
+    expect(trace.at(-1)?._tag).toBe("RunCompleted")
+  }))
+
+it.effect("keeps semantic trace order stable when tasks complete in reverse", () =>
+  Effect.gen(function*() {
+    const firstGate = yield* Deferred.make<void>()
+    const secondGate = yield* Deferred.make<void>()
+    const started = yield* Queue.unbounded<TaskId>()
+    const service = TaskExecution.of({
+      execute: Effect.fn("TaskExecution.Test.reverseCompletion")(function*(taskId) {
+        yield* Queue.offer(started, taskId)
+        yield* Deferred.await(taskId === "group" ? firstGate : secondGate)
+      })
+    })
+    const run = yield* runWorkflow(
+      fixture("diamond"),
+      TaskExecutionCapacity.make(2)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.forkScoped
+    )
+
+    yield* Queue.take(started)
+    yield* Queue.take(started)
+    yield* Deferred.succeed(secondGate, undefined)
+    yield* Deferred.succeed(firstGate, undefined)
+    const trace = yield* Fiber.join(run)
+    const executed = trace.flatMap((item) =>
+      item._tag === "OperationSelected" && item.operation._tag === "ExecuteTask"
+        ? [item.operation.taskId]
+        : []
+    )
+
+    expect(executed).toEqual(["group", "root"])
+  }))

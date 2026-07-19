@@ -8,6 +8,14 @@ export type FixtureTarget = typeof FixtureTarget.Type
 export const TaskId = Schema.NonEmptyString.pipe(Schema.brand("TaskId"))
 export type TaskId = typeof TaskId.Type
 
+const maximumTaskExecutionCapacity = 8
+
+export const TaskExecutionCapacity = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(maximumTaskExecutionCapacity)
+).pipe(Schema.brand("TaskExecutionCapacity"))
+export type TaskExecutionCapacity = typeof TaskExecutionCapacity.Type
+
 export const TrackerRevision = Schema.NonEmptyString.pipe(
   Schema.brand("TrackerRevision")
 )
