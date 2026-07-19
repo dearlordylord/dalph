@@ -107,6 +107,49 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
   expect(reversed).toEqual(result)
 })
 
+it("accumulates structural issues from every duplicate task record", () => {
+  const result = projectTrackerSnapshot({
+    revision: "duplicate-record-issues-v1",
+    tasks: [
+      {
+        id: "task-a",
+        lifecycle: open,
+        parentTaskId: null,
+        prerequisiteIds: []
+      },
+      {
+        id: "task-a",
+        lifecycle: open,
+        parentTaskId: "missing-parent",
+        prerequisiteIds: ["task-a", "task-a", "z-missing-prerequisite"]
+      }
+    ]
+  })
+
+  expect(result).toEqual({
+    _tag: "Invalid",
+    issues: [
+      { _tag: "DuplicateTask", taskId: "task-a" },
+      { _tag: "SelfPrerequisite", taskId: "task-a" },
+      {
+        _tag: "DuplicatePrerequisite",
+        dependant: "task-a",
+        prerequisite: "task-a"
+      },
+      {
+        _tag: "MissingPrerequisite",
+        dependant: "task-a",
+        prerequisite: "z-missing-prerequisite"
+      },
+      {
+        _tag: "MissingParent",
+        child: "task-a",
+        parent: "missing-parent"
+      }
+    ]
+  })
+})
+
 it("keeps grouping independent while traversing and deriving diamond eligibility", () => {
   const wire = {
     revision: "diamond-v1",

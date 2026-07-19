@@ -189,10 +189,9 @@ export class TaskDagSnapshot {
       }
     }
 
-    let tasks = HashMap.empty<TaskId, TaskProjection>()
-    for (const [taskId, record] of recordsById) {
+    for (const record of records) {
+      const taskId = record.id
       const prerequisiteIds = [...record.prerequisiteIds].sort(compareTaskIds)
-      const uniquePrerequisites: Array<TaskId> = []
       let previous: TaskId | undefined
 
       for (const prerequisite of prerequisiteIds) {
@@ -206,7 +205,6 @@ export class TaskDagSnapshot {
           continue
         }
         previous = prerequisite
-        uniquePrerequisites.push(prerequisite)
         if (prerequisite === taskId) {
           issues.push(
             ProjectionIssue.cases.SelfPrerequisite.make({ taskId })
@@ -234,11 +232,14 @@ export class TaskDagSnapshot {
           })
         )
       }
+    }
 
+    let tasks = HashMap.empty<TaskId, TaskProjection>()
+    for (const [taskId, record] of recordsById) {
       tasks = HashMap.set(tasks, taskId, {
         lifecycle: record.lifecycle,
         parentTaskId: record.parentTaskId,
-        prerequisiteIds: HashSet.fromIterable(uniquePrerequisites)
+        prerequisiteIds: HashSet.fromIterable(record.prerequisiteIds)
       })
     }
 
