@@ -1,5 +1,5 @@
 {
-  "name": "@dnd/ralph-control-plane-prototype",
+  "name": "@dalph/control-plane-prototype",
   "private": true,
   "type": "module",
   "scripts": {

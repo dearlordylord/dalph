@@ -1,5 +1,5 @@
 {
-  "name": "@dnd/ralph-execution-trace-prototype",
+  "name": "@dalph/execution-trace-prototype",
   "private": true,
   "type": "module",
   "scripts": {

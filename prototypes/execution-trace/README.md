@@ -1,7 +1,7 @@
 # Ralph execution-trace presentation prototype
 
 Disposable HITL comparison artifact for [Prototype Ralph's multi-actor
-execution-trace refinement view](https://github.com/dearlordylord/5e-quint/issues/197).
+execution-trace refinement view](https://github.com/dearlordylord/dalph/issues/1).
 
 ## What it shows
 
@@ -96,9 +96,8 @@ not encode the choice as an implementer-name special case.
 
 ## Run
 
-This is an isolated pnpm project because it is extraction-bound Dalph tooling,
-not a package in the D&D main-application workspace. The isolated lockfile
-becomes the repository lockfile when the prototype moves to Dalph.
+This remains an isolated pnpm project because it is disposable research
+evidence, not the production Dalph package workspace.
 
 ```bash
 cd <execution-trace-prototype-directory>

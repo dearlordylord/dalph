@@ -1,6 +1,6 @@
 # Ralph graph-native control-plane prototype
 
-Disposable prototype evidence for [Prototype Ralph's graph-native control-plane seams](https://github.com/dearlordylord/5e-quint/issues/182), under [Wayfinder: Ralph graph-native orchestration](https://github.com/dearlordylord/5e-quint/issues/175).
+Disposable prototype evidence for [Prototype Ralph's graph-native control-plane seams](https://github.com/dearlordylord/dalph/issues/16), under [Wayfinder: Ralph graph-native orchestration](https://github.com/dearlordylord/dalph/issues/23).
 
 This prototype tests Ralph orchestrator seams. It neither models compatibility
 with the historical shell harness nor supports importing or resuming that
