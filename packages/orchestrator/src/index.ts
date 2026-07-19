@@ -28,5 +28,7 @@ export {
   trackerWorkflowInterpreterLayer,
   WorkflowInterpreter,
   WorkflowOperation,
-  WorkflowOutcome
+  WorkflowOutcome,
+  WorkflowTrace,
+  workflowTraceOutputLayer
 } from "./workflow.js"

@@ -17,7 +17,8 @@ import {
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   TrackerSnapshot,
-  trackerWorkflowInterpreterLayer
+  trackerWorkflowInterpreterLayer,
+  workflowTraceOutputLayer
 } from "./index.js"
 
 const fixture = (
@@ -43,21 +44,19 @@ const expectedTrace = (
       operation: { _tag: "ReadTrackerGraph", target }
     },
     {
-      _tag: "OperationOutcomeObserved",
+      _tag: "TrackerGraphOutcomeObserved",
       operation: { _tag: "ReadTrackerGraph", target },
-      outcome: { _tag: "TrackerGraphObserved", revision, taskIds, runnableTaskIds }
+      outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
     },
-    ...runnableTaskIds.flatMap((taskId) => [
-      {
-        _tag: "OperationSelected",
-        operation: { _tag: "ExecuteTask", taskId }
-      },
-      {
-        _tag: "OperationOutcomeObserved",
-        operation: { _tag: "ExecuteTask", taskId },
-        outcome: { _tag: "TaskExecuted", taskId }
-      }
-    ]),
+    ...runnableTaskIds.map((taskId) => ({
+      _tag: "OperationSelected",
+      operation: { _tag: "ExecuteTask", taskId }
+    })),
+    ...runnableTaskIds.map((taskId) => ({
+      _tag: "TaskExecutionOutcomeObserved",
+      operation: { _tag: "ExecuteTask", taskId },
+      outcome: { _tag: "TaskExecuted", taskId }
+    })),
     { _tag: "RunCompleted" }
   ].map((item) => JSON.stringify(item))
 
@@ -74,6 +73,7 @@ const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
     )
 
     yield* runCli(args).pipe(
+      Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(taskExecutionDryRunLayer),
@@ -146,17 +146,13 @@ it.effect("traverses the retained 105-task snapshot through the same dry workflo
 
     expect(second).toEqual(first)
     expect(first).toHaveLength(73)
-    expect(observed._tag).toBe("OperationOutcomeObserved")
-    if (
-      observed._tag === "OperationOutcomeObserved"
-      && observed.outcome._tag === "TrackerGraphObserved"
-    ) {
+    expect(observed._tag).toBe("TrackerGraphOutcomeObserved")
+    if (observed._tag === "TrackerGraphOutcomeObserved") {
       expect(observed.outcome.revision).toBe(
         "tracker-revision:github-issue-12-04f996b64663a5e0"
       )
       expect(observed.outcome.taskIds).toHaveLength(105)
       expect(new Set(observed.outcome.taskIds)).toHaveLength(105)
-      expect(observed.outcome.runnableTaskIds).toHaveLength(35)
     }
   }))
 
@@ -186,6 +182,7 @@ it.effect("runs the CLI entrypoint through injected Stdio and application servic
     })
 
     yield* runCliFromStdio.pipe(
+      Effect.provide(workflowTraceOutputLayer),
       Effect.provide(traceOutputStdioLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(taskExecutionDryRunLayer),
@@ -228,6 +225,7 @@ it.effect("maps injected Stdio write failures to a typed trace error", () =>
 it.effect("requires the dry flag", () =>
   Effect.gen(function*() {
     const error = yield* runCli(["run", fixture("empty")]).pipe(
+      Effect.provide(workflowTraceOutputLayer),
       Effect.provide(discardOutputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(taskExecutionDryRunLayer),
@@ -357,6 +355,7 @@ it.effect("propagates typed trace output failures", () =>
       })
     )
     const error = yield* runCli(["run", fixture("empty"), "--dry"]).pipe(
+      Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
       Effect.provide(trackerWorkflowInterpreterLayer),
       Effect.provide(taskExecutionDryRunLayer),
