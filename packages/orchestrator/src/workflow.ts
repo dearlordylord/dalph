@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { FixtureTarget, TaskId, TrackerRevision, type TrackerSnapshot } from "./domain.js"
+import { FixtureTarget, TaskId, TrackerRevision } from "./domain.js"
+import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import { TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
 
 export const WorkflowOperation = Schema.TaggedUnion({
@@ -15,12 +16,14 @@ export const WorkflowOutcome = Schema.TaggedUnion({
 })
 export type WorkflowOutcome = typeof WorkflowOutcome.Type
 
-const observedTaskIds = (snapshot: TrackerSnapshot): ReadonlyArray<TaskId> => snapshot.tasks.map((task) => task.id)
+const observedTaskIds = (
+  snapshot: TaskDagSnapshot
+): ReadonlyArray<TaskId> => snapshot.topologicalOrder()
 
 interface WorkflowInterpreterService {
   readonly execute: (
     operation: WorkflowOperation
-  ) => Effect.Effect<WorkflowOutcome, TrackerReadError>
+  ) => Effect.Effect<WorkflowOutcome, GraphProjectionError | TrackerReadError>
 }
 
 export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(

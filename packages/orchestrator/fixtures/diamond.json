@@ -1,0 +1,35 @@
+{
+  "revision": "fixture-diamond-v1",
+  "tasks": [
+    {
+      "id": "join",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "group",
+      "prerequisiteIds": ["right", "left"]
+    },
+    {
+      "id": "right",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "group",
+      "prerequisiteIds": ["root"]
+    },
+    {
+      "id": "root",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": []
+    },
+    {
+      "id": "group",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": []
+    },
+    {
+      "id": "left",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": "group",
+      "prerequisiteIds": ["root"]
+    }
+  ]
+}

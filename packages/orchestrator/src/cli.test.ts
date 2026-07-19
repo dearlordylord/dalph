@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Layer, PlatformError, Ref, Sink, Stdio } from "effect"
+import { Effect, Layer, Option, PlatformError, Ref, Sink, Stdio } from "effect"
 import { expect } from "vitest"
 import {
   CliUsageError,
@@ -16,7 +16,14 @@ import {
 } from "./index.js"
 
 const fixture = (
-  name: "empty" | "invalid" | "malformed" | "singleton"
+  name:
+    | "diamond"
+    | "empty"
+    | "invalid"
+    | "invalid-graph"
+    | "malformed"
+    | "singleton"
+    | "wayfinder-105"
 ): string => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
 
 const expectedTrace = (
@@ -89,6 +96,54 @@ it.effect("runs a singleton fixture deterministically through the dry workflow",
       expectedTrace(target, "fixture-singleton-v1", ["task-only"])
     )
     expect(second).toEqual(first)
+  }))
+
+it.effect("traverses a diamond deterministically through the dry workflow", () =>
+  Effect.gen(function*() {
+    const target = fixture("diamond")
+    const first = yield* runAndCollect(target)
+    const second = yield* runAndCollect(target)
+
+    expect(first).toEqual(
+      expectedTrace(target, "fixture-diamond-v1", [
+        "group",
+        "root",
+        "left",
+        "right",
+        "join"
+      ])
+    )
+    expect(second).toEqual(first)
+  }))
+
+it.effect("traverses the retained 105-task snapshot through the same dry workflow", () =>
+  Effect.gen(function*() {
+    const target = fixture("wayfinder-105")
+    const first = yield* runAndCollect(target)
+    const second = yield* runAndCollect(target)
+    const observed: unknown = JSON.parse(first[1] ?? "null")
+
+    expect(second).toEqual(first)
+    expect(first).toHaveLength(3)
+    expect(observed).toMatchObject({
+      _tag: "OperationOutcomeObserved",
+      outcome: {
+        _tag: "TrackerGraphObserved",
+        revision: "tracker-revision:github-issue-12-04f996b64663a5e0"
+      }
+    })
+    if (
+      typeof observed === "object"
+      && observed !== null
+      && "outcome" in observed
+      && typeof observed.outcome === "object"
+      && observed.outcome !== null
+      && "taskIds" in observed.outcome
+      && Array.isArray(observed.outcome.taskIds)
+    ) {
+      expect(observed.outcome.taskIds).toHaveLength(105)
+      expect(new Set(observed.outcome.taskIds)).toHaveLength(105)
+    }
   }))
 
 it.effect("parses the dry flag independently of its argument position", () =>
@@ -185,9 +240,62 @@ it.effect("reports fixture read, parse, and decode failures precisely", () =>
       .read(FixtureTarget.make(fixture("invalid")))
       .pipe(Effect.flip, Effect.orDie)
 
-    expect(missing.operation).toBe("TrackerGraphReader.read")
-    expect(malformed.operation).toBe("TrackerGraphReader.parse")
-    expect(invalid.operation).toBe("TrackerGraphReader.decode")
+    expect(missing._tag).toBe("TrackerGraphReader.TrackerReadError")
+    expect(malformed._tag).toBe("TrackerGraphReader.TrackerReadError")
+    expect(invalid._tag).toBe("TrackerGraphReader.TrackerReadError")
+    if (
+      missing._tag === "TrackerGraphReader.TrackerReadError"
+      && malformed._tag === "TrackerGraphReader.TrackerReadError"
+      && invalid._tag === "TrackerGraphReader.TrackerReadError"
+    ) {
+      expect(missing.operation).toBe("TrackerGraphReader.read")
+      expect(malformed.operation).toBe("TrackerGraphReader.parse")
+      expect(invalid.operation).toBe("TrackerGraphReader.decode")
+    }
+  }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
+
+it.effect("rejects every structural graph issue without exposing a snapshot", () =>
+  Effect.gen(function*() {
+    const reader = yield* TrackerGraphReader
+    const error = yield* reader
+      .read(FixtureTarget.make(fixture("invalid-graph")))
+      .pipe(Effect.flip, Effect.orDie)
+
+    expect(error._tag).toBe("TaskDag.GraphProjectionError")
+    if (error._tag === "TaskDag.GraphProjectionError") {
+      expect(error.issues.map((issue) => issue._tag)).toEqual([
+        "DuplicateTask",
+        "MissingPrerequisite",
+        "DuplicatePrerequisite",
+        "SelfPrerequisite",
+        "Cycle"
+      ])
+    }
+  }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
+
+it.effect("preserves containment and blocker edges from the retained snapshot", () =>
+  Effect.gen(function*() {
+    const reader = yield* TrackerGraphReader
+    const graph = yield* reader.read(
+      FixtureTarget.make(fixture("wayfinder-105"))
+    )
+    const taskIds = graph.taskIds()
+    const containmentEdges = taskIds.filter(
+      (taskId) => Option.getOrNull(graph.parentTaskIdOf(taskId)) !== null
+    ).length
+    const derivedContainmentEdges = taskIds.reduce(
+      (count, taskId) => count + graph.childrenOf(taskId).length,
+      0
+    )
+    const blockerEdges = taskIds.reduce(
+      (count, taskId) => count + graph.prerequisitesOf(taskId).length,
+      0
+    )
+
+    expect(taskIds).toHaveLength(105)
+    expect(containmentEdges).toBe(104)
+    expect(derivedContainmentEdges).toBe(104)
+    expect(blockerEdges).toBe(108)
   }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
 
 it.effect("propagates typed trace output failures", () =>

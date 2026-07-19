@@ -2,7 +2,10 @@
   "revision": "fixture-singleton-v1",
   "tasks": [
     {
-      "id": "task-only"
+      "id": "task-only",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": []
     }
   ]
 }

@@ -13,7 +13,19 @@ export const TrackerRevision = Schema.NonEmptyString.pipe(
 )
 export type TrackerRevision = typeof TrackerRevision.Type
 
-export const TrackerTask = Schema.Struct({ id: TaskId })
+export const TaskLifecycle = Schema.TaggedUnion({
+  Open: {},
+  CompletedSuccessfully: {},
+  TerminalWithoutSuccess: {}
+})
+export type TaskLifecycle = typeof TaskLifecycle.Type
+
+export const TrackerTask = Schema.Struct({
+  id: TaskId,
+  lifecycle: TaskLifecycle,
+  parentTaskId: Schema.NullOr(TaskId),
+  prerequisiteIds: Schema.Array(TaskId)
+})
 export type TrackerTask = Schema.Schema.Type<typeof TrackerTask>
 
 export const TrackerSnapshot = Schema.Struct({

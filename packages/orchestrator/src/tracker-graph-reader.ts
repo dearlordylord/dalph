@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { readFile } from "node:fs/promises"
-import { type FixtureTarget, TrackerSnapshot } from "./domain.js"
+import { type FixtureTarget } from "./domain.js"
+import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
 
 const TrackerReadOperation = Schema.Literals([
   "TrackerGraphReader.read",
@@ -19,7 +20,7 @@ export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>(
 interface TrackerGraphReaderService {
   readonly read: (
     target: FixtureTarget
-  ) => Effect.Effect<TrackerSnapshot, TrackerReadError>
+  ) => Effect.Effect<TaskDagSnapshot, GraphProjectionError | TrackerReadError>
 }
 
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
@@ -54,18 +55,19 @@ export const trackerGraphReaderFileLayer = Layer.effect(
       target: FixtureTarget
     ) {
       const input = yield* readJson(target)
-      const snapshot = yield* Schema.decodeUnknownEffect(TrackerSnapshot)(
-        input
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TrackerReadError({
-              operation: "TrackerGraphReader.decode",
-              detail: String(cause)
-            })
-        )
+      const projection = projectTrackerSnapshot(input)
+      if (projection._tag === "Valid") return projection.snapshot
+
+      const boundaryIssue = projection.issues.find(
+        (issue) => issue._tag === "BoundaryDecodeFailed"
       )
-      return snapshot
+      if (boundaryIssue?._tag === "BoundaryDecodeFailed") {
+        return yield* new TrackerReadError({
+          operation: "TrackerGraphReader.decode",
+          detail: boundaryIssue.detail
+        })
+      }
+      return yield* new GraphProjectionError({ issues: projection.issues })
     })
 
     return TrackerGraphReader.of({ read })

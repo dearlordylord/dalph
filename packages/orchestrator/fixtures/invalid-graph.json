@@ -1,0 +1,29 @@
+{
+  "revision": "fixture-invalid-graph-v1",
+  "tasks": [
+    {
+      "id": "task-a",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": ["task-b"]
+    },
+    {
+      "id": "task-a",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": []
+    },
+    {
+      "id": "task-b",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": ["task-a"]
+    },
+    {
+      "id": "task-c",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": ["task-c", "missing", "missing"]
+    }
+  ]
+}
