@@ -20,6 +20,9 @@
   journal owns only managed workflow history.
 - Do not duplicate authority facts or persist derived frontier, resource, or UI
   state.
+- During design and review, identify distinct domain phenomena, give them
+  canonical names, and materialize them as distinct domain types or events.
+  Document the phenomenon above each branded type and non-obvious domain event.
 - Make invalid states unrepresentable. Brand distinct identities, capacities,
   revisions, ordinals, durations, positions, and resource locators at their
   boundaries.
