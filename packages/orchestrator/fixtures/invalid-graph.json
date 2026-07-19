@@ -24,6 +24,18 @@
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-c", "missing", "missing"]
+    },
+    {
+      "id": "task-d",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": ["task-e"]
+    },
+    {
+      "id": "task-e",
+      "lifecycle": { "_tag": "Open" },
+      "parentTaskId": null,
+      "prerequisiteIds": ["task-d"]
     }
   ]
 }

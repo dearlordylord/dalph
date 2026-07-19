@@ -1,17 +1,9 @@
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
 import { TaskId } from "./domain.js"
-import { projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
+import { validSnapshot } from "./task-dag-test-support.js"
 
 const open = { _tag: "Open" } as const
-
-const validSnapshot = (input: unknown): TaskDagSnapshot => {
-  const result = projectTrackerSnapshot(input)
-  if (result._tag === "Invalid") {
-    return expect.fail(`invalid test snapshot: ${JSON.stringify(result.issues)}`)
-  }
-  return result.snapshot
-}
 
 const dagSnapshotArbitrary = fc.integer({ min: 0, max: 8 }).chain((taskCount) => {
   const possibleEdgeCount = (taskCount * (taskCount - 1)) / 2

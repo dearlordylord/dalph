@@ -1,17 +1,10 @@
 import { Option } from "effect"
 import { expect, it } from "vitest"
 import { TaskId } from "./domain.js"
-import { projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
+import { validSnapshot } from "./task-dag-test-support.js"
+import { projectTrackerSnapshot } from "./task-dag.js"
 
 const open = { _tag: "Open" } as const
-
-const validSnapshot = (input: unknown): TaskDagSnapshot => {
-  const result = projectTrackerSnapshot(input)
-  if (result._tag === "Invalid") {
-    return expect.fail(`invalid test snapshot: ${JSON.stringify(result.issues)}`)
-  }
-  return result.snapshot
-}
 
 it("rejects an invalid snapshot as a whole with every structural issue", () => {
   const wire = {
@@ -40,6 +33,18 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
         lifecycle: open,
         parentTaskId: null,
         prerequisiteIds: ["task-c", "missing", "missing"]
+      },
+      {
+        id: "task-d",
+        lifecycle: open,
+        parentTaskId: null,
+        prerequisiteIds: ["task-e"]
+      },
+      {
+        id: "task-e",
+        lifecycle: open,
+        parentTaskId: null,
+        prerequisiteIds: ["task-d"]
       }
     ]
   }
@@ -64,7 +69,7 @@ it("rejects an invalid snapshot as a whole with every structural issue", () => {
         prerequisite: "missing"
       },
       { _tag: "SelfPrerequisite", taskId: "task-c" },
-      { _tag: "Cycle", taskIds: ["task-a", "task-b"] }
+      { _tag: "Cycle", taskIds: ["task-d", "task-e"] }
     ]
   })
   expect(reversed).toEqual(result)

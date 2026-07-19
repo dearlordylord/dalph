@@ -1,17 +1,21 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option, PlatformError, Ref, Sink, Stdio } from "effect"
+import { Effect, Layer, Option, PlatformError, Ref, Schema, Sink, Stdio } from "effect"
+import { readFile } from "node:fs/promises"
 import { expect } from "vitest"
 import {
   CliUsageError,
   FixtureTarget,
   runCli,
   runCliFromStdio,
+  TaskId,
+  TraceItem,
   TraceOutput,
   TraceOutputError,
   traceOutputStdioLayer,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
+  TrackerSnapshot,
   trackerWorkflowInterpreterLayer
 } from "./index.js"
 
@@ -121,26 +125,17 @@ it.effect("traverses the retained 105-task snapshot through the same dry workflo
     const target = fixture("wayfinder-105")
     const first = yield* runAndCollect(target)
     const second = yield* runAndCollect(target)
-    const observed: unknown = JSON.parse(first[1] ?? "null")
+    const observed = Schema.decodeUnknownSync(TraceItem)(
+      JSON.parse(first[1] ?? "null")
+    )
 
     expect(second).toEqual(first)
     expect(first).toHaveLength(3)
-    expect(observed).toMatchObject({
-      _tag: "OperationOutcomeObserved",
-      outcome: {
-        _tag: "TrackerGraphObserved",
-        revision: "tracker-revision:github-issue-12-04f996b64663a5e0"
-      }
-    })
-    if (
-      typeof observed === "object"
-      && observed !== null
-      && "outcome" in observed
-      && typeof observed.outcome === "object"
-      && observed.outcome !== null
-      && "taskIds" in observed.outcome
-      && Array.isArray(observed.outcome.taskIds)
-    ) {
+    expect(observed._tag).toBe("OperationOutcomeObserved")
+    if (observed._tag === "OperationOutcomeObserved") {
+      expect(observed.outcome.revision).toBe(
+        "tracker-revision:github-issue-12-04f996b64663a5e0"
+      )
       expect(observed.outcome.taskIds).toHaveLength(105)
       expect(new Set(observed.outcome.taskIds)).toHaveLength(105)
     }
@@ -276,8 +271,12 @@ it.effect("rejects every structural graph issue without exposing a snapshot", ()
 it.effect("preserves containment and blocker edges from the retained snapshot", () =>
   Effect.gen(function*() {
     const reader = yield* TrackerGraphReader
-    const graph = yield* reader.read(
-      FixtureTarget.make(fixture("wayfinder-105"))
+    const target = FixtureTarget.make(fixture("wayfinder-105"))
+    const graph = yield* reader.read(target)
+    const fixtureSnapshot = Schema.decodeUnknownSync(TrackerSnapshot)(
+      JSON.parse(
+        yield* Effect.promise(() => readFile(target, "utf8"))
+      )
     )
     const taskIds = graph.taskIds()
     const containmentEdges = taskIds.filter(
@@ -296,6 +295,29 @@ it.effect("preserves containment and blocker edges from the retained snapshot", 
     expect(containmentEdges).toBe(104)
     expect(derivedContainmentEdges).toBe(104)
     expect(blockerEdges).toBe(108)
+    expect(
+      Option.getOrNull(
+        graph.parentTaskIdOf(TaskId.make("github-issue:44"))
+      )
+    ).toBe("github-issue:26")
+    expect(
+      graph.prerequisitesOf(TaskId.make("github-issue:44"))
+    ).toEqual(["github-issue:25"])
+
+    const fixtureTasksById = new Map(
+      fixtureSnapshot.tasks.map((task) => [task.id, task])
+    )
+    const canonicalTasks = graph.toWire().tasks
+    expect(canonicalTasks).toHaveLength(fixtureSnapshot.tasks.length)
+    for (const canonicalTask of canonicalTasks) {
+      const fixtureTask = fixtureTasksById.get(canonicalTask.id)
+      expect(fixtureTask).toBeDefined()
+      if (fixtureTask === undefined) return
+      expect(canonicalTask).toEqual({
+        ...fixtureTask,
+        prerequisiteIds: [...fixtureTask.prerequisiteIds].sort()
+      })
+    }
   }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
 
 it.effect("propagates typed trace output failures", () =>

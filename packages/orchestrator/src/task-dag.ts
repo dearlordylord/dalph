@@ -43,12 +43,39 @@ const compareTaskIds = compareCodeUnits
 
 const sorted = (taskIds: Iterable<TaskId>): ReadonlyArray<TaskId> => [...taskIds].sort(compareTaskIds)
 
-const recordSignature = (record: TrackerTask): string =>
-  JSON.stringify({
-    lifecycle: record.lifecycle,
-    parentTaskId: record.parentTaskId,
-    prerequisiteIds: [...record.prerequisiteIds].sort(compareTaskIds)
-  })
+const compareTaskIdArrays = (
+  left: ReadonlyArray<TaskId>,
+  right: ReadonlyArray<TaskId>
+): number => {
+  const sharedLength = Math.min(left.length, right.length)
+  for (let index = 0; index < sharedLength; index++) {
+    const leftTaskId = left[index]
+    const rightTaskId = right[index]
+    if (leftTaskId === undefined || rightTaskId === undefined) continue
+    const taskIdOrder = compareTaskIds(leftTaskId, rightTaskId)
+    if (taskIdOrder !== 0) return taskIdOrder
+  }
+  return left.length < right.length ? before : left.length > right.length ? 1 : 0
+}
+
+const compareParentTaskIds = (left: TaskId | null, right: TaskId | null): number =>
+  left === null
+    ? right === null ? 0 : before
+    : right === null
+    ? 1
+    : compareTaskIds(left, right)
+
+const compareTrackerTasks = (left: TrackerTask, right: TrackerTask): number => {
+  const lifecycleOrder = compareCodeUnits(left.lifecycle._tag, right.lifecycle._tag)
+  if (lifecycleOrder !== 0) return lifecycleOrder
+  const parentOrder = compareParentTaskIds(left.parentTaskId, right.parentTaskId)
+  return parentOrder !== 0
+    ? parentOrder
+    : compareTaskIdArrays(
+      [...left.prerequisiteIds].sort(compareTaskIds),
+      [...right.prerequisiteIds].sort(compareTaskIds)
+    )
+}
 
 const taskProjection = (
   tasks: HashMap.HashMap<TaskId, TaskProjection>,
@@ -136,9 +163,7 @@ export class TaskDagSnapshot {
     const recordsById = new Map<TaskId, TrackerTask>()
     const records = [...decoded.tasks].sort((left, right) => {
       const idOrder = compareTaskIds(left.id, right.id)
-      return idOrder === 0
-        ? compareCodeUnits(recordSignature(left), recordSignature(right))
-        : idOrder
+      return idOrder === 0 ? compareTrackerTasks(left, right) : idOrder
     })
 
     for (const record of records) {
