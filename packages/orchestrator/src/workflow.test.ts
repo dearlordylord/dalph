@@ -145,7 +145,7 @@ it.effect("bounds and deterministically orders the wide retained frontier", () =
     expect(traces.at(-1)?._tag).toBe("RunCompleted")
   }))
 
-it.effect("keeps semantic trace order stable when tasks complete in reverse", () =>
+it.effect("records task outcome observations in completion order", () =>
   Effect.gen(function*() {
     const firstGate = yield* Deferred.make<void>()
     const secondGate = yield* Deferred.make<void>()
