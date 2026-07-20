@@ -1,10 +1,8 @@
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
-  defaultTaskExecutionCapacity,
   FixtureTarget,
   isDependencySatisfied,
   isTaskOpen,
-  maximumTaskExecutionCapacity,
   TaskExecutionCapacity,
   TaskId,
   TaskLifecycle,

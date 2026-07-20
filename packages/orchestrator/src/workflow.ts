@@ -142,7 +142,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     outcome
   })
   yield* trace.emit(observed)
-  const executionObservations = yield* Effect.forEach(
+  yield* Effect.forEach(
     snapshot.eligibleTaskIds(),
     Effect.fn("Workflow.executeRunnableTask")(function*(taskId) {
       const executeOperation = WorkflowOperation.cases.ExecuteTask.make({ taskId })
@@ -150,14 +150,15 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         TraceItem.cases.OperationSelected.make({ operation: executeOperation })
       )
       const executionOutcome = yield* interpreter.executeTask(taskId)
-      return TraceItem.cases.TaskExecutionOutcomeObserved.make({
-        operation: executeOperation,
-        outcome: executionOutcome
-      })
+      yield* trace.emit(
+        TraceItem.cases.TaskExecutionOutcomeObserved.make({
+          operation: executeOperation,
+          outcome: executionOutcome
+        })
+      )
     }),
-    { concurrency: capacity }
+    { concurrency: capacity, discard: true }
   )
-  yield* Effect.forEach(executionObservations, trace.emit, { discard: true })
   const completed = TraceItem.cases.RunCompleted.make({})
   yield* trace.emit(completed)
 })

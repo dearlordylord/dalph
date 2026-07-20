@@ -8,18 +8,21 @@ export type FixtureTarget = typeof FixtureTarget.Type
 export const TaskId = Schema.NonEmptyString.pipe(Schema.brand("TaskId"))
 export type TaskId = typeof TaskId.Type
 
-// Accepted by the orchestration specification and intentionally revised only by
-// https://github.com/dearlordylord/dalph/issues/24,
-// https://github.com/dearlordylord/dalph/issues/54, and
-// https://github.com/dearlordylord/dalph/issues/64.
+// Accepted policy: https://github.com/dearlordylord/dalph/issues/24
+// Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
+// Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
 const defaultTaskExecutionCapacityValue = 2
 
-// Accepted by the orchestration specification and intentionally revised only by
-// https://github.com/dearlordylord/dalph/issues/24,
-// https://github.com/dearlordylord/dalph/issues/54, and
-// https://github.com/dearlordylord/dalph/issues/64.
-const maximumTaskExecutionCapacityValue = 8
+// Accepted policy: https://github.com/dearlordylord/dalph/issues/24
+// Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
+// Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
+export const maximumTaskExecutionCapacityValue = 8
 
+/**
+ * The bounded number of runnable tasks that the coordinator may admit for
+ * execution. This is neither tracker execution admission nor integration
+ * capacity.
+ */
 export const TaskExecutionCapacity = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1),
   Schema.isLessThanOrEqualTo(maximumTaskExecutionCapacityValue)
@@ -28,10 +31,6 @@ export type TaskExecutionCapacity = typeof TaskExecutionCapacity.Type
 
 export const defaultTaskExecutionCapacity = TaskExecutionCapacity.make(
   defaultTaskExecutionCapacityValue
-)
-
-export const maximumTaskExecutionCapacity = TaskExecutionCapacity.make(
-  maximumTaskExecutionCapacityValue
 )
 
 export const TrackerRevision = Schema.NonEmptyString.pipe(

@@ -189,14 +189,6 @@ it.effect("keeps semantic trace order stable when tasks complete in reverse", ()
         ? [item.operation.taskId]
         : []
     )
-    const lastSelectionIndex = items.findLastIndex(
-      (item) => item._tag === "OperationSelected"
-    )
-    const firstTaskObservationIndex = items.findIndex(
-      (item) => item._tag === "TaskExecutionOutcomeObserved"
-    )
-
     expect(selected).toEqual(["group", "root"])
-    expect(observed).toEqual(["group", "root"])
-    expect(firstTaskObservationIndex).toBeGreaterThan(lastSelectionIndex)
+    expect(observed).toEqual(["root", "group"])
   }))

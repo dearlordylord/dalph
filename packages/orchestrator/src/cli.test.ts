@@ -47,15 +47,17 @@ const expectedTrace = (
       operation: { _tag: "ReadTrackerGraph", target },
       outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
     },
-    ...runnableTaskIds.map((taskId) => ({
-      _tag: "OperationSelected",
-      operation: { _tag: "ExecuteTask", taskId }
-    })),
-    ...runnableTaskIds.map((taskId) => ({
-      _tag: "TaskExecutionOutcomeObserved",
-      operation: { _tag: "ExecuteTask", taskId },
-      outcome: { _tag: "TaskExecuted" }
-    })),
+    ...runnableTaskIds.flatMap((taskId) => [
+      {
+        _tag: "OperationSelected",
+        operation: { _tag: "ExecuteTask", taskId }
+      },
+      {
+        _tag: "TaskExecutionOutcomeObserved",
+        operation: { _tag: "ExecuteTask", taskId },
+        outcome: { _tag: "TaskExecuted" }
+      }
+    ]),
     { _tag: "RunCompleted" }
   ].map((item) => JSON.stringify(item))
 
