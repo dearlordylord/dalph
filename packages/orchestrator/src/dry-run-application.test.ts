@@ -33,7 +33,7 @@ it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
     yield* dryRunCliApplication.pipe(Effect.provide(stdioLayer))
 
     expect(dryApplicationEnvironmentIsNarrow).toBe(true)
-    expect(yield* Ref.get(chunks)).toHaveLength(5)
+    expect(yield* Ref.get(chunks)).toHaveLength(4)
   }))
 
 it.effect("denies Effect CLI filesystem and child-process operations", () =>

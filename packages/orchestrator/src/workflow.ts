@@ -1,16 +1,47 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import type { TaskExecutionCapacity } from "./domain.js"
-import { FixtureTarget, TaskId, TrackerRevision } from "./domain.js"
+import { FixtureTarget, OperationId, TaskId, TrackerRevision } from "./domain.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import { TaskExecution } from "./task-execution.js"
 import { TraceOutput, type TraceOutputError } from "./trace-output.js"
 import { TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
 
 export const WorkflowOperation = Schema.TaggedUnion({
-  ReadTrackerGraph: { target: FixtureTarget },
-  ExecuteTask: { taskId: TaskId }
+  ReadTrackerGraph: {
+    operationId: OperationId,
+    predecessorOperationIds: Schema.Array(OperationId),
+    target: FixtureTarget
+  },
+  ExecuteTask: {
+    operationId: OperationId,
+    predecessorOperationIds: Schema.Array(OperationId),
+    taskId: TaskId
+  }
 })
 export type WorkflowOperation = typeof WorkflowOperation.Type
+
+const trackerGraphObservationOperationId = OperationId.make(
+  "observe-tracker-graph"
+)
+
+export const makeTrackerGraphObservationOperation = (
+  target: FixtureTarget
+): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
+  WorkflowOperation.cases.ReadTrackerGraph.make({
+    operationId: trackerGraphObservationOperationId,
+    predecessorOperationIds: [],
+    target
+  })
+
+export const makeTaskExecutionOperation = (
+  taskId: TaskId,
+  predecessorOperationId: OperationId
+): typeof WorkflowOperation.cases.ExecuteTask.Type =>
+  WorkflowOperation.cases.ExecuteTask.make({
+    operationId: OperationId.make(`task-execution:${taskId}`),
+    predecessorOperationIds: [predecessorOperationId],
+    taskId
+  })
 
 export const WorkflowOutcome = Schema.TaggedUnion({
   TrackerGraphObserved: {
@@ -92,18 +123,77 @@ export const dryRunWorkflowInterpreterLayer: Layer.Layer<
   })
 )
 
-export const TraceItem = Schema.TaggedUnion({
-  OperationSelected: { operation: WorkflowOperation },
-  TrackerGraphOutcomeObserved: {
+/** Records intent to invoke a workflow operation; it is not execution admission. */
+export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
+  operation: WorkflowOperation
+})
+export type OperationSelected = typeof OperationSelected.Type
+
+/**
+ * Records the graph result after the tracker-read capability is observed. It
+ * is not tracker execution admission, task admission, or deterministic graph
+ * presentation order.
+ */
+export const TrackerGraphOutcomeObserved = Schema.TaggedStruct(
+  "TrackerGraphOutcomeObserved",
+  {
     operation: WorkflowOperation.cases.ReadTrackerGraph,
     outcome: WorkflowOutcome.cases.TrackerGraphObserved
-  },
-  TaskExecutionOutcomeObserved: {
+  }
+)
+export type TrackerGraphOutcomeObserved = typeof TrackerGraphOutcomeObserved.Type
+
+/**
+ * Records the tracker-owned admission of a task into execution scope. This is
+ * neither coordinator capacity admission nor execution-substrate start.
+ */
+export const TrackerExecutionAdmitted = Schema.TaggedStruct(
+  "TrackerExecutionAdmitted",
+  { operation: WorkflowOperation.cases.ExecuteTask }
+)
+export type TrackerExecutionAdmitted = typeof TrackerExecutionAdmitted.Type
+
+/**
+ * Records that bounded coordinator capacity admitted a task execution. It is
+ * neither tracker admission nor evidence that an execution substrate started.
+ */
+export const TaskExecutionAdmitted = Schema.TaggedStruct(
+  "TaskExecutionAdmitted",
+  { operation: WorkflowOperation.cases.ExecuteTask }
+)
+export type TaskExecutionAdmitted = typeof TaskExecutionAdmitted.Type
+
+/**
+ * Records an execution-substrate observation that execution began. Invocation
+ * of the controlled fixture capability alone cannot establish this fact.
+ */
+export const TaskExecutionStarted = Schema.TaggedStruct(
+  "TaskExecutionStarted",
+  { operation: WorkflowOperation.cases.ExecuteTask }
+)
+export type TaskExecutionStarted = typeof TaskExecutionStarted.Type
+
+/**
+ * Records a task capability outcome when it is actually observed. Its position
+ * is observation order, not deterministic task presentation order.
+ */
+export const TaskExecutionOutcomeObserved = Schema.TaggedStruct(
+  "TaskExecutionOutcomeObserved",
+  {
     operation: WorkflowOperation.cases.ExecuteTask,
     outcome: WorkflowOutcome.cases.TaskExecuted
-  },
-  RunCompleted: {}
-})
+  }
+)
+export type TaskExecutionOutcomeObserved = typeof TaskExecutionOutcomeObserved.Type
+
+export const TraceItem = Schema.Union([
+  OperationSelected,
+  TrackerGraphOutcomeObserved,
+  TrackerExecutionAdmitted,
+  TaskExecutionAdmitted,
+  TaskExecutionStarted,
+  TaskExecutionOutcomeObserved
+])
 export type TraceItem = typeof TraceItem.Type
 
 const SemanticTrace = Schema.Array(TraceItem)
@@ -129,29 +219,39 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
-  const operation = WorkflowOperation.cases.ReadTrackerGraph.make({ target })
-  const selected = TraceItem.cases.OperationSelected.make({ operation })
+  const operation = makeTrackerGraphObservationOperation(target)
+  const selected = OperationSelected.make({ operation })
   yield* trace.emit(selected)
   const snapshot = yield* interpreter.readTrackerGraph(target)
   const outcome = WorkflowOutcome.cases.TrackerGraphObserved.make({
     revision: snapshot.revision,
     taskIds: observedTaskIds(snapshot)
   })
-  const observed = TraceItem.cases.TrackerGraphOutcomeObserved.make({
+  const observed = TrackerGraphOutcomeObserved.make({
     operation,
     outcome
   })
   yield* trace.emit(observed)
+  // Eligibility owns a deterministic comparison projection; trace emission
+  // continues to preserve the independent order in which outcomes are observed.
+  const taskAdmissionOrder = snapshot.eligibleTaskIds()
+  const traceEmission = yield* Semaphore.make(1)
+  const emitTaskTrace = Effect.fn("Workflow.emitTaskTrace")((item: TraceItem) =>
+    traceEmission.withPermit(trace.emit(item))
+  )
   yield* Effect.forEach(
-    snapshot.eligibleTaskIds(),
+    taskAdmissionOrder,
     Effect.fn("Workflow.executeRunnableTask")(function*(taskId) {
-      const executeOperation = WorkflowOperation.cases.ExecuteTask.make({ taskId })
-      yield* trace.emit(
-        TraceItem.cases.OperationSelected.make({ operation: executeOperation })
+      const executeOperation = makeTaskExecutionOperation(
+        taskId,
+        operation.operationId
+      )
+      yield* emitTaskTrace(
+        TaskExecutionAdmitted.make({ operation: executeOperation })
       )
       const executionOutcome = yield* interpreter.executeTask(taskId)
-      yield* trace.emit(
-        TraceItem.cases.TaskExecutionOutcomeObserved.make({
+      yield* emitTaskTrace(
+        TaskExecutionOutcomeObserved.make({
           operation: executeOperation,
           outcome: executionOutcome
         })
@@ -159,8 +259,6 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     }),
     { concurrency: capacity, discard: true }
   )
-  const completed = TraceItem.cases.RunCompleted.make({})
-  yield* trace.emit(completed)
 })
 
 export const encodeTraceItem = (item: TraceItem): string => JSON.stringify(Schema.encodeUnknownSync(TraceItem)(item))

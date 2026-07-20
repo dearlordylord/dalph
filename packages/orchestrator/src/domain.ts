@@ -1,12 +1,21 @@
 import { Schema } from "effect"
 
+/** Identifies a fixture locator, not a task, run, or execution resource. */
 export const FixtureTarget = Schema.NonEmptyString.pipe(
   Schema.brand("FixtureTarget")
 )
 export type FixtureTarget = typeof FixtureTarget.Type
 
+/** Identifies a tracker-owned task, not one of its attempts or operations. */
 export const TaskId = Schema.NonEmptyString.pipe(Schema.brand("TaskId"))
 export type TaskId = typeof TaskId.Type
+
+/**
+ * Causally binds one workflow operation's intent and observations. It is not a
+ * task identity, attempt identity, journal position, or trace position.
+ */
+export const OperationId = Schema.NonEmptyString.pipe(Schema.brand("OperationId"))
+export type OperationId = typeof OperationId.Type
 
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
 // Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
@@ -33,6 +42,7 @@ export const defaultTaskExecutionCapacity = TaskExecutionCapacity.make(
   defaultTaskExecutionCapacityValue
 )
 
+/** Identifies tracker snapshot content, not workflow or journal ordering. */
 export const TrackerRevision = Schema.NonEmptyString.pipe(
   Schema.brand("TrackerRevision")
 )

@@ -7,6 +7,8 @@ import {
   CliUsageError,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
+  makeTaskExecutionOperation,
+  makeTrackerGraphObservationOperation,
   runCli,
   runCliFromStdio,
   TaskId,
@@ -36,30 +38,36 @@ const expectedTrace = (
   revision: string,
   taskIds: ReadonlyArray<string>,
   runnableTaskIds: ReadonlyArray<string> = taskIds
-): ReadonlyArray<string> =>
-  [
+): ReadonlyArray<string> => {
+  const readOperation = makeTrackerGraphObservationOperation(
+    FixtureTarget.make(target)
+  )
+  return [
     {
       _tag: "OperationSelected",
-      operation: { _tag: "ReadTrackerGraph", target }
+      operation: readOperation
     },
     {
       _tag: "TrackerGraphOutcomeObserved",
-      operation: { _tag: "ReadTrackerGraph", target },
+      operation: readOperation,
       outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
     },
-    ...runnableTaskIds.flatMap((taskId) => [
-      {
-        _tag: "OperationSelected",
-        operation: { _tag: "ExecuteTask", taskId }
-      },
-      {
-        _tag: "TaskExecutionOutcomeObserved",
-        operation: { _tag: "ExecuteTask", taskId },
-        outcome: { _tag: "TaskExecuted" }
-      }
-    ]),
-    { _tag: "RunCompleted" }
+    ...runnableTaskIds.flatMap((taskId) => {
+      const operation = makeTaskExecutionOperation(
+        TaskId.make(taskId),
+        readOperation.operationId
+      )
+      return [
+        { _tag: "TaskExecutionAdmitted", operation },
+        {
+          _tag: "TaskExecutionOutcomeObserved",
+          operation,
+          outcome: { _tag: "TaskExecuted" }
+        }
+      ]
+    })
   ].map((item) => JSON.stringify(item))
+}
 
 const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
   Effect.gen(function*() {
@@ -145,7 +153,7 @@ it.effect("traverses the retained 105-task snapshot through the same dry workflo
     )
 
     expect(second).toEqual(first)
-    expect(first).toHaveLength(73)
+    expect(first).toHaveLength(72)
     expect(observed._tag).toBe("TrackerGraphOutcomeObserved")
     if (observed._tag === "TrackerGraphOutcomeObserved") {
       expect(observed.outcome.revision).toBe(
