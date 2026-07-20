@@ -13,14 +13,16 @@ import {
   TaskExecutionOutcomeObserved,
   TaskExecutionStarted,
   TaskId,
+  TraceOutputError,
   TrackerExecutionAdmitted,
   trackerGraphReaderFileLayer,
   trackerWorkflowInterpreterLayer,
   WorkflowTrace
 } from "./index.js"
 
-const fixture = (name: "diamond" | "wayfinder-105"): FixtureTarget =>
-  FixtureTarget.make(new URL(`../fixtures/${name}.json`, import.meta.url).pathname)
+const fixture = (
+  name: "diamond" | "singleton" | "wayfinder-105"
+): FixtureTarget => FixtureTarget.make(new URL(`../fixtures/${name}.json`, import.meta.url).pathname)
 
 const controlledExecutor = Effect.gen(function*() {
   const started = yield* Queue.unbounded<TaskId>()
@@ -273,4 +275,153 @@ it.effect("records task outcome observations in completion order", () =>
     }
     expect(items.some((item) => item._tag === "TrackerExecutionAdmitted")).toBe(false)
     expect(items.some((item) => item._tag === "TaskExecutionStarted")).toBe(false)
+  }))
+
+it.effect("does not invoke execution when task admission output fails", () =>
+  Effect.gen(function*() {
+    const invoked = yield* Ref.make(false)
+    const failure = new TraceOutputError({ detail: "admission output failed" })
+    const service = TaskExecution.of({
+      execute: Effect.fn("TaskExecution.Test.admissionFailure")(function*() {
+        yield* Ref.set(invoked, true)
+      })
+    })
+    const trace = WorkflowTrace.of({
+      emit: Effect.fn("WorkflowTrace.Test.admissionFailure")(function*(item) {
+        if (item._tag === "TaskExecutionAdmitted") {
+          return yield* Effect.fail(failure)
+        }
+      })
+    })
+
+    const observed = yield* runWorkflow(
+      fixture("singleton"),
+      TaskExecutionCapacity.make(1)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(WorkflowTrace, trace)),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+    expect(yield* Ref.get(invoked)).toBe(false)
+  }))
+
+it.effect("keeps later work unadmitted while outcome output is blocked", () =>
+  Effect.gen(function*() {
+    const started = yield* Queue.unbounded<TaskId>()
+    const admitted = yield* Queue.unbounded<TaskId>()
+    const releases = yield* Queue.unbounded<void>()
+    const capabilityOutcomes = yield* Queue.unbounded<TaskId>()
+    const invocationCount = yield* Ref.make(0)
+    const firstOutcomeWriteStarted = yield* Deferred.make<void>()
+    const releaseFirstOutcomeWrite = yield* Deferred.make<void>()
+    const outcomeWriteCount = yield* Ref.make(0)
+    const service = TaskExecution.of({
+      execute: Effect.fn("TaskExecution.Test.outputBackpressure")(function*(taskId) {
+        const invocationIndex = yield* Ref.getAndUpdate(
+          invocationCount,
+          (count) => count + 1
+        )
+        yield* Queue.offer(started, taskId)
+        if (invocationIndex < 2) {
+          yield* Queue.take(releases)
+        }
+        yield* Queue.offer(capabilityOutcomes, taskId)
+      })
+    })
+    const trace = WorkflowTrace.of({
+      emit: Effect.fn("WorkflowTrace.Test.outputBackpressure")(function*(item) {
+        if (item._tag === "TaskExecutionAdmitted") {
+          yield* Queue.offer(admitted, item.operation.taskId)
+        }
+        if (item._tag === "TaskExecutionOutcomeObserved") {
+          const writeIndex = yield* Ref.getAndUpdate(
+            outcomeWriteCount,
+            (count) => count + 1
+          )
+          if (writeIndex === 0) {
+            yield* Deferred.succeed(firstOutcomeWriteStarted, undefined)
+            yield* Deferred.await(releaseFirstOutcomeWrite)
+          }
+        }
+      })
+    })
+    const run = yield* runWorkflow(
+      fixture("wayfinder-105"),
+      TaskExecutionCapacity.make(2)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(WorkflowTrace, trace)),
+      Effect.forkScoped
+    )
+
+    yield* Queue.take(started)
+    yield* Queue.take(started)
+    yield* Queue.take(admitted)
+    yield* Queue.take(admitted)
+    yield* Queue.offer(releases, undefined)
+    yield* Queue.take(capabilityOutcomes)
+    yield* Deferred.await(firstOutcomeWriteStarted)
+    yield* Queue.offer(releases, undefined)
+    yield* Queue.take(capabilityOutcomes)
+
+    expect(yield* Queue.size(admitted)).toBe(0)
+
+    yield* Deferred.succeed(releaseFirstOutcomeWrite, undefined)
+    yield* Fiber.join(run)
+  }))
+
+it.effect("interrupts concurrent execution when outcome output fails", () =>
+  Effect.gen(function*() {
+    const started = yield* Queue.unbounded<TaskId>()
+    const invocationCount = yield* Ref.make(0)
+    const releaseFirst = yield* Deferred.make<void>()
+    const siblingInterrupted = yield* Deferred.make<void>()
+    const failure = new TraceOutputError({ detail: "outcome output failed" })
+    const service = TaskExecution.of({
+      execute: Effect.fn("TaskExecution.Test.outcomeFailure")(function*(taskId) {
+        const invocationIndex = yield* Ref.getAndUpdate(
+          invocationCount,
+          (count) => count + 1
+        )
+        yield* Queue.offer(started, taskId)
+        if (invocationIndex === 0) {
+          yield* Deferred.await(releaseFirst)
+        } else {
+          yield* Effect.never.pipe(
+            Effect.onInterrupt(() => Deferred.succeed(siblingInterrupted, undefined).pipe(Effect.asVoid))
+          )
+        }
+      })
+    })
+    const trace = WorkflowTrace.of({
+      emit: Effect.fn("WorkflowTrace.Test.outcomeFailure")(function*(item) {
+        if (item._tag === "TaskExecutionOutcomeObserved") {
+          return yield* Effect.fail(failure)
+        }
+      })
+    })
+    const run = yield* runWorkflow(
+      fixture("wayfinder-105"),
+      TaskExecutionCapacity.make(2)
+    ).pipe(
+      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(WorkflowTrace, trace)),
+      Effect.forkScoped
+    )
+
+    yield* Queue.take(started)
+    yield* Queue.take(started)
+    yield* Deferred.succeed(releaseFirst, undefined)
+
+    expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(failure)
+    yield* Deferred.await(siblingInterrupted)
+    expect(yield* Queue.size(started)).toBe(0)
   }))

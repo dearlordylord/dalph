@@ -235,6 +235,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   // Eligibility owns a deterministic comparison projection; trace emission
   // continues to preserve the independent order in which outcomes are observed.
   const taskAdmissionOrder = snapshot.eligibleTaskIds()
+  // This process-local semaphore is presentation backpressure, not durable
+  // workflow history. A future live projector reconstructs order from committed
+  // journal positions rather than persisting this coordination state.
   const traceEmission = yield* Semaphore.make(1)
   const emitTaskTrace = Effect.fn("Workflow.emitTaskTrace")((item: TraceItem) =>
     traceEmission.withPermit(trace.emit(item))
@@ -242,6 +245,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   yield* Effect.forEach(
     taskAdmissionOrder,
     Effect.fn("Workflow.executeRunnableTask")(function*(taskId) {
+      // Entering this capacity-bounded callback is task-execution admission:
+      // one slot is already held, the event is acknowledged next, and only
+      // then may the injected execution capability begin.
       const executeOperation = makeTaskExecutionOperation(
         taskId,
         operation.operationId
