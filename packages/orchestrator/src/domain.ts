@@ -8,13 +8,31 @@ export type FixtureTarget = typeof FixtureTarget.Type
 export const TaskId = Schema.NonEmptyString.pipe(Schema.brand("TaskId"))
 export type TaskId = typeof TaskId.Type
 
-const maximumTaskExecutionCapacity = 8
+// Accepted by the orchestration specification and intentionally revised only by
+// https://github.com/dearlordylord/dalph/issues/24,
+// https://github.com/dearlordylord/dalph/issues/54, and
+// https://github.com/dearlordylord/dalph/issues/64.
+const defaultTaskExecutionCapacityValue = 2
+
+// Accepted by the orchestration specification and intentionally revised only by
+// https://github.com/dearlordylord/dalph/issues/24,
+// https://github.com/dearlordylord/dalph/issues/54, and
+// https://github.com/dearlordylord/dalph/issues/64.
+const maximumTaskExecutionCapacityValue = 8
 
 export const TaskExecutionCapacity = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(maximumTaskExecutionCapacity)
+  Schema.isLessThanOrEqualTo(maximumTaskExecutionCapacityValue)
 ).pipe(Schema.brand("TaskExecutionCapacity"))
 export type TaskExecutionCapacity = typeof TaskExecutionCapacity.Type
+
+export const defaultTaskExecutionCapacity = TaskExecutionCapacity.make(
+  defaultTaskExecutionCapacityValue
+)
+
+export const maximumTaskExecutionCapacity = TaskExecutionCapacity.make(
+  maximumTaskExecutionCapacityValue
+)
 
 export const TrackerRevision = Schema.NonEmptyString.pipe(
   Schema.brand("TrackerRevision")
