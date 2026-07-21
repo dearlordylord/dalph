@@ -58,6 +58,16 @@ persist a second projection of the same committed fact. Conversely, no task
 execution may be inferred from an admission trace alone; reconciliation
 requires the authoritative journal and fresh execution-substrate observations.
 
+Physical journal schema evolution, event evolution, and semantic recovery are
+separate boundaries. Physical SQLite changes use ordered Effect SQL migrations.
+Each immutable journal event has a versioned envelope and JSON payload decoded
+and upcast through Effect Schema; stored history is not rewritten merely to
+adopt a newer in-process event shape. Successful row decoding is necessary but
+not sufficient for recovery: a managed-history reduction must validate the
+ordered events and return either a valid recovery state or typed semantic
+issues. Dalph does not persist that derived state. See
+[ADR 0001](adr/0001-versioned-journal-evolution.md).
+
 ## Documentation Authority
 
 | Document or system                                                                 | Tooling authority                                                                |

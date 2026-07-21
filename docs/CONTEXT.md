@@ -80,6 +80,16 @@ The Dalph-owned managed workflow history of durable intentions and subsequently
 observed outcomes used for reconciliation and recovery.
 _Avoid_: Semantic execution trace, tracker state, execution-substrate state
 
+**Journal event envelope**:
+The immutable persisted identity, order, event kind, event version, and payload
+of one authority-journal fact.
+_Avoid_: Serialized coordinator, database row
+
+**Managed-history reduction**:
+The total fold that derives a valid recovery state or typed semantic issues from
+an ordered authority journal without persisting the derived state.
+_Avoid_: Event decoding, coordinator rehydration, reducer rollup table
+
 **Run termination**:
 The final managed outcome of a run, classified as completed, blocked, cancelled,
 or failed after the required authority observations and managed work settle. A

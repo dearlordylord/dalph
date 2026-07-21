@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import type { TaskExecutionCapacity } from "./domain.js"
 import { FixtureTarget, OperationId, TaskId, TrackerRevision } from "./domain.js"
+import type { JournalReconciliationRequired, JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import { TaskExecution } from "./task-execution.js"
 import { TraceOutput, type TraceOutputError } from "./trace-output.js"
@@ -20,6 +21,12 @@ export const WorkflowOperation = Schema.TaggedUnion({
 })
 export type WorkflowOperation = typeof WorkflowOperation.Type
 
+// These deterministic fixture identities are only the issue #39 seam. Before
+// controlled mutations are implemented, issue #41 must use Wayfinder to
+// specify allocation and lifetime: an unresolved operation keeps its identity,
+// while a genuinely new operation receives a distinct one.
+// https://github.com/dearlordylord/dalph/issues/39
+// https://github.com/dearlordylord/dalph/issues/41
 const trackerGraphObservationOperationId = OperationId.make(
   "observe-tracker-graph"
 )
@@ -56,16 +63,34 @@ const observedTaskIds = (
   snapshot: TaskDagSnapshot
 ): ReadonlyArray<TaskId> => snapshot.topologicalOrder()
 
+export const makeTrackerGraphObservedOutcome = (
+  snapshot: TaskDagSnapshot
+): typeof WorkflowOutcome.cases.TrackerGraphObserved.Type =>
+  WorkflowOutcome.cases.TrackerGraphObserved.make({
+    revision: snapshot.revision,
+    taskIds: observedTaskIds(snapshot)
+  })
+
 interface WorkflowInterpreterService {
   readonly readTrackerGraph: (
-    target: FixtureTarget
+    operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
   ) => Effect.Effect<
     TaskDagSnapshot,
-    FixtureReadError | GraphProjectionError | TrackerReadError
+    | FixtureReadError
+    | GraphProjectionError
+    | JournalStoreContradiction
+    | JournalReconciliationRequired
+    | JournalStoreError
+    | TrackerReadError
   >
   readonly executeTask: (
-    taskId: TaskId
-  ) => Effect.Effect<typeof WorkflowOutcome.cases.TaskExecuted.Type>
+    operation: typeof WorkflowOperation.cases.ExecuteTask.Type
+  ) => Effect.Effect<
+    typeof WorkflowOutcome.cases.TaskExecuted.Type,
+    | JournalReconciliationRequired
+    | JournalStoreContradiction
+    | JournalStoreError
+  >
 }
 
 export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
@@ -82,13 +107,13 @@ const taskExecutingWorkflowInterpreterLayer = (
       const taskExecution = yield* TaskExecution
       const readTrackerGraph = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
-      )(function*(target: FixtureTarget) {
-        return yield* reader.read(target)
+      )(function*(operation) {
+        return yield* reader.read(operation.target)
       })
       const executeTask = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.executeTask`
-      )(function*(taskId: TaskId) {
-        yield* taskExecution.execute(taskId)
+      )(function*(operation) {
+        yield* taskExecution.execute(operation.taskId)
         return WorkflowOutcome.cases.TaskExecuted.make({})
       })
 
@@ -199,11 +224,8 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const operation = makeTrackerGraphObservationOperation(target)
   const selected = OperationSelected.make({ operation })
   yield* trace.emit(selected)
-  const snapshot = yield* interpreter.readTrackerGraph(target)
-  const outcome = WorkflowOutcome.cases.TrackerGraphObserved.make({
-    revision: snapshot.revision,
-    taskIds: observedTaskIds(snapshot)
-  })
+  const snapshot = yield* interpreter.readTrackerGraph(operation)
+  const outcome = makeTrackerGraphObservedOutcome(snapshot)
   const observed = TrackerGraphOutcomeObserved.make({
     operation,
     outcome
@@ -232,7 +254,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
       yield* emitTaskTrace(
         TaskExecutionAdmitted.make({ operation: executeOperation })
       )
-      const executionOutcome = yield* interpreter.executeTask(taskId)
+      const executionOutcome = yield* interpreter.executeTask(executeOperation)
       yield* emitTaskTrace(
         TaskExecutionOutcomeObserved.make({
           operation: executeOperation,

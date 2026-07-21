@@ -1,5 +1,4 @@
 import { Clock, Duration, Effect, Layer, Random, Schema } from "effect"
-import type { TaskId } from "./domain.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
 import { WorkflowInterpreter, WorkflowOutcome } from "./workflow.js"
 
@@ -42,11 +41,11 @@ export const dryRunWorkflowInterpreterLayer: Layer.Layer<
     const reader = yield* TrackerGraphReader
     const readTrackerGraph = Effect.fn(
       "WorkflowInterpreter.DryRun.readTrackerGraph"
-    )(function*(target) {
-      return yield* reader.read(target)
+    )(function*(operation) {
+      return yield* reader.read(operation.target)
     })
     const executeTask = Effect.fn("WorkflowInterpreter.DryRun.executeTask")(function*(
-      _taskId: TaskId
+      _operation
     ) {
       const duration = yield* simulatedTaskDuration(random)
       yield* Clock.clockWith((clock) => clock.sleep(Duration.millis(duration)))

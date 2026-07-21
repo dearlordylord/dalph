@@ -106,9 +106,9 @@ const controlledInterpreterLayer = (
       const interpreter = yield* WorkflowInterpreter
       const executeTask = Effect.fn(
         "WorkflowInterpreter.Controlled.executeTask"
-      )(function*(taskId: TaskId) {
-        const outcome = yield* interpreter.executeTask(taskId)
-        yield* awaitRelease(taskId)
+      )(function*(operation) {
+        const outcome = yield* interpreter.executeTask(operation)
+        yield* awaitRelease(operation.taskId)
         return outcome
       })
 

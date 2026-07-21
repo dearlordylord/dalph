@@ -3,7 +3,12 @@ export {
   FixtureTarget,
   isDependencySatisfied,
   isTaskOpen,
+  JournalDatabaseLocator,
+  JournalPosition,
+  JournalRecordKey,
+  JournalSchemaVersion,
   OperationId,
+  RunId,
   TaskExecutionCapacity,
   TaskId,
   TaskLifecycle,
@@ -13,6 +18,23 @@ export {
 } from "./domain.js"
 export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
 export { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
+export {
+  JournalDataCorruption,
+  JournalReconciliationRequired,
+  JournalSchemaIncompatible,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
+  JournalStore,
+  JournalStoreContradiction,
+  ManagedWorkflowEvent,
+  managedWorkflowIntent,
+  managedWorkflowOutcome,
+  memoryJournalStoreLayer
+} from "./journal-store.js"
+export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
+export { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 export {
   GraphProjectionError,
   ProjectionIssue,

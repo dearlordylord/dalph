@@ -17,6 +17,34 @@ export type TaskId = typeof TaskId.Type
 export const OperationId = Schema.NonEmptyString.pipe(Schema.brand("OperationId"))
 export type OperationId = typeof OperationId.Type
 
+/** Identifies one recoverable managed traversal, not a task or operation. */
+export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
+export type RunId = typeof RunId.Type
+
+/** Identifies one durable managed-history fact within a run. */
+export const JournalRecordKey = Schema.NonEmptyString.pipe(
+  Schema.brand("JournalRecordKey")
+)
+export type JournalRecordKey = typeof JournalRecordKey.Type
+
+/** Orders committed journal facts within one run, starting at one. */
+export const JournalPosition = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1)
+).pipe(Schema.brand("JournalPosition"))
+export type JournalPosition = typeof JournalPosition.Type
+
+/** Locates the SQLite authority journal, not a worktree or fixture. */
+export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("JournalDatabaseLocator")
+)
+export type JournalDatabaseLocator = typeof JournalDatabaseLocator.Type
+
+/** Identifies an on-disk journal schema generation; zero means uninitialized. */
+export const JournalSchemaVersion = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0)
+).pipe(Schema.brand("JournalSchemaVersion"))
+export type JournalSchemaVersion = typeof JournalSchemaVersion.Type
+
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
 // Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
 // Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
