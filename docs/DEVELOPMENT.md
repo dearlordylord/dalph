@@ -6,6 +6,14 @@ pnpm quality harness at the root. Package-local commands may be narrower during
 development, but `pnpm check:all` is the acceptance gate for repository
 changes.
 
+The root `package.json` `engines.node` field is the machine-readable authority
+for supported Node lines; CI derives its minimum-version matrix from that range
+and runs the complete gate on each entry. Before adding a supported Node major,
+verify a frozen install and the production coordinator-lock contract on that
+major. The native lock dependency must either ship a matching prebuilt binary
+or the repository must explicitly accept and provide its source-build toolchain;
+an accidental local compilation is not upgrade evidence.
+
 ## Workspace shape
 
 Production packages belong under `packages/*`. Each package owns its runtime

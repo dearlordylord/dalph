@@ -32,14 +32,32 @@ process death. A competing coordinator fails before mutation.
 Requested path aliases resolve through one shared filesystem boundary before
 either controlled or production locking observes the canonical locator.
 
-Every affected mutation runs through the ownership guard. Loss of the scoped
-ownership or an observation that the locked directory descriptor and canonical
-directory path name different resources interrupts in-flight guarded mutations
-and rejects later ones. The descriptor locks the existing Git common directory itself, so
-replacing a child lock file cannot create competing ownership. A durable row,
-stale-file timeout, TTL lease, in-process semaphore, and journal fact are not
-substitutes for coordinator ownership. Dry-run remains non-mutating and does
-not acquire this capability.
+The production composition must acquire this capability before enabling live
+mutation, and every affected mutation must run through its ownership guard. Loss
+of the scoped ownership or an observation that the locked directory descriptor
+and canonical directory path name different resources interrupts in-flight
+guarded mutations and rejects later ones. The descriptor locks the existing Git
+common directory itself, so replacing a child lock file cannot create competing
+ownership. A durable row, stale-file timeout, TTL lease, in-process semaphore,
+and journal fact are not substitutes for coordinator ownership. Dry-run remains
+non-mutating and does not acquire this capability.
+
+The native lock request is non-blocking and is never retried. Acquisition also
+performs one canonical-path resolution, open, and stat, whose latency belongs to
+the supported local filesystem. Every new mutation synchronously performs one
+descriptor/path stat pair before crossing its effect boundary. While ownership
+is held, the background observer starts its next stat pair one second after the
+preceding observation completes. On a responsive local host contradiction
+detection is therefore nominally about one second, not a strict wall-clock
+deadline; active mutations add their own observations. This local ownership
+cadence is independent of tracker graph refresh and tracker API latency.
+
+The supported identity boundary is a local filesystem path canonicalizable by
+`realpath`, including symbolic links, `.` and `..` segments, and filesystem case
+normalization when the host canonicalizes case aliases. Network filesystems and
+distinct bind-mount aliases require an explicitly qualified locking contract
+before production use; local-path tests must not be treated as evidence for
+distributed lock semantics.
 
 ## Durability and Reconstruction
 
