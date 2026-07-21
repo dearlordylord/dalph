@@ -85,6 +85,17 @@ The immutable persisted identity, order, event kind, event version, and payload
 of one authority-journal fact.
 _Avoid_: Serialized coordinator, database row
 
+**Git common directory**:
+The canonical Git-owned administrative directory shared by a repository and
+all of its linked worktrees. It is the resource scope for live coordinator
+ownership, not a worktree, repository root, or Dalph control directory.
+_Avoid_: Worktree `.git` file, project directory, coordinator identity
+
+**Git common-directory target**:
+A requested path that must resolve to a canonical Git common-directory locator
+before either controlled or production ownership observes it.
+_Avoid_: Canonical locator, coordinator identity
+
 **Managed-history reduction**:
 The total fold that derives a valid recovery state or typed semantic issues from
 an ordered authority journal without persisting the derived state.

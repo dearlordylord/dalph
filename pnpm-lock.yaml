@@ -92,6 +92,9 @@ importers:
       effect:
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99
+      fs-ext-extra-prebuilt:
+        specifier: 2.2.9
+        version: 2.2.9
 
 packages:
 
@@ -1594,6 +1597,10 @@ packages:
     resolution: {integrity: sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg==}
     engines: {node: '>= 0.4'}
 
+  fs-ext-extra-prebuilt@2.2.9:
+    resolution: {integrity: sha512-NOL/BZ0/Fd0Mqb8PsGgFZ9TZqbYu3lTffS0ucGgdJ8xtEkAz+HLku1Ju30Ehdpvg7XM5kF1PfJYF/wbO5Hr42Q==}
+    engines: {node: '>= 8.0.0'}
+
   fs-extra@11.3.6:
     resolution: {integrity: sha512-w8ZNZr2mKIc7qeNaQ9AVPT1+iFaI+Avd4xudVOvdDJ8VytREi1Ft5Ih7hd9jjehod8vAM5GMsfQ/TpPf4EyoEA==}
     engines: {node: '>=14.14'}
@@ -2086,6 +2093,9 @@ packages:
 
   multipasta@0.2.8:
     resolution: {integrity: sha512-ZPWuMKyv0cSO29f7hozp+k6+crZbQijV8ipMvxNxRf2SwtYGTX1ZX89Kd20VV4H9Znonx+EQn+iy1wGQsJ+b+Q==}
+
+  nan@2.28.0:
+    resolution: {integrity: sha512-fTsDz99OTq2sVePhGdp4qQhggZFtKr64ZNVyVajRKtMOkJxYekplBh577PiJB12v/D3s2E5cGtOI45LWp6rnLQ==}
 
   nano-spawn@2.1.0:
     resolution: {integrity: sha512-yTW+2okrElHiH4fsiz/+/zc0EDo9BDDoC3iKk8dpv1GeRc9nUWzUZHx6TofMWErchhUQR8hY9/Eu1Uja9x1nqA==}
@@ -4408,6 +4418,10 @@ snapshots:
     dependencies:
       is-callable: 1.2.7
 
+  fs-ext-extra-prebuilt@2.2.9:
+    dependencies:
+      nan: 2.28.0
+
   fs-extra@11.3.6:
     dependencies:
       graceful-fs: 4.2.11
@@ -4931,6 +4945,8 @@ snapshots:
       msgpackr-extract: 3.0.4
 
   multipasta@0.2.8: {}
+
+  nan@2.28.0: {}
 
   nano-spawn@2.1.0: {}
 

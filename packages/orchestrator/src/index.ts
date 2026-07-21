@@ -1,6 +1,17 @@
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
+  ControlledCoordinatorLock,
+  controlledCoordinatorLockLayer,
+  CoordinatorLock,
+  CoordinatorLockHeld,
+  CoordinatorLockObservationContradiction,
+  CoordinatorLockUnavailable,
+  CoordinatorOwnershipLost
+} from "./coordinator-lock.js"
+export {
   FixtureTarget,
+  GitCommonDirectoryLocator,
+  GitCommonDirectoryTarget,
   GithubIssueNumber,
   GithubIssueTarget,
   GithubRepositoryName,
@@ -40,6 +51,7 @@ export {
   memoryJournalStoreLayer
 } from "./journal-store.js"
 export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
+export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 export { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 export {
   GraphProjectionError,

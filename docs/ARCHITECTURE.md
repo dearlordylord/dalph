@@ -22,6 +22,25 @@ conventions remain evidence outside the Dalph orchestrator's managed namespace.
 Tracker claims, journal runs, attempts, sessions, evidence, and recovery state
 are allocated and owned only through the orchestrator's typed ports.
 
+## Coordinator Ownership
+
+Exactly one live mutating Dalph coordinator owns a canonical Git common
+directory. Ownership is a scoped capability backed by an operating-system file
+lock, acquired before any affected mutation and released by scope closure or
+process death. A competing coordinator fails before mutation.
+
+Requested path aliases resolve through one shared filesystem boundary before
+either controlled or production locking observes the canonical locator.
+
+Every affected mutation runs through the ownership guard. Loss of the scoped
+ownership or an observation that the locked directory descriptor and canonical
+directory path name different resources interrupts in-flight guarded mutations
+and rejects later ones. The descriptor locks the existing Git common directory itself, so
+replacing a child lock file cannot create competing ownership. A durable row,
+stale-file timeout, TTL lease, in-process semaphore, and journal fact are not
+substitutes for coordinator ownership. Dry-run remains non-mutating and does
+not acquire this capability.
+
 ## Durability and Reconstruction
 
 Dalph persists only managed workflow history in the authority journal. It does
