@@ -1,6 +1,8 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option, PlatformError, Ref, Schema, Sink, Stdio } from "effect"
+import type { Duration } from "effect"
+import { Clock, Effect, Fiber, Layer, Option, PlatformError, Queue, Random, Ref, Schema, Sink, Stdio } from "effect"
+import { TestClock } from "effect/testing"
 import { readFile } from "node:fs/promises"
 import { expect } from "vitest"
 import {
@@ -37,11 +39,17 @@ const expectedTrace = (
   target: string,
   revision: string,
   taskIds: ReadonlyArray<string>,
-  runnableTaskIds: ReadonlyArray<string> = taskIds
+  runnableTaskIds: ReadonlyArray<string> = taskIds,
+  completionTaskIds: ReadonlyArray<string> = runnableTaskIds
 ): ReadonlyArray<string> => {
   const readOperation = makeTrackerGraphObservationOperation(
     FixtureTarget.make(target)
   )
+  const operationFor = (taskId: string) =>
+    makeTaskExecutionOperation(
+      TaskId.make(taskId),
+      readOperation.operationId
+    )
   return [
     {
       _tag: "OperationSelected",
@@ -52,26 +60,31 @@ const expectedTrace = (
       operation: readOperation,
       outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
     },
-    ...runnableTaskIds.flatMap((taskId) => {
-      const operation = makeTaskExecutionOperation(
-        TaskId.make(taskId),
-        readOperation.operationId
-      )
-      return [
-        { _tag: "TaskExecutionAdmitted", operation },
-        {
-          _tag: "TaskExecutionOutcomeObserved",
-          operation,
-          outcome: { _tag: "TaskExecuted" }
-        }
-      ]
-    })
+    ...runnableTaskIds.map((taskId) => ({
+      _tag: "TaskExecutionAdmitted",
+      operation: operationFor(taskId)
+    })),
+    ...completionTaskIds.map((taskId) => ({
+      _tag: "TaskExecutionOutcomeObserved",
+      operation: operationFor(taskId),
+      outcome: { _tag: "TaskExecuted" }
+    }))
   ].map((item) => JSON.stringify(item))
 }
 
 const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
   Effect.gen(function*() {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const testClock = yield* TestClock.testClockWith(Effect.succeed)
+    const clock = yield* Clock.Clock
+    const sleeps = yield* Queue.unbounded<Duration.Duration>()
+    const controlledClock = {
+      ...clock,
+      sleep: (duration: Duration.Duration) =>
+        Queue.offer(sleeps, duration).pipe(
+          Effect.andThen(clock.sleep(duration))
+        )
+    }
     const outputLayer = Layer.succeed(
       TraceOutput,
       TraceOutput.of({
@@ -81,13 +94,31 @@ const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
       })
     )
 
-    yield* runCli(args).pipe(
+    const run = yield* runCli(args).pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(outputLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(NodeServices.layer)
+      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
+      Random.withSeed(2),
+      Effect.forkScoped
     )
+    let completed = false
+    while (!completed) {
+      const state = yield* Effect.race(
+        Queue.take(sleeps).pipe(
+          Effect.map((duration) => ({ _tag: "Sleeping", duration }) as const)
+        ),
+        Fiber.await(run).pipe(Effect.as({ _tag: "Completed" } as const))
+      )
+      if (state._tag === "Completed") {
+        completed = true
+      } else {
+        yield* testClock.adjust(state.duration)
+      }
+    }
+    yield* Fiber.join(run)
 
     return yield* Ref.get(lines)
   })
@@ -132,13 +163,19 @@ it.effect("traverses a diamond deterministically through the dry workflow", () =
     const second = yield* runAndCollect(target)
 
     expect(first).toEqual(
-      expectedTrace(target, "fixture-diamond-v1", [
-        "group",
-        "root",
-        "left",
-        "right",
-        "join"
-      ], ["group", "root"])
+      expectedTrace(
+        target,
+        "fixture-diamond-v1",
+        [
+          "group",
+          "root",
+          "left",
+          "right",
+          "join"
+        ],
+        ["group", "root"],
+        ["root", "group"]
+      )
     )
     expect(second).toEqual(first)
   }))
@@ -178,25 +215,41 @@ it.effect("runs the CLI entrypoint through injected Stdio and application servic
   Effect.gen(function*() {
     const target = fixture("singleton")
     const chunks = yield* Ref.make<ReadonlyArray<string>>([])
+    const testClock = yield* TestClock.testClockWith(Effect.succeed)
+    const clock = yield* Clock.Clock
+    const sleeps = yield* Queue.unbounded<Duration.Duration>()
+    const controlledClock = {
+      ...clock,
+      sleep: (duration: Duration.Duration) =>
+        Queue.offer(sleeps, duration).pipe(
+          Effect.andThen(clock.sleep(duration))
+        )
+    }
     const stdioLayer = Stdio.layerTest({
       args: Effect.succeed(["run", "--dry", target]),
       stdout: () =>
-        Sink.forEach((chunk: string | Uint8Array) =>
-          Ref.update(chunks, (current) => [
-            ...current,
-            typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)
-          ])
-        )
+        Sink.forEach((chunk: string | Uint8Array) => {
+          const text = typeof chunk === "string"
+            ? chunk
+            : new TextDecoder().decode(chunk)
+          return Ref.update(chunks, (current) => [...current, text])
+        })
     })
 
-    yield* runCliFromStdio.pipe(
+    const run = yield* runCliFromStdio.pipe(
       Effect.provide(workflowTraceOutputLayer),
       Effect.provide(traceOutputStdioLayer),
       Effect.provide(dryRunWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(stdioLayer),
-      Effect.provide(NodeServices.layer)
+      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
+      Random.withSeed(2),
+      Effect.forkScoped
     )
+    const duration = yield* Queue.take(sleeps)
+    yield* testClock.adjust(duration)
+    yield* Fiber.join(run)
 
     expect(yield* Ref.get(chunks)).toEqual(
       expectedTrace(target, "fixture-singleton-v1", ["task-only"]).map(

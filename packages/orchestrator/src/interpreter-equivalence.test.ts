@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Clock, Duration, Effect, Fiber, Layer, Queue, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import type { TraceItem, TrackerGraphReader, WorkflowInterpreter } from "./index.js"
 import {
@@ -36,7 +37,7 @@ const taskExecutionLayer = Layer.succeed(
   TaskExecution,
   TaskExecution.of({
     execute: Effect.fn("TaskExecution.Equivalence.execute")(function*() {
-      yield* Effect.void
+      yield* Effect.sleep("1 millis")
     })
   })
 )
@@ -59,6 +60,16 @@ const runWith = (
 ) =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
+    const clock = yield* Clock.Clock
+    const sleeps = yield* Queue.unbounded<Duration.Duration>()
+    const controlledDuration = Duration.millis(1)
+    const controlledClock = {
+      ...clock,
+      sleep: (_duration: Duration.Duration) =>
+        Queue.offer(sleeps, controlledDuration).pipe(
+          Effect.andThen(clock.sleep(controlledDuration))
+        )
+    }
     const traceLayer = Layer.succeed(
       WorkflowTrace,
       WorkflowTrace.of({
@@ -68,11 +79,28 @@ const runWith = (
       })
     )
 
-    yield* runWorkflow(target, TaskExecutionCapacity.make(2)).pipe(
+    const run = yield* runWorkflow(target, TaskExecutionCapacity.make(2)).pipe(
       Effect.provide(traceLayer),
       Effect.provide(interpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer)
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
+      Effect.forkScoped
     )
+    let completed = false
+    while (!completed) {
+      const state = yield* Effect.race(
+        Queue.take(sleeps).pipe(
+          Effect.map((duration) => ({ _tag: "Sleeping", duration }) as const)
+        ),
+        Fiber.await(run).pipe(Effect.as({ _tag: "Completed" } as const))
+      )
+      if (state._tag === "Completed") {
+        completed = true
+      } else {
+        yield* TestClock.adjust(state.duration)
+      }
+    }
+    yield* Fiber.join(run)
     return semanticTrace(yield* Ref.get(items))
   })
 

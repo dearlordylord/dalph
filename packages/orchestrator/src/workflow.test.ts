@@ -1,8 +1,10 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Queue, Ref, Schema } from "effect"
+import { Clock, Deferred, Duration, Effect, Fiber, Layer, Queue, Random, Ref, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import type { TraceItem } from "./index.js"
 import {
+  dryRunWorkflowInterpreterLayer,
   FixtureTarget,
   makeTaskExecutionOperation,
   makeTrackerGraphObservationOperation,
@@ -275,6 +277,79 @@ it.effect("records task outcome observations in completion order", () =>
     }
     expect(items.some((item) => item._tag === "TrackerExecutionAdmitted")).toBe(false)
     expect(items.some((item) => item._tag === "TaskExecutionStarted")).toBe(false)
+  }))
+
+it.effect("dry-run reproducibly varies completion order without varying admission", () =>
+  Effect.gen(function*() {
+    const testClock = yield* TestClock.testClockWith(Effect.succeed)
+    const clock = yield* Clock.Clock
+    const observe = Effect.fn("WorkflowTest.observeSeededDryRun")(function*(
+      seed: number
+    ) {
+      const sleeps = yield* Queue.unbounded<number>()
+      const admitted = yield* Queue.unbounded<TaskId>()
+      const traces = yield* Ref.make<ReadonlyArray<TraceItem>>([])
+      const controlledClock = {
+        ...clock,
+        sleep: (duration: Duration.Duration) =>
+          Queue.offer(sleeps, Duration.toMillis(duration)).pipe(
+            Effect.andThen(clock.sleep(duration))
+          )
+      }
+      const trace = WorkflowTrace.of({
+        emit: Effect.fn("WorkflowTrace.Test.seededDryRun")(function*(item) {
+          yield* Ref.update(traces, (items) => [...items, item])
+          if (item._tag === "TaskExecutionAdmitted") {
+            yield* Queue.offer(admitted, item.operation.taskId)
+          }
+        })
+      })
+      const run = yield* runWorkflow(
+        fixture("diamond"),
+        TaskExecutionCapacity.make(2)
+      ).pipe(
+        Effect.provide(dryRunWorkflowInterpreterLayer),
+        Effect.provide(trackerGraphReaderFileLayer),
+        Effect.provide(Layer.succeed(WorkflowTrace, trace)),
+        Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
+        Random.withSeed(seed),
+        Effect.forkScoped
+      )
+      const admissionOrder = [
+        yield* Queue.take(admitted),
+        yield* Queue.take(admitted)
+      ]
+      const durations = [yield* Queue.take(sleeps), yield* Queue.take(sleeps)]
+
+      yield* testClock.adjust(Math.max(...durations))
+      yield* Fiber.join(run)
+
+      const items = yield* Ref.get(traces)
+      return {
+        admissionOrder,
+        completionOrder: items.flatMap((item) =>
+          item._tag === "TaskExecutionOutcomeObserved"
+            ? [item.operation.taskId]
+            : []
+        ),
+        durations,
+        items
+      }
+    })
+
+    const first = yield* observe(2)
+    const repeated = yield* observe(2)
+    const different = yield* observe(5)
+
+    expect(first.admissionOrder).toEqual(["group", "root"])
+    expect(repeated.admissionOrder).toEqual(first.admissionOrder)
+    expect(different.admissionOrder).toEqual(first.admissionOrder)
+    expect(first.completionOrder).toEqual(["root", "group"])
+    expect(repeated.completionOrder).toEqual(first.completionOrder)
+    expect(repeated.durations).toEqual(first.durations)
+    expect(different.completionOrder).toEqual(["group", "root"])
+    expect(different.completionOrder).not.toEqual(first.completionOrder)
+    expect(first.items.some((item) => "duration" in item)).toBe(false)
   }))
 
 it.effect("does not invoke execution when task admission output fails", () =>

@@ -99,30 +99,6 @@ export const deterministicTestWorkflowInterpreterLayer = taskExecutingWorkflowIn
 
 export const trackerWorkflowInterpreterLayer = liveFakeWorkflowInterpreterLayer
 
-export const dryRunWorkflowInterpreterLayer: Layer.Layer<
-  WorkflowInterpreter,
-  never,
-  TrackerGraphReader
-> = Layer.effect(
-  WorkflowInterpreter,
-  Effect.gen(function*() {
-    const reader = yield* TrackerGraphReader
-    const readTrackerGraph = Effect.fn(
-      "WorkflowInterpreter.DryRun.readTrackerGraph"
-    )(function*(target: FixtureTarget) {
-      return yield* reader.read(target)
-    })
-    const executeTask = Effect.fn("WorkflowInterpreter.DryRun.executeTask")(function*(
-      taskId: TaskId
-    ) {
-      yield* Effect.succeed(taskId)
-      return WorkflowOutcome.cases.TaskExecuted.make({})
-    })
-
-    return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
-  })
-)
-
 /** Records intent to invoke a workflow operation; it is not execution admission. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
   operation: WorkflowOperation

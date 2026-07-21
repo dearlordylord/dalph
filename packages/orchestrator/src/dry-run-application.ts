@@ -1,10 +1,11 @@
 import { NodeTerminal } from "@effect/platform-node"
-import { Effect, FileSystem, Layer, Path, PlatformError } from "effect"
+import { Effect, FileSystem, Layer, Path, PlatformError, Random } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { runCliFromStdio } from "./cli.js"
+import { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
 import { traceOutputStdioLayer } from "./trace-output.js"
 import { trackerGraphReaderFileLayer } from "./tracker-graph-reader.js"
-import { dryRunWorkflowInterpreterLayer, workflowTraceOutputLayer } from "./workflow.js"
+import { workflowTraceOutputLayer } from "./workflow.js"
 
 const denied = (method: string) =>
   PlatformError.systemError({
@@ -32,10 +33,22 @@ export const dryCliEnvironmentLayer = Layer.mergeAll(
   Path.layer
 )
 
+// Dry-run demonstration seed policy: https://github.com/dearlordylord/dalph/issues/99
+const defaultDryRunRandomSeed = "dry-run-v1"
+
+const defaultDryRunRandomLayer = Layer.effect(
+  Random.Random,
+  Random.Random.pipe(Random.withSeed(defaultDryRunRandomSeed))
+)
+
+const defaultDryRunWorkflowInterpreterLayer = dryRunWorkflowInterpreterLayer.pipe(
+  Layer.provide(defaultDryRunRandomLayer)
+)
+
 export const dryRunCliApplication = runCliFromStdio.pipe(
   Effect.provide(workflowTraceOutputLayer),
   Effect.provide(traceOutputStdioLayer),
-  Effect.provide(dryRunWorkflowInterpreterLayer),
+  Effect.provide(defaultDryRunWorkflowInterpreterLayer),
   Effect.provide(trackerGraphReaderFileLayer),
   Effect.provide(dryCliEnvironmentLayer)
 )
