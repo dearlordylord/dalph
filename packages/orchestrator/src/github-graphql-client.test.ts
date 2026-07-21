@@ -58,7 +58,7 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
           request,
           new Response(
             JSON.stringify({ data: { repository: { id: "repo", issue: { id: "issue" } } } }),
-            { headers: { "x-github-request-id": "request-1" }, status: 200 }
+            { status: 200 }
           )
         )
       })
@@ -146,7 +146,6 @@ it.effect("loads the GitHub token through injected Effect configuration", () => 
       HttpClientResponse.fromWeb(
         request,
         new Response("{}", {
-          headers: { "x-github-request-id": "configured-request" },
           status: 200
         })
       )
