@@ -48,7 +48,7 @@
     "@vitest/coverage-v8": "4.0.18",
     "effect": "4.0.0-beta.99",
     "eslint": "9.39.2",
-    "eslint-import-resolver-typescript": "4.4.4",
+    "eslint-import-resolver-typescript": "4.4.5",
     "eslint-plugin-functional": "9.0.2",
     "eslint-plugin-import": "2.32.0",
     "eslint-plugin-import-x": "4.16.1",
