@@ -1,9 +1,10 @@
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import type { TaskExecutionCapacity, TrackerTarget } from "./domain.js"
 import { OperationId, TaskId, TrackerRevision, TrackerTarget as TrackerTargetSchema } from "./domain.js"
 import type { JournalReconciliationRequired, JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
-import { TaskExecution } from "./task-execution.js"
+import { TaskWorkStart } from "./task-work-start.js"
 import { TraceOutput, type TraceOutputError } from "./trace-output.js"
 import {
   type FixtureReadError,
@@ -96,6 +97,7 @@ interface WorkflowInterpreterService {
     | JournalReconciliationRequired
     | JournalStoreContradiction
     | JournalStoreError
+    | CoordinatorOwnershipError
   >
 }
 
@@ -103,33 +105,55 @@ export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, Wo
   "@dalph/WorkflowInterpreter"
 ) {}
 
-const taskExecutingWorkflowInterpreterLayer = (
+type TrackerGraphReadError =
+  | FixtureReadError
+  | GraphProjectionError
+  | TrackerAdapterReadError
+  | TrackerReadError
+
+const makeTaskWorkStartingWorkflowInterpreter = (
+  operationPrefix: "LiveFake" | "DeterministicTest",
+  read: (
+    target: TrackerTarget
+  ) => Effect.Effect<TaskDagSnapshot, TrackerGraphReadError>,
+  request: (
+    taskId: TaskId
+  ) => Effect.Effect<void, CoordinatorOwnershipError>
+) => {
+  const readTrackerGraph = Effect.fn(
+    `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
+  )(function*(operation) {
+    return yield* read(operation.target)
+  })
+  const executeTask = Effect.fn(
+    `WorkflowInterpreter.${operationPrefix}.executeTask`
+  )(function*(operation) {
+    yield* request(operation.taskId)
+    return WorkflowOutcome.cases.TaskExecuted.make({})
+  })
+
+  return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
+}
+
+const taskWorkStartingWorkflowInterpreterLayer = (
   operationPrefix: "LiveFake" | "DeterministicTest"
 ) =>
   Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       const reader = yield* TrackerGraphReader
-      const taskExecution = yield* TaskExecution
-      const readTrackerGraph = Effect.fn(
-        `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
-      )(function*(operation) {
-        return yield* reader.read(operation.target)
-      })
-      const executeTask = Effect.fn(
-        `WorkflowInterpreter.${operationPrefix}.executeTask`
-      )(function*(operation) {
-        yield* taskExecution.execute(operation.taskId)
-        return WorkflowOutcome.cases.TaskExecuted.make({})
-      })
-
-      return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
+      const taskWorkStart = yield* TaskWorkStart
+      return makeTaskWorkStartingWorkflowInterpreter(
+        operationPrefix,
+        reader.read,
+        taskWorkStart.request
+      )
     })
   )
 
-export const liveFakeWorkflowInterpreterLayer = taskExecutingWorkflowInterpreterLayer("LiveFake")
+export const liveFakeWorkflowInterpreterLayer = taskWorkStartingWorkflowInterpreterLayer("LiveFake")
 
-export const deterministicTestWorkflowInterpreterLayer = taskExecutingWorkflowInterpreterLayer("DeterministicTest")
+export const deterministicTestWorkflowInterpreterLayer = taskWorkStartingWorkflowInterpreterLayer("DeterministicTest")
 
 /** Records intent to invoke a workflow operation; it is not execution admission. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", {

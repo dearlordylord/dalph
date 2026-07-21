@@ -10,12 +10,12 @@ import {
   makeTaskExecutionOperation,
   makeTrackerGraphObservationOperation,
   runWorkflow,
-  TaskExecution,
   TaskExecutionAdmitted,
   TaskExecutionCapacity,
   TaskExecutionOutcomeObserved,
   TaskExecutionStarted,
   TaskId,
+  TaskWorkStart,
   TraceOutputError,
   TrackerExecutionAdmitted,
   trackerGraphReaderFileLayer,
@@ -33,8 +33,8 @@ const controlledExecutor = Effect.gen(function*() {
   const maximumActive = yield* Ref.make(0)
   const traces = yield* Ref.make<ReadonlyArray<TraceItem>>([])
   const admissionPrecededExecution = yield* Ref.make(true)
-  const service = TaskExecution.of({
-    execute: Effect.fn("TaskExecution.Test.execute")(function*(taskId) {
+  const service = TaskWorkStart.of({
+    request: Effect.fn("TaskWorkStart.Test.request")(function*(taskId) {
       const items = yield* Ref.get(traces)
       yield* Ref.update(
         admissionPrecededExecution,
@@ -116,7 +116,7 @@ it.effect("capacity 2 admits both controlled tasks before either gate releases",
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
       Effect.forkScoped
     )
@@ -140,7 +140,7 @@ it.effect("capacity 1 never holds two task permits", () =>
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
       Effect.forkScoped
     )
@@ -164,7 +164,7 @@ it.effect("bounds and deterministically orders the wide retained frontier", () =
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
       Effect.forkScoped
     )
@@ -201,8 +201,8 @@ it.effect("records task outcome observations in completion order", () =>
     const capabilityOutcomes = yield* Queue.unbounded<TaskId>()
     const traces = yield* Ref.make<ReadonlyArray<TraceItem>>([])
     const outcomeWriteCount = yield* Ref.make(0)
-    const service = TaskExecution.of({
-      execute: Effect.fn("TaskExecution.Test.reverseCompletion")(function*(taskId) {
+    const service = TaskWorkStart.of({
+      request: Effect.fn("TaskWorkStart.Test.reverseCompletion")(function*(taskId) {
         yield* Queue.offer(started, taskId)
         yield* Deferred.await(taskId === "group" ? firstGate : secondGate)
         yield* Queue.offer(capabilityOutcomes, taskId)
@@ -229,7 +229,7 @@ it.effect("records task outcome observations in completion order", () =>
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
       Effect.forkScoped
     )
@@ -356,8 +356,8 @@ it.effect("does not invoke execution when task admission output fails", () =>
   Effect.gen(function*() {
     const invoked = yield* Ref.make(false)
     const failure = new TraceOutputError({ detail: "admission output failed" })
-    const service = TaskExecution.of({
-      execute: Effect.fn("TaskExecution.Test.admissionFailure")(function*() {
+    const service = TaskWorkStart.of({
+      request: Effect.fn("TaskWorkStart.Test.admissionFailure")(function*() {
         yield* Ref.set(invoked, true)
       })
     })
@@ -375,7 +375,7 @@ it.effect("does not invoke execution when task admission output fails", () =>
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
       Effect.flip
     )
@@ -394,8 +394,8 @@ it.effect("keeps later work unadmitted while outcome output is blocked", () =>
     const firstOutcomeWriteStarted = yield* Deferred.make<void>()
     const releaseFirstOutcomeWrite = yield* Deferred.make<void>()
     const outcomeWriteCount = yield* Ref.make(0)
-    const service = TaskExecution.of({
-      execute: Effect.fn("TaskExecution.Test.outputBackpressure")(function*(taskId) {
+    const service = TaskWorkStart.of({
+      request: Effect.fn("TaskWorkStart.Test.outputBackpressure")(function*(taskId) {
         const invocationIndex = yield* Ref.getAndUpdate(
           invocationCount,
           (count) => count + 1
@@ -430,7 +430,7 @@ it.effect("keeps later work unadmitted while outcome output is blocked", () =>
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
       Effect.forkScoped
     )
@@ -458,8 +458,8 @@ it.effect("interrupts concurrent execution when outcome output fails", () =>
     const releaseFirst = yield* Deferred.make<void>()
     const siblingInterrupted = yield* Deferred.make<void>()
     const failure = new TraceOutputError({ detail: "outcome output failed" })
-    const service = TaskExecution.of({
-      execute: Effect.fn("TaskExecution.Test.outcomeFailure")(function*(taskId) {
+    const service = TaskWorkStart.of({
+      request: Effect.fn("TaskWorkStart.Test.outcomeFailure")(function*(taskId) {
         const invocationIndex = yield* Ref.getAndUpdate(
           invocationCount,
           (count) => count + 1
@@ -487,7 +487,7 @@ it.effect("interrupts concurrent execution when outcome output fails", () =>
     ).pipe(
       Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(Layer.succeed(TaskExecution, service)),
+      Effect.provide(Layer.succeed(TaskWorkStart, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
       Effect.forkScoped
     )

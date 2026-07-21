@@ -24,9 +24,9 @@ import {
   RunId,
   runWorkflow,
   sqliteJournalStoreLayer,
-  TaskExecution,
   TaskExecutionCapacity,
   TaskId,
+  TaskWorkStart,
   trackerGraphReaderFileLayer,
   WorkflowInterpreter,
   WorkflowOperation,
@@ -205,9 +205,9 @@ durableJournalStoreContract(
                 Effect.provide(trackerGraphReaderFileLayer),
                 Effect.provide(
                   Layer.succeed(
-                    TaskExecution,
-                    TaskExecution.of({
-                      execute: () => Effect.sync(() => executions += 1)
+                    TaskWorkStart,
+                    TaskWorkStart.of({
+                      request: () => Effect.sync(() => executions += 1)
                     })
                   )
                 ),

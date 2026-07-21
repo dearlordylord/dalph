@@ -51,6 +51,7 @@ export {
   memoryJournalStoreLayer
 } from "./journal-store.js"
 export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
+export { coordinatorOwnedTaskWorkStartLayer, productionTaskWorkStartLayer } from "./live-task-work-start.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 export { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 export {
@@ -61,7 +62,7 @@ export {
   TaskDagSnapshot,
   TaskDagWire
 } from "./task-dag.js"
-export { TaskExecution } from "./task-execution.js"
+export { TaskRunner, TaskWorkStart } from "./task-work-start.js"
 export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
 export {
   FixtureReader,

@@ -9,9 +9,9 @@ import {
   liveFakeWorkflowInterpreterLayer,
   runWorkflow,
   semanticTrace,
-  TaskExecution,
   TaskExecutionCapacity,
   TaskId,
+  TaskWorkStart,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   WorkflowInterpreter,
@@ -35,21 +35,21 @@ const fixture = (
   name: "diamond" | "empty" | "singleton" | "wayfinder-105"
 ): FixtureTarget => FixtureTarget.make(new URL(`../fixtures/${name}.json`, import.meta.url).pathname)
 
-const taskExecutionLayer = Layer.succeed(
-  TaskExecution,
-  TaskExecution.of({
-    execute: Effect.fn("TaskExecution.Equivalence.execute")(function*() {
+const taskWorkStartLayer = Layer.succeed(
+  TaskWorkStart,
+  TaskWorkStart.of({
+    request: Effect.fn("TaskWorkStart.Equivalence.request")(function*() {
       yield* Effect.void
     })
   })
 )
 
 const liveFakeLayer = liveFakeWorkflowInterpreterLayer.pipe(
-  Layer.provide(taskExecutionLayer)
+  Layer.provide(taskWorkStartLayer)
 )
 
 const deterministicTestLayer = deterministicTestWorkflowInterpreterLayer.pipe(
-  Layer.provide(taskExecutionLayer)
+  Layer.provide(taskWorkStartLayer)
 )
 
 const makeCompletionController = (
