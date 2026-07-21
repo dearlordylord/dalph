@@ -6,6 +6,7 @@ import type { TraceItem } from "./index.js"
 import {
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
+  liveFakeWorkflowInterpreterLayer,
   makeTaskExecutionOperation,
   makeTrackerGraphObservationOperation,
   runWorkflow,
@@ -18,7 +19,6 @@ import {
   TraceOutputError,
   TrackerExecutionAdmitted,
   trackerGraphReaderFileLayer,
-  trackerWorkflowInterpreterLayer,
   WorkflowTrace
 } from "./index.js"
 
@@ -114,7 +114,7 @@ it.effect("capacity 2 admits both controlled tasks before either gate releases",
       fixture("diamond"),
       TaskExecutionCapacity.make(2)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -138,7 +138,7 @@ it.effect("capacity 1 never holds two task permits", () =>
       fixture("diamond"),
       TaskExecutionCapacity.make(1)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -162,7 +162,7 @@ it.effect("bounds and deterministically orders the wide retained frontier", () =
       fixture("wayfinder-105"),
       TaskExecutionCapacity.make(2)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, controlled.service)),
       Effect.provide(Layer.succeed(WorkflowTrace, controlled.trace)),
@@ -227,7 +227,7 @@ it.effect("records task outcome observations in completion order", () =>
       fixture("diamond"),
       TaskExecutionCapacity.make(2)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
@@ -373,7 +373,7 @@ it.effect("does not invoke execution when task admission output fails", () =>
       fixture("singleton"),
       TaskExecutionCapacity.make(1)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
@@ -428,7 +428,7 @@ it.effect("keeps later work unadmitted while outcome output is blocked", () =>
       fixture("wayfinder-105"),
       TaskExecutionCapacity.make(2)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),
@@ -485,7 +485,7 @@ it.effect("interrupts concurrent execution when outcome output fails", () =>
       fixture("wayfinder-105"),
       TaskExecutionCapacity.make(2)
     ).pipe(
-      Effect.provide(trackerWorkflowInterpreterLayer),
+      Effect.provide(liveFakeWorkflowInterpreterLayer),
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(Layer.succeed(TaskExecution, service)),
       Effect.provide(Layer.succeed(WorkflowTrace, trace)),

@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect"
-import { readFile } from "node:fs/promises"
+import { NodeFileSystem } from "@effect/platform-node"
+import { Context, Effect, FileSystem, Layer, Schema } from "effect"
 import { type FixtureTarget } from "./domain.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
 
@@ -27,17 +27,45 @@ export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Trac
   "@dalph/TrackerGraphReader"
 ) {}
 
-const readJson = Effect.fn("TrackerGraphReader.readJson")(function*(
-  target: FixtureTarget
-) {
-  const contents = yield* Effect.tryPromise({
-    try: () => readFile(target, "utf8"),
-    catch: (cause) =>
-      new TrackerReadError({
-        operation: "TrackerGraphReader.read",
-        detail: String(cause)
-      })
+interface FixtureReaderService {
+  readonly read: (
+    target: FixtureTarget
+  ) => Effect.Effect<string, TrackerReadError>
+}
+
+/** Reads fixture content without granting graph projection any filesystem authority. */
+export class FixtureReader extends Context.Service<FixtureReader, FixtureReaderService>()(
+  "@dalph/FixtureReader"
+) {}
+
+const fixtureReaderFileSystemLayer = Layer.effect(
+  FixtureReader,
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const read = Effect.fn("FixtureReader.File.read")(function*(
+      target: FixtureTarget
+    ) {
+      return yield* fileSystem.readFileString(target).pipe(
+        Effect.mapError((cause) =>
+          new TrackerReadError({
+            operation: "TrackerGraphReader.read",
+            detail: String(cause)
+          })
+        )
+      )
+    })
+
+    return FixtureReader.of({ read })
   })
+)
+
+export const fixtureReaderFileLayer = fixtureReaderFileSystemLayer.pipe(
+  Layer.provide(NodeFileSystem.layer)
+)
+
+const parseJson = Effect.fn("TrackerGraphReader.parseJson")(function*(
+  contents: string
+) {
   return yield* Effect.try({
     try: (): unknown => JSON.parse(contents),
     catch: (cause) =>
@@ -48,13 +76,15 @@ const readJson = Effect.fn("TrackerGraphReader.readJson")(function*(
   })
 })
 
-export const trackerGraphReaderFileLayer = Layer.effect(
+export const trackerGraphReaderLayer = Layer.effect(
   TrackerGraphReader,
   Effect.gen(function*() {
+    const fixtureReader = yield* FixtureReader
     const read = Effect.fn("TrackerGraphReader.read")(function*(
       target: FixtureTarget
     ) {
-      const input = yield* readJson(target)
+      const contents = yield* fixtureReader.read(target)
+      const input = yield* parseJson(contents)
       const projection = projectTrackerSnapshot(input)
       if (projection._tag === "Valid") return projection.snapshot
 
@@ -72,4 +102,8 @@ export const trackerGraphReaderFileLayer = Layer.effect(
 
     return TrackerGraphReader.of({ read })
   })
+)
+
+export const trackerGraphReaderFileLayer = trackerGraphReaderLayer.pipe(
+  Layer.provide(fixtureReaderFileLayer)
 )

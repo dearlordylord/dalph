@@ -11,7 +11,7 @@ export {
   TrackerSnapshot,
   TrackerTask
 } from "./domain.js"
-export { dryCliEnvironmentLayer, dryRunCliApplication } from "./dry-run-application.js"
+export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
 export { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
 export {
   GraphProjectionError,
@@ -23,7 +23,14 @@ export {
 } from "./task-dag.js"
 export { TaskExecution } from "./task-execution.js"
 export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
-export { TrackerGraphReader, trackerGraphReaderFileLayer, TrackerReadError } from "./tracker-graph-reader.js"
+export {
+  FixtureReader,
+  fixtureReaderFileLayer,
+  TrackerGraphReader,
+  trackerGraphReaderFileLayer,
+  trackerGraphReaderLayer,
+  TrackerReadError
+} from "./tracker-graph-reader.js"
 export {
   deterministicTestWorkflowInterpreterLayer,
   encodeTraceItem,
@@ -39,7 +46,6 @@ export {
   TraceItem,
   TrackerExecutionAdmitted,
   TrackerGraphOutcomeObserved,
-  trackerWorkflowInterpreterLayer,
   WorkflowInterpreter,
   WorkflowOperation,
   WorkflowOutcome,

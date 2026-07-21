@@ -71,6 +71,30 @@ const effectImportDiscipline = [
   }
 ]
 
+const ambientCapabilityBypasses = [
+  {
+    message: "Use injected Effect services instead of loading ambient host capabilities with require().",
+    selector: "CallExpression[callee.name='require']"
+  },
+  {
+    message: "Inject randomness through Effect Random instead of calling Math.random().",
+    selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']"
+  }
+]
+
+const ambientCapabilityGlobals = [
+  "crypto",
+  "fetch",
+  "globalThis",
+  "performance",
+  "process",
+  "setInterval",
+  "setTimeout"
+].map((name) => ({
+  message: `Inject the ${name} capability through an Effect service instead of using its ambient global.`,
+  name
+}))
+
 const effectClassInheritanceRule = {
   meta: {
     docs: {
@@ -113,6 +137,7 @@ const effectClassInheritanceRule = {
 }
 
 const productionRestrictions = [
+  ...ambientCapabilityBypasses,
   ...clockReads,
   ...moduleMocks,
   ...effectImportDiscipline,
@@ -123,10 +148,6 @@ const productionRestrictions = [
   {
     message: "Unchecked type assertions are forbidden. Parse with Schema, use satisfies, or restructure the code.",
     selector: "TSTypeAssertion"
-  },
-  {
-    message: "Read runtime configuration through Effect Config at the application boundary.",
-    selector: "MemberExpression[object.name='process'][property.name='env']"
   }
 ]
 
@@ -219,6 +240,7 @@ export default [
       "functional/prefer-immutable-types": "off",
       "functional/prefer-tacit": "error",
       "import/first": "error",
+      "import/no-nodejs-modules": "error",
       "import/no-duplicates": "error",
       "import/newline-after-import": "off",
       "dalph/effect-class-inheritance-only": "error",
@@ -230,6 +252,7 @@ export default [
         ignoreArrayIndexes: true,
         ignoreDefaultValues: true
       }],
+      "no-restricted-globals": ["error", ...ambientCapabilityGlobals],
       "no-restricted-syntax": ["error", ...productionRestrictions],
       "object-shorthand": "error",
       "sort-destructure-keys/sort-destructure-keys": "error"
@@ -258,6 +281,14 @@ export default [
       "import-x/no-unused-modules": "off"
     }
   },
+  // This adapter-contract test reads the fixture independently to establish
+  // its expected graph; production control-plane modules retain the ban.
+  {
+    files: ["packages/orchestrator/src/cli.test.ts"],
+    rules: {
+      "import/no-nodejs-modules": "off"
+    }
+  },
   {
     files: ["**/*.test.ts", "**/*.spec.ts"],
     rules: {
@@ -281,11 +312,15 @@ export default [
       }]
     }
   },
+  // Host tooling scripts are the repository boundary that implements process
+  // execution and quality-gate orchestration; they are not control-plane code.
   {
     files: ["scripts/**/*.ts"],
     rules: {
       "functional/no-throw-statements": "off",
+      "import/no-nodejs-modules": "off",
       "no-console": "off",
+      "no-restricted-globals": "off",
       "no-restricted-syntax": ["error", ...clockReads, ...moduleMocks, ...effectImportDiscipline]
     }
   }

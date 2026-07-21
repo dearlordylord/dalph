@@ -97,8 +97,6 @@ export const liveFakeWorkflowInterpreterLayer = taskExecutingWorkflowInterpreter
 
 export const deterministicTestWorkflowInterpreterLayer = taskExecutingWorkflowInterpreterLayer("DeterministicTest")
 
-export const trackerWorkflowInterpreterLayer = liveFakeWorkflowInterpreterLayer
-
 /** Records intent to invoke a workflow operation; it is not execution admission. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
   operation: WorkflowOperation
