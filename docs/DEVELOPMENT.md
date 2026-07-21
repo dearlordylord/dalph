@@ -1,8 +1,10 @@
 # Development harness
 
-Dalph requires Node 22.22.2 or newer and uses a single pnpm quality harness at the repository root. Package-local
-commands may be narrower during development, but `pnpm check:all` is the
-acceptance gate for repository changes.
+Dalph supports Node 22 from 22.22.2 and Node 24 from 24.15.0; odd-numbered Node
+25 is unsupported. Node 24.15.0 is recommended. The repository uses a single
+pnpm quality harness at the root. Package-local commands may be narrower during
+development, but `pnpm check:all` is the acceptance gate for repository
+changes.
 
 ## Workspace shape
 
