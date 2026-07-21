@@ -77,6 +77,8 @@ export const makeDryRunCliApplication = (
     Effect.provide(dryCliEnvironmentLayer)
   )
 
+// Live GitHub dry-run CLI registration owner:
+// https://github.com/dearlordylord/dalph/issues/103
 export const dryRunCliApplication = makeDryRunCliApplication(
   fixtureReaderFileLayer
 )

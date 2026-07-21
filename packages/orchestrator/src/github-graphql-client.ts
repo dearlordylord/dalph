@@ -1,6 +1,5 @@
 import { NodeHttpClient } from "@effect/platform-node"
-import { Config, Context, Effect, Layer, Option, type Redacted, Schema } from "effect"
-import * as Headers from "effect/unstable/http/Headers"
+import { Config, Context, Effect, Layer, type Redacted, Schema } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
@@ -36,15 +35,8 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
-/** Identifies one GitHub HTTP response, not a tracker revision or journal position. */
-export const GithubRequestId = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubRequestId")
-)
-export type GithubRequestId = typeof GithubRequestId.Type
-
 export const GithubGraphqlResponse = Schema.Struct({
-  body: Schema.Unknown,
-  requestId: GithubRequestId
+  body: Schema.Unknown
 })
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
@@ -77,6 +69,9 @@ export class GithubGraphqlClient extends Context.Service<GithubGraphqlClient, Gi
 const graphqlEndpoint = "https://api.github.com/graphql"
 const githubUserAgent = "dalph-orchestrator"
 const connectionPageSize = 100
+// Stable identity format guidance:
+// https://docs.github.com/en/graphql/guides/migrating-graphql-global-node-ids
+const nextGlobalIdHeaderValue = "1"
 
 const resolveIssueQuery = `query ResolveIssue($owner: String!, $repository: String!, $issueNumber: Int!) {
   repository(owner: $owner, name: $repository) {
@@ -180,6 +175,7 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function*(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),
       HttpClientRequest.setHeader("user-agent", githubUserAgent),
+      HttpClientRequest.setHeader("x-github-next-global-id", nextGlobalIdHeaderValue),
       HttpClientRequest.bodyJsonUnsafe(requestBody(request))
     )
     const response = yield* httpClient.execute(httpRequest).pipe(
@@ -189,16 +185,7 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function*(
     const body = yield* response.json.pipe(
       Effect.mapError((cause) => requestError(request._tag, cause))
     )
-    const requestId = Option.getOrUndefined(
-      Headers.get(response.headers, "x-github-request-id")
-    )
-    if (requestId === undefined || requestId.length === 0) {
-      return yield* requestError(
-        request._tag,
-        "GitHub response omitted x-github-request-id"
-      )
-    }
-    return GithubGraphqlResponse.make({ body, requestId: GithubRequestId.make(requestId) })
+    return GithubGraphqlResponse.make({ body })
   })
 
   return GithubGraphqlClient.of({ execute })

@@ -28,6 +28,7 @@ export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>(
 export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
   BoundaryDecode: {},
   IncompleteSnapshot: {},
+  ResourceLimitExceeded: {},
   Transport: {},
   UnsupportedTarget: {}
 })

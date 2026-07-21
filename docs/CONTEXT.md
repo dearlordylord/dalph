@@ -40,6 +40,13 @@ deterministic-test scenarios. It is not live tracker authority or managed
 workflow history.
 _Avoid_: Tracker state file, authoritative snapshot
 
+**Tracker target closure**:
+The tasks selected by a tracker target's grouping descendants together with
+every transitive prerequisite needed to evaluate them. Grouping descendants of
+a prerequisite-only task are outside the closure unless the target selects
+them independently.
+_Avoid_: Scope, complete native graph
+
 **Managed execution**:
 A run, attempt, claim, session, or artifact created and namespaced by the Dalph
 orchestrator.

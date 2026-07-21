@@ -87,6 +87,53 @@ ordered events and return either a valid recovery state or typed semantic
 issues. Dalph does not persist that derived state. See
 [ADR 0001](adr/0001-versioned-journal-evolution.md).
 
+## Tracker Target Closure
+
+Grouping chooses target membership; dependency edges extend that membership only
+far enough to include every transitive prerequisite. For example, if selected
+root `R` groups child `C`, `C` is blocked by `B`, and prerequisite-only task `B`
+groups child `B1`, the closure contains `R`, `C`, and `B` but not `B1`. The
+concrete consequence is that this run neither schedules nor presents `B1` unless
+the selected root hierarchy also reaches it. This does not hide a prerequisite
+needed to release `C`: GitHub records `B`, not `B1`, on `C.blockedBy`, and
+grouping itself never controls eligibility.
+
+## Tracker Observation Consistency
+
+A complete tracker observation is all-or-nothing at the Dalph boundary, but it
+is not necessarily a provider-transactional, point-in-time snapshot. The GitHub
+adapter must finish every bounded page, decode every task in the tracker target
+closure, and reject detectable missing or contradictory facts before exposing
+a `TaskDagSnapshot`. Its `TrackerRevision` identifies the canonical content
+actually observed; it does not claim that GitHub assigned one revision to the
+multi-request read.
+
+GitHub's current Issue GraphQL fields expose current issue values and paginated
+`subIssues`/`blockedBy` connections without an as-of-time argument. GitHub keeps
+an editable history for authored issue content, and `timelineItems(since:)`
+includes timestamped lifecycle, dependency, and subissue add/remove events.
+Those events are a possible future event-replay source, but they are not a
+direct as-of graph query. Reconstruction would need separately specified
+completeness, initial-state, ordering, deletion, transfer, retention, and access
+semantics, so V1 deliberately does not claim historical reconstruction. Git
+commits are a separate Git authority and cannot reconstruct tracker state.
+Consequently, concurrent tracker edits that do not create a detectable identity,
+pagination, repository, or parent contradiction can produce a mixed-time
+observation. Consumers must refresh tracker authority before ambiguity-crossing
+effects rather than treating an earlier `TrackerRevision` as a GitHub transaction
+token.
+
+The V1 GitHub adapter admits at most 1,000 distinct tasks and reads at most 10
+pages from any one `subIssues` or `blockedBy` connection. With GitHub's maximum
+100 nodes per GraphQL page, these caps bound one relation at 1,000 endpoints and
+the worst-case observation at 21,001 provider requests. Crossing either bound
+fails with `ResourceLimitExceeded`; a partial graph is never returned. These
+are deliberate safety limits, not inferred properties of the current target.
+
+Provider evidence: [GitHub Issue GraphQL fields](https://docs.github.com/en/graphql/reference/issues)
+and [GitHub GraphQL query limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api),
+plus [GitHub issue edit history](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/editing-an-issue).
+
 ## Documentation Authority
 
 | Document or system                                                                 | Tooling authority                                                                |

@@ -35,6 +35,7 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
       ReadonlyArray<{
         readonly authorization: string | undefined
         readonly body: string
+        readonly globalIdVersion: string | undefined
         readonly method: string
         readonly url: string
         readonly userAgent: string | undefined
@@ -46,6 +47,9 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
         yield* Ref.update(observed, (requests) => [...requests, {
           authorization: Option.getOrUndefined(Headers.get(request.headers, "authorization")),
           body: encodedBody.body,
+          globalIdVersion: Option.getOrUndefined(
+            Headers.get(request.headers, "x-github-next-global-id")
+          ),
           method: request.method,
           url: request.url,
           userAgent: Option.getOrUndefined(Headers.get(request.headers, "user-agent"))
@@ -62,7 +66,7 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     const clientLayer = githubGraphqlClientLayer({
       token: Redacted.make("secret-token")
     }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)))
-    const responses = yield* Effect.gen(function*() {
+    yield* Effect.gen(function*() {
       const client = yield* GithubGraphqlClient
       return yield* Effect.forEach([
         GithubGraphqlRequest.cases.ResolveIssue.make({
@@ -83,17 +87,12 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     }).pipe(Effect.provide(clientLayer))
 
     const requests = yield* Ref.get(observed)
-    expect(responses.map(({ requestId }) => requestId)).toEqual([
-      "request-1",
-      "request-1",
-      "request-1",
-      "request-1"
-    ])
     expect(requests).toHaveLength(4)
     const request = requests[0]
     expect(request).toBeDefined()
     if (request === undefined) return
     expect(request.authorization).toBe("Bearer secret-token")
+    expect(request.globalIdVersion).toBe("1")
     expect(request.method).toBe("POST")
     expect(request.url).toBe("https://api.github.com/graphql")
     expect(request.userAgent).toBe("dalph-orchestrator")
@@ -127,19 +126,14 @@ const executeResolve = (
   }).pipe(Effect.provide(layer))
 }
 
-it.effect("classifies HTTP, JSON, and missing request identity failures", () =>
+it.effect("classifies HTTP and JSON failures", () =>
   Effect.gen(function*() {
     const failures = yield* Effect.forEach([
       new Response("server error", { status: 500 }),
-      new Response("not-json", {
-        headers: { "x-github-request-id": "request-invalid-json" },
-        status: 200
-      }),
-      new Response("{}", { status: 200 }),
-      new Response("{}", { headers: { "x-github-request-id": "" }, status: 200 })
+      new Response("not-json", { status: 200 })
     ], (response) => executeResolve(response).pipe(Effect.flip, Effect.orDie))
 
-    expect(failures).toHaveLength(4)
+    expect(failures).toHaveLength(2)
     for (const failure of failures) {
       expect(failure._tag).toBe("GithubGraphqlClient.RequestError")
       expect(failure.operation).toBe("ResolveIssue")
@@ -166,7 +160,7 @@ it.effect("loads the GitHub token through injected Effect configuration", () => 
     const response = yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({
       target
     }))
-    expect(response.requestId).toBe("configured-request")
+    expect(response.body).toEqual({})
   }).pipe(
     Effect.provide(layer),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "configured-token" })))
