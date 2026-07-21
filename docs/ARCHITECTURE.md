@@ -1,108 +1,114 @@
 # Dalph Tooling Architecture
 
-This document owns stable architecture for Dalph repository tooling. It does
-not own a target repository's rules, product runtime, authored content, or
+This document records stable architecture for Dalph repository tooling. It does
+not define a target repository's rules, product runtime, authored content, or
 application architecture.
 
 Canonical boundary terminology lives in [CONTEXT.md](CONTEXT.md).
 
 ## Historical-Harness Boundary
 
-The Dalph orchestrator is a clean tooling system. `scripts/ralph-run.sh` is a
-one-off historical execution harness, not its architecture, compatibility
-baseline, migration source, fallback scheduler, or runtime substrate. The
+The Dalph orchestrator is graph-native repository tooling designed independently
+of `scripts/ralph-run.sh`. That script is a one-off historical harness, not
+Dalph's architecture, compatibility baseline, migration source, fallback
+scheduler, or runtime foundation. The
 historical harness may supply candidate tooling requirements, failure evidence,
 and design lessons. A candidate becomes an accepted tooling requirement only
-when an owning decision or implementation specification explicitly accepts it.
+when a named decision or implementation specification explicitly accepts it.
 
 The Dalph orchestrator must not invoke, wrap, resume, migrate, or preserve
-behavioral parity with the historical harness. Historical plan indexes, shell
-stages, claims, run directories, prompts, retained runs, and cleanup
-conventions remain evidence outside the Dalph orchestrator's managed namespace.
-Tracker claims, journal runs, attempts, sessions, evidence, and recovery state
-are allocated and owned only through the orchestrator's typed ports.
+behavioral parity with the historical harness. Dalph ignores identities and
+records created by that harness. Dalph reads task claims from the configured
+task tracker, creates planned task attempts, receives task-work session
+identities from the task-work provider, and records workflow history in the
+Dalph workflow journal.
 
-## Coordinator Ownership
+## Exclusive Coordinator Lock
 
-Exactly one live mutating Dalph coordinator owns a canonical Git common
-directory. Ownership is a scoped capability backed by an operating-system file
-lock, acquired before any affected mutation and released by scope closure or
-process death. A competing coordinator fails before mutation.
+At most one live Dalph coordinator may send state-changing requests for a
+canonical Git common directory. It proves exclusivity by holding an
+operating-system lock on that directory. Closing the Effect Layer scope or
+ending the coordinator process releases the lock. A competing coordinator fails
+before sending a state-changing request.
 
-Requested path aliases resolve through one shared filesystem boundary before
-either controlled or production locking observes the canonical locator.
+Requested path aliases pass through the same canonical-path resolution code
+before either the deterministic-test or production lock implementation checks
+the resulting locator.
 
-The production composition must acquire this capability before enabling live
-mutation, and every affected mutation must run through its ownership guard. Loss
-of the scoped ownership or an observation that the locked directory descriptor
-and canonical directory path name different resources interrupts in-flight
-guarded mutations and rejects later ones. The descriptor locks the existing Git
-common directory itself, so replacing a child lock file cannot create competing
-ownership. A durable row, stale-file timeout, TTL lease, in-process semaphore,
-and journal fact are not substitutes for coordinator ownership. Dry-run remains
-non-mutating and does not acquire this capability.
+Before Dalph sends a live request that may change task-tracker, Git, or
+task-work-provider state for this Git common directory, the coordinator verifies
+that it still holds the directory lock. If the locked descriptor and canonical
+path identify different directories, Dalph interrupts an in-flight request and
+rejects later requests. The descriptor locks the existing Git common directory
+itself, so replacing a child lock file cannot create a competing lock. A durable
+row, stale-file timeout, TTL lease, in-process semaphore, and journal record are
+not substitutes. Dry-run remains read-only and does not acquire the lock.
 
 The native lock request is non-blocking and is never retried. Acquisition also
 performs one canonical-path resolution, open, and stat, whose latency belongs to
-the supported local filesystem. Every new mutation synchronously performs one
-descriptor/path stat pair before crossing its effect boundary. While ownership
-is held, the background observer starts its next stat pair one second after the
+the supported local filesystem. Before every state-changing request, the
+coordinator synchronously performs one descriptor/path stat pair. While the lock
+is held, the background check starts its next stat pair one second after the
 preceding observation completes. On a responsive local host contradiction
 detection is therefore nominally about one second, not a strict wall-clock
-deadline; active mutations add their own observations. This local ownership
-cadence is independent of tracker graph refresh and tracker API latency.
+deadline; active state-changing requests add their own checks. This lock-check
+cadence is independent of task-graph refresh and task-tracker API latency.
 
-The supported identity boundary is a local filesystem path canonicalizable by
-`realpath`, including symbolic links, `.` and `..` segments, and filesystem case
-normalization when the host canonicalizes case aliases. Network filesystems and
-distinct bind-mount aliases require an explicitly qualified locking contract
-before production use; local-path tests must not be treated as evidence for
-distributed lock semantics.
+The production lock accepts local filesystem paths that `realpath` can
+canonicalize, including symbolic links, `.` and `..` segments, and filesystem
+case normalization when the host canonicalizes case aliases. Network
+filesystems and distinct bind-mount aliases require separately specified lock
+behavior before production use; local-path tests do not prove distributed lock
+behavior.
 
 ## Durability and Reconstruction
 
-Dalph persists only managed workflow history in the authority journal. It does
-not make an in-memory coordinator object durable, copy facts owned by another
-authority, or persist a derived view so that execution can resume from that
-object after a restart.
+Dalph persists only the workflow history it records in the Dalph workflow
+journal. It does not make an in-memory coordinator object durable or persist
+copies of current task-tracker, Git, or task-runner state so that coordination
+can continue from those copies after restart.
 
-Recovery reconstructs state through reconciliation; it does not rehydrate a
-serialized coordinator. It reopens and reads journal facts at their canonical
-positions, refreshes observations from the tracker, Git, and execution
-substrate, and then derives fresh process-local coordination and presentation
-state. A restarted process must not treat a pre-crash queue buffer, permit
-holding, timer instance, frontier, presentation cursor, or projection as
-authority.
+After restart, Dalph reads the run's journal events in position order, rereads
+current task state from the task tracker, rereads refs and worktrees from Git,
+and asks the task runner for current task-work sessions, provider work units,
+and worker processes. It derives new in-memory coordination and presentation
+state from those reads. A restarted process must not treat a pre-crash queue
+buffer, capacity reservation, timer instance, frontier, presentation cursor, or
+projection as proof that work occurred.
 
-| State or fact | Durability and authority | Restart treatment |
+| State or record | Where current state is read | Restart treatment |
 | --- | --- | --- |
-| Managed workflow intentions and observed outcomes | Durable; the JournalStore is authoritative for Dalph-managed history and assigns canonical `JournalPosition`s within a `RunId` | Reopen the journal, read in position order, and reconcile any intent whose outcome was ambiguous before retrying |
-| Task identity, lifecycle, dependencies, grouping, and claims | Durable only according to the tracker; the tracker remains authoritative | Refresh the tracker snapshot and derive current eligibility rather than restoring a stored frontier |
-| Git lineage, refs, commits, worktrees, and integration facts | Durable only according to Git; Git remains authoritative | Re-observe the exact managed resources and reconcile them with journaled intentions before continuing |
-| Session and process facts | Owned by the execution substrate; their availability across restart is a substrate property, not Dalph journal authority | Refresh substrate observations and classify the managed execution before retry, cleanup, or failure |
-| In-memory queue buffers, wakeup signals, semaphore instances, permit holdings, and timer instances | Non-durable process-local coordination | Discard them on process loss and recreate them from accepted configuration, journaled scheduling facts, and reconciled authority observations; they never prove that work occurred |
-| Runnable frontiers and resource-readiness views | Non-durable derived scheduling state | Recompute them from refreshed authority observations and managed journal history |
-| Journal-backed live semantic-trace occurrences, presentation cursors, and graph indexes | Non-authoritative derived presentation state, even when a sink stores a copy | Re-project corresponding committed journal facts in original `(RunId, JournalPosition)` order, then rebuild indexes without reordering or renumbering observed history. After restart, obtain fresh external-authority observations and record them as new managed observations, preserving any authority-provided identities or revisions and leaving unobservable intervals explicit rather than inventing historical events. Dry-run and deterministic-test traces remain process-local interpreter projections and do not write the authority journal |
+| Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the uncertain-request recovery rules to each intent missing a recorded outcome before retrying |
+| Task identity, lifecycle, dependencies, grouping, and claims | Read through the configured task tracker | Reread every task in the task-tracker target closure and derive current eligibility instead of restoring a stored frontier |
+| Git lineage, refs, commits, worktrees, and integration state | Read from Git | Reread the exact resource locators recorded in the planned task attempt and compare them with journaled intents before continuing |
+| Task-work sessions, provider work units, and worker processes | Read through the configured task runner; its adapter queries the configured task-work provider | Ask the task runner for a fresh report, then classify the task-work session and its provider work units or worker processes before retry, cleanup, or failure |
+| In-memory queue buffers, wakeup signals, semaphore instances, permit holdings, and timer instances | Available only in the live coordinator process | Discard them on process loss and recreate them from accepted configuration, journaled scheduling records, and fresh task-tracker, Git, and task-runner reads; they never prove that work occurred |
+| Runnable frontiers and resource-readiness views | Derived in the live coordinator process | Recompute them from fresh task-tracker, Git, and task-runner reads plus Dalph-recorded journal history |
+| Workflow-comparison-trace entries, presentation cursors, and graph indexes | Derived presentation data, even when an output store retains a copy | Rebuild them from committed journal records in original `(RunId, JournalPosition)` order without reordering or renumbering history. After restart, reread the task tracker and Git, ask the task runner for a fresh task-work session report, and record new journal events for those reads and reports. Preserve returned identities or revisions and leave unreadable intervals explicit. Dry-run and deterministic-test comparison traces remain process-local and do not write the Dalph workflow journal |
 
-For a recoverable live run, a successfully acknowledged journal append is the
-durability boundary for a managed fact. Presentation may apply process-local
-backpressure after acknowledgement, but a crash between acknowledgement and
-output does not erase the fact: replay can reconstruct any corresponding trace
-item from the same `(RunId, JournalPosition)`. A persistent live-trace projector
+A journal event record is durable after Dalph receives successful
+acknowledgement of its append. Presentation may apply process-local backpressure
+after acknowledgement, but a crash before presentation output does not erase
+that record: replay can reconstruct any corresponding comparison-trace entry
+from the same `(RunId, JournalPosition)`. If Dalph persists live
+workflow-comparison-trace entries, it
 must either atomically commit each projected item with advancement of its source
 cursor or enforce idempotency by `(RunId, JournalPosition)`, so replay cannot
-persist a second projection of the same committed fact. Conversely, no task
-execution may be inferred from an admission trace alone; reconciliation
-requires the authoritative journal and fresh execution-substrate observations.
+persist a second projection of the same committed record. A workflow comparison
+trace item saying task-work capacity was reserved does not prove that task work
+began. After restart, Dalph requires the journaled start request and a fresh
+task-work session report from the task runner.
 
-Physical journal schema evolution, event evolution, and semantic recovery are
-separate boundaries. Physical SQLite changes use ordered Effect SQL migrations.
-Each immutable journal event has a versioned envelope and JSON payload decoded
-and upcast through Effect Schema; stored history is not rewritten merely to
-adopt a newer in-process event shape. Successful row decoding is necessary but
-not sufficient for recovery: a managed-history reduction must validate the
-ordered events and return either a valid recovery state or typed semantic
-issues. Dalph does not persist that derived state. See
+SQLite schema migration, journal-event version conversion, and ordered journal
+history validation change independently and require separate implementations.
+Physical SQLite changes use ordered Effect SQL migrations.
+Each journal event record contains its identity, position, kind, version, and
+JSON payload. Effect Schema decodes that record and converts older payload
+versions; stored history is not rewritten merely to adopt a newer in-process
+event shape. Successful row decoding is necessary but
+not sufficient for recovery: journal history validation must read events in
+order, check rules between them, and return either a valid recovery state or
+typed validation errors. Dalph does not persist that derived state. See
 [ADR 0001](adr/0001-versioned-journal-evolution.md).
 
 ## Tracker Target Closure
@@ -116,15 +122,15 @@ the selected root hierarchy also reaches it. This does not hide a prerequisite
 needed to release `C`: GitHub records `B`, not `B1`, on `C.blockedBy`, and
 grouping itself never controls eligibility.
 
-## Tracker Observation Consistency
+## Task-Tracker Observation Consistency
 
-A complete tracker observation is all-or-nothing at the Dalph boundary, but it
-is not necessarily a provider-transactional, point-in-time snapshot. The GitHub
-adapter must finish every bounded page, decode every task in the tracker target
-closure, and reject detectable missing or contradictory facts before exposing
-a `TaskDagSnapshot`. Its `TrackerRevision` identifies the canonical content
-actually observed; it does not claim that GitHub assigned one revision to the
-multi-request read.
+The task-tracker adapter returns either one complete normalized task graph or a
+typed failure. GitHub may still change between the API requests used to assemble
+that graph. The GitHub adapter must finish every bounded page, decode every task
+in the task-tracker target closure, and reject detectable missing or
+contradictory records before exposing a `TaskDagSnapshot`. Its `TrackerRevision`
+identifies the canonical content actually read; it does not claim that GitHub
+assigned one revision to the multi-request read.
 
 GitHub's current Issue GraphQL fields expose current issue values and paginated
 `subIssues`/`blockedBy` connections without an as-of-time argument. GitHub keeps
@@ -134,14 +140,14 @@ Those events are a possible future event-replay source, but they are not a
 direct as-of graph query. Reconstruction would need separately specified
 completeness, initial-state, ordering, deletion, transfer, retention, and access
 semantics, so V1 deliberately does not claim historical reconstruction. Git
-commits are a separate Git authority and cannot reconstruct tracker state.
-Consequently, concurrent tracker edits that do not create a detectable identity,
+records commit history and cannot reconstruct task-tracker state. Consequently,
+concurrent task-tracker edits that do not create a detectable identity,
 pagination, repository, or parent contradiction can produce a mixed-time
-observation. Consumers must refresh tracker authority before ambiguity-crossing
-effects rather than treating an earlier `TrackerRevision` as a GitHub transaction
-token.
+observation. Before the Dalph coordinator sends a state-changing request whose
+validity depends on the current task graph, it must reread the task tracker
+instead of treating an earlier `TrackerRevision` as a GitHub transaction token.
 
-The V1 GitHub adapter admits at most 1,000 distinct tasks and reads at most 10
+One V1 GitHub adapter read supports at most 1,000 distinct tasks and at most 10
 pages from any one `subIssues` or `blockedBy` connection. With GitHub's maximum
 100 nodes per GraphQL page, these caps bound one relation at 1,000 endpoints and
 the worst-case observation at 21,001 provider requests. Crossing either bound
@@ -152,16 +158,16 @@ Provider evidence: [GitHub Issue GraphQL fields](https://docs.github.com/en/grap
 and [GitHub GraphQL query limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api),
 plus [GitHub issue edit history](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/editing-an-issue).
 
-## Documentation Authority
+## Documentation Responsibilities
 
-| Document or system                                                                 | Tooling authority                                                                |
+| Document, application, or store                                                    | Records or decisions provided                                                    |
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Dalph tooling context](CONTEXT.md)                                                | Canonical boundary terminology and the tooling/main-application distinction      |
-| This document                                                                      | Stable Dalph tooling structure and ownership boundaries                          |
+| [Dalph tooling context](CONTEXT.md)                                                | Canonical Dalph terminology and the tooling/main-application distinction          |
+| This document                                                                      | Stable Dalph structure and rules for rereading task-tracker and Git state, obtaining task-runner reports, and reading journal history |
 | Accepted implementation specification                                              | Executable Dalph requirements and acceptance                                     |
-| Canonical issue tracker                                                            | Work identity, accepted planning decisions, and dependency state                 |
-| [`research/`](../research/)                                                        | Historical investigation and decision evidence after accepted facts are promoted |
+| Configured task tracker                                                            | Task identity, description, lifecycle, dependency/grouping relationships, and claims |
+| [`research/`](../research/)                                                        | Historical investigation and decision evidence; accepted requirements and decisions are recorded in their named specification or decision document |
 | Historical `ralph-run.sh` sources in their origin repository                      | Historical harness behavior only                                                 |
 
 A target repository's architecture, ubiquitous language, and modeling
-assumptions are not Dalph architecture owners.
+assumptions do not define Dalph architecture.
