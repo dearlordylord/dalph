@@ -31,6 +31,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
+      "fs-ext-extra-prebuilt",
       "msgpackr-extract",
       "unrs-resolver"
     ]

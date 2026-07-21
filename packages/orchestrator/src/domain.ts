@@ -39,6 +39,18 @@ export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
 )
 export type JournalDatabaseLocator = typeof JournalDatabaseLocator.Type
 
+/** Names a requested Git common-directory path before canonical resolution. */
+export const GitCommonDirectoryTarget = Schema.NonEmptyString.pipe(
+  Schema.brand("GitCommonDirectoryTarget")
+)
+export type GitCommonDirectoryTarget = typeof GitCommonDirectoryTarget.Type
+
+/** Canonically locates one Git common directory, not a requested path alias. */
+export const GitCommonDirectoryLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("GitCommonDirectoryLocator")
+)
+export type GitCommonDirectoryLocator = typeof GitCommonDirectoryLocator.Type
+
 /** Identifies an on-disk journal schema generation; zero means uninitialized. */
 export const JournalSchemaVersion = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0)
