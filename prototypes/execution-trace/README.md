@@ -1,4 +1,4 @@
-# Ralph execution-trace presentation prototype
+# Dalph execution-trace presentation prototype
 
 Disposable HITL comparison artifact for [Prototype Ralph's multi-actor
 execution-trace refinement view](https://github.com/dearlordylord/dalph/issues/1).
@@ -40,7 +40,7 @@ joins](https://github.com/dearlordylord/5e-quint/issues/170); a focused view
 keeps that task's ancestor, prerequisite, and dependant closure.
 
 The GitHub snapshot is authority input. The execution occurrences layered over
-it are explicitly marked as simulation, not observed Ralph history. The
+it are explicitly marked as simulation, not observed Dalph history. The
 scenario uses three members of that tree:
 
 - GH-170 and GH-46 acquire the two task-execution slots together.

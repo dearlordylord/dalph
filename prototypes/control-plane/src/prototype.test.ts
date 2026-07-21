@@ -84,7 +84,7 @@ const dagSnapshotArbitrary = fc
       });
   });
 
-describe("Ralph graph-native control-plane falsification scenarios", () => {
+describe("Dalph graph-native control-plane falsification scenarios", () => {
   it("preserves canonical encoding and topological laws across generated DAG insertion orders", () => {
     fc.assert(
       fc.property(dagSnapshotArbitrary, (wire) => {
@@ -425,7 +425,7 @@ describe("Ralph graph-native control-plane falsification scenarios", () => {
   });
 
   it("recovers a resumable agent after coordinator-process death without journaling tracker facts", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "ralph-control-plane-"));
+    const directory = await mkdtemp(join(tmpdir(), "dalph-control-plane-"));
     const journalPath = join(directory, "events.ndjson");
     const firstProcess = makeNdjsonJournal(journalPath);
     const events = [
@@ -506,7 +506,7 @@ describe("Ralph graph-native control-plane falsification scenarios", () => {
           id: "task-a",
           lifecycle: {
             _tag: "Claimed",
-            owner: "ralph-worker-a",
+            owner: "dalph-worker-a",
           },
           prerequisites: [],
         },
@@ -524,7 +524,7 @@ describe("Ralph graph-native control-plane falsification scenarios", () => {
         { id: "task-e", lifecycle: ready, prerequisites: [] },
         {
           id: "task-f",
-          lifecycle: { _tag: "Claimed", owner: "ralph-worker-f" },
+          lifecycle: { _tag: "Claimed", owner: "dalph-worker-f" },
           prerequisites: [],
         },
       ],
@@ -641,7 +641,7 @@ describe("Ralph graph-native control-plane falsification scenarios", () => {
       tasks: [
         {
           id: taskId,
-          lifecycle: { _tag: "Claimed", owner: "ralph-worker-conflict" },
+          lifecycle: { _tag: "Claimed", owner: "dalph-worker-conflict" },
           prerequisites: [],
         },
       ],

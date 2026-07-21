@@ -371,7 +371,7 @@ export const App = () => {
             {run.mode === "observed" ? "Observed run" : "Simulation"} ·{" "}
             {runLabel(run)}
           </p>
-          <h1>Ralph execution refinement</h1>
+          <h1>Dalph execution refinement</h1>
         </div>
         <div className="mode-badge">
           {run.mode === "observed"

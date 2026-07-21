@@ -1,4 +1,4 @@
-# Ralph Tooling Context
+# Dalph Tooling Context
 
 This context names repository delivery-orchestration concepts. It is separate
 from every target repository's application and domain model.
@@ -16,7 +16,8 @@ _Avoid_: Target application, product runtime
 
 **Dalph orchestrator**:
 The graph-native repository tooling that coordinates delivery work. Ralph is
-the retained product identity used in the original research record.
+the retained identity of the original research record and historical harness,
+not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
 **Historical Ralph harness**:
@@ -24,12 +25,12 @@ The one-off `scripts/ralph-run.sh` experiment and its execution formats.
 _Avoid_: Ralph architecture, compatibility baseline, legacy runtime
 
 **Candidate tooling requirement**:
-A possible Ralph requirement mined from evidence but not yet accepted by an
+A possible Dalph requirement mined from evidence but not yet accepted by an
 owning decision or implementation specification.
 _Avoid_: Requirement, contract
 
 **Accepted tooling requirement**:
-A Ralph requirement explicitly selected by its owning tooling decision or
+A Dalph requirement explicitly selected by its owning tooling decision or
 implementation specification.
 _Avoid_: Observed shell behavior, candidate
 
@@ -40,7 +41,7 @@ workflow history.
 _Avoid_: Tracker state file, authoritative snapshot
 
 **Managed execution**:
-A run, attempt, claim, session, or artifact created and namespaced by the Ralph
+A run, attempt, claim, session, or artifact created and namespaced by the Dalph
 orchestrator.
 _Avoid_: Historical harness run, pre-existing workspace
 

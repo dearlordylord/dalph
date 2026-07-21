@@ -204,12 +204,12 @@ export interface CoordinatorPorts {
 
 const EXECUTION_CONCURRENCY = 2;
 
-export const makeCoordinator = Effect.fn("Ralph.makeCoordinator")(function* (
+export const makeCoordinator = Effect.fn("Dalph.makeCoordinator")(function* (
   ports: CoordinatorPorts,
 ) {
   const integrationGate = yield* Semaphore.make(1);
 
-  const executeOne = Effect.fn("Ralph.executeOne")(function* (taskId: TaskId) {
+  const executeOne = Effect.fn("Dalph.executeOne")(function* (taskId: TaskId) {
     const attempt = yield* ports.execution.planAttempt(taskId);
     yield* ports.journal.append({
       _tag: "AttemptPlanned",
@@ -257,7 +257,7 @@ export const makeCoordinator = Effect.fn("Ralph.makeCoordinator")(function* (
     return outcome;
   });
 
-  const executeFrontier = Effect.fn("Ralph.executeFrontier")(function* (
+  const executeFrontier = Effect.fn("Dalph.executeFrontier")(function* (
     snapshot: TaskDagSnapshot,
   ) {
     return yield* Effect.forEach(snapshot.runnableFrontier(), executeOne, {
@@ -614,7 +614,7 @@ export const recoverControlState = (
   };
 };
 
-export const recoverFromPorts = Effect.fn("Ralph.recoverFromPorts")(function* (
+export const recoverFromPorts = Effect.fn("Dalph.recoverFromPorts")(function* (
   ports: RecoveryPorts,
 ) {
   const [trackerSnapshot, journal, executions, claims, integrations] =
