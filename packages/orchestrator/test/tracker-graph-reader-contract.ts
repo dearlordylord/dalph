@@ -1,19 +1,21 @@
 import { expect, it } from "@effect/vitest"
 import { Effect, type Layer } from "effect"
-import type { TaskId, TrackerTarget } from "../src/domain.js"
+import type { TrackerTarget, TrackerTask } from "../src/domain.js"
 import { TrackerGraphReader } from "../src/tracker-graph-reader.js"
 
 interface ContractScenario {
   readonly complete: {
-    readonly expectedTaskIds: ReadonlyArray<TaskId>
+    readonly expectedTasks: ReadonlyArray<TrackerTask>
+    readonly forbiddenTaskIdFragments: ReadonlyArray<string>
     readonly layer: Layer.Layer<TrackerGraphReader>
     readonly target: TrackerTarget
   }
-  readonly incomplete: {
+  readonly failures: ReadonlyArray<{
     readonly expectedErrorTag: string
     readonly layer: Layer.Layer<TrackerGraphReader>
+    readonly name: string
     readonly target: TrackerTarget
-  }
+  }>
   readonly name: string
 }
 
@@ -25,16 +27,23 @@ export const trackerGraphReaderContract = (
     Effect.gen(function*() {
       const reader = yield* TrackerGraphReader
       const snapshot = yield* reader.read(scenario.complete.target)
-      expect(snapshot.taskIds()).toEqual(scenario.complete.expectedTaskIds)
+      expect(snapshot.toWire().tasks).toEqual(scenario.complete.expectedTasks)
+      for (const taskId of snapshot.taskIds()) {
+        for (const fragment of scenario.complete.forbiddenTaskIdFragments) {
+          expect(taskId).not.toContain(fragment)
+        }
+      }
     }).pipe(Effect.provide(scenario.complete.layer)))
 
-  it.effect(`${scenario.name} exposes no snapshot when its observation is incomplete`, () =>
-    Effect.gen(function*() {
-      const reader = yield* TrackerGraphReader
-      const error = yield* reader.read(scenario.incomplete.target).pipe(
-        Effect.flip,
-        Effect.orDie
-      )
-      expect(error._tag).toBe(scenario.incomplete.expectedErrorTag)
-    }).pipe(Effect.provide(scenario.incomplete.layer)))
+  for (const failure of scenario.failures) {
+    it.effect(`${scenario.name} exposes no snapshot for ${failure.name}`, () =>
+      Effect.gen(function*() {
+        const reader = yield* TrackerGraphReader
+        const error = yield* reader.read(failure.target).pipe(
+          Effect.flip,
+          Effect.orDie
+        )
+        expect(error._tag).toBe(failure.expectedErrorTag)
+      }).pipe(Effect.provide(failure.layer)))
+  }
 }

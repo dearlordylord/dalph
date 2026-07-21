@@ -7,7 +7,8 @@ import {
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
-  TaskId
+  TaskId,
+  TaskLifecycle
 } from "./domain.js"
 import { TrackerGraphReader, trackerGraphReaderFileLayer } from "./tracker-graph-reader.js"
 
@@ -18,15 +19,36 @@ const fixture = (name: string): FixtureTarget =>
 
 trackerGraphReaderContract({
   complete: {
-    expectedTaskIds: [TaskId.make("task-only")],
+    expectedTasks: [{
+      id: TaskId.make("task-only"),
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }],
+    forbiddenTaskIdFragments: [],
     layer: trackerGraphReaderFileLayer,
     target: fixture("singleton")
   },
-  incomplete: {
-    expectedErrorTag: "TaskDag.GraphProjectionError",
-    layer: trackerGraphReaderFileLayer,
-    target: fixture("invalid-graph")
-  },
+  failures: [
+    {
+      expectedErrorTag: "TaskDag.GraphProjectionError",
+      layer: trackerGraphReaderFileLayer,
+      name: "an invalid graph",
+      target: fixture("invalid-graph")
+    },
+    {
+      expectedErrorTag: "TrackerGraphReader.TrackerReadError",
+      layer: trackerGraphReaderFileLayer,
+      name: "malformed serialized input",
+      target: fixture("malformed")
+    },
+    {
+      expectedErrorTag: "FixtureReader.FixtureReadError",
+      layer: trackerGraphReaderFileLayer,
+      name: "an inaccessible fixture",
+      target: fixture("missing")
+    }
+  ],
   name: "fixture tracker reader"
 })
 

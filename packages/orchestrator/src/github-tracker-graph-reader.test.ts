@@ -8,16 +8,23 @@ import {
   GithubRepositoryName,
   GithubRepositoryOwner,
   TaskId,
+  TaskLifecycle,
   type TrackerTarget
 } from "./domain.js"
-import { GithubGraphqlClient, type GithubGraphqlRequest, GithubGraphqlRequestError } from "./github-graphql-client.js"
+import {
+  GithubGraphqlClient,
+  type GithubGraphqlRequest,
+  GithubGraphqlRequestError,
+  type GithubGraphqlResponse,
+  GithubRequestId
+} from "./github-graphql-client.js"
 import { githubTrackerGraphReaderLayer } from "./github-tracker-graph-reader.js"
 import { TrackerAdapterReadError, TrackerGraphReader } from "./tracker-graph-reader.js"
 
 const page = (
   requestId: string,
   body: unknown
-): { readonly requestId: string; readonly body: unknown } => ({ body, requestId })
+): GithubGraphqlResponse => ({ body, requestId: GithubRequestId.make(requestId) })
 
 const issue = (
   id: string,
@@ -107,7 +114,7 @@ const responseFor = (request: GithubGraphqlRequest) => {
 }
 
 const clientLayerFor = (
-  handler: (request: GithubGraphqlRequest) => { readonly requestId: string; readonly body: unknown }
+  handler: (request: GithubGraphqlRequest) => GithubGraphqlResponse
 ) =>
   Layer.succeed(
     GithubGraphqlClient,
@@ -133,6 +140,18 @@ const transitiveBlocker = TaskId.make("[\"repository-node\",\"transitive-blocker
 const incompleteClientLayer = clientLayerFor((request) =>
   request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
     ? connection("partial-subissues", "subIssues", [], true, null)
+    : responseFor(request)
+)
+
+const malformedClientLayer = clientLayerFor((request) =>
+  request._tag === "ResolveIssue"
+    ? page("malformed", { data: { repository: { issue: 42 } } })
+    : responseFor(request)
+)
+
+const inaccessibleClientLayer = clientLayerFor((request) =>
+  request._tag === "ResolveIssue"
+    ? page("inaccessible", { data: { repository: null } })
     : responseFor(request)
 )
 
@@ -177,7 +196,7 @@ it.effect("rejects an incomplete pagination response without exposing a snapshot
 
     expect(error).toBeInstanceOf(TrackerAdapterReadError)
     if (error._tag === "TrackerGraphReader.AdapterReadError") {
-      expect(error.operation).toBe("GithubTrackerGraphReader.readSubIssues")
+      expect(error.context.operation).toBe("GithubTrackerGraphReader.readSubIssues")
       expect(error.reason._tag).toBe("IncompleteSnapshot")
     }
   }).pipe(
@@ -262,6 +281,11 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
       )),
       failedRead(override((request) =>
         request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
+          ? connection("repeated-cursor", "subIssues", [], true, "repeat")
+          : undefined
+      )),
+      failedRead(override((request) =>
+        request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
           ? page("missing-subissues", { data: { node: null } })
           : undefined
       )),
@@ -275,6 +299,34 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
           ? connection("containment-cycle", "subIssues", ["root-node"])
           : undefined
       )),
+      failedRead(override((request) => {
+        if (request._tag === "ReadBlockedBy" && request.issueNodeId === "root-node") {
+          return connection("early-prerequisite", "blockedBy", ["first-blocker-node"])
+        }
+        if (request._tag === "ReadSubIssues" && request.issueNodeId === "child-node") {
+          return connection("late-parent", "subIssues", ["first-blocker-node"])
+        }
+        return undefined
+      })),
+      failedRead(override((request) => {
+        if (request._tag === "ReadSubIssues" && request.issueNodeId === "root-node") {
+          return connection("two-parents", "subIssues", ["child-node", "second-blocker-node"])
+        }
+        if (request._tag === "ReadIssue" && request.issueNodeId === "second-blocker-node") {
+          return issue("second-blocker-node", "root-node")
+        }
+        if (
+          request._tag === "ReadSubIssues"
+          && (request.issueNodeId === "child-node" || request.issueNodeId === "second-blocker-node")
+        ) {
+          return connection(
+            `shared-child-${request.issueNodeId}`,
+            "subIssues",
+            ["transitive-blocker-node"]
+          )
+        }
+        return undefined
+      })),
       failedRead(override((request) =>
         request._tag === "ReadBlockedBy" && request.issueNodeId === "root-node"
           ? connection("dependency-cycle", "blockedBy", ["root-node"])
@@ -325,20 +377,61 @@ it.effect("maps reopened and duplicate GitHub lifecycle states", () =>
 
 trackerGraphReaderContract({
   complete: {
-    expectedTaskIds: [
-      child,
-      firstBlocker,
-      root,
-      secondBlocker,
-      transitiveBlocker
+    expectedTasks: [
+      {
+        id: child,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: root,
+        prerequisiteIds: [firstBlocker, secondBlocker]
+      },
+      {
+        id: firstBlocker,
+        lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
+        parentTaskId: null,
+        prerequisiteIds: [transitiveBlocker]
+      },
+      {
+        id: root,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      },
+      {
+        id: secondBlocker,
+        lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      },
+      {
+        id: transitiveBlocker,
+        lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
     ],
+    forbiddenTaskIdFragments: ["42", "dalph", "octo", "github.com"],
     layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(clientLayer)),
     target
   },
-  incomplete: {
-    expectedErrorTag: "TrackerGraphReader.AdapterReadError",
-    layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(incompleteClientLayer)),
-    target
-  },
+  failures: [
+    {
+      expectedErrorTag: "TrackerGraphReader.AdapterReadError",
+      layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(incompleteClientLayer)),
+      name: "a partial observation",
+      target
+    },
+    {
+      expectedErrorTag: "TrackerGraphReader.AdapterReadError",
+      layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(inaccessibleClientLayer)),
+      name: "an inaccessible observation",
+      target
+    },
+    {
+      expectedErrorTag: "TrackerGraphReader.AdapterReadError",
+      layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(malformedClientLayer)),
+      name: "a malformed observation",
+      target
+    }
+  ],
   name: "GitHub tracker reader"
 })

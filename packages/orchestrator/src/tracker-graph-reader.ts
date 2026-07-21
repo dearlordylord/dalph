@@ -33,13 +33,28 @@ export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
 })
 export type TrackerAdapterReadFailureReason = typeof TrackerAdapterReadFailureReason.Type
 
+export const GithubTrackerReadOperation = Schema.Literals([
+  "GithubTrackerGraphReader.readBlockedBy",
+  "GithubTrackerGraphReader.readIssue",
+  "GithubTrackerGraphReader.readSubIssues",
+  "GithubTrackerGraphReader.resolveIssue",
+  "GithubTrackerGraphReader.project",
+  "GithubTrackerGraphReader.selectAdapter"
+])
+export type GithubTrackerReadOperation = typeof GithubTrackerReadOperation.Type
+
+export const TrackerAdapterReadContext = Schema.TaggedUnion({
+  Fixture: { operation: Schema.Literal("TrackerGraphReader.selectAdapter") },
+  Github: { operation: GithubTrackerReadOperation }
+})
+export type TrackerAdapterReadContext = typeof TrackerAdapterReadContext.Type
+
 /** A provider adapter could not produce one complete, decoded tracker observation. */
 export class TrackerAdapterReadError extends Schema.TaggedErrorClass<TrackerAdapterReadError>()(
   "TrackerGraphReader.AdapterReadError",
   {
+    context: TrackerAdapterReadContext,
     detail: Schema.String,
-    operation: Schema.NonEmptyString,
-    provider: Schema.NonEmptyString,
     reason: TrackerAdapterReadFailureReason
   }
 ) {}
@@ -115,8 +130,9 @@ export const trackerGraphReaderLayer = Layer.effect(
     ) {
       if (typeof target !== "string") {
         return yield* new TrackerAdapterReadError({
-          provider: "fixture",
-          operation: "TrackerGraphReader.selectAdapter",
+          context: TrackerAdapterReadContext.cases.Fixture.make({
+            operation: "TrackerGraphReader.selectAdapter"
+          }),
           detail: `fixture reader cannot read ${target._tag}`,
           reason: TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({})
         })

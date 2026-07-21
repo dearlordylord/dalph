@@ -6,16 +6,19 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 import { GithubIssueTarget } from "./domain.js"
 
+/** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
 export const GithubIssueNodeId = Schema.NonEmptyString.pipe(
   Schema.brand("GithubIssueNodeId")
 )
 export type GithubIssueNodeId = typeof GithubIssueNodeId.Type
 
+/** Identifies one GitHub repository node at the provider boundary, not its owner/name locator. */
 export const GithubRepositoryNodeId = Schema.NonEmptyString.pipe(
   Schema.brand("GithubRepositoryNodeId")
 )
 export type GithubRepositoryNodeId = typeof GithubRepositoryNodeId.Type
 
+/** Continues one GitHub connection read; it is not a journal or presentation position. */
 export const GithubCursor = Schema.NonEmptyString.pipe(Schema.brand("GithubCursor"))
 export type GithubCursor = typeof GithubCursor.Type
 
@@ -33,9 +36,15 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
+/** Identifies one GitHub HTTP response, not a tracker revision or journal position. */
+export const GithubRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("GithubRequestId")
+)
+export type GithubRequestId = typeof GithubRequestId.Type
+
 export const GithubGraphqlResponse = Schema.Struct({
   body: Schema.Unknown,
-  requestId: Schema.NonEmptyString
+  requestId: GithubRequestId
 })
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
@@ -187,7 +196,7 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function*(
         "GitHub response omitted x-github-request-id"
       )
     }
-    return GithubGraphqlResponse.make({ body, requestId })
+    return GithubGraphqlResponse.make({ body, requestId: GithubRequestId.make(requestId) })
   })
 
   return GithubGraphqlClient.of({ execute })
