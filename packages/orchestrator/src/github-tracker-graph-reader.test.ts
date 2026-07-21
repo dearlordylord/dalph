@@ -30,7 +30,8 @@ const issue = (
   id: string,
   parentId: string | null,
   state: "CLOSED" | "OPEN" = "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null = null
+  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null = null,
+  repositoryId = "repository-node"
 ) =>
   page(`issue-${id}`, {
     data: {
@@ -38,7 +39,7 @@ const issue = (
         __typename: "Issue",
         id,
         parent: parentId === null ? null : { id: parentId },
-        repository: { id: "repository-node" },
+        repository: { id: repositoryId },
         state,
         stateReason
       }
@@ -50,12 +51,14 @@ const connection = (
   field: "blockedBy" | "subIssues",
   ids: ReadonlyArray<string>,
   hasNextPage = false,
-  endCursor: string | null = null
+  endCursor: string | null = null,
+  nodeId = "root-node"
 ) =>
   page(requestId, {
     data: {
       node: {
         __typename: "Issue",
+        id: nodeId,
         [field]: {
           nodes: ids.map((id) => ({ id })),
           pageInfo: { endCursor, hasNextPage }
@@ -96,18 +99,39 @@ const responseFor = (request: GithubGraphqlRequest) => {
       if (request.issueNodeId === "root-node" && request.cursor === "next-child") {
         return connection("root-subissues-2", "subIssues", [])
       }
-      return connection(`subissues-${request.issueNodeId}`, "subIssues", [])
+      return connection(`subissues-${request.issueNodeId}`, "subIssues", [], false, null, request.issueNodeId)
     case "ReadBlockedBy":
       if (request.issueNodeId === "child-node" && request.cursor === null) {
-        return connection("child-blockers-1", "blockedBy", ["first-blocker-node"], true, "next-blocker")
+        return connection(
+          "child-blockers-1",
+          "blockedBy",
+          ["first-blocker-node"],
+          true,
+          "next-blocker",
+          "child-node"
+        )
       }
       if (request.issueNodeId === "child-node" && request.cursor === "next-blocker") {
-        return connection("child-blockers-2", "blockedBy", ["second-blocker-node"])
+        return connection(
+          "child-blockers-2",
+          "blockedBy",
+          ["second-blocker-node"],
+          false,
+          null,
+          "child-node"
+        )
       }
       if (request.issueNodeId === "first-blocker-node") {
-        return connection("transitive-blocker", "blockedBy", ["transitive-blocker-node"])
+        return connection(
+          "transitive-blocker",
+          "blockedBy",
+          ["transitive-blocker-node"],
+          false,
+          null,
+          "first-blocker-node"
+        )
       }
-      return connection(`blockers-${request.issueNodeId}`, "blockedBy", [])
+      return connection(`blockers-${request.issueNodeId}`, "blockedBy", [], false, null, request.issueNodeId)
   }
 
   return page("unexpected", { data: null })
@@ -189,6 +213,26 @@ it.effect("projects paginated grouping and transitive prerequisite closure atomi
     Effect.provide(clientLayer)
   ))
 
+it.effect("derives a stable revision from snapshot content rather than transport request ids", () =>
+  Effect.gen(function*() {
+    const readWith = (layer: Layer.Layer<GithubGraphqlClient>) =>
+      Effect.gen(function*() {
+        const reader = yield* TrackerGraphReader
+        return yield* reader.read(target)
+      }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer))
+
+    const first = yield* readWith(clientLayer)
+    const second = yield* readWith(clientLayerFor((request) => {
+      const response = responseFor(request)
+      return {
+        ...response,
+        requestId: GithubRequestId.make(`unrelated-${response.requestId}`)
+      }
+    }))
+
+    expect(second.revision).toBe(first.revision)
+  }))
+
 it.effect("rejects an incomplete pagination response without exposing a snapshot", () =>
   Effect.gen(function*() {
     const reader = yield* TrackerGraphReader
@@ -260,6 +304,11 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
           : undefined
       )),
       failedRead(override((request) =>
+        request._tag === "ReadIssue" && request.issueNodeId === "root-node"
+          ? issue("root-node", null, "OPEN", null, "different-repository")
+          : undefined
+      )),
+      failedRead(override((request) =>
         request._tag === "ReadIssue" && request.issueNodeId === "child-node"
           ? issue("child-node", "different-parent")
           : undefined
@@ -281,6 +330,11 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
       )),
       failedRead(override((request) =>
         request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
+          ? connection("wrong-relation-node", "subIssues", [], false, null, "different-node")
+          : undefined
+      )),
+      failedRead(override((request) =>
+        request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
           ? connection("repeated-cursor", "subIssues", [], true, "repeat")
           : undefined
       )),
@@ -296,7 +350,7 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
       )),
       failedRead(override((request) =>
         request._tag === "ReadSubIssues" && request.issueNodeId === "child-node"
-          ? connection("containment-cycle", "subIssues", ["root-node"])
+          ? connection("containment-cycle", "subIssues", ["root-node"], false, null, "child-node")
           : undefined
       )),
       failedRead(override((request) => {
@@ -304,7 +358,14 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
           return connection("early-prerequisite", "blockedBy", ["first-blocker-node"])
         }
         if (request._tag === "ReadSubIssues" && request.issueNodeId === "child-node") {
-          return connection("late-parent", "subIssues", ["first-blocker-node"])
+          return connection(
+            "late-parent",
+            "subIssues",
+            ["first-blocker-node"],
+            false,
+            null,
+            "child-node"
+          )
         }
         return undefined
       })),
@@ -322,7 +383,10 @@ it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub 
           return connection(
             `shared-child-${request.issueNodeId}`,
             "subIssues",
-            ["transitive-blocker-node"]
+            ["transitive-blocker-node"],
+            false,
+            null,
+            request.issueNodeId
           )
         }
         return undefined

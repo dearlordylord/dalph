@@ -102,6 +102,7 @@ const readSubIssuesQuery = `query ReadSubIssues($issueNodeId: ID!, $cursor: Stri
   node(id: $issueNodeId) {
     ... on Issue {
       __typename
+      id
       subIssues(first: $pageSize, after: $cursor) {
         nodes { id }
         pageInfo { hasNextPage endCursor }
@@ -114,6 +115,7 @@ const readBlockedByQuery = `query ReadBlockedBy($issueNodeId: ID!, $cursor: Stri
   node(id: $issueNodeId) {
     ... on Issue {
       __typename
+      id
       blockedBy(first: $pageSize, after: $cursor) {
         nodes { id }
         pageInfo { hasNextPage endCursor }
