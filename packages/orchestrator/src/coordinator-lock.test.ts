@@ -1,7 +1,8 @@
-import { NodeFileSystem, NodePath } from "@effect/platform-node"
+import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { describe, expect } from "vitest"
 import {
   ControlledCoordinatorLock,
@@ -22,6 +23,42 @@ import {
 const nodePathAndFileSystemLayer = Layer.merge(
   NodeFileSystem.layer,
   NodePath.layer
+)
+
+const nodeServicesAndCoordinatorLockLayer = nodeCoordinatorLockLayer.pipe(
+  Layer.provideMerge(NodeServices.layer)
+)
+
+const childLockHolderScript = `
+const fileSystem = require("node:fs")
+const { flock } = require("fs-ext-extra-prebuilt")
+const descriptor = fileSystem.openSync(process.argv[1], "r")
+flock(descriptor, "exnb", (failure) => {
+  if (failure !== null) process.exit(2)
+  process.stdout.write("locked\\n")
+  setInterval(() => undefined, 1_000)
+})
+`
+
+const startChildLockHolder = Effect.fn("CoordinatorLock.Test.startChildLockHolder")(
+  function*(target: GitCommonDirectoryTarget) {
+    const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
+    const packageDirectory = new URL("../", import.meta.url).pathname
+    const holder = yield* childProcesses.spawn(
+      ChildProcess.make(
+        "node",
+        ["-e", childLockHolderScript, target],
+        { cwd: packageDirectory }
+      )
+    )
+    const ready = yield* holder.stdout.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.runHead
+    )
+    expect(Option.getOrUndefined(ready)).toBe("locked")
+    return holder
+  }
 )
 
 const withTemporaryGitCommonDirectory = <A, E, R>(
@@ -76,6 +113,24 @@ const coordinatorLockContract = <Services, E>(
         )
       ))
 
+    it.effect("rejects a second live coordinator acquired through parent path segments", () =>
+      Effect.scoped(
+        withTemporaryGitCommonDirectory((target) =>
+          Effect.gen(function*() {
+            const path = yield* Path.Path
+            const lock = yield* CoordinatorLock
+            const alias = GitCommonDirectoryTarget.make(
+              `${target}/../${path.basename(target)}/.`
+            )
+
+            yield* lock.acquire(alias)
+            const failure = yield* Effect.flip(lock.acquire(target))
+
+            expect(failure).toBeInstanceOf(CoordinatorLockHeld)
+          }).pipe(Effect.provide(layer))
+        )
+      ))
+
     it.effect("rejects mutation after scoped ownership is released", () =>
       Effect.scoped(
         withTemporaryGitCommonDirectory((target) =>
@@ -91,6 +146,21 @@ const coordinatorLockContract = <Services, E>(
               ownership.runMutation(Effect.void)
             )
             expect(failure).toBeInstanceOf(CoordinatorOwnershipLost)
+          }).pipe(Effect.provide(layer))
+        )
+      ))
+
+    it.effect("allows a successor after scoped ownership is released", () =>
+      Effect.scoped(
+        withTemporaryGitCommonDirectory((target) =>
+          Effect.gen(function*() {
+            const lock = yield* CoordinatorLock
+            const ownershipScope = yield* Scope.make()
+            yield* lock.acquire(target).pipe(Scope.provide(ownershipScope))
+            yield* Scope.close(ownershipScope, Exit.void)
+
+            const successor = yield* lock.acquire(target)
+            yield* successor.runMutation(Effect.void)
           }).pipe(Effect.provide(layer))
         )
       ))
@@ -127,7 +197,7 @@ const coordinatorLockContract = <Services, E>(
             ], { discard: true })
 
             yield* contradict(target)
-            yield* TestClock.adjust("100 millis")
+            yield* TestClock.adjust("1 second")
             const failures = yield* Effect.all([
               Effect.flip(Fiber.join(firstFiber)),
               Effect.flip(Fiber.join(secondFiber))
@@ -260,6 +330,26 @@ describe("node CoordinatorLock adapter failures", () => {
             _tag: "CoordinatorLockObservationContradiction"
           })
         }).pipe(provideNodeLock)
+      )
+    ))
+
+  it.live("releases native ownership when the holder process dies", () =>
+    Effect.scoped(
+      withTemporaryGitCommonDirectory((target) =>
+        Effect.gen(function*() {
+          const lock = yield* CoordinatorLock
+          const holder = yield* startChildLockHolder(target)
+
+          const heldFailure = yield* Effect.flip(lock.acquire(target))
+          expect(heldFailure).toBeInstanceOf(CoordinatorLockHeld)
+
+          yield* holder.kill({ killSignal: "SIGKILL" })
+          const killedExit = yield* Effect.exit(holder.exitCode)
+          expect(Exit.isFailure(killedExit)).toBe(true)
+
+          const ownership = yield* lock.acquire(target)
+          yield* ownership.runMutation(Effect.void)
+        }).pipe(Effect.provide(nodeServicesAndCoordinatorLockLayer))
       )
     ))
 })

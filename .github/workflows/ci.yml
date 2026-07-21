@@ -15,10 +15,37 @@ permissions:
   contents: read
 
 jobs:
+  node-support:
+    name: Resolve supported Node versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Node versions from package engines
+        id: versions
+        run: |
+          node -e '
+            const ranges = require("./package.json").engines.node.split(" || ")
+            if (ranges.some((range) => !/^\^\d+\.\d+\.\d+$/.test(range))) {
+              throw new Error("engines.node must contain caret minimums separated by ` || `")
+            }
+            const versions = ranges.map((range) => range.slice(1))
+            require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `versions=${JSON.stringify(versions)}\n`)
+          '
+
   quality:
-    name: Comprehensive quality gate
+    name: Comprehensive quality gate (Node ${{ matrix.node-version }})
+    needs: node-support
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ${{ fromJSON(needs.node-support.outputs.versions) }}
 
     steps:
       - name: Checkout
@@ -36,7 +63,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           cache: pnpm
-          node-version: 24.15.0
+          node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -13,7 +13,7 @@ import {
 } from "./coordinator-lock.js"
 import type { GitCommonDirectoryLocator, GitCommonDirectoryTarget } from "./domain.js"
 
-const ownershipObservationSchedule = Schedule.spaced("25 millis")
+const ownershipObservationSchedule = Schedule.spaced("1 second")
 const lockHeldCodes = new Set(["EACCES", "EAGAIN", "EWOULDBLOCK"])
 const NativeLockCause = Schema.Struct({ code: Schema.String })
 
