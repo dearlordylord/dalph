@@ -26,6 +26,7 @@ export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-ou
 export {
   FixtureReader,
   fixtureReaderFileLayer,
+  FixtureReadError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   trackerGraphReaderLayer,

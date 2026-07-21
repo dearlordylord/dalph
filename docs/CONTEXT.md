@@ -33,6 +33,12 @@ A Ralph requirement explicitly selected by its owning tooling decision or
 implementation specification.
 _Avoid_: Observed shell behavior, candidate
 
+**Tracker fixture**:
+A serialized, controlled tracker snapshot used as input for dry-run and
+deterministic-test scenarios. It is not live tracker authority or managed
+workflow history.
+_Avoid_: Tracker state file, authoritative snapshot
+
 **Managed execution**:
 A run, attempt, claim, session, or artifact created and namespaced by the Ralph
 orchestrator.

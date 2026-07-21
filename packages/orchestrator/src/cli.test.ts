@@ -8,6 +8,7 @@ import { expect } from "vitest"
 import {
   CliUsageError,
   dryRunWorkflowInterpreterLayer,
+  FixtureReadError,
   FixtureTarget,
   makeTaskExecutionOperation,
   makeTrackerGraphObservationOperation,
@@ -313,15 +314,16 @@ it.effect("reports fixture read, parse, and decode failures precisely", () =>
       .read(FixtureTarget.make(fixture("invalid")))
       .pipe(Effect.flip, Effect.orDie)
 
-    expect(missing._tag).toBe("TrackerGraphReader.TrackerReadError")
+    expect(missing).toBeInstanceOf(FixtureReadError)
+    expect(missing._tag).toBe("FixtureReader.FixtureReadError")
     expect(malformed._tag).toBe("TrackerGraphReader.TrackerReadError")
     expect(invalid._tag).toBe("TrackerGraphReader.TrackerReadError")
     if (
-      missing._tag === "TrackerGraphReader.TrackerReadError"
+      missing._tag === "FixtureReader.FixtureReadError"
       && malformed._tag === "TrackerGraphReader.TrackerReadError"
       && invalid._tag === "TrackerGraphReader.TrackerReadError"
     ) {
-      expect(missing.operation).toBe("TrackerGraphReader.read")
+      expect(missing.target).toBe(`${fixture("empty")}.missing`)
       expect(malformed.operation).toBe("TrackerGraphReader.parse")
       expect(invalid.operation).toBe("TrackerGraphReader.decode")
     }

@@ -1,13 +1,21 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
-import { type FixtureTarget } from "./domain.js"
+import { FixtureTarget } from "./domain.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
 
 const TrackerReadOperation = Schema.Literals([
-  "TrackerGraphReader.read",
   "TrackerGraphReader.parse",
   "TrackerGraphReader.decode"
 ])
+
+/** Failure to acquire serialized tracker-fixture content from its read capability. */
+export class FixtureReadError extends Schema.TaggedErrorClass<FixtureReadError>()(
+  "FixtureReader.FixtureReadError",
+  {
+    target: FixtureTarget,
+    detail: Schema.String
+  }
+) {}
 
 export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>()(
   "TrackerGraphReader.TrackerReadError",
@@ -20,7 +28,10 @@ export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>(
 interface TrackerGraphReaderService {
   readonly read: (
     target: FixtureTarget
-  ) => Effect.Effect<TaskDagSnapshot, GraphProjectionError | TrackerReadError>
+  ) => Effect.Effect<
+    TaskDagSnapshot,
+    FixtureReadError | GraphProjectionError | TrackerReadError
+  >
 }
 
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
@@ -30,7 +41,7 @@ export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Trac
 interface FixtureReaderService {
   readonly read: (
     target: FixtureTarget
-  ) => Effect.Effect<string, TrackerReadError>
+  ) => Effect.Effect<string, FixtureReadError>
 }
 
 /** Reads fixture content without granting graph projection any filesystem authority. */
@@ -47,8 +58,8 @@ const fixtureReaderFileSystemLayer = Layer.effect(
     ) {
       return yield* fileSystem.readFileString(target).pipe(
         Effect.mapError((cause) =>
-          new TrackerReadError({
-            operation: "TrackerGraphReader.read",
+          new FixtureReadError({
+            target,
             detail: String(cause)
           })
         )

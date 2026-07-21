@@ -1,8 +1,7 @@
 import { it } from "@effect/vitest"
-import { Clock, Duration, Effect, Fiber, Layer, Queue, Ref } from "effect"
-import { TestClock } from "effect/testing"
+import { Clock, Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import type { TraceItem, TrackerGraphReader, WorkflowInterpreter } from "./index.js"
+import type { TraceItem } from "./index.js"
 import {
   deterministicTestWorkflowInterpreterLayer,
   dryRunWorkflowInterpreterLayer,
@@ -12,7 +11,10 @@ import {
   semanticTrace,
   TaskExecution,
   TaskExecutionCapacity,
+  TaskId,
+  TrackerGraphReader,
   trackerGraphReaderFileLayer,
+  WorkflowInterpreter,
   WorkflowTrace
 } from "./index.js"
 
@@ -37,7 +39,7 @@ const taskExecutionLayer = Layer.succeed(
   TaskExecution,
   TaskExecution.of({
     execute: Effect.fn("TaskExecution.Equivalence.execute")(function*() {
-      yield* Effect.sleep("1 millis")
+      yield* Effect.void
     })
   })
 )
@@ -50,26 +52,92 @@ const deterministicTestLayer = deterministicTestWorkflowInterpreterLayer.pipe(
   Layer.provide(taskExecutionLayer)
 )
 
-const runWith = (
+const makeCompletionController = (
+  taskIds: ReadonlyArray<TaskId>
+) =>
+  Effect.gen(function*() {
+    const entries = yield* Effect.forEach(
+      taskIds,
+      Effect.fn("CompletionController.makeGate")(function*(taskId) {
+        const started = yield* Deferred.make<void>()
+        const released = yield* Deferred.make<void>()
+        return [taskId, { released, started }] as const
+      })
+    )
+    const gates = new Map(entries)
+    const gateFor = Effect.fn("CompletionController.gateFor")(function*(
+      taskId: TaskId
+    ) {
+      const gate = gates.get(taskId)
+      if (gate === undefined) {
+        return yield* Effect.die(`missing completion gate for ${taskId}`)
+      }
+      return gate
+    })
+    const awaitRelease = Effect.fn(
+      "CompletionController.awaitRelease"
+    )(function*(taskId: TaskId) {
+      const gate = yield* gateFor(taskId)
+      yield* Deferred.succeed(gate.started, undefined)
+      yield* Deferred.await(gate.released)
+    })
+    const release = Effect.fn("CompletionController.release")(function*(
+      taskId: TaskId
+    ) {
+      const gate = yield* gateFor(taskId)
+      yield* Deferred.await(gate.started)
+      yield* Deferred.succeed(gate.released, undefined)
+    })
+
+    return { awaitRelease, release }
+  })
+
+const controlledInterpreterLayer = (
+  interpreterLayer: Layer.Layer<
+    WorkflowInterpreter,
+    never,
+    TrackerGraphReader
+  >,
+  awaitRelease: (taskId: TaskId) => Effect.Effect<void>
+) =>
+  Layer.effect(
+    WorkflowInterpreter,
+    Effect.gen(function*() {
+      const interpreter = yield* WorkflowInterpreter
+      const executeTask = Effect.fn(
+        "WorkflowInterpreter.Controlled.executeTask"
+      )(function*(taskId: TaskId) {
+        const outcome = yield* interpreter.executeTask(taskId)
+        yield* awaitRelease(taskId)
+        return outcome
+      })
+
+      return WorkflowInterpreter.of({
+        executeTask,
+        readTrackerGraph: interpreter.readTrackerGraph
+      })
+    })
+  ).pipe(Layer.provide(interpreterLayer))
+
+const runWithCompletionOrder = (
   target: FixtureTarget,
   interpreterLayer: Layer.Layer<
     WorkflowInterpreter,
     never,
     TrackerGraphReader
-  >
+  >,
+  completionOrder: ReadonlyArray<TaskId>
 ) =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
     const clock = yield* Clock.Clock
-    const sleeps = yield* Queue.unbounded<Duration.Duration>()
-    const controlledDuration = Duration.millis(1)
     const controlledClock = {
       ...clock,
-      sleep: (_duration: Duration.Duration) =>
-        Queue.offer(sleeps, controlledDuration).pipe(
-          Effect.andThen(clock.sleep(controlledDuration))
-        )
+      sleep: () => Effect.void
     }
+    const completionController = yield* makeCompletionController(
+      completionOrder
+    )
     const traceLayer = Layer.succeed(
       WorkflowTrace,
       WorkflowTrace.of({
@@ -81,28 +149,41 @@ const runWith = (
 
     const run = yield* runWorkflow(target, TaskExecutionCapacity.make(2)).pipe(
       Effect.provide(traceLayer),
-      Effect.provide(interpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(
+        controlledInterpreterLayer(
+          interpreterLayer,
+          completionController.awaitRelease
+        )
+      ),
       Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
       Effect.forkScoped
     )
-    let completed = false
-    while (!completed) {
-      const state = yield* Effect.race(
-        Queue.take(sleeps).pipe(
-          Effect.map((duration) => ({ _tag: "Sleeping", duration }) as const)
-        ),
-        Fiber.await(run).pipe(Effect.as({ _tag: "Completed" } as const))
-      )
-      if (state._tag === "Completed") {
-        completed = true
-      } else {
-        yield* TestClock.adjust(state.duration)
-      }
-    }
+    yield* Effect.forEach(
+      completionOrder,
+      completionController.release,
+      { discard: true }
+    )
     yield* Fiber.join(run)
     return semanticTrace(yield* Ref.get(items))
   })
+
+const runWith = (
+  target: FixtureTarget,
+  interpreterLayer: Layer.Layer<
+    WorkflowInterpreter,
+    never,
+    TrackerGraphReader
+  >
+) =>
+  Effect.gen(function*() {
+    const reader = yield* TrackerGraphReader
+    const snapshot = yield* reader.read(target)
+    return yield* runWithCompletionOrder(
+      target,
+      interpreterLayer,
+      snapshot.eligibleTaskIds()
+    )
+  }).pipe(Effect.provide(trackerGraphReaderFileLayer))
 
 for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) {
   it.effect(`${name} has one semantic trace under every interpreter`, () =>
@@ -119,6 +200,22 @@ for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) 
       expect(deterministicTest).toEqual(liveFake)
     }))
 }
+
+it.effect("honors an explicit controlled completion order", () =>
+  Effect.gen(function*() {
+    const trace = yield* runWithCompletionOrder(
+      fixture("diamond"),
+      dryRunWorkflowInterpreterLayer,
+      [TaskId.make("group"), TaskId.make("root")]
+    ).pipe(Effect.provide(trackerGraphReaderFileLayer))
+    const completionOrder = trace.flatMap((item) =>
+      item._tag === "TaskExecutionOutcomeObserved"
+        ? [item.operation.taskId]
+        : []
+    )
+
+    expect(completionOrder).toEqual(["group", "root"])
+  }))
 
 it.effect("dry-run traverses the complete graph with only its read port", () =>
   Effect.gen(function*() {

@@ -4,7 +4,7 @@ import { FixtureTarget, OperationId, TaskId, TrackerRevision } from "./domain.js
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import { TaskExecution } from "./task-execution.js"
 import { TraceOutput, type TraceOutputError } from "./trace-output.js"
-import { TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
+import { type FixtureReadError, TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
 
 export const WorkflowOperation = Schema.TaggedUnion({
   ReadTrackerGraph: {
@@ -59,7 +59,10 @@ const observedTaskIds = (
 interface WorkflowInterpreterService {
   readonly readTrackerGraph: (
     target: FixtureTarget
-  ) => Effect.Effect<TaskDagSnapshot, GraphProjectionError | TrackerReadError>
+  ) => Effect.Effect<
+    TaskDagSnapshot,
+    FixtureReadError | GraphProjectionError | TrackerReadError
+  >
   readonly executeTask: (
     taskId: TaskId
   ) => Effect.Effect<typeof WorkflowOutcome.cases.TaskExecuted.Type>
