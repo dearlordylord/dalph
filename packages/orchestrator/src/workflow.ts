@@ -1,17 +1,22 @@
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
-import type { TaskExecutionCapacity } from "./domain.js"
-import { FixtureTarget, OperationId, TaskId, TrackerRevision } from "./domain.js"
+import type { TaskExecutionCapacity, TrackerTarget } from "./domain.js"
+import { OperationId, TaskId, TrackerRevision, TrackerTarget as TrackerTargetSchema } from "./domain.js"
 import type { JournalReconciliationRequired, JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import { TaskExecution } from "./task-execution.js"
 import { TraceOutput, type TraceOutputError } from "./trace-output.js"
-import { type FixtureReadError, TrackerGraphReader, type TrackerReadError } from "./tracker-graph-reader.js"
+import {
+  type FixtureReadError,
+  type TrackerAdapterReadError,
+  TrackerGraphReader,
+  type TrackerReadError
+} from "./tracker-graph-reader.js"
 
 export const WorkflowOperation = Schema.TaggedUnion({
   ReadTrackerGraph: {
     operationId: OperationId,
     predecessorOperationIds: Schema.Array(OperationId),
-    target: FixtureTarget
+    target: TrackerTargetSchema
   },
   ExecuteTask: {
     operationId: OperationId,
@@ -32,7 +37,7 @@ const trackerGraphObservationOperationId = OperationId.make(
 )
 
 export const makeTrackerGraphObservationOperation = (
-  target: FixtureTarget
+  target: TrackerTarget
 ): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
   WorkflowOperation.cases.ReadTrackerGraph.make({
     operationId: trackerGraphObservationOperationId,
@@ -81,6 +86,7 @@ interface WorkflowInterpreterService {
     | JournalStoreContradiction
     | JournalReconciliationRequired
     | JournalStoreError
+    | TrackerAdapterReadError
     | TrackerReadError
   >
   readonly executeTask: (
@@ -216,7 +222,7 @@ export class WorkflowTrace extends Context.Service<WorkflowTrace, WorkflowTraceS
 ) {}
 
 export const runWorkflow = Effect.fn("Workflow.run")(function*(
-  target: FixtureTarget,
+  target: TrackerTarget,
   capacity: TaskExecutionCapacity
 ) {
   const interpreter = yield* WorkflowInterpreter

@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
-import { FixtureTarget } from "./domain.js"
+import { FixtureTarget, type TrackerTarget } from "./domain.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
 
 const TrackerReadOperation = Schema.Literals([
@@ -25,12 +25,31 @@ export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>(
   }
 ) {}
 
+export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
+  BoundaryDecode: {},
+  IncompleteSnapshot: {},
+  Transport: {},
+  UnsupportedTarget: {}
+})
+export type TrackerAdapterReadFailureReason = typeof TrackerAdapterReadFailureReason.Type
+
+/** A provider adapter could not produce one complete, decoded tracker observation. */
+export class TrackerAdapterReadError extends Schema.TaggedErrorClass<TrackerAdapterReadError>()(
+  "TrackerGraphReader.AdapterReadError",
+  {
+    detail: Schema.String,
+    operation: Schema.NonEmptyString,
+    provider: Schema.NonEmptyString,
+    reason: TrackerAdapterReadFailureReason
+  }
+) {}
+
 interface TrackerGraphReaderService {
   readonly read: (
-    target: FixtureTarget
+    target: TrackerTarget
   ) => Effect.Effect<
     TaskDagSnapshot,
-    FixtureReadError | GraphProjectionError | TrackerReadError
+    FixtureReadError | GraphProjectionError | TrackerAdapterReadError | TrackerReadError
   >
 }
 
@@ -92,8 +111,16 @@ export const trackerGraphReaderLayer = Layer.effect(
   Effect.gen(function*() {
     const fixtureReader = yield* FixtureReader
     const read = Effect.fn("TrackerGraphReader.read")(function*(
-      target: FixtureTarget
+      target: TrackerTarget
     ) {
+      if (typeof target !== "string") {
+        return yield* new TrackerAdapterReadError({
+          provider: "fixture",
+          operation: "TrackerGraphReader.selectAdapter",
+          detail: `fixture reader cannot read ${target._tag}`,
+          reason: TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({})
+        })
+      }
       const contents = yield* fixtureReader.read(target)
       const input = yield* parseJson(contents)
       const projection = projectTrackerSnapshot(input)

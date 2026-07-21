@@ -1,6 +1,10 @@
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
   FixtureTarget,
+  GithubIssueNumber,
+  GithubIssueTarget,
+  GithubRepositoryName,
+  GithubRepositoryOwner,
   isDependencySatisfied,
   isTaskOpen,
   JournalDatabaseLocator,
@@ -14,10 +18,12 @@ export {
   TaskLifecycle,
   TrackerRevision,
   TrackerSnapshot,
+  TrackerTarget,
   TrackerTask
 } from "./domain.js"
 export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
 export { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
+export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader.js"
 export {
   JournalDataCorruption,
   JournalReconciliationRequired,
@@ -49,6 +55,8 @@ export {
   FixtureReader,
   fixtureReaderFileLayer,
   FixtureReadError,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   trackerGraphReaderLayer,
