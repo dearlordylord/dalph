@@ -66,6 +66,7 @@ it("uses one locale-independent canonical order for operation identities", () =>
       const branded = identities.map((identity) => OperationId.make(identity))
       const expected = branded.toSorted((left, right) => left < right ? -1 : left > right ? 1 : 0)
       expect(branded.toSorted(compareOperationIds)).toEqual(expected)
+      expect(compareOperationIds(OperationId.make("same"), OperationId.make("same"))).toBe(0)
     }
   ))
 })

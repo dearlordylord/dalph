@@ -19,7 +19,6 @@ import {
   OperationId,
   PlannedTaskAttempt,
   ProviderObservationId,
-  ProviderObservationIdentityReused,
   ProviderRequestId,
   recoverTaskWorkSessionEstablishments,
   RunId,
@@ -184,8 +183,7 @@ it.effect("fails closed when a provider reuses one observation identity for anot
         .pipe(Effect.flip)
     }).pipe(Effect.provide(layer))
 
-    expect(failure).toBeInstanceOf(ProviderObservationIdentityReused)
-    expect(failure).toMatchObject({ observationId: reused, operationId })
+    expect(failure).toBeInstanceOf(JournalStoreContradiction)
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("performs exactly three fresh lookups before typed unreadable non-convergence", () =>

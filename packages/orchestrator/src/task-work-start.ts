@@ -127,7 +127,10 @@ export const TaskWorkSessionResult = Schema.TaggedUnion({
 })
 export type TaskWorkSessionResult = typeof TaskWorkSessionResult.Type
 
-/** A terminal provider result for one session; it does not decide task success. */
+/**
+ * A terminal provider result for one session; it does not decide task success.
+ * Issue #29 owns adding the distinct TaskRunner result-read operation.
+ */
 export const TaskWorkSessionResultReported = Schema.TaggedStruct(
   "TaskWorkSessionResultReported",
   {

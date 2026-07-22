@@ -52,15 +52,6 @@ export class TaskWorkSessionEvidenceContradiction
   )
 {}
 
-/** One provider observation identity was reused for a distinct completed call. */
-export class ProviderObservationIdentityReused extends Schema.TaggedErrorClass<ProviderObservationIdentityReused>()(
-  "ProviderObservationIdentityReused",
-  {
-    observationId: ProviderObservationId,
-    operationId: OperationId
-  }
-) {}
-
 /** The planned attempt belongs to a different recoverable workflow run. */
 export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<TaskWorkSessionRunContradiction>()(
   "TaskWorkSessionRunContradiction",
@@ -74,7 +65,6 @@ export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<Tas
 type TaskWorkSessionObservationError =
   | JournalStoreContradiction
   | JournalStoreError
-  | ProviderObservationIdentityReused
   | TaskWorkSessionEvidenceContradiction
   | TaskWorkSessionRunContradiction
   | TraceOutputError

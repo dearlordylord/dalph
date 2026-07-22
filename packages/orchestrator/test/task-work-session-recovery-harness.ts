@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data, no-magic-numbers */
-import { Effect, Fiber, Layer, Queue } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Queue } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -77,7 +77,7 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
   let releaseLookupRecord: Queue.Queue<void>
   let outcomePendingSignal: Queue.Queue<void>
   let releaseOutcome: Queue.Queue<void>
-  let workflowCompletedSignal: Queue.Queue<void>
+  let workflowExitSignal: Queue.Queue<Exit.Exit<unknown, unknown>>
 
   const requireOperation = () => {
     if (operation === undefined) return Effect.die(new Error("identity must be selected"))
@@ -204,7 +204,11 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
     const fiber = yield* Effect.gen(function*() {
       return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(selected)
     }).pipe(
-      Effect.onExit(() => Queue.offer(workflowCompletedSignal, undefined)),
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit) && exit.cause.reasons.every(Cause.isInterruptReason)
+          ? Effect.void
+          : Queue.offer(workflowExitSignal, exit)
+      ),
       Effect.provide(interpreterLayer),
       Effect.provide(Layer.succeed(JournalStore, journal)),
       Effect.forkDetach
@@ -218,9 +222,40 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
       pendingEvidence = yield* Queue.take(lookupRecordedSignal)
     })
 
+  const applyWorkflowExit = (exit: Exit.Exit<unknown, unknown>) => {
+    if (Exit.isSuccess(exit)) {
+      return Effect.sync(() => {
+        status = "Established"
+      })
+    }
+    const failure = Cause.squash(exit.cause)
+    if (typeof failure !== "object" || failure === null || !("_tag" in failure)) {
+      return Effect.die(failure)
+    }
+    switch (failure._tag) {
+      case "TaskWorkSessionLookupDidNotConverge":
+        return Effect.sync(() => {
+          status = "LookupDidNotConverge"
+        })
+      case "TaskWorkSessionEstablishmentDidNotConverge":
+        return Effect.sync(() => {
+          status = "EstablishmentDidNotConverge"
+        })
+      case "TaskWorkSessionCorrelationConflict":
+      case "TaskWorkSessionEvidenceContradiction":
+        return Effect.sync(() => {
+          status = "CorrelationConflict"
+        })
+      default:
+        return Effect.die(failure)
+    }
+  }
+
   return {
     init: () =>
       Effect.gen(function*() {
+        yield* interruptWorkflow
+        interruptWorkflow = Effect.void
         authorization = "NoAuthorization"
         candidateSelected = false
         coordinatorRunning = true
@@ -248,7 +283,7 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         releaseLookupRecord = yield* Queue.unbounded<void>()
         outcomePendingSignal = yield* Queue.unbounded<void>()
         releaseOutcome = yield* Queue.unbounded<void>()
-        workflowCompletedSignal = yield* Queue.unbounded<void>()
+        workflowExitSignal = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>()
       }),
     selectIdentity: () =>
       Effect.sync(() => {
@@ -308,29 +343,19 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         if (evidence === "Matching") {
           matchingReportRecorded = true
           yield* Queue.take(outcomePendingSignal)
-        } else if (evidence === "Absent" && matchingReportRecorded) {
-          status = "CorrelationConflict"
-        } else if (evidence === "Absent" && lookupAttempts < lookupBound) {
+        } else if (evidence === "Absent" && !matchingReportRecorded && lookupAttempts < lookupBound) {
           authorization = "FreshAbsence"
-        } else if (evidence === "Absent") {
-          status = "EstablishmentDidNotConverge"
-        } else if (evidence === "Unreadable" && lookupAttempts === lookupBound) {
-          status = "LookupDidNotConverge"
-        } else if (evidence === "Conflict") {
-          status = "CorrelationConflict"
         }
         if (
           evidence === "Conflict"
           || (evidence === "Absent" && (matchingReportRecorded || lookupAttempts === lookupBound))
           || (evidence === "Unreadable" && lookupAttempts === lookupBound)
-        ) yield* Queue.take(workflowCompletedSignal)
+        ) yield* Queue.take(workflowExitSignal).pipe(Effect.flatMap(applyWorkflowExit))
       }),
     recordOutcome: () =>
       Queue.offer(releaseOutcome, undefined).pipe(
-        Effect.andThen(Queue.take(workflowCompletedSignal)),
-        Effect.andThen(Effect.sync(() => {
-          status = "Established"
-        })),
+        Effect.andThen(Queue.take(workflowExitSignal)),
+        Effect.flatMap(applyWorkflowExit),
         Effect.asVoid
       ),
     crash: () =>

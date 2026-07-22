@@ -17,7 +17,7 @@ import {
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
 import { type WorkflowOperation, WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
-import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow.js"
+import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow-outcome.js"
 
 /**
  * Records a managed operation before its state-changing request. It is
@@ -331,9 +331,8 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:outcome`)
 
 export const taskWorkStartRequestedRecordKey = (
-  operationId: OperationId,
   observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-requested:${observationId}`)
+): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
 
 export const taskWorkStartAcknowledgedRecordKey = (
   operationId: OperationId,
@@ -346,10 +345,8 @@ export const taskWorkStartFailedRecordKey = (
 ): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-failed:${observationId}`)
 
 export const taskWorkSessionLookupRequestedRecordKey = (
-  operationId: OperationId,
   observationId: ProviderObservationId
-): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:task-work-session-lookup-requested:${observationId}`)
+): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
 
 export const taskWorkSessionReportedRecordKey = (
   operationId: OperationId,
