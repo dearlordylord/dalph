@@ -11,6 +11,7 @@ import {
   journaledWorkflowInterpreterLayer,
   JournalStore,
   JournalStoreContradiction,
+  makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
   MatchingTaskWorkSessionReported,
@@ -22,15 +23,19 @@ import {
   ProviderRequestId,
   recoverTaskWorkSessionEstablishments,
   RunId,
+  TaskAttemptPlanHistoryContradiction,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  taskRevisionFor,
   TaskRunner,
   taskRunnerWorkflowInterpreterLayer,
   TaskWorkSessionCorrelationConflict,
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionEvidenceContradiction,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TaskWorkSessionLookupDidNotConverge,
   TaskWorkSessionLookupFailure,
   TaskWorkSessionRunContradiction,
@@ -64,14 +69,26 @@ const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-41"),
   baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
   branch: TaskBranchRef.make("refs/heads/dalph/task-41"),
+  executor: TaskExecutorLocator.make("executor:recovery-test"),
   runId,
+  session: TaskWorkSessionLocator.make("session:recovery-test"),
   taskId,
+  taskRevision: taskRevisionFor(task),
   worktree: WorktreeLocator.make("/tmp/dalph/task-41")
 })
 const request = TaskWorkStartRequest.make({ operationId, plannedAttempt, task })
+const planOperationId = OperationId.make("operation-plan-attempt")
+const planOperation = makeTaskAttemptPlanOperation({
+  operationId: planOperationId,
+  plannedAttempt,
+  predecessorOperationIds: []
+})
 const operation = makeTaskWorkSessionEstablishmentOperation({
-  predecessorOperationIds: [OperationId.make("operation-plan-attempt")],
+  predecessorOperationIds: [planOperationId],
   request
+})
+const recordPlannedAttempt = Effect.gen(function*() {
+  yield* (yield* WorkflowInterpreter).recordTaskAttemptPlan(planOperation)
 })
 
 it.effect("repeats one exact start request only after fresh authoritative absence", () =>
@@ -116,6 +133,7 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
     )
     const result = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
+      yield* recordPlannedAttempt
       const outcome = yield* interpreter.establishTaskWorkSession(operation)
       const journal = yield* JournalStore
       const records = yield* journal.read(runId)
@@ -133,6 +151,7 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
     expect(yield* Ref.get(lookupCount)).toBe(2)
 
     expect(result.records.map(({ event }) => event._tag)).toEqual([
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -178,6 +197,7 @@ it.effect("fails closed when a provider reuses one observation identity for anot
     )
 
     const failure = yield* Effect.gen(function*() {
+      yield* recordPlannedAttempt
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(operation)
         .pipe(Effect.flip)
@@ -321,6 +341,7 @@ it.effect("reconstructs an unresolved operation from journal history and replays
 
     const results = yield* Effect.gen(function*() {
       const journal = yield* JournalStore
+      yield* recordPlannedAttempt
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
@@ -476,7 +497,9 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused claim acquisition"),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
-      readTrackerGraph: () => Effect.succeed(snapshot)
+      recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      readTrackerGraph: () => Effect.succeed(snapshot),
+      simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
@@ -549,12 +572,14 @@ it.effect("journals uncertain start and unreadable lookup evidence before non-co
 
     const tags = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
+      yield* recordPlannedAttempt
       const failure = yield* interpreter.establishTaskWorkSession(operation).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(TaskWorkSessionLookupDidNotConverge)
       return (yield* (yield* JournalStore).read(runId)).map(({ event }) => event._tag)
     }).pipe(Effect.provide(layer))
 
     expect(tags).toEqual([
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestFailed",
@@ -605,6 +630,7 @@ it.effect("blocks a repeat when fresh absence contradicts a recorded matching re
 
     const failure = yield* Effect.gen(function*() {
       const journal = yield* JournalStore
+      yield* recordPlannedAttempt
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
@@ -660,6 +686,7 @@ it.effect("rejects a fresh matching report for a different provider session", ()
 
     const failure = yield* Effect.gen(function*() {
       const journal = yield* JournalStore
+      yield* recordPlannedAttempt
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
@@ -768,6 +795,7 @@ it.effect("rejects a changed payload under an already committed operation identi
     )
     const failure = yield* Effect.gen(function*() {
       const journal = yield* JournalStore
+      yield* recordPlannedAttempt
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
@@ -778,7 +806,8 @@ it.effect("rejects a changed payload under an already committed operation identi
         .pipe(Effect.flip)
     }).pipe(Effect.provide(layer))
 
-    expect(failure).toBeInstanceOf(JournalStoreContradiction)
+    expect(failure).toBeInstanceOf(TaskAttemptPlanHistoryContradiction)
+    expect(failure).toMatchObject({ reason: "PlanMismatch" })
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects a planned attempt from another journal run", () =>

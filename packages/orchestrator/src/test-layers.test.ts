@@ -14,11 +14,14 @@ import {
   ProviderObservationId,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  taskRevisionFor,
   TaskRunner,
   taskRunnerTestLayer,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TaskWorkSessionLookupFailure,
   TaskWorkStartRequest,
   TestTaskRunner,
@@ -31,23 +34,27 @@ import {
 import { freshOperationIdAllocatorLayer } from "./task-work-planning.js"
 
 const taskId = TaskId.make("test-layer-task")
+const task = {
+  id: taskId,
+  lifecycle: TaskLifecycle.cases.Open.make({}),
+  parentTaskId: null,
+  prerequisiteIds: []
+}
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("test-layer-attempt"),
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
   branch: TaskBranchRef.make("refs/heads/test-layer-task"),
+  executor: TaskExecutorLocator.make("executor:test-layer"),
   runId: RunId.make("test-layer-run"),
+  session: TaskWorkSessionLocator.make("session:test-layer"),
   taskId,
+  taskRevision: taskRevisionFor(task),
   worktree: WorktreeLocator.make("/tmp/test-layer-task")
 })
 const request = TaskWorkStartRequest.make({
   operationId: OperationId.make("test-layer-operation"),
   plannedAttempt,
-  task: {
-    id: taskId,
-    lifecycle: TaskLifecycle.cases.Open.make({}),
-    parentTaskId: null,
-    prerequisiteIds: []
-  }
+  task
 })
 const lookup = { operationId: request.operationId, plannedAttempt }
 
@@ -123,4 +130,22 @@ it("rejects a start request whose planned attempt belongs to another task", () =
       }
     })
   ).toThrow("planned attempt task identity must match the requested task")
+})
+
+it("rejects a start request after the task lifecycle changes", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(TaskWorkStartRequest)({
+      ...request,
+      task: { ...task, lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}) }
+    })
+  ).toThrow("planned attempt task revision must match the requested task")
+})
+
+it("rejects a start request after task dependencies change", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(TaskWorkStartRequest)({
+      ...request,
+      task: { ...task, prerequisiteIds: [TaskId.make("new-prerequisite")] }
+    })
+  ).toThrow("planned attempt task revision must match the requested task")
 })

@@ -11,13 +11,16 @@ import {
   GitCommitSha,
   liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
+  PlannedTaskAttemptPlanner,
   ProviderObservationId,
   ProviderRequestId,
   RunId,
   runWorkflow,
+  TaskExecutorLocator,
   TaskRunner,
   TaskWorkCapacity,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TraceOutputError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
@@ -32,7 +35,9 @@ const planningLayers = [
   deterministicOperationIdAllocatorLayer("workflow-test"),
   deterministicPlannedTaskAttemptLayer({
     baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+    executor: TaskExecutorLocator.make("executor:workflow-test"),
     runId: RunId.make("workflow-test"),
+    sessionRoot: TaskWorkSessionLocator.make("session:workflow-test"),
     worktreeRoot: WorktreeLocator.make("/tmp/dalph-workflow-test")
   }),
   deterministicTaskClaimAcquisitionPlannerLayer({
@@ -60,7 +65,8 @@ const successfulTaskRunner = TaskRunner.of({
 const runLayered = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   traceLayer: Layer.Layer<WorkflowTrace>,
-  runner = successfulTaskRunner
+  runner = successfulTaskRunner,
+  attemptPlannerLayer = planningLayers[1]
 ) =>
   effect.pipe(
     Effect.provide(liveFakeWorkflowInterpreterLayer),
@@ -68,11 +74,11 @@ const runLayered = <A, E, R>(
     Effect.provide(Layer.succeed(TaskRunner, runner)),
     Effect.provide(trackerGraphReaderFileLayer),
     Effect.provide(planningLayers[0]),
-    Effect.provide(planningLayers[1]),
+    Effect.provide(attemptPlannerLayer),
     Effect.provide(planningLayers[2])
   )
 
-it.effect("emits every distinct task-work session-establishment phenomenon", () =>
+it.effect("simulates task-work establishment without provider protocol effects", () =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
     const traceLayer = Layer.succeed(
@@ -97,31 +103,31 @@ it.effect("emits every distinct task-work session-establishment phenomenon", () 
       "OperationSelected",
       "TrackerGraphOutcomeObserved",
       "TrackerExecutionAdmitted",
-      "TaskExecutionAdmitted",
       "OperationSelected",
-      "TaskWorkStartRequested",
-      "TaskWorkStartRequestAcknowledged",
-      "TaskWorkSessionLookupRequested",
-      "TaskWorkSessionReported",
-      "TaskWorkSessionEstablished"
+      "TaskAttemptPlanRecordingSimulated",
+      "OperationSelected",
+      "TaskExecutionAdmitted",
+      "TaskWorkSessionEstablishmentSimulated"
     ])
   }))
 
-it.effect("reserves no more than the configured task-work capacity", () =>
+it.effect("reserves no more than the configured concurrent task attempts", () =>
   Effect.gen(function*() {
     const started = yield* Queue.unbounded<string>()
     const release = yield* Deferred.make<void>()
-    const runner = TaskRunner.of({
-      ...successfulTaskRunner,
-      requestTaskWorkStart: Effect.fn("TaskRunner.WorkflowTest.gatedStart")(function*(request) {
-        yield* Queue.offer(started, request.task.id)
-        yield* Deferred.await(release)
-        return {
-          observationId: ProviderObservationId.make(`request-observation:${request.operationId}`),
-          providerRequestId: ProviderRequestId.make(`request:${request.operationId}`)
-        }
+    const gatedPlannerLayer = Layer.effect(
+      PlannedTaskAttemptPlanner,
+      Effect.gen(function*() {
+        const delegate = yield* PlannedTaskAttemptPlanner
+        return PlannedTaskAttemptPlanner.of({
+          plan: (task, revision) =>
+            Queue.offer(started, task.id).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(delegate.plan(task, revision))
+            )
+        })
       })
-    })
+    ).pipe(Layer.provide(planningLayers[1]))
     const traceLayer = Layer.succeed(
       WorkflowTrace,
       WorkflowTrace.of({ emit: () => Effect.void })
@@ -129,7 +135,8 @@ it.effect("reserves no more than the configured task-work capacity", () =>
     const fiber = yield* runLayered(
       runWorkflow(FixtureTarget.make(fixture("wayfinder-105")), TaskWorkCapacity.make(2)),
       traceLayer,
-      runner
+      successfulTaskRunner,
+      gatedPlannerLayer
     ).pipe(Effect.forkScoped)
 
     yield* Queue.take(started)

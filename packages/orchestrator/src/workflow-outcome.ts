@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { OperationId, TaskId, TaskWorkSessionId, TrackerRevision } from "./domain.js"
+import { OperationId, TaskId, TaskWorkSessionId, TaskWorkSessionLocator, TrackerRevision } from "./domain.js"
 import type { TaskDagSnapshot } from "./task-dag.js"
 
 export const WorkflowOutcome = Schema.TaggedUnion({
@@ -10,6 +10,11 @@ export const WorkflowOutcome = Schema.TaggedUnion({
   TaskWorkSessionEstablished: {
     operationId: OperationId,
     sessionId: TaskWorkSessionId
+  },
+  /** A pure plan projection that makes no claim about provider state. */
+  TaskWorkSessionEstablishmentSimulated: {
+    operationId: OperationId,
+    session: TaskWorkSessionLocator
   }
 })
 export type WorkflowOutcome = typeof WorkflowOutcome.Type

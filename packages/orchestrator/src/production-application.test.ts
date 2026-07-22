@@ -11,6 +11,7 @@ import {
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
   JournalStore,
+  makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
   MatchingTaskWorkSessionReported,
   OperationId,
@@ -21,17 +22,25 @@ import {
   RunId,
   sqliteJournalStoreLayer,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  taskRevisionFor,
   TaskRunner,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TaskWorkStartRequest,
   TrackerGraphReader,
   WorkflowInterpreter,
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
-import { intentRecordKey, TaskWorkSessionEstablishmentIntentRecorded } from "./journal-store.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  TaskAttemptPlannedEvent,
+  TaskWorkSessionEstablishmentIntentRecorded
+} from "./journal-store.js"
 
 it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenario.AfterOutcomeRecorded}`, () =>
   Effect.gen(function*() {
@@ -41,26 +50,35 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     })
     const runId = RunId.make("production-run")
     const taskId = TaskId.make("production-task")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("production-attempt"),
       baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
       branch: TaskBranchRef.make("refs/heads/production-task"),
+      executor: TaskExecutorLocator.make("executor:production-test"),
       runId,
+      session: TaskWorkSessionLocator.make("session:production-test"),
       taskId,
+      taskRevision: taskRevisionFor(task),
       worktree: WorktreeLocator.make(`${directory}/task`)
     })
     const request = TaskWorkStartRequest.make({
       operationId: OperationId.make("production-operation"),
       plannedAttempt,
-      task: {
-        id: taskId,
-        lifecycle: TaskLifecycle.cases.Open.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
+      task
+    })
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("production-plan-operation"),
+      plannedAttempt,
+      predecessorOperationIds: []
     })
     const operation = makeTaskWorkSessionEstablishmentOperation({
-      predecessorOperationIds: [],
+      predecessorOperationIds: [planOperation.operationId],
       request
     })
     const requests = yield* Ref.make(0)
@@ -102,6 +120,11 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
     yield* Effect.gen(function*() {
       const journal = yield* JournalStore
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+      )
       yield* journal.append(
         runId,
         intentRecordKey(request.operationId),

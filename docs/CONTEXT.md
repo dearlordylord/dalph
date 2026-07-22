@@ -128,9 +128,29 @@ confirms completion.
 _Avoid_: Task claim, task completed successfully, Git branch
 
 **Planned task attempt**:
-One Dalph decision to try a task from one exact Base SHA using one exact set of
-resource locators. Planning it does not prove that external work started.
+One immutable Dalph decision to try one exact task revision in one run from one
+exact Base SHA. It binds its attempt identity, branch ref, worktree path,
+executor locator, and task-work-session locator before Dalph creates or
+discovers any of those execution resources. Planning it does not prove that an
+external resource exists or that task work started.
 _Avoid_: Task, task work, task-work session, retry counter
+
+**Task revision**:
+The canonical revision of one normalized task's tracker-observed content bound
+to a planned task attempt. It is distinct from the revision of the complete
+task graph snapshot.
+_Avoid_: Tracker revision, Git commit, journal position
+
+**Task executor locator**:
+The branded locator selecting the configured executor for one planned task
+attempt. It is not a provider-assigned task-work-session identity.
+_Avoid_: Task runner, task-work session ID, worker process ID
+
+**Task-work-session locator**:
+The branded, Dalph-planned locator used to create or rediscover one exact
+task-work session. A task-work provider may later report a distinct native
+session identity for that locator.
+_Avoid_: Task-work-session identity, executor locator, worktree locator
 
 **Task work**:
 The activity performed to satisfy a task's requested repository change. Task

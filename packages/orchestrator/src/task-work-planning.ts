@@ -1,6 +1,13 @@
 import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
-import type { GitCommitSha, RunId, Task } from "./domain.js"
-import { AttemptId, OperationId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "./domain.js"
+import type { GitCommitSha, RunId, Task, TaskExecutorLocator, TaskRevision } from "./domain.js"
+import {
+  AttemptId,
+  OperationId,
+  PlannedTaskAttempt,
+  TaskBranchRef,
+  TaskWorkSessionLocator,
+  WorktreeLocator
+} from "./domain.js"
 
 interface OperationIdAllocatorService {
   readonly allocate: () => Effect.Effect<OperationId>
@@ -49,7 +56,8 @@ export class PlannedTaskAttemptError extends Schema.TaggedErrorClass<PlannedTask
 
 interface PlannedTaskAttemptPlannerService {
   readonly plan: (
-    task: Task
+    task: Task,
+    taskRevision: TaskRevision
   ) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 
@@ -61,24 +69,35 @@ export class PlannedTaskAttemptPlanner extends Context.Service<
 
 interface DeterministicPlannedTaskAttemptOptions {
   readonly baseSha: GitCommitSha
+  readonly executor: TaskExecutorLocator
   readonly runId: RunId
+  readonly sessionRoot: TaskWorkSessionLocator
   readonly worktreeRoot: WorktreeLocator
 }
 
 export const deterministicPlannedTaskAttemptLayer = (
   options: DeterministicPlannedTaskAttemptOptions
 ) =>
-  Layer.succeed(
+  Layer.effect(
     PlannedTaskAttemptPlanner,
-    PlannedTaskAttemptPlanner.of({
-      plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function*(task) {
-        return PlannedTaskAttempt.make({
-          attemptId: AttemptId.make(`attempt:${task.id}`),
-          baseSha: options.baseSha,
-          branch: TaskBranchRef.make(`refs/heads/dalph/${task.id}`),
-          runId: options.runId,
-          taskId: task.id,
-          worktree: WorktreeLocator.make(`${options.worktreeRoot}/${task.id}`)
+    Effect.gen(function*() {
+      const nextAttemptOrdinal = yield* Ref.make(0)
+      return PlannedTaskAttemptPlanner.of({
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function*(task, taskRevision) {
+          const ordinal = yield* Ref.getAndUpdate(nextAttemptOrdinal, (current) => current + 1)
+          const attemptId = AttemptId.make(`attempt:${task.id}:${ordinal}`)
+          const resourceSegment = `attempt-${encodeURIComponent(task.id)}-${ordinal}`
+          return PlannedTaskAttempt.make({
+            attemptId,
+            baseSha: options.baseSha,
+            branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
+            executor: options.executor,
+            runId: options.runId,
+            session: TaskWorkSessionLocator.make(`${options.sessionRoot}/${resourceSegment}`),
+            taskId: task.id,
+            taskRevision,
+            worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
+          })
         })
       })
     })

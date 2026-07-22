@@ -1,9 +1,9 @@
 import { Effect, Layer } from "effect"
-import { ProviderObservationId, ProviderRequestId, TaskWorkSessionId } from "./domain.js"
-import type { TaskRunnerService } from "./task-work-start.js"
-import { MatchingTaskWorkSessionReported, TaskRunner } from "./task-work-start.js"
+import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
+import { TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
 import { controlledTrackerMutationLayer, TrackerMutation } from "./tracker-mutation.js"
+import { WorkflowOutcome } from "./workflow-outcome.js"
 import {
   acquireTaskClaimThrough,
   emitTaskWorkSessionNonConvergence,
@@ -13,6 +13,15 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
+
+const simulateTaskWorkSession = Effect.fn(
+  "WorkflowInterpreter.simulateTaskWorkSession"
+)(function*(operation) {
+  return WorkflowOutcome.cases.TaskWorkSessionEstablishmentSimulated.make({
+    operationId: operation.request.operationId,
+    session: operation.request.plannedAttempt.session
+  })
+})
 
 const taskRunnerInterpreterLayer = (
   operationPrefix: "TaskRunner" | "DeterministicTest"
@@ -46,10 +55,17 @@ const taskRunnerInterpreterLayer = (
           Effect.tapError((failure) => emitTaskWorkSessionNonConvergence(failure, operation, trace))
         )
       })
+      const recordTaskAttemptPlan = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.recordTaskAttemptPlan`
+      )(function*(operation) {
+        return TaskAttemptPlanRecordingSimulated.make({ operation })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
-        readTrackerGraph
+        recordTaskAttemptPlan,
+        readTrackerGraph,
+        simulateTaskWorkSession
       })
     })
   )
@@ -65,18 +81,15 @@ export const taskRunnerWorkflowInterpreterLayer = trackerMutationWorkflowInterpr
 )
 export const liveFakeWorkflowInterpreterLayer = taskRunnerWorkflowInterpreterLayer
 
-export const makeDryRunWorkflowInterpreterLayer = (
-  simulation: TaskRunnerService
-): Layer.Layer<
+export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
   WorkflowInterpreter,
   never,
-  TrackerGraphReader | WorkflowTrace
+  TrackerGraphReader
 > =>
   Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       const reader = yield* TrackerGraphReader
-      const trace = yield* WorkflowTrace
       const readTrackerGraph = Effect.fn(
         "WorkflowInterpreter.DryRun.readTrackerGraph"
       )(function*(operation) {
@@ -87,42 +100,19 @@ export const makeDryRunWorkflowInterpreterLayer = (
       )(function*(operation) {
         return TaskClaimAcquisitionSimulated.make({ operation })
       })
-      const establishTaskWorkSession = Effect.fn(
-        "WorkflowInterpreter.DryRun.establishTaskWorkSession"
+      const recordTaskAttemptPlan = Effect.fn(
+        "WorkflowInterpreter.DryRun.recordTaskAttemptPlan"
       )(function*(operation) {
-        return yield* runTaskWorkSessionEstablishmentProtocol(
-          simulation,
-          operation,
-          true,
-          taskWorkSessionTraceObserver(operation, trace)
-        ).pipe(
-          Effect.tapError((failure) => emitTaskWorkSessionNonConvergence(failure, operation, trace))
-        )
+        return TaskAttemptPlanRecordingSimulated.make({ operation })
       })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
-        establishTaskWorkSession,
-        readTrackerGraph
+        establishTaskWorkSession: () => Effect.die("dry-run cannot establish a provider task-work session"),
+        recordTaskAttemptPlan,
+        readTrackerGraph,
+        simulateTaskWorkSession
       })
     })
   )
 
-const successfulDryRunSimulation = TaskRunner.of({
-  lookupTaskWorkSession: Effect.fn("TaskRunner.DryRun.lookup")(function*(lookup) {
-    return MatchingTaskWorkSessionReported.make({
-      observationId: ProviderObservationId.make(`lookup:${lookup.operationId}`),
-      sessionId: TaskWorkSessionId.make(`session:${lookup.operationId}`),
-      work: { _tag: "NoProviderWorkReported" }
-    })
-  }),
-  requestTaskWorkStart: Effect.fn("TaskRunner.DryRun.request")(function*(request) {
-    return {
-      observationId: ProviderObservationId.make(`request-observation:${request.operationId}`),
-      providerRequestId: ProviderRequestId.make(`request:${request.operationId}`)
-    }
-  })
-})
-
-export const dryRunWorkflowInterpreterLayer = makeDryRunWorkflowInterpreterLayer(
-  successfulDryRunSimulation
-)
+export const dryRunWorkflowInterpreterLayer = makeDryRunWorkflowInterpreterLayer()

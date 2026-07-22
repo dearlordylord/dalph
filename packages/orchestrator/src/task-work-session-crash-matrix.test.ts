@@ -13,6 +13,7 @@ import {
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
   JournalStore,
+  makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -24,10 +25,13 @@ import {
   RunId,
   sqliteJournalStoreLayer,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  taskRevisionFor,
   TaskRunner,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TaskWorkStartRequest,
   TrackerGraphReader,
   WorkflowInterpreter,
@@ -42,6 +46,7 @@ const crashScenarios = [
     expectedLookups: 2,
     expectedRequests: 1,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -57,6 +62,7 @@ const crashScenarios = [
     expectedLookups: 1,
     expectedRequests: 1,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -68,6 +74,7 @@ const crashScenarios = [
     expectedLookups: 2,
     expectedRequests: 2,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -83,6 +90,7 @@ const crashScenarios = [
     expectedLookups: 1,
     expectedRequests: 1,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -96,6 +104,7 @@ const crashScenarios = [
     expectedLookups: 2,
     expectedRequests: 2,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -113,6 +122,7 @@ const crashScenarios = [
     expectedLookups: 2,
     expectedRequests: 1,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -128,6 +138,7 @@ const crashScenarios = [
     expectedLookups: 3,
     expectedRequests: 2,
     expectedTags: [
+      "TaskAttemptPlanned",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -159,25 +170,35 @@ for (const scenario of crashScenarios) {
       const runId = RunId.make(`crash-${scenario.boundary}`)
       const operationId = OperationId.make(`operation-${scenario.boundary}`)
       const taskId = TaskId.make(`task-${scenario.boundary}`)
+      const task = {
+        id: taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make(`attempt-${scenario.boundary}`),
         baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
         branch: TaskBranchRef.make(`refs/heads/${scenario.boundary}`),
+        executor: TaskExecutorLocator.make("executor:crash-matrix"),
         runId,
+        session: TaskWorkSessionLocator.make(`session:${scenario.boundary}`),
         taskId,
+        taskRevision: taskRevisionFor(task),
         worktree: WorktreeLocator.make(`${directory}/task`)
       })
       const request = TaskWorkStartRequest.make({
         operationId,
         plannedAttempt,
-        task: {
-          id: taskId,
-          lifecycle: TaskLifecycle.cases.Open.make({}),
-          parentTaskId: null,
-          prerequisiteIds: []
-        }
+        task
       })
-      const predecessorOperationIds = [OperationId.make("planned-attempt-operation")]
+      const planOperationId = OperationId.make("planned-attempt-operation")
+      const predecessorOperationIds = [planOperationId]
+      const planOperation = makeTaskAttemptPlanOperation({
+        operationId: planOperationId,
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
       const operation = makeTaskWorkSessionEstablishmentOperation({
         predecessorOperationIds,
         request
@@ -279,7 +300,9 @@ for (const scenario of crashScenarios) {
         DALPH_JOURNAL_DATABASE: filename
       }))
       const runCoordinator = Effect.gen(function*() {
-        return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(operation)
+        const interpreter = yield* WorkflowInterpreter
+        yield* interpreter.recordTaskAttemptPlan(planOperation)
+        return yield* interpreter.establishTaskWorkSession(operation)
       }).pipe(
         Effect.provide(applicationLayer),
         Effect.provide(configLayer)
@@ -308,26 +331,35 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-before-intent-" })
     const runId = RunId.make("before-intent-run")
     const taskId = TaskId.make("before-intent-task")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("before-intent-attempt"),
       baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
       branch: TaskBranchRef.make("refs/heads/before-intent"),
+      executor: TaskExecutorLocator.make("executor:before-intent"),
       runId,
+      session: TaskWorkSessionLocator.make("session:before-intent"),
       taskId,
+      taskRevision: taskRevisionFor(task),
       worktree: WorktreeLocator.make(`${directory}/task`)
+    })
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("before-intent-plan"),
+      plannedAttempt,
+      predecessorOperationIds: []
     })
     const makeOperation = (operationId: OperationId) =>
       makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [],
+        predecessorOperationIds: [planOperation.operationId],
         request: TaskWorkStartRequest.make({
           operationId,
           plannedAttempt,
-          task: {
-            id: taskId,
-            lifecycle: TaskLifecycle.cases.Open.make({}),
-            parentTaskId: null,
-            prerequisiteIds: []
-          }
+          task
         })
       })
     const discarded = makeOperation(OperationId.make("discarded-candidate"))
@@ -381,7 +413,9 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     expect(beforeRecovery).toEqual([])
 
     const outcome = yield* Effect.gen(function*() {
-      return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(replacement)
+      const interpreter = yield* WorkflowInterpreter
+      yield* interpreter.recordTaskAttemptPlan(planOperation)
+      return yield* interpreter.establishTaskWorkSession(replacement)
     }).pipe(Effect.provide(applicationLayer), Effect.provide(configLayer))
     expect(outcome.operationId).toBe(replacement.request.operationId)
     expect(outcome.operationId).not.toBe(discarded.request.operationId)

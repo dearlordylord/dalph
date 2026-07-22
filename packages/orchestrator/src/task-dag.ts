@@ -6,6 +6,7 @@ import {
   type Task,
   TaskId,
   TaskLifecycle,
+  TaskRevision,
   TrackerRevision,
   TrackerSnapshot,
   type TrackerTask
@@ -66,6 +67,22 @@ interface TaskProjection {
   readonly parentTaskId: TaskId | null
   readonly prerequisiteIds: HashSet.HashSet<TaskId>
 }
+
+const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): TaskRevision =>
+  TaskRevision.make(JSON.stringify({
+    id: taskId,
+    lifecycle: projection.lifecycle._tag,
+    parentTaskId: projection.parentTaskId,
+    prerequisiteIds: sorted(projection.prerequisiteIds)
+  }))
+
+/** Derives the exact normalized tracker content revision bound to an attempt. */
+export const taskRevisionFor = (task: Task): TaskRevision =>
+  taskProjectionRevision(task.id, {
+    lifecycle: task.lifecycle,
+    parentTaskId: task.parentTaskId,
+    prerequisiteIds: HashSet.fromIterable(task.prerequisiteIds)
+  })
 
 const compareTaskIds: Order.Order<TaskId> = Order.String
 

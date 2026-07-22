@@ -12,6 +12,8 @@ import {
   GitCommitSha,
   runCli,
   RunId,
+  TaskExecutorLocator,
+  TaskWorkSessionLocator,
   TraceOutput,
   TraceOutputError,
   trackerGraphReaderFileLayer,
@@ -23,7 +25,9 @@ const fixture = (name: "empty" | "singleton") => new URL(`../fixtures/${name}.js
 
 const plannerLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  executor: TaskExecutorLocator.make("executor:cli-test"),
   runId: RunId.make("cli-test"),
+  sessionRoot: TaskWorkSessionLocator.make("session:cli-test"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-cli-test")
 })
 const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
@@ -69,13 +73,11 @@ it.effect("runs the dry CLI through the task-work session workflow", () =>
       "TrackerGraphOutcomeObserved",
       "OperationSelected",
       "TaskClaimAcquisitionIntended",
-      "TaskExecutionAdmitted",
       "OperationSelected",
-      "TaskWorkStartRequested",
-      "TaskWorkStartRequestAcknowledged",
-      "TaskWorkSessionLookupRequested",
-      "TaskWorkSessionReported",
-      "TaskWorkSessionEstablished"
+      "TaskAttemptPlanRecordingSimulated",
+      "OperationSelected",
+      "TaskExecutionAdmitted",
+      "TaskWorkSessionEstablishmentSimulated"
     ])
   }))
 

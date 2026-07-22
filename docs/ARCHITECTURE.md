@@ -229,6 +229,37 @@ task still present in the target closure can emit `TrackerExecutionAdmitted`.
 Dry-run records claim intent without receiving tracker mutation authority and
 cannot emit that admission.
 
+## Durable Task-Attempt Planning
+
+Before the coordinator asks Git or a task-work provider to create or discover
+an execution resource, it records one immutable planned task attempt in the
+Dalph workflow journal and waits for the append acknowledgement. The plan binds
+the run, task, normalized task revision, attempt, declared Base SHA, branch ref,
+worktree path, executor locator, and task-work-session locator. The subsequent
+session-establishment operation causally depends on that acknowledged planning
+operation.
+
+All plan identities and locators cross the journal boundary through Effect
+Schema and retain distinct brands. A failed or contradictory plan append
+therefore leaves Git and the task-work provider untouched. Repeating the same
+planning operation is idempotent; attempting to replace its journal key with a
+different plan is a journal contradiction. The key is scoped by `RunId` and
+`AttemptId`, so changing a planning-operation identity cannot replace an
+attempt. Genuine retry planning allocates a new attempt identity and new branch,
+worktree, and task-work-session locators.
+
+Only the journal-backed interpreter constructs durable plan acknowledgement.
+Dry-run and live-fake interpreters return a distinct simulated result, and the
+workflow routes that result only to a pure task-work simulation method. That
+method emits `TaskWorkSessionEstablishmentSimulated` with the plan's session
+locator; it neither fabricates a provider session ID nor claims authoritative
+establishment. It has no task-runner lookup or start capability. Before live
+session establishment or recovery, the journaled interpreter requires exactly
+one earlier `TaskAttemptPlanned` event with the identical plan whose planning
+operation is a direct causal predecessor. Missing, duplicate, non-causal, and
+mismatched plan evidence fail with a typed contradiction before provider
+mutation.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

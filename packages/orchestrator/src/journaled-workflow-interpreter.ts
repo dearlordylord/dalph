@@ -1,10 +1,12 @@
 import { Effect, Layer } from "effect"
 import type { RunId } from "./domain.js"
 import {
+  attemptPlanRecordKey,
   intentRecordKey,
   JournalStore,
   outcomeRecordKey,
   providerObservationRequestRecordKey,
+  TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskWorkSessionEstablishedEvent,
@@ -21,6 +23,12 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
+import {
+  samePlannedTaskAttempt,
+  TaskAttemptPlanHistoryContradiction,
+  TaskAttemptPlanRecordAcknowledged,
+  TaskAttemptPlanRunContradiction
+} from "./task-attempt-plan-recording.js"
 import { TaskRunner } from "./task-work-start.js"
 import {
   emitTaskWorkSessionNonConvergence,
@@ -153,6 +161,26 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         return result
       })
 
+      const recordTaskAttemptPlan = Effect.fn(
+        "WorkflowInterpreter.Journaled.recordTaskAttemptPlan"
+      )(function*(operation) {
+        if (operation.plannedAttempt.runId !== runId) {
+          return yield* new TaskAttemptPlanRunContradiction({
+            journalRunId: runId,
+            operationId: operation.operationId,
+            plannedAttemptRunId: operation.plannedAttempt.runId
+          })
+        }
+        yield* journal.append(
+          runId,
+          attemptPlanRecordKey(operation.plannedAttempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation, version: 2 })
+        )
+        return TaskAttemptPlanRecordAcknowledged.make({
+          plannedAttempt: operation.plannedAttempt
+        })
+      })
+
       const establishTaskWorkSession = Effect.fn(
         "WorkflowInterpreter.Journaled.establishTaskWorkSession"
       )(function*(operation) {
@@ -164,6 +192,43 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           })
         }
         const records = yield* journal.read(runId)
+        const plannedAttempt = operation.request.plannedAttempt
+        const planEvents = records.flatMap(({ event }) =>
+          event._tag === "TaskAttemptPlanned"
+            && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
+            ? [event]
+            : []
+        )
+        if (planEvents.length === 0) {
+          return yield* new TaskAttemptPlanHistoryContradiction({
+            attemptId: plannedAttempt.attemptId,
+            operationId: operation.request.operationId,
+            reason: "Missing"
+          })
+        }
+        if (planEvents.length > 1) {
+          return yield* new TaskAttemptPlanHistoryContradiction({
+            attemptId: plannedAttempt.attemptId,
+            operationId: operation.request.operationId,
+            reason: "MultiplePlans"
+          })
+        }
+        // The empty case was rejected above, so reduction has a durable plan to return.
+        const planEvent = planEvents.reduce((first) => first)
+        if (!operation.predecessorOperationIds.includes(planEvent.operation.operationId)) {
+          return yield* new TaskAttemptPlanHistoryContradiction({
+            attemptId: plannedAttempt.attemptId,
+            operationId: operation.request.operationId,
+            reason: "CausalPredecessorMissing"
+          })
+        }
+        if (!samePlannedTaskAttempt(planEvent.operation.plannedAttempt, plannedAttempt)) {
+          return yield* new TaskAttemptPlanHistoryContradiction({
+            attemptId: plannedAttempt.attemptId,
+            operationId: operation.request.operationId,
+            reason: "PlanMismatch"
+          })
+        }
         const intentKey = intentRecordKey(operation.request.operationId)
         const hasIntent = records.some(({ key }) => key === intentKey)
         const previousMatchingEvent = records.findLast(({ event }) =>
@@ -310,7 +375,9 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
-        readTrackerGraph
+        recordTaskAttemptPlan,
+        readTrackerGraph,
+        simulateTaskWorkSession: interpreter.simulateTaskWorkSession
       })
     })
   ).pipe(Layer.provide(interpreterLayer))

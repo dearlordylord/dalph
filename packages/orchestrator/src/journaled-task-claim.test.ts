@@ -45,7 +45,9 @@ it.effect("journals claim intent before the authoritative acquired outcome", () 
           })
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
-      readTrackerGraph: () => Effect.die("unused graph read")
+      recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
@@ -98,7 +100,9 @@ it.effect("records simulated claim intent without an authoritative outcome", () 
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
-      readTrackerGraph: () => Effect.die("unused graph read")
+      recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
@@ -115,9 +119,17 @@ it.effect("records simulated claim intent without an authoritative outcome", () 
   return Effect.gen(function*() {
     const interpreter = yield* WorkflowInterpreter
     yield* interpreter.acquireTaskClaim(operation)
+    yield* recoverTaskClaimAcquisitions(runId)
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual(["TaskClaimAcquisitionIntended"])
-  }).pipe(Effect.provide(layer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(layer),
+    Effect.provide(Layer.succeed(
+      WorkflowTrace,
+      WorkflowTrace.of({ emit: () => Effect.void })
+    )),
+    Effect.provide(memoryJournalStoreLayer)
+  )
 })
 
 it.effect("reconciles a crashed claim with its original durable acquisition", () => {
@@ -142,7 +154,9 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
           })
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
-      readTrackerGraph: () => Effect.die("unused graph read")
+      recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(

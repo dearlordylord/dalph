@@ -11,9 +11,11 @@ import {
   ProviderRequestId,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   WorktreeLocator
 } from "../src/domain.js"
 import {
@@ -23,6 +25,7 @@ import {
   type WorkflowJournalEvent
 } from "../src/journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "../src/journaled-workflow-interpreter.js"
+import { taskRevisionFor } from "../src/task-dag.js"
 import {
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -33,7 +36,12 @@ import {
 } from "../src/task-work-start.js"
 import { TrackerGraphReader } from "../src/tracker-graph-reader.js"
 import { taskRunnerWorkflowInterpreterLayer } from "../src/workflow-interpreters.js"
-import { makeTaskWorkSessionEstablishmentOperation, WorkflowInterpreter, WorkflowTrace } from "../src/workflow.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskWorkSessionEstablishmentOperation,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../src/workflow.js"
 
 type Evidence = "Absent" | "Conflict" | "Matching" | "Unreadable"
 const lookupBound = 3n
@@ -202,7 +210,13 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
   const startWorkflow = Effect.gen(function*() {
     const selected = yield* requireOperation()
     const fiber = yield* Effect.gen(function*() {
-      return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(selected)
+      const interpreter = yield* WorkflowInterpreter
+      yield* interpreter.recordTaskAttemptPlan(makeTaskAttemptPlanOperation({
+        operationId: selected.predecessorOperationIds[0] ?? OperationId.make("mbt-predecessor"),
+        plannedAttempt: selected.request.plannedAttempt,
+        predecessorOperationIds: []
+      }))
+      return yield* interpreter.establishTaskWorkSession(selected)
     }).pipe(
       Effect.onExit((exit) =>
         Exit.isFailure(exit) && exit.cause.reasons.every(Cause.isInterruptReason)
@@ -289,17 +303,26 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
       Effect.sync(() => {
         candidateSelected = true
         operationId += 1n
+        const task = {
+          id: taskId,
+          lifecycle: TaskLifecycle.cases.Open.make({}),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
         const request = TaskWorkStartRequest.make({
           operationId: OperationId.make(`mbt-operation-${operationId}`),
           plannedAttempt: PlannedTaskAttempt.make({
             attemptId: AttemptId.make("mbt-attempt"),
             baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
             branch: TaskBranchRef.make("refs/heads/mbt-task"),
+            executor: TaskExecutorLocator.make("executor:mbt"),
             runId,
+            session: TaskWorkSessionLocator.make("session:mbt"),
             taskId,
+            taskRevision: taskRevisionFor(task),
             worktree: WorktreeLocator.make("/tmp/mbt-task")
           }),
-          task: { id: taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+          task
         })
         operation = makeTaskWorkSessionEstablishmentOperation({
           predecessorOperationIds: [OperationId.make("mbt-predecessor")],

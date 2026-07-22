@@ -1,11 +1,7 @@
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import type {
-  TaskWorkSessionReport,
-  TrackerGraphReader,
-  WorkflowInterpreter as WorkflowInterpreterService
-} from "./index.js"
+import type { TrackerGraphReader, WorkflowInterpreter as WorkflowInterpreterService } from "./index.js"
 import {
   ClaimOwner,
   deterministicOperationIdAllocatorLayer,
@@ -16,20 +12,19 @@ import {
   FixtureTarget,
   GitCommitSha,
   liveFakeWorkflowInterpreterLayer,
-  makeDryRunWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
-  NoMatchingTaskWorkSessionReported,
   ProviderObservationId,
   ProviderRequestId,
   RunId,
   runWorkflow,
   semanticTrace,
+  TaskExecutorLocator,
   TaskRunner,
   TaskWorkCapacity,
-  TaskWorkSessionCorrelationConflict,
   TaskWorkSessionId,
-  TaskWorkSessionLookupFailure,
+  TaskWorkSessionLocator,
   trackerGraphReaderFileLayer,
+  WorkflowInterpreter,
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
@@ -41,15 +36,17 @@ type Assert<T extends true> = T
 type DryRunRequirements = Assert<
   IsExactly<
     Layer.Services<typeof dryRunWorkflowInterpreterLayer>,
-    TrackerGraphReader | WorkflowTrace
+    TrackerGraphReader
   >
 >
-const dryRunRequiresOnlyReadAndTraceCapabilities: DryRunRequirements = true
+const dryRunRequiresOnlyReadCapability: DryRunRequirements = true
 
 const target = new URL("../fixtures/singleton.json", import.meta.url).pathname
 const plannerLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  executor: TaskExecutorLocator.make("executor:equivalence"),
   runId: RunId.make("equivalence"),
+  sessionRoot: TaskWorkSessionLocator.make("session:equivalence"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-equivalence")
 })
 const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
@@ -122,93 +119,53 @@ it.effect("dry-run and deterministic-test emit one exact semantic projection", (
     expect(dry.trace.map((item) => item._tag)).not.toContain(
       "TrackerExecutionAdmitted"
     )
-    expect(dryRunRequiresOnlyReadAndTraceCapabilities).toBe(true)
+    expect(dryRunRequiresOnlyReadCapability).toBe(true)
   }))
 
-type ScriptedLookup = TaskWorkSessionReport | TaskWorkSessionLookupFailure
-
-const scriptedRunner = (results: ReadonlyArray<ScriptedLookup>): TaskRunnerService => {
-  const remaining = [...results]
-  return TaskRunner.of({
-    lookupTaskWorkSession: Effect.fn("TaskRunner.Equivalence.scriptedLookup")(function*() {
-      const result = remaining.shift()
-      if (result === undefined) return yield* Effect.die("lookup script exhausted")
-      return result instanceof TaskWorkSessionLookupFailure ? yield* result : result
-    }),
-    requestTaskWorkStart: Effect.fn("TaskRunner.Equivalence.scriptedRequest")(function*(request) {
-      return {
-        observationId: ProviderObservationId.make(`request-observation:${request.operationId}`),
-        providerRequestId: ProviderRequestId.make(`request:${request.operationId}`)
-      }
+it.effect("never calls an injected task runner for a simulated attempt", () =>
+  Effect.gen(function*() {
+    const lookups = yield* Ref.make(0)
+    const starts = yield* Ref.make(0)
+    const defectingRunner = TaskRunner.of({
+      lookupTaskWorkSession: () =>
+        Ref.update(lookups, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("simulation must not look up provider sessions"))
+        ),
+      requestTaskWorkStart: () =>
+        Ref.update(starts, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("simulation must not start provider sessions"))
+        )
     })
-  })
-}
 
-const lookupScenarios = [
-  {
-    name: "absence followed by a match",
-    results: () => [
-      NoMatchingTaskWorkSessionReported.make({
-        observationId: ProviderObservationId.make("lookup:absence")
-      }),
-      MatchingTaskWorkSessionReported.make({
-        observationId: ProviderObservationId.make("lookup:match"),
-        sessionId: TaskWorkSessionId.make("session:match"),
-        work: { _tag: "NoProviderWorkReported" }
-      })
-    ]
-  },
-  {
-    name: "unreadable lookup exhaustion",
-    results: () =>
-      [1, 2, 3].map((attempt) =>
-        new TaskWorkSessionLookupFailure({
-          detail: "provider registry unavailable",
-          observationId: ProviderObservationId.make(`lookup:unreadable:${attempt}`)
-        })
-      )
-  },
-  {
-    name: "absence exhaustion",
-    results: () =>
-      [1, 2, 3].map((attempt) =>
-        NoMatchingTaskWorkSessionReported.make({
-          observationId: ProviderObservationId.make(`lookup:absence:${attempt}`)
-        })
-      )
-  },
-  {
-    name: "provider correlation conflict",
-    results: () => [
-      TaskWorkSessionCorrelationConflict.make({
-        conflicts: [{
-          detail: "two provider sessions matched",
-          sessionId: TaskWorkSessionId.make("session:conflict")
-        }],
-        observationId: ProviderObservationId.make("lookup:conflict")
-      })
-    ]
-  }
-] satisfies ReadonlyArray<{
-  readonly name: string
-  readonly results: () => ReadonlyArray<ScriptedLookup>
-}>
+    const simulated = yield* traceUnder(liveFakeWorkflowInterpreterLayer, defectingRunner)
+    const simulation = simulated.trace.find(
+      ({ _tag }) => _tag === "TaskWorkSessionEstablishmentSimulated"
+    )
 
-for (const scenario of lookupScenarios) {
-  it.effect(`keeps ${scenario.name} equivalent across all interpreters`, () =>
-    Effect.gen(function*() {
-      const dryRunner = scriptedRunner(scenario.results())
-      const dry = yield* traceUnder(makeDryRunWorkflowInterpreterLayer(dryRunner), dryRunner)
-      const deterministic = yield* traceUnder(
-        deterministicTestWorkflowInterpreterLayer,
-        scriptedRunner(scenario.results())
+    expect(simulated.result).toBe("Success")
+    expect(simulated.trace.map(({ _tag }) => _tag)).toContain(
+      "TaskWorkSessionEstablishmentSimulated"
+    )
+    expect(simulated.trace.map(({ _tag }) => _tag)).not.toContain(
+      "TaskWorkSessionEstablished"
+    )
+    expect(simulated.trace.map(({ _tag }) => _tag)).not.toContain("TaskWorkStartRequested")
+    expect(simulated.trace.map(({ _tag }) => _tag)).not.toContain("TaskWorkSessionLookupRequested")
+    expect(simulation).toBeDefined()
+    if (simulation?._tag === "TaskWorkSessionEstablishmentSimulated") {
+      expect(simulation.outcome.session).toBe(
+        simulation.operation.request.plannedAttempt.session
       )
-      const liveFake = yield* traceUnder(
-        liveFakeWorkflowInterpreterLayer,
-        scriptedRunner(scenario.results())
+      const directEstablishment = yield* Effect.gen(function*() {
+        const interpreter = yield* WorkflowInterpreter
+        return yield* interpreter.establishTaskWorkSession(simulation.operation)
+      }).pipe(
+        Effect.provide(dryRunWorkflowInterpreterLayer),
+        Effect.provide(trackerGraphReaderFileLayer),
+        Effect.exit
       )
-
-      expect(liveFake).toEqual(deterministic)
-      expect(dry.result).toBe(deterministic.result)
-    }))
-}
+      expect(Exit.isFailure(directEstablishment)).toBe(true)
+    }
+    expect(yield* Ref.get(lookups)).toBe(0)
+    expect(yield* Ref.get(starts)).toBe(0)
+  }))

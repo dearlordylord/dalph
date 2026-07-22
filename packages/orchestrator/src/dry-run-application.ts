@@ -2,7 +2,14 @@ import { NodeTerminal } from "@effect/platform-node"
 import { Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { runCliFromStdio } from "./cli.js"
-import { ClaimOwner, GitCommitSha, RunId, WorktreeLocator } from "./domain.js"
+import {
+  ClaimOwner,
+  GitCommitSha,
+  RunId,
+  TaskExecutorLocator,
+  TaskWorkSessionLocator,
+  WorktreeLocator
+} from "./domain.js"
 import { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
 import { deterministicTaskClaimAcquisitionPlannerLayer } from "./task-claim-planning.js"
 import { deterministicOperationIdAllocatorLayer, deterministicPlannedTaskAttemptLayer } from "./task-work-planning.js"
@@ -66,7 +73,9 @@ const dryRunTaskClaimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLaye
 
 const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  executor: TaskExecutorLocator.make("executor:dry-run"),
   runId: RunId.make("dry-run"),
+  sessionRoot: TaskWorkSessionLocator.make("session:dry-run"),
   worktreeRoot: WorktreeLocator.make("/dalph/dry-run")
 })
 

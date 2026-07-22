@@ -2,9 +2,11 @@ import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import { OperationId, PlannedTaskAttempt, ProviderObservationId, RunId } from "./domain.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
+import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
 import type { TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
 import { runTaskClaimAcquisitionProtocol } from "./task-claim-protocol.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
+import * as TaskExecutionTrace from "./task-execution-trace.js"
 import {
   decideTaskWorkSessionRecovery,
   TaskWorkSessionEstablishmentDidNotConverge,
@@ -38,6 +40,7 @@ import { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
   compareOperationIds,
+  makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
@@ -78,6 +81,7 @@ type TaskWorkSessionObservationError =
   | JournalStoreError
   | TaskWorkSessionEvidenceContradiction
   | TaskWorkSessionRunContradiction
+  | TaskAttemptPlan.TaskAttemptPlanHistoryContradiction
   | TraceOutputError
 
 interface TaskWorkSessionProtocolObserver {
@@ -201,6 +205,11 @@ export const runTaskWorkSessionEstablishmentProtocol = Effect.fn(
     : yield* Effect.fail(result.error)
 })
 
+type TaskAttemptPlanRecordingError =
+  | JournalStoreContradiction
+  | JournalStoreError
+  | TaskAttemptPlan.TaskAttemptPlanRunContradiction
+
 interface WorkflowInterpreterService {
   readonly acquireTaskClaim: (
     operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
@@ -221,6 +230,14 @@ interface WorkflowInterpreterService {
     typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type,
     TaskWorkSessionProtocolFailure
   >
+  readonly simulateTaskWorkSession: (
+    operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type
+  ) => Effect.Effect<
+    typeof WorkflowOutcome.cases.TaskWorkSessionEstablishmentSimulated.Type
+  >
+  readonly recordTaskAttemptPlan: (
+    operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
+  ) => Effect.Effect<TaskAttemptPlan.TaskAttemptPlanRecordingResult, TaskAttemptPlanRecordingError>
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
   ) => Effect.Effect<
@@ -295,24 +312,6 @@ export const TrackerExecutionAdmitted = Schema.TaggedStruct(
     claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
     observationOperation: WorkflowOperation.cases.ReadTrackerGraph
   }
-)
-
-/**
- * Records one held unit of bounded task-work capacity. It is neither tracker
- * execution admission nor evidence that a task-work provider started work.
- */
-export const TaskExecutionAdmitted = Schema.TaggedStruct(
-  "TaskExecutionAdmitted",
-  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
-)
-
-/**
- * Records provider evidence that task work began. Session establishment alone
- * cannot emit this event; issue #46 owns its first production observation.
- */
-export const TaskExecutionStarted = Schema.TaggedStruct(
-  "TaskExecutionStarted",
-  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
 )
 
 export const TaskWorkStartRequestedTrace = Schema.TaggedStruct(
@@ -393,9 +392,11 @@ export const TraceItem = Schema.Union([
   TrackerGraphOutcomeObserved,
   TaskClaimAcquisitionIntended,
   TaskClaimAcquiredTrace,
+  TaskAttemptPlan.TaskAttemptPlanAcknowledged,
+  TaskAttemptPlan.TaskAttemptPlanRecordingSimulated,
   TrackerExecutionAdmitted,
-  TaskExecutionAdmitted,
-  TaskExecutionStarted,
+  TaskExecutionTrace.TaskExecutionAdmitted,
+  TaskExecutionTrace.TaskExecutionStarted,
   TaskWorkStartRequestedTrace,
   TaskWorkStartRequestAcknowledgedTrace,
   TaskWorkStartRequestFailedTrace,
@@ -403,6 +404,7 @@ export const TraceItem = Schema.Union([
   TaskWorkSessionLookupFailedTrace,
   TaskWorkSessionReportedTrace,
   TaskWorkSessionEstablishedTrace,
+  TaskExecutionTrace.TaskWorkSessionEstablishmentSimulatedTrace,
   TaskWorkSessionLookupDidNotConvergeTrace,
   TaskWorkSessionEstablishmentDidNotConvergeTrace
 ])

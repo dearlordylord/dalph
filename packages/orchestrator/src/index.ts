@@ -34,10 +34,13 @@ export {
   ProviderWorkUnitId,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  TaskRevision,
   TaskWorkCapacity,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TrackerRevision,
   TrackerSnapshot,
   TrackerTarget,
@@ -66,6 +69,7 @@ export {
   JournalStore,
   JournalStoreContradiction,
   memoryJournalStoreLayer,
+  TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   trackerGraphObservationIntent,
@@ -91,6 +95,14 @@ export {
   sqliteJournalStoreLayer
 } from "./sqlite-journal-store.js"
 export {
+  TaskAttemptPlanAcknowledged,
+  TaskAttemptPlanHistoryContradiction,
+  TaskAttemptPlanRecordAcknowledged,
+  TaskAttemptPlanRecordingResult,
+  TaskAttemptPlanRecordingSimulated,
+  TaskAttemptPlanRunContradiction
+} from "./task-attempt-plan-recording.js"
+export {
   deterministicTaskClaimAcquisitionPlannerLayer,
   TaskClaimAcquisitionPlanner,
   taskClaimAcquisitionPlannerConfigLayer
@@ -102,8 +114,11 @@ export {
   projectTaskDagWire,
   projectTrackerSnapshot,
   TaskDagSnapshot,
-  TaskDagWire
+  TaskDagWire,
+  taskRevisionFor
 } from "./task-dag.js"
+export { TaskExecutionAdmitted, TaskExecutionStarted } from "./task-execution-trace.js"
+export { TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
 export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -175,6 +190,7 @@ export {
   AuthoritativeTaskClaimAcquired,
   causalGraphProjection,
   decideTaskWorkSessionRecovery,
+  makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
@@ -182,8 +198,6 @@ export {
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TaskClaimAcquisitionSimulated,
-  TaskExecutionAdmitted,
-  TaskExecutionStarted,
   TaskWorkSessionEstablishedTrace,
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionEstablishmentDidNotConvergeTrace,

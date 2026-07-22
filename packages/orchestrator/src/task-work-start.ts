@@ -10,6 +10,7 @@ import {
   TaskWorkSessionId,
   WorkerProcessId
 } from "./domain.js"
+import { taskRevisionFor } from "./task-dag.js"
 
 /** The immutable evidence-bearing request to establish one task-work session. */
 export const TaskWorkStartRequest = Schema.Struct({
@@ -23,6 +24,14 @@ export const TaskWorkStartRequest = Schema.Struct({
       : {
         path: ["plannedAttempt", "taskId"],
         issue: "planned attempt task identity must match the requested task"
+      }
+  ),
+  Schema.makeFilter((request) =>
+    taskRevisionFor(request.task) === request.plannedAttempt.taskRevision
+      ? undefined
+      : {
+        path: ["plannedAttempt", "taskRevision"],
+        issue: "planned attempt task revision must match the requested task"
       }
   )
 )

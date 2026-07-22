@@ -9,8 +9,10 @@ import {
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
 import {
@@ -19,6 +21,7 @@ import {
   memoryJournalStoreLayer,
   trackerGraphObservationIntent
 } from "./journal-store.js"
+import { taskRevisionFor } from "./task-dag.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import {
   causalGraphProjection,
@@ -34,6 +37,12 @@ it("preserves operation identity and direct predecessors across journal codec ro
     fc.uniqueArray(fc.string({ minLength: 1, maxLength: 20 }), { maxLength: 8 }),
     (predecessors) => {
       const taskId = TaskId.make("task")
+      const task = {
+        id: taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
       const operation = makeTaskWorkSessionEstablishmentOperation({
         predecessorOperationIds: predecessors.map((id) => OperationId.make(id)),
         request: TaskWorkStartRequest.make({
@@ -42,16 +51,14 @@ it("preserves operation identity and direct predecessors across journal codec ro
             attemptId: AttemptId.make("attempt"),
             baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
             branch: TaskBranchRef.make("refs/heads/task"),
+            executor: TaskExecutorLocator.make("executor:test"),
             runId: RunId.make("run"),
+            session: TaskWorkSessionLocator.make("session:test"),
             taskId,
+            taskRevision: taskRevisionFor(task),
             worktree: WorktreeLocator.make("/tmp/task")
           }),
-          task: {
-            id: taskId,
-            lifecycle: TaskLifecycle.cases.Open.make({}),
-            parentTaskId: null,
-            prerequisiteIds: []
-          }
+          task
         })
       })
       const decoded = Schema.decodeUnknownSync(WorkflowOperation)(

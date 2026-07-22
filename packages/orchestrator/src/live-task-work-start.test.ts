@@ -14,9 +14,11 @@ import {
   ProviderRequestId,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
 import {
@@ -28,6 +30,7 @@ import {
   TaskClaimAcquisition,
   TrackerMutation
 } from "./index.js"
+import { taskRevisionFor } from "./task-dag.js"
 import { MatchingTaskWorkSessionReported, TaskRunner, TaskWorkStartRequest } from "./task-work-start.js"
 
 it.effect("shares one ownership capability across guarded starts and read-only lookups", () =>
@@ -62,23 +65,27 @@ it.effect("shares one ownership capability across guarded starts and read-only l
       Layer.provide(controlledCoordinatorLockLayer)
     )
     const taskId = TaskId.make("task")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("attempt"),
       baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
       branch: TaskBranchRef.make("refs/heads/task"),
+      executor: TaskExecutorLocator.make("executor:ownership-test"),
       runId: RunId.make("run"),
+      session: TaskWorkSessionLocator.make("session:ownership-test"),
       taskId,
+      taskRevision: taskRevisionFor(task),
       worktree: WorktreeLocator.make(`${directory}/task`)
     })
     const request = TaskWorkStartRequest.make({
       operationId: OperationId.make("operation"),
       plannedAttempt,
-      task: {
-        id: taskId,
-        lifecycle: TaskLifecycle.cases.Open.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
+      task
     })
 
     yield* Effect.gen(function*() {

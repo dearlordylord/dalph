@@ -1,9 +1,13 @@
 import { Effect, Semaphore } from "effect"
 import type { TaskWorkCapacity, TrackerTarget } from "./domain.js"
+import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
+import { taskRevisionFor } from "./task-dag.js"
+import { TaskExecutionAdmitted, TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import {
+  makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
@@ -11,7 +15,6 @@ import {
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
-  TaskExecutionAdmitted,
   TaskWorkSessionEstablishedTrace,
   type TraceItem,
   TrackerExecutionAdmitted,
@@ -100,20 +103,42 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         taskPredecessorOperationId = admissionObservation.operationId
       }
 
-      const plannedAttempt = yield* planner.plan(taskForAttempt)
+      const plannedAttempt = yield* planner.plan(
+        taskForAttempt,
+        taskRevisionFor(taskForAttempt)
+      )
+      const planOperation = makeTaskAttemptPlanOperation({
+        operationId: yield* allocator.allocate(),
+        plannedAttempt,
+        predecessorOperationIds: [taskPredecessorOperationId]
+      })
+      yield* emit(OperationSelected.make({ operation: planOperation }))
+      const planResult = yield* interpreter.recordTaskAttemptPlan(planOperation)
+      yield* emit(
+        planResult._tag === "TaskAttemptPlanRecordAcknowledged"
+          ? TaskAttemptPlanAcknowledged.make({ operation: planOperation })
+          : TaskAttemptPlanRecordingSimulated.make({ operation: planOperation })
+      )
       const request = TaskWorkStartRequest.make({
         operationId: yield* allocator.allocate(),
         plannedAttempt,
         task: taskForAttempt
       })
       const operation = makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [taskPredecessorOperationId],
+        predecessorOperationIds: [planOperation.operationId],
         request
       })
-      yield* emit(TaskExecutionAdmitted.make({ operation }))
       yield* emit(OperationSelected.make({ operation }))
-      const outcome = yield* interpreter.establishTaskWorkSession(operation)
-      yield* emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
+      yield* emit(TaskExecutionAdmitted.make({ operation }))
+      if (planResult._tag === "TaskAttemptPlanRecordAcknowledged") {
+        const outcome = yield* interpreter.establishTaskWorkSession(operation)
+        yield* emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
+      } else {
+        const outcome = yield* interpreter.simulateTaskWorkSession(operation)
+        yield* emit(
+          TaskWorkSessionEstablishmentSimulatedTrace.make({ operation, outcome })
+        )
+      }
     }),
     { concurrency: capacity, discard: true }
   )

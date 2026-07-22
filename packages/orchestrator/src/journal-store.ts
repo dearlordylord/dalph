@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import type { AttemptId } from "./domain.js"
 import {
   JournalPosition,
   JournalRecordKey,
@@ -52,6 +53,15 @@ export const TaskClaimAcquiredEvent = Schema.TaggedStruct(
   "TaskClaimAcquired",
   {
     claim: ActiveTaskClaim,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Acknowledges the immutable attempt plan before any execution resource mutation. */
+export const TaskAttemptPlannedEvent = Schema.TaggedStruct(
+  "TaskAttemptPlanned",
+  {
+    operation: WorkflowOperationSchema.cases.RecordTaskAttemptPlan,
     version: Schema.Literal(workflowJournalEventVersion)
   }
 )
@@ -151,6 +161,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TrackerGraphOutcomeObservedEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
+  TaskAttemptPlannedEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkStartRequested,
   TaskWorkStartRequestAcknowledged,
@@ -348,6 +359,9 @@ export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
 
 export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:outcome`)
+
+export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:plan`)
 
 export const providerObservationRequestRecordKey = (
   observationId: ProviderObservationId

@@ -66,6 +66,12 @@ export type RunId = typeof RunId.Type
 export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
 export type AttemptId = typeof AttemptId.Type
 
+/** Identifies the exact tracker-observed task content bound to one attempt. */
+export const TaskRevision = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskRevision")
+)
+export type TaskRevision = typeof TaskRevision.Type
+
 /** Identifies one exact Git commit used as a planned attempt's base. */
 export const GitCommitSha = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{40}$/)
@@ -83,6 +89,18 @@ export const TaskBranchRef = Schema.NonEmptyString.pipe(
   Schema.brand("TaskBranchRef")
 )
 export type TaskBranchRef = typeof TaskBranchRef.Type
+
+/** Locates the configured executor that will receive one planned task attempt. */
+export const TaskExecutorLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskExecutorLocator")
+)
+export type TaskExecutorLocator = typeof TaskExecutorLocator.Type
+
+/** Locates one durable task-work session before a provider creates or discovers it. */
+export const TaskWorkSessionLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskWorkSessionLocator")
+)
+export type TaskWorkSessionLocator = typeof TaskWorkSessionLocator.Type
 
 /** Identifies one provider-assigned task-work session. */
 export const TaskWorkSessionId = Schema.NonEmptyString.pipe(
@@ -205,15 +223,18 @@ export const Task = TrackerTask
 export type Task = typeof Task.Type
 
 /**
- * Binds one attempt to its task, run, planned Base SHA, and exact Git resource
- * locators before task work is requested.
+ * Binds one attempt to its exact tracker revision and every Git/executor
+ * resource locator before any execution resource is created or discovered.
  */
 export const PlannedTaskAttempt = Schema.Struct({
   attemptId: AttemptId,
   baseSha: GitCommitSha,
   branch: TaskBranchRef,
+  executor: TaskExecutorLocator,
   runId: RunId,
+  session: TaskWorkSessionLocator,
   taskId: TaskId,
+  taskRevision: TaskRevision,
   worktree: WorktreeLocator
 })
 export type PlannedTaskAttempt = typeof PlannedTaskAttempt.Type

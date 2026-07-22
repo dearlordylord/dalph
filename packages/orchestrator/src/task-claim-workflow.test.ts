@@ -20,10 +20,12 @@ import {
   RunId,
   runWorkflow,
   TaskClaimAcquisition,
+  TaskExecutorLocator,
   TaskId,
   TaskRunner,
   TaskWorkCapacity,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
   TrackerMutation,
@@ -43,7 +45,9 @@ const claimPlanningLayer = deterministicTaskClaimAcquisitionPlannerLayer({
 })
 const attemptPlanningLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  executor: TaskExecutorLocator.make("executor:claim-workflow"),
   runId: RunId.make("claim-workflow"),
+  sessionRoot: TaskWorkSessionLocator.make("session:claim-workflow"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-claim-workflow")
 })
 const taskRunnerLayer = Layer.succeed(

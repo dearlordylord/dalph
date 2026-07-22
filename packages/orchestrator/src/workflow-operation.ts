@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { TrackerTarget } from "./domain.js"
-import { OperationId, TrackerTarget as TrackerTargetSchema } from "./domain.js"
+import { OperationId, PlannedTaskAttempt, TrackerTarget as TrackerTargetSchema } from "./domain.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
@@ -51,16 +51,36 @@ const AcquireTaskClaimOperation = Schema.TaggedStruct(
   )
 )
 
+const RecordTaskAttemptPlanOperation = Schema.TaggedStruct(
+  "RecordTaskAttemptPlan",
+  {
+    operationId: OperationId,
+    plannedAttempt: PlannedTaskAttempt,
+    predecessorOperationIds: CausalPredecessorOperationIds
+  }
+).check(
+  Schema.makeFilter((operation) =>
+    operation.predecessorOperationIds.includes(operation.operationId)
+      ? {
+        path: ["predecessorOperationIds"],
+        issue: "an operation cannot causally precede itself"
+      }
+      : undefined
+  )
+)
+
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
     AcquireTaskClaimOperation,
+    RecordTaskAttemptPlanOperation,
     EstablishTaskWorkSessionOperation
   ]),
   {
     cases: {
       AcquireTaskClaim: AcquireTaskClaimOperation,
       EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
+      RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
     }
   }
@@ -78,6 +98,8 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     ? operation.operationId
     : operation._tag === "AcquireTaskClaim"
     ? operation.acquisition.operationId
+    : operation._tag === "RecordTaskAttemptPlan"
+    ? operation.operationId
     : operation.request.operationId
 
 const orderedBefore = -1
@@ -116,6 +138,20 @@ export const makeTaskClaimAcquisitionOperation = (
 ): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
   WorkflowOperation.cases.AcquireTaskClaim.make({
     acquisition: fields.acquisition,
+    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
+      compareOperationIds
+    )
+  })
+
+export const makeTaskAttemptPlanOperation = (
+  fields: {
+    readonly operationId: OperationId
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  }
+): typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type =>
+  WorkflowOperation.cases.RecordTaskAttemptPlan.make({
+    ...fields,
     predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
       compareOperationIds
     )
