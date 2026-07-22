@@ -336,6 +336,21 @@ one planned task attempt. A round consumes no technical retry count; later
 retry and convergence policy owns whether another round may begin.
 _Avoid_: Reviewer process, technical retry, task attempt
 
+**Technical retry scope**:
+The exact reviewer invocation or findings-handback invocation whose typed
+technical failures share one captured positive retry limit and bounded
+exponential delay policy. The scope retains its workflow operation and semantic
+review round, but its technical retry ordinal is a separate branded fact.
+_Avoid_: Semantic review round, task attempt, coordinator recovery budget
+
+**Technical retry scheduled**:
+The Dalph workflow-journal fact recorded after one typed technical invocation
+failure and before waiting. It binds the active technical retry scope, next
+technical retry ordinal, capped delay, and absolute `notBefore` read from the
+Effect clock. It does not prove that the retry began and does not make a
+coordinator interruption consume or preserve budget.
+_Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
+
 **Reviewer invocation**:
 One request to a fresh independent reviewer, identified by its workflow
 operation and durable reviewer-session identity before it crosses the reviewer

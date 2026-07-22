@@ -46,6 +46,10 @@ export {
   TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
+  TechnicalRetryDelayMillis,
+  TechnicalRetryLimit,
+  TechnicalRetryNotBefore,
+  TechnicalRetryOrdinal,
   TrackerRevision,
   TrackerSnapshot,
   TrackerTarget,
@@ -185,6 +189,7 @@ export {
   TestTaskRunner,
   UnreadableProviderWorkUnit
 } from "./task-work-start.js"
+export * from "./technical-retry.js"
 export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
 export {
   FixtureReader,

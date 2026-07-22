@@ -1,6 +1,7 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref, Result, Schema } from "effect"
+import { Effect, Fiber, Layer, Ref, Result, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -18,6 +19,8 @@ import {
   TaskId,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
+  TechnicalRetryDelayMillis,
+  TechnicalRetryLimit,
   WorkerProcessId,
   WorktreeLocator
 } from "./domain.js"
@@ -76,6 +79,7 @@ import {
 } from "./journaled-implementation-review.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
+import { TechnicalRetryPolicy } from "./technical-retry.js"
 import {
   makeImplementationEvidenceSealingOperation,
   makeImplementationReviewOperation,
@@ -244,6 +248,100 @@ it.effect("journals a fresh reviewer session before invocation and reuses the du
     expect(first.manifest.findingHistory).toEqual([finding])
     expect(first.manifest.predecessorEvidenceReference).toEqual(evidence.sealed.manifestReference)
     expect(yield* Ref.get(invocations)).toBe(1)
+  }).pipe(Effect.provide(testLayer)))
+
+it.effect("retries review and findings handback failures inside distinct durable technical scopes", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const store = yield* EvidenceStore
+    const evidence = yield* appendExecutionAndEvidence(1)
+    const operation = reviewOperation(evidence)
+    if (operation.request._tag !== "AuthorizedImplementationReview") return yield* Effect.die("invalid fixture")
+    const technicalRetryPolicy = TechnicalRetryPolicy.make({
+      initialDelayMillis: TechnicalRetryDelayMillis.make(10),
+      limit: TechnicalRetryLimit.make(2),
+      maximumDelayMillis: TechnicalRetryDelayMillis.make(20)
+    })
+    const reviewCalls = yield* Ref.make(0)
+    const reviewProtocol = makeJournaledImplementationReview({
+      evidenceStore: store,
+      handback: ReviewFindingsHandback.of({ deliverOrResume: () => Effect.die("unused") }),
+      journal,
+      reviewer: ImplementationReviewer.of({
+        createOrResume: (request) =>
+          Ref.updateAndGet(reviewCalls, (count) => count + 1).pipe(
+            Effect.flatMap((call) =>
+              call === 1
+                ? Effect.fail(
+                  new ImplementationReviewInvocationFailure({
+                    detail: "temporary reviewer failure",
+                    operationId: request.operationId,
+                    reviewerSessionId: request.reviewerSessionId
+                  })
+                )
+                : Effect.succeed(ImplementationReviewDisposition.cases.Findings.make({ findings: [finding] }))
+            )
+          )
+      }),
+      runId,
+      technicalRetryPolicy
+    })
+    const reviewFiber = yield* reviewProtocol(operation).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("10 millis")
+    const review = yield* Fiber.join(reviewFiber)
+
+    const handbackCalls = yield* Ref.make(0)
+    const handbackRequest = ReviewFindingsHandbackRequest.make({
+      implementerInvocationId: evidence.executionOperationId,
+      implementerSessionId: sessionId,
+      operationId: OperationId.make("technically-retried-handback"),
+      plannedAttempt: plan,
+      review,
+      reviewOperationId: operation.request.operationId
+    })
+    const handbackProtocol = makeJournaledReviewFindingsHandback({
+      evidenceStore: store,
+      handback: ReviewFindingsHandback.of({
+        deliverOrResume: (request) =>
+          Ref.updateAndGet(handbackCalls, (count) => count + 1).pipe(
+            Effect.flatMap((call) =>
+              call <= 2
+                ? Effect.fail(
+                  new ReviewFindingsHandbackFailure({
+                    detail: "temporary handback failure",
+                    operationId: request.operationId
+                  })
+                )
+                : Effect.succeed(ReviewFindingsHandbackAcknowledged.make({
+                  operationId: request.operationId,
+                  reviewEvidenceReference: request.review.manifestReference
+                }))
+            )
+          )
+      }),
+      journal,
+      reviewer: ImplementationReviewer.of({ createOrResume: () => Effect.die("unused") }),
+      runId,
+      technicalRetryPolicy
+    })
+    const handbackFiber = yield* handbackProtocol(
+      makeReviewFindingsHandbackOperation(handbackRequest)
+    ).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("30 millis")
+    yield* Fiber.join(handbackFiber)
+
+    expect(yield* Ref.get(reviewCalls)).toBe(2)
+    expect(yield* Ref.get(handbackCalls)).toBe(3)
+    const retryEvents = (yield* journal.read(runId)).flatMap(({ event }) =>
+      event._tag === "TechnicalRetryScheduled" ? [event] : []
+    )
+    expect(retryEvents.map(({ retryOrdinal }) => retryOrdinal)).toEqual([1, 1, 2])
+    expect(retryEvents.map(({ scope }) => scope._tag)).toEqual([
+      "ImplementationReviewInvocation",
+      "ReviewFindingsHandbackInvocation",
+      "ReviewFindingsHandbackInvocation"
+    ])
+    expect(retryEvents.every(({ scope }) => scope.semanticRound === SemanticReviewRound.make(1))).toBe(true)
   }).pipe(Effect.provide(testLayer)))
 
 it.effect("rejects stale implementer invocation and cross-attempt continuation before review", () =>

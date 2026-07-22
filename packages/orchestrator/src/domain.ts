@@ -133,6 +133,34 @@ export const SemanticReviewRound = Schema.Int.check(
 ).pipe(Schema.brand("SemanticReviewRound"))
 export type SemanticReviewRound = typeof SemanticReviewRound.Type
 
+/** Bounds automatic technical retries after an invocation failure; it is not a semantic review-round limit. */
+export const TechnicalRetryLimit = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("TechnicalRetryLimit"))
+export type TechnicalRetryLimit = typeof TechnicalRetryLimit.Type
+
+/** Orders retries after the first technical invocation, starting at one; it is not a semantic review round. */
+export const TechnicalRetryOrdinal = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("TechnicalRetryOrdinal"))
+export type TechnicalRetryOrdinal = typeof TechnicalRetryOrdinal.Type
+
+/** A positive whole-millisecond technical retry delay, distinct from an absolute time. */
+export const TechnicalRetryDelayMillis = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("TechnicalRetryDelayMillis"))
+export type TechnicalRetryDelayMillis = typeof TechnicalRetryDelayMillis.Type
+
+/** The absolute virtual-clock millisecond before which one technical retry is ineligible. */
+export const TechnicalRetryNotBefore = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("TechnicalRetryNotBefore"))
+export type TechnicalRetryNotBefore = typeof TechnicalRetryNotBefore.Type
+
 /** Identifies one reviewer finding across immutable review evidence. */
 export const ReviewFindingId = Schema.NonEmptyString.pipe(
   Schema.brand("ReviewFindingId")

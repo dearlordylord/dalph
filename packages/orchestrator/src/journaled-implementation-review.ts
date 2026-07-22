@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import type { PlannedTaskAttempt, RunId } from "./domain.js"
 import { authorizeImplementationReview, EvidenceStore, type EvidenceStoreService } from "./implementation-evidence.js"
 import {
@@ -13,8 +14,10 @@ import {
   extendReviewFindingHistory,
   type ImplementationReviewerService,
   ImplementationReviewHistoryContradiction,
+  ImplementationReviewInvocationFailure,
   ImplementationReviewModeContradiction,
   ReviewFindingsHandbackAcknowledged,
+  ReviewFindingsHandbackFailure,
   type ReviewFindingsHandbackRequest,
   type ReviewFindingsHandbackService,
   type SealedImplementationReview,
@@ -22,6 +25,7 @@ import {
 } from "./implementation-review.js"
 import { intentRecordKey, type JournalRecord, type JournalStoreService, outcomeRecordKey } from "./journal-store.js"
 import { samePlannedTaskAttempt } from "./task-attempt-plan-recording.js"
+import { captureTechnicalRetryPolicy, type TechnicalRetryPolicy, TechnicalRetryScope } from "./technical-retry.js"
 import type { WorkflowOperation } from "./workflow-operation.js"
 
 type ReviewOperation = typeof WorkflowOperation.cases.ReviewImplementation.Type
@@ -247,6 +251,7 @@ interface JournaledImplementationReviewOptions {
   readonly journal: JournalStoreService
   readonly reviewer: ImplementationReviewerService
   readonly runId: RunId
+  readonly technicalRetryPolicy?: TechnicalRetryPolicy
 }
 
 /** Invokes and seals one exact fresh review, idempotently returning a durable outcome. */
@@ -293,12 +298,27 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     yield* requireReviewPredecessors(records, request, true).pipe(
       Effect.provideService(EvidenceStore, options.evidenceStore)
     )
+    const technicalRetry = {
+      isRetryable: (failure: unknown): failure is ImplementationReviewInvocationFailure =>
+        failure instanceof ImplementationReviewInvocationFailure,
+      journal: options.journal,
+      policy: options.technicalRetryPolicy,
+      runId: options.runId,
+      scope: TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+        operationId: request.operationId,
+        reviewerSessionId: request.reviewerSessionId,
+        semanticRound: request.round
+      })
+    }
+    const capturedTechnicalRetry = yield* captureTechnicalRetryPolicy<
+      CoordinatorOwnershipError | ImplementationReviewInvocationFailure
+    >(technicalRetry)
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
       ImplementationReviewIntendedEvent.make({ operation, version: 2 })
     )
-    const disposition = yield* options.reviewer.createOrResume(request)
+    const disposition = yield* capturedTechnicalRetry.run(options.reviewer.createOrResume(request))
     const review = yield* sealImplementationReview(request, disposition).pipe(
       Effect.provideService(EvidenceStore, options.evidenceStore)
     )
@@ -373,12 +393,27 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     if (latest?.outcome.operationId !== request.implementerInvocationId) {
       return yield* failHistory(request.operationId, "ImplementerInvocationIsNotLatest")
     }
+    const technicalRetry = {
+      isRetryable: (failure: unknown): failure is ReviewFindingsHandbackFailure =>
+        failure instanceof ReviewFindingsHandbackFailure,
+      journal: options.journal,
+      policy: options.technicalRetryPolicy,
+      runId: options.runId,
+      scope: TechnicalRetryScope.cases.ReviewFindingsHandbackInvocation.make({
+        operationId: request.operationId,
+        reviewOperationId: request.reviewOperationId,
+        semanticRound: request.review.manifest.round
+      })
+    }
+    const capturedTechnicalRetry = yield* captureTechnicalRetryPolicy<
+      CoordinatorOwnershipError | ReviewFindingsHandbackFailure
+    >(technicalRetry)
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
       ReviewFindingsHandbackIntendedEvent.make({ operation, version: 2 })
     )
-    const acknowledgement = yield* options.handback.deliverOrResume(request)
+    const acknowledgement = yield* capturedTechnicalRetry.run(options.handback.deliverOrResume(request))
     if (!handbackAcknowledgesRequest(acknowledgement, request)) {
       return yield* failHistory(request.operationId, "ReviewMismatch")
     }

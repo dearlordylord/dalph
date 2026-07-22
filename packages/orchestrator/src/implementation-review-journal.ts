@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { ReviewFindingsHandbackAcknowledged, SealedImplementationReview } from "./implementation-review.js"
+import { TechnicalRetryJournalEvent } from "./technical-retry.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
 const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
@@ -44,5 +45,6 @@ export const ImplementationReviewJournalEvent = Schema.Union([
   ImplementationReviewIntendedEvent,
   ImplementationReviewCompletedEvent,
   ReviewFindingsHandbackIntendedEvent,
-  ReviewFindingsHandbackCompletedEvent
+  ReviewFindingsHandbackCompletedEvent,
+  TechnicalRetryJournalEvent
 ])

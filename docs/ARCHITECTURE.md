@@ -393,6 +393,39 @@ after simulated evidence sealing but return
 a reviewer session observation, a semantic disposition, or a findings
 handback.
 
+## Bounded Technical Invocation Scheduling
+
+Before the journaled interpreter invokes one reviewer or sends one findings
+handback, it captures a positive technical retry limit, positive initial delay,
+and maximum delay for that exact active scope. Reviewer scope binds the review
+operation, reviewer session, and semantic review round. Findings-handback scope
+binds its operation, reviewed operation, and the same semantic round. Technical
+retry ordinals and semantic review rounds are distinct branded values; a
+provider invocation failure never creates another semantic round.
+The current default permits three retries after the first invocation, begins at
+100 milliseconds, and caps each delay at five seconds; every active scope
+persists those values rather than depending on later defaults.
+
+Only `ImplementationReviewInvocationFailure` and
+`ReviewFindingsHandbackFailure` advance these schedules. The Effect schedule
+applies exponential delay capped by the captured maximum and stops after the
+captured retry limit. Before each wait it records the next technical retry
+ordinal, capped delay, and absolute `notBefore` from the Effect clock in the
+Dalph workflow journal. Production and tests execute this same scheduling
+algebra; deterministic tests advance `TestClock`. Dry-run has no provider
+invocation and therefore cannot fabricate a technical failure or scheduled
+retry fact.
+If clock-plus-delay arithmetic cannot produce a nonnegative safe-integer
+`notBefore`, scheduling fails with `TechnicalRetryScheduleOverflow` before a
+schedule fact is appended, a timer waits, or another provider invocation runs.
+
+Coordinator ownership failure and Effect interruption are not technical
+invocation failures and bypass this schedule. These durable records make the
+active budget observable, but this implementation does not claim that restart
+waits the remaining delay or avoids double consumption. Retry recovery across
+coordinator interruption belongs to issue #51 and must reconcile the persisted
+facts before superseding any deferral.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

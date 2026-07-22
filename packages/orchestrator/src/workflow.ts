@@ -47,6 +47,7 @@ import {
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
 import * as TaskWorktree from "./task-worktree-reconciliation.js"
+import type { TechnicalRetryScheduleOverflow } from "./technical-retry.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
 import {
@@ -257,17 +258,21 @@ type TaskAttemptPlanRecordingError =
   | JournalStoreError
   | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
+type ImplementationReviewWorkflowError =
+  | CoordinatorOwnershipError
+  | EvidenceStoreFailure
+  | ImplementationReviewHistoryContradiction
+  | ImplementationReviewNotAuthorized
+  | JournalStoreContradiction
+  | JournalStoreError
+  | TechnicalRetryScheduleOverflow
+
 interface WorkflowInterpreterService {
   readonly handBackReviewFindings: (
     operation: typeof WorkflowOperation.cases.HandBackReviewFindings.Type
   ) => Effect.Effect<
     typeof ReviewFindingsHandbackAcknowledged.Type,
-    | CoordinatorOwnershipError
-    | EvidenceStoreFailure
-    | ImplementationReviewHistoryContradiction
-    | ImplementationReviewNotAuthorized
-    | JournalStoreContradiction
-    | JournalStoreError
+    | ImplementationReviewWorkflowError
     | ReviewFindingsHandbackFailure
   >
   readonly acquireTaskClaim: (
@@ -335,14 +340,9 @@ interface WorkflowInterpreterService {
     operation: typeof WorkflowOperation.cases.ReviewImplementation.Type
   ) => Effect.Effect<
     typeof SealedImplementationReview.Type | typeof ImplementationReviewSimulated.Type,
-    | CoordinatorOwnershipError
-    | EvidenceStoreFailure
-    | ImplementationReviewHistoryContradiction
+    | ImplementationReviewWorkflowError
     | ImplementationReviewInvocationFailure
     | ImplementationReviewModeContradiction
-    | ImplementationReviewNotAuthorized
-    | JournalStoreContradiction
-    | JournalStoreError
   >
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
