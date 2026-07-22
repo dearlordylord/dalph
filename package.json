@@ -19,6 +19,7 @@
     "check:format": "pnpm lint:code",
     "check:circular": "node scripts/check-circular.mjs",
     "check:duplicates": "jscpd .",
+    "check:quint": "pnpm quint typecheck specs/taskWorkSessionRecovery.qnt && pnpm quint test specs/taskWorkSessionRecovery_test.qnt --main taskWorkSessionRecoveryTest && pnpm quint run specs/taskWorkSessionRecovery.qnt --invariants requestRequiresIntent everyRequestUsesStableIdentity everyRequestUsesStablePayload causalPredecessorsAreStable absenceAloneAuthorizesRepeat unreadableAndConflictNeverAuthorize establishmentRequiresMatchingReport lookupBoundIsRespected terminalOutcomeIsStable --witnesses intentReached requestReached absenceAuthorizedRepeatReached matchingReached outcomeReached unreadableBoundReached absenceBoundReached conflictReached crashRestartReached --max-steps 40 --max-samples 10000 --verbosity 1",
     "check:secrets": "gitleaks git --redact --no-banner",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -43,6 +44,8 @@
     "@effect/vitest": "4.0.0-beta.99",
     "@eslint/compat": "2.0.2",
     "@eslint/js": "9.39.5",
+    "@firfi/quint-connect": "2.0.2-effect4.1",
+    "@informalsystems/quint": "0.32.0",
     "@types/node": "26.1.1",
     "@typescript-eslint/parser": "8.65.0",
     "@vitest/coverage-v8": "4.0.18",
@@ -60,6 +63,7 @@
     "madge": "8.0.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.54.0",
-    "vitest": "4.0.18"
+    "vitest": "4.0.18",
+    "zod": "4.1.12"
   }
 }

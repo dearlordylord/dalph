@@ -51,6 +51,58 @@ export type OperationId = typeof OperationId.Type
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type
 
+/** Identifies one planned task attempt, not its task, run, or provider session. */
+export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
+export type AttemptId = typeof AttemptId.Type
+
+/** Identifies one exact Git commit used as a planned attempt's base. */
+export const GitCommitSha = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{40}$/)
+).pipe(Schema.brand("GitCommitSha"))
+export type GitCommitSha = typeof GitCommitSha.Type
+
+/** Locates the one exact worktree reserved for a planned task attempt. */
+export const WorktreeLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("WorktreeLocator")
+)
+export type WorktreeLocator = typeof WorktreeLocator.Type
+
+/** Locates the exact Git branch ref reserved for a planned task attempt. */
+export const TaskBranchRef = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskBranchRef")
+)
+export type TaskBranchRef = typeof TaskBranchRef.Type
+
+/** Identifies one provider-assigned task-work session. */
+export const TaskWorkSessionId = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskWorkSessionId")
+)
+export type TaskWorkSessionId = typeof TaskWorkSessionId.Type
+
+/** Identifies one task-work-provider response to a start request. */
+export const ProviderRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("ProviderRequestId")
+)
+export type ProviderRequestId = typeof ProviderRequestId.Type
+
+/** Identifies one completed provider observation, not journal ordering. */
+export const ProviderObservationId = Schema.NonEmptyString.pipe(
+  Schema.brand("ProviderObservationId")
+)
+export type ProviderObservationId = typeof ProviderObservationId.Type
+
+/** Identifies one provider-owned work unit within a task-work session. */
+export const ProviderWorkUnitId = Schema.NonEmptyString.pipe(
+  Schema.brand("ProviderWorkUnitId")
+)
+export type ProviderWorkUnitId = typeof ProviderWorkUnitId.Type
+
+/** Identifies one operating-system worker process reported by a task runner. */
+export const WorkerProcessId = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1)
+).pipe(Schema.brand("WorkerProcessId"))
+export type WorkerProcessId = typeof WorkerProcessId.Type
+
 /** Identifies one durable managed-history fact within a run. */
 export const JournalRecordKey = Schema.NonEmptyString.pipe(
   Schema.brand("JournalRecordKey")
@@ -63,7 +115,7 @@ export const JournalPosition = Schema.Int.check(
 ).pipe(Schema.brand("JournalPosition"))
 export type JournalPosition = typeof JournalPosition.Type
 
-/** Locates the SQLite authority journal, not a worktree or fixture. */
+/** Locates Dalph's SQLite workflow journal, not a worktree or fixture. */
 export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
   Schema.brand("JournalDatabaseLocator")
 )
@@ -90,26 +142,26 @@ export type JournalSchemaVersion = typeof JournalSchemaVersion.Type
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
 // Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
 // Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
-const defaultTaskExecutionCapacityValue = 2
+const defaultTaskWorkCapacityValue = 2
 
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
 // Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
 // Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
-export const maximumTaskExecutionCapacityValue = 8
+export const maximumTaskWorkCapacityValue = 8
 
 /**
  * The bounded number of runnable tasks that the coordinator may admit for
  * execution. This is neither tracker execution admission nor integration
  * capacity.
  */
-export const TaskExecutionCapacity = Schema.Int.check(
+export const TaskWorkCapacity = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(maximumTaskExecutionCapacityValue)
-).pipe(Schema.brand("TaskExecutionCapacity"))
-export type TaskExecutionCapacity = typeof TaskExecutionCapacity.Type
+  Schema.isLessThanOrEqualTo(maximumTaskWorkCapacityValue)
+).pipe(Schema.brand("TaskWorkCapacity"))
+export type TaskWorkCapacity = typeof TaskWorkCapacity.Type
 
-export const defaultTaskExecutionCapacity = TaskExecutionCapacity.make(
-  defaultTaskExecutionCapacityValue
+export const defaultTaskWorkCapacity = TaskWorkCapacity.make(
+  defaultTaskWorkCapacityValue
 )
 
 /** Identifies tracker snapshot content, not workflow or journal ordering. */
@@ -136,6 +188,24 @@ export const TrackerTask = Schema.Struct({
   prerequisiteIds: Schema.Array(TaskId)
 })
 export type TrackerTask = Schema.Schema.Type<typeof TrackerTask>
+
+/** A normalized tracker-owned task value used outside provider adapters. */
+export const Task = TrackerTask
+export type Task = typeof Task.Type
+
+/**
+ * Binds one attempt to its task, run, planned Base SHA, and exact Git resource
+ * locators before task work is requested.
+ */
+export const PlannedTaskAttempt = Schema.Struct({
+  attemptId: AttemptId,
+  baseSha: GitCommitSha,
+  branch: TaskBranchRef,
+  runId: RunId,
+  taskId: TaskId,
+  worktree: WorktreeLocator
+})
+export type PlannedTaskAttempt = typeof PlannedTaskAttempt.Type
 
 export const TrackerSnapshot = Schema.Struct({
   revision: TrackerRevision,

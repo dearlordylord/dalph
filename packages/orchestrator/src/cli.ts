@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
-import { defaultTaskExecutionCapacity, FixtureTarget } from "./domain.js"
-import { runWorkflow } from "./workflow.js"
+import { defaultTaskWorkCapacity, FixtureTarget } from "./domain.js"
+import { runWorkflow } from "./workflow-run.js"
 
 export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()(
   "Cli.CliUsageError",
@@ -11,7 +11,7 @@ export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()(
 const executeDryRun = Effect.fn("Cli.executeDryRun")(function*(
   target: FixtureTarget
 ) {
-  yield* runWorkflow(target, defaultTaskExecutionCapacity)
+  yield* runWorkflow(target, defaultTaskWorkCapacity)
 })
 
 const runCommand = Command.make(

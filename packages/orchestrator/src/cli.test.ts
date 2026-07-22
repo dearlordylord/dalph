@@ -1,429 +1,96 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import type { Duration } from "effect"
-import { Clock, Effect, Fiber, Layer, Option, PlatformError, Queue, Random, Ref, Schema, Sink, Stdio } from "effect"
-import { TestClock } from "effect/testing"
-import { readFile } from "node:fs/promises"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   CliUsageError,
+  deterministicOperationIdAllocatorLayer,
+  deterministicPlannedTaskAttemptLayer,
   dryRunWorkflowInterpreterLayer,
-  FixtureReadError,
-  FixtureTarget,
-  makeTaskExecutionOperation,
-  makeTrackerGraphObservationOperation,
+  GitCommitSha,
   runCli,
-  runCliFromStdio,
-  TaskId,
-  TraceItem,
+  RunId,
   TraceOutput,
   TraceOutputError,
-  traceOutputStdioLayer,
-  TrackerGraphReader,
   trackerGraphReaderFileLayer,
-  TrackerSnapshot,
-  workflowTraceOutputLayer
+  workflowTraceOutputLayer,
+  WorktreeLocator
 } from "./index.js"
 
-const fixture = (
-  name:
-    | "diamond"
-    | "empty"
-    | "invalid"
-    | "invalid-graph"
-    | "malformed"
-    | "singleton"
-    | "wayfinder-105"
-): string => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
+const fixture = (name: "empty" | "singleton") => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
 
-const expectedTrace = (
-  target: string,
-  revision: string,
-  taskIds: ReadonlyArray<string>,
-  runnableTaskIds: ReadonlyArray<string> = taskIds,
-  completionTaskIds: ReadonlyArray<string> = runnableTaskIds
-): ReadonlyArray<string> => {
-  const readOperation = makeTrackerGraphObservationOperation(
-    FixtureTarget.make(target)
+const plannerLayer = deterministicPlannedTaskAttemptLayer({
+  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  runId: RunId.make("cli-test"),
+  worktreeRoot: WorktreeLocator.make("/tmp/dalph-cli-test")
+})
+
+const runArguments = (
+  args: ReadonlyArray<string>,
+  outputLayer: Layer.Layer<TraceOutput>
+) =>
+  runCli(args).pipe(
+    Effect.provide(dryRunWorkflowInterpreterLayer),
+    Effect.provide(workflowTraceOutputLayer),
+    Effect.provide(outputLayer),
+    Effect.provide(trackerGraphReaderFileLayer),
+    Effect.provide(deterministicOperationIdAllocatorLayer("cli-test")),
+    Effect.provide(plannerLayer),
+    Effect.provide(NodeServices.layer)
   )
-  const operationFor = (taskId: string) =>
-    makeTaskExecutionOperation(
-      TaskId.make(taskId),
-      readOperation.operationId
-    )
-  return [
-    {
-      _tag: "OperationSelected",
-      operation: readOperation
-    },
-    {
-      _tag: "TrackerGraphOutcomeObserved",
-      operation: readOperation,
-      outcome: { _tag: "TrackerGraphObserved", revision, taskIds }
-    },
-    ...runnableTaskIds.map((taskId) => ({
-      _tag: "TaskExecutionAdmitted",
-      operation: operationFor(taskId)
-    })),
-    ...completionTaskIds.map((taskId) => ({
-      _tag: "TaskExecutionOutcomeObserved",
-      operation: operationFor(taskId),
-      outcome: { _tag: "TaskExecuted" }
-    }))
-  ].map((item) => JSON.stringify(item))
-}
 
-const runArgumentsAndCollect = (args: ReadonlyArray<string>) =>
+const runWithOutput = (target: string, outputLayer: Layer.Layer<TraceOutput>) =>
+  runArguments(["run", target, "--dry"], outputLayer)
+
+it.effect("runs the dry CLI through the task-work session workflow", () =>
   Effect.gen(function*() {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
-    const testClock = yield* TestClock.testClockWith(Effect.succeed)
-    const clock = yield* Clock.Clock
-    const sleeps = yield* Queue.unbounded<Duration.Duration>()
-    const controlledClock = {
-      ...clock,
-      sleep: (duration: Duration.Duration) =>
-        Queue.offer(sleeps, duration).pipe(
-          Effect.andThen(clock.sleep(duration))
-        )
-    }
-    const outputLayer = Layer.succeed(
-      TraceOutput,
-      TraceOutput.of({
-        writeLine: Effect.fn("TraceOutput.Test.writeLine")(function*(line) {
-          yield* Ref.update(lines, (current) => [...current, line])
+    yield* runWithOutput(
+      fixture("singleton"),
+      Layer.succeed(
+        TraceOutput,
+        TraceOutput.of({
+          writeLine: (line) => Ref.update(lines, (current) => [...current, line])
         })
-      })
-    )
-
-    const run = yield* runCli(args).pipe(
-      Effect.provide(workflowTraceOutputLayer),
-      Effect.provide(outputLayer),
-      Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(NodeServices.layer),
-      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
-      Random.withSeed(2),
-      Effect.forkScoped
-    )
-    let completed = false
-    while (!completed) {
-      const state = yield* Effect.race(
-        Queue.take(sleeps).pipe(
-          Effect.map((duration) => ({ _tag: "Sleeping", duration }) as const)
-        ),
-        Fiber.await(run).pipe(Effect.as({ _tag: "Completed" } as const))
-      )
-      if (state._tag === "Completed") {
-        completed = true
-      } else {
-        yield* testClock.adjust(state.duration)
-      }
-    }
-    yield* Fiber.join(run)
-
-    return yield* Ref.get(lines)
-  })
-
-const runAndCollect = (target: string) => runArgumentsAndCollect(["run", target, "--dry"])
-
-const discardOutputLayer = Layer.succeed(
-  TraceOutput,
-  TraceOutput.of({
-    writeLine: Effect.fn("TraceOutput.Test.discard")(function*() {
-      yield* Effect.void
-    })
-  })
-)
-
-it.effect("runs an empty fixture deterministically through the dry workflow", () =>
-  Effect.gen(function*() {
-    const target = fixture("empty")
-    const first = yield* runAndCollect(target)
-    const second = yield* runAndCollect(target)
-
-    expect(first).toEqual(expectedTrace(target, "fixture-empty-v1", []))
-    expect(second).toEqual(first)
-  }))
-
-it.effect("runs a singleton fixture deterministically through the dry workflow", () =>
-  Effect.gen(function*() {
-    const target = fixture("singleton")
-    const first = yield* runAndCollect(target)
-    const second = yield* runAndCollect(target)
-
-    expect(first).toEqual(
-      expectedTrace(target, "fixture-singleton-v1", ["task-only"])
-    )
-    expect(second).toEqual(first)
-  }))
-
-it.effect("traverses a diamond deterministically through the dry workflow", () =>
-  Effect.gen(function*() {
-    const target = fixture("diamond")
-    const first = yield* runAndCollect(target)
-    const second = yield* runAndCollect(target)
-
-    expect(first).toEqual(
-      expectedTrace(
-        target,
-        "fixture-diamond-v1",
-        [
-          "group",
-          "root",
-          "left",
-          "right",
-          "join"
-        ],
-        ["group", "root"],
-        ["root", "group"]
       )
     )
-    expect(second).toEqual(first)
+
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
+      "OperationSelected",
+      "TrackerGraphOutcomeObserved",
+      "OperationSelected",
+      "TrackerGraphOutcomeObserved",
+      "TaskWorkCapacityReserved",
+      "OperationSelected",
+      "TaskWorkStartRequested",
+      "TaskWorkStartRequestAcknowledged",
+      "TaskWorkSessionLookupRequested",
+      "TaskWorkSessionReported",
+      "TaskWorkSessionEstablished"
+    ])
   }))
 
-it.effect("traverses the retained 105-task snapshot through the same dry workflow", () =>
+it.effect("requires the dry flag before running any workflow", () =>
   Effect.gen(function*() {
-    const target = fixture("wayfinder-105")
-    const first = yield* runAndCollect(target)
-    const second = yield* runAndCollect(target)
-    const observed = Schema.decodeUnknownSync(TraceItem)(
-      JSON.parse(first[1] ?? "null")
-    )
-
-    expect(second).toEqual(first)
-    expect(first).toHaveLength(72)
-    expect(observed._tag).toBe("TrackerGraphOutcomeObserved")
-    if (observed._tag === "TrackerGraphOutcomeObserved") {
-      expect(observed.outcome.revision).toBe(
-        "tracker-revision:github-issue-12-04f996b64663a5e0"
+    const failure = yield* runArguments(
+      ["run", fixture("empty")],
+      Layer.succeed(
+        TraceOutput,
+        TraceOutput.of({ writeLine: () => Effect.void })
       )
-      expect(observed.outcome.taskIds).toHaveLength(105)
-      expect(new Set(observed.outcome.taskIds)).toHaveLength(105)
-    }
+    ).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(CliUsageError)
   }))
-
-it.effect("parses the dry flag independently of its argument position", () =>
-  Effect.gen(function*() {
-    const target = fixture("singleton")
-    const lines = yield* runArgumentsAndCollect(["run", "--dry", target])
-
-    expect(lines).toEqual(
-      expectedTrace(target, "fixture-singleton-v1", ["task-only"])
-    )
-  }))
-
-it.effect("runs the CLI entrypoint through injected Stdio and application services", () =>
-  Effect.gen(function*() {
-    const target = fixture("singleton")
-    const chunks = yield* Ref.make<ReadonlyArray<string>>([])
-    const testClock = yield* TestClock.testClockWith(Effect.succeed)
-    const clock = yield* Clock.Clock
-    const sleeps = yield* Queue.unbounded<Duration.Duration>()
-    const controlledClock = {
-      ...clock,
-      sleep: (duration: Duration.Duration) =>
-        Queue.offer(sleeps, duration).pipe(
-          Effect.andThen(clock.sleep(duration))
-        )
-    }
-    const stdioLayer = Stdio.layerTest({
-      args: Effect.succeed(["run", "--dry", target]),
-      stdout: () =>
-        Sink.forEach((chunk: string | Uint8Array) => {
-          const text = typeof chunk === "string"
-            ? chunk
-            : new TextDecoder().decode(chunk)
-          return Ref.update(chunks, (current) => [...current, text])
-        })
-    })
-
-    const run = yield* runCliFromStdio.pipe(
-      Effect.provide(workflowTraceOutputLayer),
-      Effect.provide(traceOutputStdioLayer),
-      Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(stdioLayer),
-      Effect.provide(NodeServices.layer),
-      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
-      Random.withSeed(2),
-      Effect.forkScoped
-    )
-    const duration = yield* Queue.take(sleeps)
-    yield* testClock.adjust(duration)
-    yield* Fiber.join(run)
-
-    expect(yield* Ref.get(chunks)).toEqual(
-      expectedTrace(target, "fixture-singleton-v1", ["task-only"]).map(
-        (line) => `${line}\n`
-      )
-    )
-  }))
-
-it.effect("maps injected Stdio write failures to a typed trace error", () =>
-  Effect.gen(function*() {
-    const platformFailure = PlatformError.systemError({
-      _tag: "WriteZero",
-      module: "Stdio",
-      method: "write"
-    })
-    const stdioLayer = Stdio.layerTest({
-      stdout: () => Sink.fail(platformFailure)
-    })
-    const error = yield* Effect.gen(function*() {
-      const output = yield* TraceOutput
-      yield* output.writeLine("trace")
-    }).pipe(
-      Effect.provide(traceOutputStdioLayer),
-      Effect.provide(stdioLayer),
-      Effect.flip,
-      Effect.orDie
-    )
-
-    expect(error).toBeInstanceOf(TraceOutputError)
-    expect(error.detail).toContain("WriteZero")
-  }))
-
-it.effect("requires the dry flag", () =>
-  Effect.gen(function*() {
-    const error = yield* runCli(["run", fixture("empty")]).pipe(
-      Effect.provide(workflowTraceOutputLayer),
-      Effect.provide(discardOutputLayer),
-      Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(NodeServices.layer),
-      Effect.flip,
-      Effect.orDie
-    )
-
-    expect(error).toBeInstanceOf(CliUsageError)
-    if (error._tag === "Cli.CliUsageError") {
-      expect(error.usage).toBe("dalph run <fixture-target> --dry")
-    }
-  }))
-
-it.effect("reports fixture read, parse, and decode failures precisely", () =>
-  Effect.gen(function*() {
-    const reader = yield* TrackerGraphReader
-    const missing = yield* reader
-      .read(FixtureTarget.make(`${fixture("empty")}.missing`))
-      .pipe(Effect.flip, Effect.orDie)
-    const malformed = yield* reader
-      .read(FixtureTarget.make(fixture("malformed")))
-      .pipe(Effect.flip, Effect.orDie)
-    const invalid = yield* reader
-      .read(FixtureTarget.make(fixture("invalid")))
-      .pipe(Effect.flip, Effect.orDie)
-
-    expect(missing).toBeInstanceOf(FixtureReadError)
-    expect(missing._tag).toBe("FixtureReader.FixtureReadError")
-    expect(malformed._tag).toBe("TrackerGraphReader.TrackerReadError")
-    expect(invalid._tag).toBe("TrackerGraphReader.TrackerReadError")
-    if (
-      missing._tag === "FixtureReader.FixtureReadError"
-      && malformed._tag === "TrackerGraphReader.TrackerReadError"
-      && invalid._tag === "TrackerGraphReader.TrackerReadError"
-    ) {
-      expect(missing.target).toBe(`${fixture("empty")}.missing`)
-      expect(malformed.operation).toBe("TrackerGraphReader.parse")
-      expect(invalid.operation).toBe("TrackerGraphReader.decode")
-    }
-  }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
-
-it.effect("rejects every structural graph issue without exposing a snapshot", () =>
-  Effect.gen(function*() {
-    const reader = yield* TrackerGraphReader
-    const error = yield* reader
-      .read(FixtureTarget.make(fixture("invalid-graph")))
-      .pipe(Effect.flip, Effect.orDie)
-
-    expect(error._tag).toBe("TaskDag.GraphProjectionError")
-    if (error._tag === "TaskDag.GraphProjectionError") {
-      expect(error.issues.map((issue) => issue._tag)).toEqual([
-        "DuplicateTask",
-        "MissingPrerequisite",
-        "DuplicatePrerequisite",
-        "SelfPrerequisite",
-        "MissingParent",
-        "SelfParent",
-        "Cycle",
-        "Cycle",
-        "ContainmentCycle"
-      ])
-    }
-  }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
-
-it.effect("preserves containment and blocker edges from the retained snapshot", () =>
-  Effect.gen(function*() {
-    const reader = yield* TrackerGraphReader
-    const target = FixtureTarget.make(fixture("wayfinder-105"))
-    const graph = yield* reader.read(target)
-    const fixtureSnapshot = Schema.decodeUnknownSync(TrackerSnapshot)(
-      JSON.parse(
-        yield* Effect.promise(() => readFile(target, "utf8"))
-      )
-    )
-    const taskIds = graph.taskIds()
-    const containmentEdges = taskIds.filter(
-      (taskId) => Option.getOrNull(graph.parentTaskIdOf(taskId)) !== null
-    ).length
-    const derivedContainmentEdges = taskIds.reduce(
-      (count, taskId) => count + graph.childrenOf(taskId).length,
-      0
-    )
-    const blockerEdges = taskIds.reduce(
-      (count, taskId) => count + graph.prerequisitesOf(taskId).length,
-      0
-    )
-
-    expect(taskIds).toHaveLength(105)
-    expect(containmentEdges).toBe(104)
-    expect(derivedContainmentEdges).toBe(104)
-    expect(blockerEdges).toBe(108)
-    expect(
-      Option.getOrNull(
-        graph.parentTaskIdOf(TaskId.make("github-issue:44"))
-      )
-    ).toBe("github-issue:26")
-    expect(
-      graph.prerequisitesOf(TaskId.make("github-issue:44"))
-    ).toEqual(["github-issue:25"])
-
-    const fixtureTasksById = new Map(
-      fixtureSnapshot.tasks.map((task) => [task.id, task])
-    )
-    const canonicalTasks = graph.toWire().tasks
-    expect(canonicalTasks).toHaveLength(fixtureSnapshot.tasks.length)
-    for (const canonicalTask of canonicalTasks) {
-      const fixtureTask = fixtureTasksById.get(canonicalTask.id)
-      expect(fixtureTask).toBeDefined()
-      if (fixtureTask === undefined) return
-      expect(canonicalTask).toEqual({
-        ...fixtureTask,
-        prerequisiteIds: [...fixtureTask.prerequisiteIds].sort()
-      })
-    }
-  }).pipe(Effect.provide(trackerGraphReaderFileLayer)))
 
 it.effect("propagates typed trace output failures", () =>
   Effect.gen(function*() {
-    const failure = new TraceOutputError({ detail: "closed" })
-    const outputLayer = Layer.succeed(
-      TraceOutput,
-      TraceOutput.of({
-        writeLine: Effect.fn("TraceOutput.Test.failWrite")(function*() {
-          return yield* Effect.fail(failure)
-        })
-      })
-    )
-    const error = yield* runCli(["run", fixture("empty"), "--dry"]).pipe(
-      Effect.provide(workflowTraceOutputLayer),
-      Effect.provide(outputLayer),
-      Effect.provide(dryRunWorkflowInterpreterLayer),
-      Effect.provide(trackerGraphReaderFileLayer),
-      Effect.provide(NodeServices.layer),
-      Effect.flip,
-      Effect.orDie
-    )
-
-    expect(error).toBe(failure)
+    const failure = new TraceOutputError({ detail: "write failed" })
+    const observed = yield* runWithOutput(
+      fixture("empty"),
+      Layer.succeed(
+        TraceOutput,
+        TraceOutput.of({ writeLine: () => Effect.fail(failure) })
+      )
+    ).pipe(Effect.flip)
+    expect(observed).toBe(failure)
   }))

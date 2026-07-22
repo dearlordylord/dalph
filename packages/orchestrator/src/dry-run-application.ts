@@ -1,11 +1,13 @@
 import { NodeTerminal } from "@effect/platform-node"
-import { Effect, FileSystem, Layer, Path, PlatformError, Random, Sink } from "effect"
+import { Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { runCliFromStdio } from "./cli.js"
+import { GitCommitSha, RunId, WorktreeLocator } from "./domain.js"
 import { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
+import { deterministicOperationIdAllocatorLayer, deterministicPlannedTaskAttemptLayer } from "./task-work-planning.js"
 import { traceOutputStdioLayer } from "./trace-output.js"
 import { type FixtureReader, fixtureReaderFileLayer, trackerGraphReaderLayer } from "./tracker-graph-reader.js"
-import { workflowTraceOutputLayer } from "./workflow.js"
+import { workflowTraceOutputLayer } from "./workflow-trace-output.js"
 
 const denied = (method: string) =>
   PlatformError.systemError({
@@ -53,25 +55,25 @@ export const dryCliEnvironmentLayer = Layer.mergeAll(
   Path.layer
 )
 
-// Dry-run demonstration seed policy: https://github.com/dearlordylord/dalph/issues/99
-const defaultDryRunRandomSeed = "dry-run-v1"
-
-const defaultDryRunRandomLayer = Layer.effect(
-  Random.Random,
-  Random.Random.pipe(Random.withSeed(defaultDryRunRandomSeed))
+const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer(
+  "dry-run-operation"
 )
 
-const defaultDryRunWorkflowInterpreterLayer = dryRunWorkflowInterpreterLayer.pipe(
-  Layer.provide(defaultDryRunRandomLayer)
-)
+const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
+  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  runId: RunId.make("dry-run"),
+  worktreeRoot: WorktreeLocator.make("/dalph/dry-run")
+})
 
 export const makeDryRunCliApplication = (
   fixtureReaderLayer: Layer.Layer<FixtureReader>
 ) =>
   runCliFromStdio.pipe(
+    Effect.provide(dryRunWorkflowInterpreterLayer),
     Effect.provide(workflowTraceOutputLayer),
     Effect.provide(traceOutputStdioLayer),
-    Effect.provide(defaultDryRunWorkflowInterpreterLayer),
+    Effect.provide(dryRunOperationIdAllocatorLayer),
+    Effect.provide(dryRunPlannedTaskAttemptLayer),
     Effect.provide(trackerGraphReaderLayer),
     Effect.provide(fixtureReaderLayer),
     Effect.provide(dryCliEnvironmentLayer)

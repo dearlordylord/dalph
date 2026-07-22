@@ -1,228 +1,204 @@
 import { it } from "@effect/vitest"
-import { Clock, Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Cause, Effect, Exit, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import type { TraceItem } from "./index.js"
+import type {
+  TaskWorkSessionReport,
+  TrackerGraphReader,
+  WorkflowInterpreter as WorkflowInterpreterService
+} from "./index.js"
 import {
+  deterministicOperationIdAllocatorLayer,
+  deterministicPlannedTaskAttemptLayer,
   deterministicTestWorkflowInterpreterLayer,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
+  GitCommitSha,
   liveFakeWorkflowInterpreterLayer,
+  makeDryRunWorkflowInterpreterLayer,
+  MatchingTaskWorkSessionReported,
+  NoMatchingTaskWorkSessionReported,
+  ProviderObservationId,
+  ProviderRequestId,
+  RunId,
   runWorkflow,
   semanticTrace,
-  TaskExecutionCapacity,
-  TaskId,
-  TaskWorkStart,
-  TrackerGraphReader,
+  TaskRunner,
+  TaskWorkCapacity,
+  TaskWorkSessionCorrelationConflict,
+  TaskWorkSessionId,
+  TaskWorkSessionLookupFailure,
   trackerGraphReaderFileLayer,
-  WorkflowInterpreter,
-  WorkflowTrace
+  WorkflowTrace,
+  WorktreeLocator
 } from "./index.js"
+import type { TaskRunnerService } from "./task-work-start.js"
+import type { TraceItem } from "./workflow.js"
 
-type IsExactly<A, B> = [A] extends [B] ? [B] extends [A] ? true
-  : false
-  : false
+type IsExactly<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false
 type Assert<T extends true> = T
-type DryRunHasOnlyReadRequirements = Assert<
+type DryRunRequirements = Assert<
   IsExactly<
     Layer.Services<typeof dryRunWorkflowInterpreterLayer>,
-    TrackerGraphReader
+    TrackerGraphReader | WorkflowTrace
   >
 >
+const dryRunRequiresOnlyReadAndTraceCapabilities: DryRunRequirements = true
 
-const dryRunRequirementsAreReadOnly: DryRunHasOnlyReadRequirements = true
-
-const fixture = (
-  name: "diamond" | "empty" | "singleton" | "wayfinder-105"
-): FixtureTarget => FixtureTarget.make(new URL(`../fixtures/${name}.json`, import.meta.url).pathname)
-
-const taskWorkStartLayer = Layer.succeed(
-  TaskWorkStart,
-  TaskWorkStart.of({
-    request: Effect.fn("TaskWorkStart.Equivalence.request")(function*() {
-      yield* Effect.void
+const target = new URL("../fixtures/singleton.json", import.meta.url).pathname
+const plannerLayer = deterministicPlannedTaskAttemptLayer({
+  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  runId: RunId.make("equivalence"),
+  worktreeRoot: WorktreeLocator.make("/tmp/dalph-equivalence")
+})
+const successfulRunner = TaskRunner.of({
+  lookupTaskWorkSession: Effect.fn("TaskRunner.Equivalence.lookup")(function*(lookup) {
+    return MatchingTaskWorkSessionReported.make({
+      observationId: ProviderObservationId.make(`lookup:${lookup.operationId}`),
+      sessionId: TaskWorkSessionId.make(`session:${lookup.operationId}`),
+      work: { _tag: "NoProviderWorkReported" }
     })
+  }),
+  requestTaskWorkStart: Effect.fn("TaskRunner.Equivalence.request")(function*(request) {
+    return {
+      observationId: ProviderObservationId.make(`request-observation:${request.operationId}`),
+      providerRequestId: ProviderRequestId.make(`request:${request.operationId}`)
+    }
   })
-)
+})
 
-const liveFakeLayer = liveFakeWorkflowInterpreterLayer.pipe(
-  Layer.provide(taskWorkStartLayer)
-)
-
-const deterministicTestLayer = deterministicTestWorkflowInterpreterLayer.pipe(
-  Layer.provide(taskWorkStartLayer)
-)
-
-const makeCompletionController = (
-  taskIds: ReadonlyArray<TaskId>
-) =>
-  Effect.gen(function*() {
-    const entries = yield* Effect.forEach(
-      taskIds,
-      Effect.fn("CompletionController.makeGate")(function*(taskId) {
-        const started = yield* Deferred.make<void>()
-        const released = yield* Deferred.make<void>()
-        return [taskId, { released, started }] as const
-      })
-    )
-    const gates = new Map(entries)
-    const gateFor = Effect.fn("CompletionController.gateFor")(function*(
-      taskId: TaskId
-    ) {
-      const gate = gates.get(taskId)
-      if (gate === undefined) {
-        return yield* Effect.die(`missing completion gate for ${taskId}`)
-      }
-      return gate
-    })
-    const awaitRelease = Effect.fn(
-      "CompletionController.awaitRelease"
-    )(function*(taskId: TaskId) {
-      const gate = yield* gateFor(taskId)
-      yield* Deferred.succeed(gate.started, undefined)
-      yield* Deferred.await(gate.released)
-    })
-    const release = Effect.fn("CompletionController.release")(function*(
-      taskId: TaskId
-    ) {
-      const gate = yield* gateFor(taskId)
-      yield* Deferred.await(gate.started)
-      yield* Deferred.succeed(gate.released, undefined)
-    })
-
-    return { awaitRelease, release }
-  })
-
-const controlledInterpreterLayer = (
+const traceUnder = (
   interpreterLayer: Layer.Layer<
-    WorkflowInterpreter,
+    WorkflowInterpreterService,
     never,
-    TrackerGraphReader
+    TrackerGraphReader | WorkflowTrace | TaskRunner
   >,
-  awaitRelease: (taskId: TaskId) => Effect.Effect<void>
-) =>
-  Layer.effect(
-    WorkflowInterpreter,
-    Effect.gen(function*() {
-      const interpreter = yield* WorkflowInterpreter
-      const executeTask = Effect.fn(
-        "WorkflowInterpreter.Controlled.executeTask"
-      )(function*(operation) {
-        const outcome = yield* interpreter.executeTask(operation)
-        yield* awaitRelease(operation.taskId)
-        return outcome
-      })
-
-      return WorkflowInterpreter.of({
-        executeTask,
-        readTrackerGraph: interpreter.readTrackerGraph
-      })
-    })
-  ).pipe(Layer.provide(interpreterLayer))
-
-const runWithCompletionOrder = (
-  target: FixtureTarget,
-  interpreterLayer: Layer.Layer<
-    WorkflowInterpreter,
-    never,
-    TrackerGraphReader
-  >,
-  completionOrder: ReadonlyArray<TaskId>
+  runner: TaskRunnerService = successfulRunner
 ) =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
-    const clock = yield* Clock.Clock
-    const controlledClock = {
-      ...clock,
-      sleep: () => Effect.void
-    }
-    const completionController = yield* makeCompletionController(
-      completionOrder
-    )
     const traceLayer = Layer.succeed(
       WorkflowTrace,
       WorkflowTrace.of({
-        emit: Effect.fn("WorkflowTrace.Equivalence.emit")(function*(item) {
-          yield* Ref.update(items, (current) => [...current, item])
-        })
+        emit: (item) => Ref.update(items, (current) => [...current, item])
       })
     )
-
-    const run = yield* runWorkflow(target, TaskExecutionCapacity.make(2)).pipe(
+    const program = runWorkflow(FixtureTarget.make(target), TaskWorkCapacity.make(1)).pipe(
+      Effect.provide(interpreterLayer),
       Effect.provide(traceLayer),
-      Effect.provide(
-        controlledInterpreterLayer(
-          interpreterLayer,
-          completionController.awaitRelease
-        )
-      ),
-      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
-      Effect.forkScoped
+      Effect.provide(trackerGraphReaderFileLayer),
+      Effect.provide(deterministicOperationIdAllocatorLayer("equivalence")),
+      Effect.provide(plannerLayer),
+      Effect.provide(Layer.succeed(TaskRunner, runner))
     )
-    yield* Effect.forEach(
-      completionOrder,
-      completionController.release,
-      { discard: true }
-    )
-    yield* Fiber.join(run)
-    return semanticTrace(yield* Ref.get(items))
+    const result = yield* Effect.exit(program)
+    const failure = Exit.isFailure(result) ? Cause.squash(result.cause) : undefined
+    return {
+      result: failure === undefined
+        ? "Success"
+        : typeof failure === "object" && failure !== null && "_tag" in failure
+        ? String(failure._tag)
+        : String(failure),
+      trace: semanticTrace(yield* Ref.get(items))
+    }
   })
 
-const runWith = (
-  target: FixtureTarget,
-  interpreterLayer: Layer.Layer<
-    WorkflowInterpreter,
-    never,
-    TrackerGraphReader
-  >
-) =>
+it.effect("dry-run and deterministic-test emit one exact semantic projection", () =>
   Effect.gen(function*() {
-    const reader = yield* TrackerGraphReader
-    const snapshot = yield* reader.read(target)
-    return yield* runWithCompletionOrder(
-      target,
-      interpreterLayer,
-      snapshot.eligibleTaskIds()
+    const dry = yield* traceUnder(dryRunWorkflowInterpreterLayer)
+    const deterministic = yield* traceUnder(
+      deterministicTestWorkflowInterpreterLayer
     )
-  }).pipe(Effect.provide(trackerGraphReaderFileLayer))
+    const liveFake = yield* traceUnder(liveFakeWorkflowInterpreterLayer)
 
-for (const name of ["empty", "singleton", "diamond", "wayfinder-105"] as const) {
-  it.effect(`${name} has one semantic trace under every interpreter`, () =>
-    Effect.gen(function*() {
-      const target = fixture(name)
-      const liveFake = yield* runWith(target, liveFakeLayer)
-      const dryRun = yield* runWith(target, dryRunWorkflowInterpreterLayer)
-      const deterministicTest = yield* runWith(
-        target,
-        deterministicTestLayer
-      )
+    expect(deterministic).toEqual(dry)
+    expect(liveFake).toEqual(dry)
+    expect(dryRunRequiresOnlyReadAndTraceCapabilities).toBe(true)
+  }))
 
-      expect(dryRun).toEqual(liveFake)
-      expect(deterministicTest).toEqual(liveFake)
-    }))
+type ScriptedLookup = TaskWorkSessionReport | TaskWorkSessionLookupFailure
+
+const scriptedRunner = (results: ReadonlyArray<ScriptedLookup>): TaskRunnerService => {
+  const remaining = [...results]
+  return TaskRunner.of({
+    lookupTaskWorkSession: Effect.fn("TaskRunner.Equivalence.scriptedLookup")(function*() {
+      const result = remaining.shift()
+      if (result === undefined) return yield* Effect.die("lookup script exhausted")
+      return result instanceof TaskWorkSessionLookupFailure ? yield* result : result
+    }),
+    requestTaskWorkStart: Effect.fn("TaskRunner.Equivalence.scriptedRequest")(function*(request) {
+      return {
+        observationId: ProviderObservationId.make(`request-observation:${request.operationId}`),
+        providerRequestId: ProviderRequestId.make(`request:${request.operationId}`)
+      }
+    })
+  })
 }
 
-it.effect("honors an explicit controlled completion order", () =>
-  Effect.gen(function*() {
-    const trace = yield* runWithCompletionOrder(
-      fixture("diamond"),
-      dryRunWorkflowInterpreterLayer,
-      [TaskId.make("group"), TaskId.make("root")]
-    ).pipe(Effect.provide(trackerGraphReaderFileLayer))
-    const completionOrder = trace.flatMap((item) =>
-      item._tag === "TaskExecutionOutcomeObserved"
-        ? [item.operation.taskId]
-        : []
-    )
+const lookupScenarios = [
+  {
+    name: "absence followed by a match",
+    results: () => [
+      NoMatchingTaskWorkSessionReported.make({
+        observationId: ProviderObservationId.make("lookup:absence")
+      }),
+      MatchingTaskWorkSessionReported.make({
+        observationId: ProviderObservationId.make("lookup:match"),
+        sessionId: TaskWorkSessionId.make("session:match"),
+        work: { _tag: "NoProviderWorkReported" }
+      })
+    ]
+  },
+  {
+    name: "unreadable lookup exhaustion",
+    results: () =>
+      [1, 2, 3].map((attempt) =>
+        new TaskWorkSessionLookupFailure({
+          detail: "provider registry unavailable",
+          observationId: ProviderObservationId.make(`lookup:unreadable:${attempt}`)
+        })
+      )
+  },
+  {
+    name: "absence exhaustion",
+    results: () =>
+      [1, 2, 3].map((attempt) =>
+        NoMatchingTaskWorkSessionReported.make({
+          observationId: ProviderObservationId.make(`lookup:absence:${attempt}`)
+        })
+      )
+  },
+  {
+    name: "provider correlation conflict",
+    results: () => [
+      TaskWorkSessionCorrelationConflict.make({
+        conflicts: [{
+          detail: "two provider sessions matched",
+          sessionId: TaskWorkSessionId.make("session:conflict")
+        }],
+        observationId: ProviderObservationId.make("lookup:conflict")
+      })
+    ]
+  }
+] satisfies ReadonlyArray<{
+  readonly name: string
+  readonly results: () => ReadonlyArray<ScriptedLookup>
+}>
 
-    expect(completionOrder).toEqual(["group", "root"])
-  }))
+for (const scenario of lookupScenarios) {
+  it.effect(`keeps ${scenario.name} equivalent across all interpreters`, () =>
+    Effect.gen(function*() {
+      const dryRunner = scriptedRunner(scenario.results())
+      const dry = yield* traceUnder(makeDryRunWorkflowInterpreterLayer(dryRunner), dryRunner)
+      const deterministic = yield* traceUnder(
+        deterministicTestWorkflowInterpreterLayer,
+        scriptedRunner(scenario.results())
+      )
+      const liveFake = yield* traceUnder(
+        liveFakeWorkflowInterpreterLayer,
+        scriptedRunner(scenario.results())
+      )
 
-it.effect("dry-run traverses the complete graph with only its read port", () =>
-  Effect.gen(function*() {
-    yield* runWith(
-      fixture("wayfinder-105"),
-      dryRunWorkflowInterpreterLayer
-    )
-
-    expect(dryRunRequirementsAreReadOnly).toBe(true)
-  }))
+      expect(deterministic).toEqual(dry)
+      expect(liveFake).toEqual(dry)
+    }))
+}

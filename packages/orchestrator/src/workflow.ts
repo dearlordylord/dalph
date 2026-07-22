@@ -1,83 +1,203 @@
-import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
-import type { TaskExecutionCapacity, TrackerTarget } from "./domain.js"
-import { OperationId, TaskId, TrackerRevision, TrackerTarget as TrackerTargetSchema } from "./domain.js"
-import type { JournalReconciliationRequired, JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
+import { OperationId, PlannedTaskAttempt, ProviderObservationId, RunId } from "./domain.js"
+import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
-import { TaskWorkStart } from "./task-work-start.js"
-import { TraceOutput, type TraceOutputError } from "./trace-output.js"
 import {
-  type FixtureReadError,
-  type TrackerAdapterReadError,
-  TrackerGraphReader,
-  type TrackerReadError
-} from "./tracker-graph-reader.js"
+  decideTaskWorkSessionRecovery,
+  TaskWorkSessionEstablishmentDidNotConverge,
+  TaskWorkSessionLookupDidNotConverge
+} from "./task-work-session-recovery-decision.js"
+import type {
+  TaskRunnerService,
+  TaskWorkSessionCorrelationConflict,
+  TaskWorkSessionLookup,
+  TaskWorkStartRequest
+} from "./task-work-start.js"
+import {
+  MatchingTaskWorkSessionReported,
+  TaskWorkSessionLookupFailure,
+  TaskWorkSessionReport,
+  TaskWorkStartRequestAcknowledgement,
+  TaskWorkStartRequestFailure
+} from "./task-work-start.js"
+import type { TraceOutputError } from "./trace-output.js"
+import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
+import { WorkflowOperation } from "./workflow-operation.js"
+import { WorkflowOutcome } from "./workflow-outcome.js"
+export {
+  causalGraphProjection,
+  makeTaskWorkSessionEstablishmentOperation,
+  makeTrackerGraphObservationOperation,
+  workflowOperationId
+} from "./workflow-operation.js"
+export { WorkflowOperation }
+export {
+  decideTaskWorkSessionRecovery,
+  TaskWorkSessionEstablishmentDidNotConverge,
+  TaskWorkSessionLookupDidNotConverge
+} from "./task-work-session-recovery-decision.js"
+export { makeTrackerGraphObservedOutcome, WorkflowOutcome } from "./workflow-outcome.js"
 
-export const WorkflowOperation = Schema.TaggedUnion({
-  ReadTrackerGraph: {
+/** Fresh provider evidence contradicts an earlier matching-session report. */
+export class TaskWorkSessionEvidenceContradiction
+  extends Schema.TaggedErrorClass<TaskWorkSessionEvidenceContradiction>()(
+    "TaskWorkSessionEvidenceContradiction",
+    {
+      currentReport: TaskWorkSessionReport,
+      operationId: OperationId,
+      previousReport: MatchingTaskWorkSessionReported
+    }
+  )
+{}
+
+/** The planned attempt belongs to a different recoverable workflow run. */
+export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<TaskWorkSessionRunContradiction>()(
+  "TaskWorkSessionRunContradiction",
+  {
+    journalRunId: RunId,
     operationId: OperationId,
-    predecessorOperationIds: Schema.Array(OperationId),
-    target: TrackerTargetSchema
-  },
-  ExecuteTask: {
-    operationId: OperationId,
-    predecessorOperationIds: Schema.Array(OperationId),
-    taskId: TaskId
+    plannedAttemptRunId: RunId
   }
+) {}
+
+type TaskWorkSessionObservationError =
+  | JournalStoreContradiction
+  | JournalStoreError
+  | TaskWorkSessionEvidenceContradiction
+  | TaskWorkSessionRunContradiction
+  | TraceOutputError
+
+interface TaskWorkSessionProtocolObserver {
+  readonly lookupFailed: (
+    lookup: TaskWorkSessionLookup,
+    failure: TaskWorkSessionLookupFailure
+  ) => Effect.Effect<void, TaskWorkSessionObservationError>
+  readonly sessionReported: (
+    lookup: TaskWorkSessionLookup,
+    report: TaskWorkSessionReport
+  ) => Effect.Effect<void, TaskWorkSessionObservationError>
+  readonly startFailed: (
+    request: TaskWorkStartRequest,
+    failure: TaskWorkStartRequestFailure
+  ) => Effect.Effect<void, TaskWorkSessionObservationError>
+  readonly startRequested: (
+    request: TaskWorkStartRequest,
+    acknowledgement: TaskWorkStartRequestAcknowledgement
+  ) => Effect.Effect<void, TaskWorkSessionObservationError>
+}
+
+const silentTaskWorkSessionProtocolObserver: TaskWorkSessionProtocolObserver = {
+  lookupFailed: () => Effect.void,
+  sessionReported: () => Effect.void,
+  startFailed: () => Effect.void,
+  startRequested: () => Effect.void
+}
+
+type TaskWorkSessionProtocolFailure =
+  | CoordinatorOwnershipError
+  | TaskWorkSessionObservationError
+  | typeof TaskWorkSessionCorrelationConflict.Type
+  | TaskWorkSessionEstablishmentDidNotConverge
+  | TaskWorkSessionLookupDidNotConverge
+
+type TaskWorkSessionProtocolResult =
+  | {
+    readonly _tag: "Established"
+    readonly outcome: typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type
+  }
+  | { readonly _tag: "Failed"; readonly error: TaskWorkSessionProtocolFailure }
+
+const taskWorkSessionLookupAttemptBound = 3
+const taskWorkSessionRecoverySchedule = Schedule.recurs(taskWorkSessionLookupAttemptBound - 1)
+
+export const runTaskWorkSessionEstablishmentProtocol = Effect.fn(
+  "WorkflowInterpreter.runTaskWorkSessionEstablishmentProtocol"
+)(function*(
+  runner: TaskRunnerService,
+  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
+  requestBeforeFirstLookup: boolean,
+  observer: TaskWorkSessionProtocolObserver = silentTaskWorkSessionProtocolObserver
+) {
+  const pendingRequest = yield* Ref.make(requestBeforeFirstLookup)
+  const lookup: TaskWorkSessionLookup = {
+    operationId: operation.request.operationId,
+    plannedAttempt: operation.request.plannedAttempt
+  }
+
+  const observe = <E extends TaskWorkSessionObservationError>(
+    effect: Effect.Effect<void, E>
+  ) =>
+    effect.pipe(
+      Effect.result,
+      Effect.map((result): TaskWorkSessionProtocolResult | undefined =>
+        result._tag === "Failure"
+          ? { _tag: "Failed", error: result.failure }
+          : undefined
+      )
+    )
+
+  const pass = Effect.gen(function*() {
+    if (yield* Ref.getAndSet(pendingRequest, false)) {
+      const requestResult = yield* runner.requestTaskWorkStart(operation.request).pipe(Effect.result)
+      if (requestResult._tag === "Failure") {
+        if (!(requestResult.failure instanceof TaskWorkStartRequestFailure)) {
+          return { _tag: "Failed", error: requestResult.failure } satisfies TaskWorkSessionProtocolResult
+        }
+        const failed = yield* observe(observer.startFailed(operation.request, requestResult.failure))
+        if (failed !== undefined) return failed
+      } else {
+        const failed = yield* observe(observer.startRequested(operation.request, requestResult.success))
+        if (failed !== undefined) return failed
+      }
+    }
+
+    const lookupResult = yield* runner.lookupTaskWorkSession(lookup).pipe(Effect.result)
+    if (lookupResult._tag === "Failure") {
+      const failed = yield* observe(observer.lookupFailed(lookup, lookupResult.failure))
+      if (failed !== undefined) return failed
+      const decision = decideTaskWorkSessionRecovery(
+        operation,
+        lookupResult.failure,
+        false
+      )
+      return yield* Effect.fail(decision.retry)
+    }
+
+    const report = lookupResult.success
+    const failed = yield* observe(observer.sessionReported(lookup, report))
+    if (failed !== undefined) return failed
+    const decision = decideTaskWorkSessionRecovery(
+      operation,
+      report,
+      false
+    )
+    if (decision._tag === "RepeatRequest") {
+      yield* Ref.set(pendingRequest, true)
+      return yield* Effect.fail(decision.retry)
+    }
+    return decision
+  })
+
+  const result = yield* pass.pipe(
+    Effect.retryOrElse(
+      taskWorkSessionRecoverySchedule,
+      (retry): Effect.Effect<TaskWorkSessionProtocolResult> =>
+        Effect.succeed({ _tag: "Failed", error: retry.atBoundError })
+    )
+  )
+  return result._tag === "Established"
+    ? result.outcome
+    : yield* Effect.fail(result.error)
 })
-export type WorkflowOperation = typeof WorkflowOperation.Type
-
-// These deterministic fixture identities are only the issue #39 seam. Before
-// controlled mutations are implemented, issue #41 must use Wayfinder to
-// specify allocation and lifetime: an unresolved operation keeps its identity,
-// while a genuinely new operation receives a distinct one.
-// https://github.com/dearlordylord/dalph/issues/39
-// https://github.com/dearlordylord/dalph/issues/41
-const trackerGraphObservationOperationId = OperationId.make(
-  "observe-tracker-graph"
-)
-
-export const makeTrackerGraphObservationOperation = (
-  target: TrackerTarget
-): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
-  WorkflowOperation.cases.ReadTrackerGraph.make({
-    operationId: trackerGraphObservationOperationId,
-    predecessorOperationIds: [],
-    target
-  })
-
-export const makeTaskExecutionOperation = (
-  taskId: TaskId,
-  predecessorOperationId: OperationId
-): typeof WorkflowOperation.cases.ExecuteTask.Type =>
-  WorkflowOperation.cases.ExecuteTask.make({
-    operationId: OperationId.make(`task-execution:${taskId}`),
-    predecessorOperationIds: [predecessorOperationId],
-    taskId
-  })
-
-export const WorkflowOutcome = Schema.TaggedUnion({
-  TrackerGraphObserved: {
-    revision: TrackerRevision,
-    taskIds: Schema.Array(TaskId)
-  },
-  TaskExecuted: {}
-})
-export type WorkflowOutcome = typeof WorkflowOutcome.Type
-
-const observedTaskIds = (
-  snapshot: TaskDagSnapshot
-): ReadonlyArray<TaskId> => snapshot.topologicalOrder()
-
-export const makeTrackerGraphObservedOutcome = (
-  snapshot: TaskDagSnapshot
-): typeof WorkflowOutcome.cases.TrackerGraphObserved.Type =>
-  WorkflowOutcome.cases.TrackerGraphObserved.make({
-    revision: snapshot.revision,
-    taskIds: observedTaskIds(snapshot)
-  })
 
 interface WorkflowInterpreterService {
+  readonly establishTaskWorkSession: (
+    operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type
+  ) => Effect.Effect<
+    typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type,
+    TaskWorkSessionProtocolFailure
+  >
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
   ) => Effect.Effect<
@@ -85,87 +205,22 @@ interface WorkflowInterpreterService {
     | FixtureReadError
     | GraphProjectionError
     | JournalStoreContradiction
-    | JournalReconciliationRequired
     | JournalStoreError
     | TrackerAdapterReadError
     | TrackerReadError
   >
-  readonly executeTask: (
-    operation: typeof WorkflowOperation.cases.ExecuteTask.Type
-  ) => Effect.Effect<
-    typeof WorkflowOutcome.cases.TaskExecuted.Type,
-    | JournalReconciliationRequired
-    | JournalStoreContradiction
-    | JournalStoreError
-    | CoordinatorOwnershipError
-  >
 }
 
-export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
-  "@dalph/WorkflowInterpreter"
-) {}
+export class WorkflowInterpreter extends Context.Service<
+  WorkflowInterpreter,
+  WorkflowInterpreterService
+>()("@dalph/WorkflowInterpreter") {}
 
-type TrackerGraphReadError =
-  | FixtureReadError
-  | GraphProjectionError
-  | TrackerAdapterReadError
-  | TrackerReadError
-
-const makeTaskWorkStartingWorkflowInterpreter = (
-  operationPrefix: "LiveFake" | "DeterministicTest",
-  read: (
-    target: TrackerTarget
-  ) => Effect.Effect<TaskDagSnapshot, TrackerGraphReadError>,
-  request: (
-    taskId: TaskId
-  ) => Effect.Effect<void, CoordinatorOwnershipError>
-) => {
-  const readTrackerGraph = Effect.fn(
-    `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
-  )(function*(operation) {
-    return yield* read(operation.target)
-  })
-  const executeTask = Effect.fn(
-    `WorkflowInterpreter.${operationPrefix}.executeTask`
-  )(function*(operation) {
-    yield* request(operation.taskId)
-    return WorkflowOutcome.cases.TaskExecuted.make({})
-  })
-
-  return WorkflowInterpreter.of({ executeTask, readTrackerGraph })
-}
-
-const taskWorkStartingWorkflowInterpreterLayer = (
-  operationPrefix: "LiveFake" | "DeterministicTest"
-) =>
-  Layer.effect(
-    WorkflowInterpreter,
-    Effect.gen(function*() {
-      const reader = yield* TrackerGraphReader
-      const taskWorkStart = yield* TaskWorkStart
-      return makeTaskWorkStartingWorkflowInterpreter(
-        operationPrefix,
-        reader.read,
-        taskWorkStart.request
-      )
-    })
-  )
-
-export const liveFakeWorkflowInterpreterLayer = taskWorkStartingWorkflowInterpreterLayer("LiveFake")
-
-export const deterministicTestWorkflowInterpreterLayer = taskWorkStartingWorkflowInterpreterLayer("DeterministicTest")
-
-/** Records intent to invoke a workflow operation; it is not execution admission. */
+/** Records selection of one immutable workflow operation. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
   operation: WorkflowOperation
 })
-export type OperationSelected = typeof OperationSelected.Type
 
-/**
- * Records the graph result after the tracker-read capability is observed. It
- * is not tracker execution admission, task admission, or deterministic graph
- * presentation order.
- */
 export const TrackerGraphOutcomeObserved = Schema.TaggedStruct(
   "TrackerGraphOutcomeObserved",
   {
@@ -173,69 +228,101 @@ export const TrackerGraphOutcomeObserved = Schema.TaggedStruct(
     outcome: WorkflowOutcome.cases.TrackerGraphObserved
   }
 )
-export type TrackerGraphOutcomeObserved = typeof TrackerGraphOutcomeObserved.Type
 
-/**
- * Records the tracker-owned admission of a task into execution scope. This is
- * neither coordinator capacity admission nor execution-substrate start.
- */
-export const TrackerExecutionAdmitted = Schema.TaggedStruct(
-  "TrackerExecutionAdmitted",
-  { operation: WorkflowOperation.cases.ExecuteTask }
+/** Records one held unit of bounded task-work capacity without claiming work started. */
+export const TaskWorkCapacityReserved = Schema.TaggedStruct(
+  "TaskWorkCapacityReserved",
+  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
 )
-export type TrackerExecutionAdmitted = typeof TrackerExecutionAdmitted.Type
 
-/**
- * Records that bounded coordinator capacity admitted a task execution. It is
- * neither tracker admission nor evidence that an execution substrate started.
- */
-export const TaskExecutionAdmitted = Schema.TaggedStruct(
-  "TaskExecutionAdmitted",
-  { operation: WorkflowOperation.cases.ExecuteTask }
+export const TaskWorkStartRequestedTrace = Schema.TaggedStruct(
+  "TaskWorkStartRequested",
+  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
 )
-export type TaskExecutionAdmitted = typeof TaskExecutionAdmitted.Type
 
-/**
- * Records an execution-substrate observation that execution began. Invocation
- * of the controlled fixture capability alone cannot establish this fact.
- */
-export const TaskExecutionStarted = Schema.TaggedStruct(
-  "TaskExecutionStarted",
-  { operation: WorkflowOperation.cases.ExecuteTask }
-)
-export type TaskExecutionStarted = typeof TaskExecutionStarted.Type
-
-/**
- * Records a task capability outcome when it is actually observed. Its position
- * is observation order, not deterministic task presentation order.
- */
-export const TaskExecutionOutcomeObserved = Schema.TaggedStruct(
-  "TaskExecutionOutcomeObserved",
+export const TaskWorkStartRequestAcknowledgedTrace = Schema.TaggedStruct(
+  "TaskWorkStartRequestAcknowledged",
   {
-    operation: WorkflowOperation.cases.ExecuteTask,
-    outcome: WorkflowOutcome.cases.TaskExecuted
+    acknowledgement: TaskWorkStartRequestAcknowledgement,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
   }
 )
-export type TaskExecutionOutcomeObserved = typeof TaskExecutionOutcomeObserved.Type
+
+export const TaskWorkStartRequestFailedTrace = Schema.TaggedStruct(
+  "TaskWorkStartRequestFailed",
+  {
+    failure: TaskWorkStartRequestFailure,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+  }
+)
+
+export const TaskWorkSessionLookupRequestedTrace = Schema.TaggedStruct(
+  "TaskWorkSessionLookupRequested",
+  {
+    lookup: Schema.Struct({
+      operationId: OperationId,
+      plannedAttempt: PlannedTaskAttempt
+    }),
+    observationId: ProviderObservationId,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+  }
+)
+
+export const TaskWorkSessionLookupFailedTrace = Schema.TaggedStruct(
+  "TaskWorkSessionLookupFailed",
+  {
+    failure: TaskWorkSessionLookupFailure,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+  }
+)
+
+export const TaskWorkSessionReportedTrace = Schema.TaggedStruct(
+  "TaskWorkSessionReported",
+  {
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession,
+    report: TaskWorkSessionReport
+  }
+)
+
+export const TaskWorkSessionEstablishedTrace = Schema.TaggedStruct(
+  "TaskWorkSessionEstablished",
+  {
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession,
+    outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished
+  }
+)
+
+export const TaskWorkSessionLookupDidNotConvergeTrace = Schema.TaggedStruct(
+  "TaskWorkSessionLookupDidNotConverge",
+  {
+    failure: TaskWorkSessionLookupDidNotConverge,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+  }
+)
+
+export const TaskWorkSessionEstablishmentDidNotConvergeTrace = Schema.TaggedStruct(
+  "TaskWorkSessionEstablishmentDidNotConverge",
+  {
+    failure: TaskWorkSessionEstablishmentDidNotConverge,
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+  }
+)
 
 export const TraceItem = Schema.Union([
   OperationSelected,
   TrackerGraphOutcomeObserved,
-  TrackerExecutionAdmitted,
-  TaskExecutionAdmitted,
-  TaskExecutionStarted,
-  TaskExecutionOutcomeObserved
+  TaskWorkCapacityReserved,
+  TaskWorkStartRequestedTrace,
+  TaskWorkStartRequestAcknowledgedTrace,
+  TaskWorkStartRequestFailedTrace,
+  TaskWorkSessionLookupRequestedTrace,
+  TaskWorkSessionLookupFailedTrace,
+  TaskWorkSessionReportedTrace,
+  TaskWorkSessionEstablishedTrace,
+  TaskWorkSessionLookupDidNotConvergeTrace,
+  TaskWorkSessionEstablishmentDidNotConvergeTrace
 ])
 export type TraceItem = typeof TraceItem.Type
-
-const SemanticTrace = Schema.Array(TraceItem)
-
-export const semanticTrace = (
-  items: ReadonlyArray<TraceItem>
-): ReadonlyArray<TraceItem> =>
-  Schema.decodeUnknownSync(SemanticTrace)(
-    Schema.encodeUnknownSync(SemanticTrace)(items)
-  )
 
 interface WorkflowTraceService {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
@@ -245,67 +332,43 @@ export class WorkflowTrace extends Context.Service<WorkflowTrace, WorkflowTraceS
   "@dalph/WorkflowTrace"
 ) {}
 
-export const runWorkflow = Effect.fn("Workflow.run")(function*(
-  target: TrackerTarget,
-  capacity: TaskExecutionCapacity
-) {
-  const interpreter = yield* WorkflowInterpreter
-  const trace = yield* WorkflowTrace
-  const operation = makeTrackerGraphObservationOperation(target)
-  const selected = OperationSelected.make({ operation })
-  yield* trace.emit(selected)
-  const snapshot = yield* interpreter.readTrackerGraph(operation)
-  const outcome = makeTrackerGraphObservedOutcome(snapshot)
-  const observed = TrackerGraphOutcomeObserved.make({
-    operation,
-    outcome
+export const taskWorkSessionTraceObserver = (
+  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
+  trace: WorkflowTraceService
+): TaskWorkSessionProtocolObserver => ({
+  lookupFailed: Effect.fn("WorkflowTrace.taskWorkSessionLookupFailed")(function*(lookup, failure) {
+    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+      lookup,
+      observationId: failure.observationId,
+      operation
+    }))
+    yield* trace.emit(TaskWorkSessionLookupFailedTrace.make({ failure, operation }))
+  }),
+  sessionReported: Effect.fn("WorkflowTrace.taskWorkSessionReported")(function*(lookup, report) {
+    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+      lookup,
+      observationId: report.observationId,
+      operation
+    }))
+    yield* trace.emit(TaskWorkSessionReportedTrace.make({ operation, report }))
+  }),
+  startFailed: Effect.fn("WorkflowTrace.taskWorkStartFailed")(function*(_request, failure) {
+    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkStartRequestFailedTrace.make({ failure, operation }))
+  }),
+  startRequested: Effect.fn("WorkflowTrace.taskWorkStartRequested")(function*(_request, acknowledgement) {
+    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
   })
-  yield* trace.emit(observed)
-  // Eligibility owns a deterministic comparison projection; trace emission
-  // continues to preserve the independent order in which outcomes are observed.
-  const taskAdmissionOrder = snapshot.eligibleTaskIds()
-  // This process-local semaphore is presentation backpressure, not durable
-  // workflow history. A future live projector reconstructs order from committed
-  // journal positions rather than persisting this coordination state.
-  const traceEmission = yield* Semaphore.make(1)
-  const emitTaskTrace = Effect.fn("Workflow.emitTaskTrace")((item: TraceItem) =>
-    traceEmission.withPermit(trace.emit(item))
-  )
-  yield* Effect.forEach(
-    taskAdmissionOrder,
-    Effect.fn("Workflow.executeRunnableTask")(function*(taskId) {
-      // Entering this capacity-bounded callback is task-execution admission:
-      // one slot is already held, the event is acknowledged next, and only
-      // then may the injected execution capability begin.
-      const executeOperation = makeTaskExecutionOperation(
-        taskId,
-        operation.operationId
-      )
-      yield* emitTaskTrace(
-        TaskExecutionAdmitted.make({ operation: executeOperation })
-      )
-      const executionOutcome = yield* interpreter.executeTask(executeOperation)
-      yield* emitTaskTrace(
-        TaskExecutionOutcomeObserved.make({
-          operation: executeOperation,
-          outcome: executionOutcome
-        })
-      )
-    }),
-    { concurrency: capacity, discard: true }
-  )
 })
 
-export const encodeTraceItem = (item: TraceItem): string => JSON.stringify(Schema.encodeUnknownSync(TraceItem)(item))
-
-export const workflowTraceOutputLayer = Layer.effect(
-  WorkflowTrace,
-  Effect.gen(function*() {
-    const output = yield* TraceOutput
-    const emit = Effect.fn("WorkflowTrace.Output.emit")(function*(item: TraceItem) {
-      yield* output.writeLine(encodeTraceItem(item))
-    })
-
-    return WorkflowTrace.of({ emit })
-  })
-)
+export const emitTaskWorkSessionNonConvergence = (
+  failure: TaskWorkSessionProtocolFailure,
+  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
+  trace: WorkflowTraceService
+) =>
+  failure instanceof TaskWorkSessionLookupDidNotConverge
+    ? trace.emit(TaskWorkSessionLookupDidNotConvergeTrace.make({ failure, operation }))
+    : failure instanceof TaskWorkSessionEstablishmentDidNotConverge
+    ? trace.emit(TaskWorkSessionEstablishmentDidNotConvergeTrace.make({ failure, operation }))
+    : Effect.void

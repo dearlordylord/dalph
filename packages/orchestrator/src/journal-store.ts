@@ -1,15 +1,27 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { JournalPosition, JournalRecordKey, JournalSchemaVersion, OperationId, RunId } from "./domain.js"
 import {
-  type WorkflowOperation,
-  WorkflowOperation as WorkflowOperationSchema,
-  type WorkflowOutcome,
-  WorkflowOutcome as WorkflowOutcomeSchema
-} from "./workflow.js"
+  JournalPosition,
+  JournalRecordKey,
+  JournalSchemaVersion,
+  OperationId,
+  ProviderObservationId,
+  RunId
+} from "./domain.js"
+import {
+  TaskWorkSessionLookup,
+  TaskWorkSessionLookupFailure,
+  TaskWorkSessionReport,
+  TaskWorkSessionResultReported as TaskWorkSessionResultReport,
+  TaskWorkStartRequest,
+  TaskWorkStartRequestAcknowledgement,
+  TaskWorkStartRequestFailure
+} from "./task-work-start.js"
+import { type WorkflowOperation, WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
+import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow.js"
 
 /**
- * Records a managed operation before an ambiguity-crossing effect. It is
- * workflow history, not proof of tracker, Git, or execution-substrate state.
+ * Records a managed operation before its state-changing request. It is
+ * workflow history, not proof of tracker, Git, or task-work-provider facts.
  */
 const ManagedWorkflowIntent = Schema.TaggedStruct("ManagedWorkflowIntent", {
   operation: WorkflowOperationSchema
@@ -24,21 +36,110 @@ const ManagedTrackerGraphOutcomeObserved = Schema.TaggedStruct(
   }
 )
 
-/** Records one task-execution observation without replacing substrate authority. */
-const ManagedTaskExecutionOutcomeObserved = Schema.TaggedStruct(
-  "ManagedTaskExecutionOutcomeObserved",
+// Version 2 is the first canonical task-work event vocabulary.
+const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
+
+/** Records the immutable intent before a task-work start request can cross its boundary. */
+export const TaskWorkSessionEstablishmentIntentRecorded = Schema.TaggedStruct(
+  "TaskWorkSessionEstablishmentIntentRecorded",
   {
-    operationId: OperationId,
-    outcome: WorkflowOutcomeSchema.cases.TaskExecuted
+    operation: WorkflowOperationSchema.cases.EstablishTaskWorkSession,
+    version: Schema.Literal(workflowJournalEventVersion)
   }
 )
 
-export const ManagedWorkflowEvent = Schema.Union([
+/** Records one exact task-work start request that crossed the provider boundary. */
+export const TaskWorkStartRequested = Schema.TaggedStruct(
+  "TaskWorkStartRequested",
+  {
+    observationId: ProviderObservationId,
+    request: TaskWorkStartRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records the provider acknowledgement without treating it as session evidence. */
+export const TaskWorkStartRequestAcknowledged = Schema.TaggedStruct(
+  "TaskWorkStartRequestAcknowledged",
+  {
+    acknowledgement: TaskWorkStartRequestAcknowledgement,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records an uncertain start-request return; recovery still requires a fresh lookup. */
+export const TaskWorkStartRequestFailed = Schema.TaggedStruct(
+  "TaskWorkStartRequestFailed",
+  {
+    failure: TaskWorkStartRequestFailure,
+    request: TaskWorkStartRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records one completed read-only task-work session lookup request. */
+export const TaskWorkSessionLookupRequested = Schema.TaggedStruct(
+  "TaskWorkSessionLookupRequested",
+  {
+    lookup: TaskWorkSessionLookup,
+    observationId: ProviderObservationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records an unreadable provider lookup without inventing a session report. */
+export const TaskWorkSessionLookupFailed = Schema.TaggedStruct(
+  "TaskWorkSessionLookupFailed",
+  {
+    failure: TaskWorkSessionLookupFailure,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records the provider's authoritative task-work session report. */
+export const TaskWorkSessionReported = Schema.TaggedStruct(
+  "TaskWorkSessionReported",
+  {
+    operationId: OperationId,
+    report: TaskWorkSessionReport,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records that exactly one matching task-work session establishes the operation. */
+export const TaskWorkSessionEstablishedEvent = Schema.TaggedStruct(
+  "TaskWorkSessionEstablished",
+  {
+    outcome: WorkflowOutcomeSchema.cases.TaskWorkSessionEstablished,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records a terminal provider result without deciding task-tracker success. */
+const TaskWorkSessionResultReportedEvent = Schema.TaggedStruct(
+  "TaskWorkSessionResultReported",
+  {
+    report: TaskWorkSessionResultReport,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+export const WorkflowJournalEvent = Schema.Union([
   ManagedWorkflowIntent,
   ManagedTrackerGraphOutcomeObserved,
-  ManagedTaskExecutionOutcomeObserved
+  TaskWorkSessionEstablishmentIntentRecorded,
+  TaskWorkStartRequested,
+  TaskWorkStartRequestAcknowledged,
+  TaskWorkStartRequestFailed,
+  TaskWorkSessionLookupRequested,
+  TaskWorkSessionLookupFailed,
+  TaskWorkSessionReported,
+  TaskWorkSessionEstablishedEvent,
+  TaskWorkSessionResultReportedEvent
 ])
-export type ManagedWorkflowEvent = typeof ManagedWorkflowEvent.Type
+export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
 export const managedWorkflowIntent = (
   operation: WorkflowOperation
@@ -46,19 +147,14 @@ export const managedWorkflowIntent = (
 
 export const managedWorkflowOutcome = (
   operationId: OperationId,
-  outcome: WorkflowOutcome
-):
-  | typeof ManagedTrackerGraphOutcomeObserved.Type
-  | typeof ManagedTaskExecutionOutcomeObserved.Type =>
-  outcome._tag === "TrackerGraphObserved"
-    ? ManagedTrackerGraphOutcomeObserved.make({ operationId, outcome })
-    : ManagedTaskExecutionOutcomeObserved.make({ operationId, outcome })
+  outcome: typeof WorkflowOutcomeSchema.cases.TrackerGraphObserved.Type
+): typeof ManagedTrackerGraphOutcomeObserved.Type => ManagedTrackerGraphOutcomeObserved.make({ operationId, outcome })
 
 export interface JournalRecord {
   readonly runId: RunId
   readonly key: JournalRecordKey
   readonly position: JournalPosition
-  readonly event: ManagedWorkflowEvent
+  readonly event: WorkflowJournalEvent
 }
 
 const JournalStoreOperation = Schema.Literals([
@@ -122,23 +218,6 @@ export class JournalSchemaIncompatible extends Schema.TaggedErrorClass<JournalSc
   }
 ) {}
 
-/**
- * Temporary fail-closed substitute delivered by issue #39 while the real
- * authority-reconciliation protocol remains unspecified. This error is not a
- * recovery outcome and must be replaced, not normalized, by the Wayfinder-led
- * specification and implementation in issue #41.
- *
- * @see https://github.com/dearlordylord/dalph/issues/39
- * @see https://github.com/dearlordylord/dalph/issues/41
- */
-export class JournalReconciliationRequired extends Schema.TaggedErrorClass<JournalReconciliationRequired>()(
-  "JournalReconciliationRequired",
-  {
-    runId: RunId,
-    operationId: OperationId
-  }
-) {}
-
 export type JournalStoreError =
   | JournalDataCorruption
   | JournalSchemaIncompatible
@@ -161,7 +240,7 @@ interface JournalStoreService {
   readonly append: (
     runId: RunId,
     key: JournalRecordKey,
-    event: ManagedWorkflowEvent
+    event: WorkflowJournalEvent
   ) => Effect.Effect<JournalRecord, JournalStoreContradiction | JournalStoreError>
   readonly read: (
     runId: RunId
@@ -177,11 +256,11 @@ interface MemoryJournalState {
 }
 
 const sameEvent = (
-  left: ManagedWorkflowEvent,
-  right: ManagedWorkflowEvent
+  left: WorkflowJournalEvent,
+  right: WorkflowJournalEvent
 ): boolean =>
-  JSON.stringify(Schema.encodeUnknownSync(ManagedWorkflowEvent)(left))
-    === JSON.stringify(Schema.encodeUnknownSync(ManagedWorkflowEvent)(right))
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left))
+    === JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
 export const memoryJournalStoreLayer = Layer.effect(
   JournalStore,
@@ -192,7 +271,7 @@ export const memoryJournalStoreLayer = Layer.effect(
     const append = Effect.fn("JournalStore.Memory.append")(function*(
       runId: RunId,
       key: JournalRecordKey,
-      event: ManagedWorkflowEvent
+      event: WorkflowJournalEvent
     ) {
       const update = (
         current: MemoryJournalState
@@ -247,3 +326,29 @@ export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
 
 export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:outcome`)
+
+export const taskWorkStartRequestedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-requested:${observationId}`)
+
+export const taskWorkStartAcknowledgedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-acknowledged:${observationId}`)
+
+export const taskWorkStartFailedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-failed:${observationId}`)
+
+export const taskWorkSessionLookupRequestedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:task-work-session-lookup-requested:${observationId}`)
+
+export const taskWorkSessionReportedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-session-reported:${observationId}`)

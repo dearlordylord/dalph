@@ -1,14 +1,9 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Cause, Effect, Layer, Schema } from "effect"
+import { Cause, Config, Effect, Layer, Schema } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
-import {
-  type JournalDatabaseLocator,
-  JournalPosition,
-  JournalRecordKey,
-  JournalSchemaVersion,
-  RunId
-} from "./domain.js"
+import { CoordinatorOwnership } from "./coordinator-lock.js"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey, JournalSchemaVersion, RunId } from "./domain.js"
 import {
   JournalDataCorruption,
   type JournalRecord,
@@ -20,7 +15,7 @@ import {
   JournalStore,
   JournalStoreContradiction,
   type JournalStoreError,
-  ManagedWorkflowEvent
+  WorkflowJournalEvent
 } from "./journal-store.js"
 
 const PersistedJournalRow = Schema.Struct({
@@ -122,7 +117,7 @@ const decodeBoundary = <A>(
 
 const parseEvent = (
   input: string
-): Effect.Effect<ManagedWorkflowEvent, JournalDataCorruption> =>
+): Effect.Effect<WorkflowJournalEvent, JournalDataCorruption> =>
   Effect.try({
     try: (): unknown => JSON.parse(input),
     catch: (cause) =>
@@ -131,11 +126,11 @@ const parseEvent = (
         operation: "JournalStore.read"
       })
   }).pipe(
-    Effect.flatMap((decoded) => decodeBoundary(ManagedWorkflowEvent, decoded, "JournalStore.read"))
+    Effect.flatMap((decoded) => decodeBoundary(WorkflowJournalEvent, decoded, "JournalStore.read"))
   )
 
-const encodeEvent = (event: ManagedWorkflowEvent): string =>
-  JSON.stringify(Schema.encodeUnknownSync(ManagedWorkflowEvent)(event))
+const encodeEvent = (event: WorkflowJournalEvent): string =>
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(event))
 
 const fromPersistedRow = Effect.fn("JournalStore.Sqlite.fromPersistedRow")(
   function*(row: PersistedJournalRow) {
@@ -225,7 +220,7 @@ export const sqliteJournalStoreLayer = (
       const append = Effect.fn("JournalStore.Sqlite.append")(function*(
         runId: RunId,
         key: JournalRecordKey,
-        event: ManagedWorkflowEvent
+        event: WorkflowJournalEvent
       ) {
         const eventJson = encodeEvent(event)
         return yield* Effect.gen(function*() {
@@ -307,3 +302,17 @@ export const sqliteJournalStoreLayer = (
       return JournalStore.of({ append, read })
     })
   ).pipe(Layer.provide(Reactivity.layer))
+
+export const journalDatabaseLocatorConfig = Config.schema(
+  JournalDatabaseLocator,
+  "DALPH_JOURNAL_DATABASE"
+)
+
+/** Opens production SQLite only after the coordinator holds the Git-directory lock. */
+export const productionJournalStoreLayer = Layer.unwrap(
+  Effect.gen(function*() {
+    yield* CoordinatorOwnership
+    const filename = yield* journalDatabaseLocatorConfig
+    return sqliteJournalStoreLayer({ filename })
+  })
+)

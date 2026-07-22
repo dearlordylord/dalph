@@ -46,17 +46,23 @@ export type CoordinatorOwnershipError =
  * Guards mutations performed by one live coordinator. The guard interrupts an
  * in-flight mutation when the scoped ownership signal fails.
  */
-export interface CoordinatorOwnership {
+export interface CoordinatorOwnershipCapability {
   readonly runMutation: <A, E, R>(
     mutation: Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E | CoordinatorOwnershipError, R>
 }
 
+/** Scoped proof that one live coordinator may cross state-changing boundaries. */
+export class CoordinatorOwnership extends Context.Service<
+  CoordinatorOwnership,
+  CoordinatorOwnershipCapability
+>()("@dalph/CoordinatorOwnership") {}
+
 interface CoordinatorLockService {
   readonly acquire: (
     target: GitCommonDirectoryTarget
   ) => Effect.Effect<
-    CoordinatorOwnership,
+    CoordinatorOwnershipCapability,
     CoordinatorLockAcquireError,
     Scope.Scope
   >
@@ -155,7 +161,7 @@ export const controlledCoordinatorLockLayer = Layer.effectContext(
 
         return {
           runMutation: <A, E, R>(mutation: Effect.Effect<A, E, R>) => guardCoordinatorMutation(signal, mutation)
-        } satisfies CoordinatorOwnership
+        } satisfies CoordinatorOwnershipCapability
       }
     )
 

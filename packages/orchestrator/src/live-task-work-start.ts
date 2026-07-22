@@ -1,50 +1,60 @@
 import type { FileSystem } from "effect"
 import { Effect, Layer } from "effect"
-import { CoordinatorLock, type CoordinatorLockHeld, type CoordinatorLockUnavailable } from "./coordinator-lock.js"
+import {
+  CoordinatorLock,
+  type CoordinatorLockHeld,
+  type CoordinatorLockUnavailable,
+  CoordinatorOwnership
+} from "./coordinator-lock.js"
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
-import { TaskRunner, TaskWorkStart } from "./task-work-start.js"
+import { TaskRunner } from "./task-work-start.js"
 
-/**
- * Acquires coordinator ownership before exposing a task-work start capability
- * and guards every request sent through the underlying task runner.
- */
-export const coordinatorOwnedTaskWorkStartLayer = <E, R>(
-  target: GitCommonDirectoryTarget,
-  taskRunnerLayer: Layer.Layer<TaskRunner, E, R>
+/** Acquires one scoped ownership capability for all live state-changing adapters. */
+export const coordinatorOwnershipLayer = (
+  target: GitCommonDirectoryTarget
 ): Layer.Layer<
-  TaskWorkStart,
-  CoordinatorLockHeld | CoordinatorLockUnavailable | E,
-  CoordinatorLock | R
+  CoordinatorOwnership,
+  CoordinatorLockHeld | CoordinatorLockUnavailable,
+  CoordinatorLock
 > =>
   Layer.effect(
-    TaskWorkStart,
+    CoordinatorOwnership,
     Effect.gen(function*() {
       const coordinatorLock = yield* CoordinatorLock
-      const ownership = yield* coordinatorLock.acquire(target)
+      return CoordinatorOwnership.of(yield* coordinatorLock.acquire(target))
+    })
+  )
+
+/** Guards only the state-changing start request; provider lookup stays read-only. */
+export const coordinatorOwnedTaskRunnerLayer = <E, R>(
+  taskRunnerLayer: Layer.Layer<TaskRunner, E, R>
+) =>
+  Layer.effect(
+    TaskRunner,
+    Effect.gen(function*() {
+      const ownership = yield* CoordinatorOwnership
       const taskRunner = yield* TaskRunner
+      const requestTaskWorkStart = Effect.fn(
+        "TaskRunner.CoordinatorOwned.requestTaskWorkStart"
+      )(function*(request) {
+        return yield* ownership.runMutation(
+          taskRunner.requestTaskWorkStart(request)
+        )
+      })
 
-      const request = Effect.fn("TaskWorkStart.CoordinatorOwned.request")(
-        function*(taskId) {
-          yield* ownership.runMutation(
-            taskRunner.requestTaskWorkStart(taskId)
-          )
-        }
-      )
-
-      return TaskWorkStart.of({ request })
+      return TaskRunner.of({
+        lookupTaskWorkSession: taskRunner.lookupTaskWorkSession,
+        requestTaskWorkStart
+      })
     })
   ).pipe(Layer.provide(taskRunnerLayer))
 
-/** Production task-work start capability guarded by the OS-backed lock. */
-export const productionTaskWorkStartLayer = <E, R>(
-  target: GitCommonDirectoryTarget,
-  taskRunnerLayer: Layer.Layer<TaskRunner, E, R>
+/** Production ownership acquisition using the OS-backed coordinator lock. */
+export const productionCoordinatorOwnershipLayer = (
+  target: GitCommonDirectoryTarget
 ): Layer.Layer<
-  TaskWorkStart,
-  CoordinatorLockHeld | CoordinatorLockUnavailable | E,
-  FileSystem.FileSystem | R
-> =>
-  coordinatorOwnedTaskWorkStartLayer(target, taskRunnerLayer).pipe(
-    Layer.provide(nodeCoordinatorLockLayer)
-  )
+  CoordinatorOwnership,
+  CoordinatorLockHeld | CoordinatorLockUnavailable,
+  FileSystem.FileSystem
+> => coordinatorOwnershipLayer(target).pipe(Layer.provide(nodeCoordinatorLockLayer))

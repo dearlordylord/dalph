@@ -3,6 +3,7 @@ import { HashMap, HashSet, Option, Order, Result, Schema } from "effect"
 import {
   isDependencySatisfied,
   isTaskOpen,
+  type Task,
   TaskId,
   TaskLifecycle,
   TrackerRevision,
@@ -262,6 +263,19 @@ export class TaskDagSnapshot {
         _tag: "Valid",
         snapshot: new TaskDagSnapshot(decoded.revision, tasks)
       }
+  }
+
+  /** Returns normalized runnable task values, never provider-specific records. */
+  eligibleTasks(): ReadonlyArray<Task> {
+    return this.eligibleTaskIds().map((taskId) => {
+      const projection = HashMap.getUnsafe(this.tasks, taskId)
+      return {
+        id: taskId,
+        lifecycle: projection.lifecycle,
+        parentTaskId: projection.parentTaskId,
+        prerequisiteIds: sorted(projection.prerequisiteIds)
+      }
+    })
   }
 
   taskIds(): ReadonlyArray<TaskId> {

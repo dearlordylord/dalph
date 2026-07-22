@@ -8,8 +8,6 @@ import { describe, expect } from "vitest"
 import {
   FixtureTarget,
   JournalDatabaseLocator,
-  journaledWorkflowInterpreterLayer,
-  JournalReconciliationRequired,
   JournalRecordKey,
   JournalStorageAccessDenied,
   JournalStorageCapacityExhausted,
@@ -17,21 +15,12 @@ import {
   JournalStorageUnavailable,
   JournalStore,
   JournalStoreContradiction,
-  liveFakeWorkflowInterpreterLayer,
   managedWorkflowIntent,
   memoryJournalStoreLayer,
   OperationId,
   RunId,
-  runWorkflow,
   sqliteJournalStoreLayer,
-  TaskExecutionCapacity,
-  TaskId,
-  TaskWorkStart,
-  trackerGraphReaderFileLayer,
-  WorkflowInterpreter,
-  WorkflowOperation,
-  WorkflowOutcome,
-  WorkflowTrace
+  WorkflowOperation
 } from "./index.js"
 import { classifyJournalStorageFailure } from "./sqlite-journal-store.js"
 
@@ -71,10 +60,10 @@ const withSqliteClient = <A, E, R>(
 
 const intent = (operationId: string, taskId: string) =>
   managedWorkflowIntent(
-    WorkflowOperation.cases.ExecuteTask.make({
+    WorkflowOperation.cases.ReadTrackerGraph.make({
       operationId: OperationId.make(operationId),
       predecessorOperationIds: [],
-      taskId: TaskId.make(taskId)
+      target: FixtureTarget.make(taskId)
     })
   )
 
@@ -184,62 +173,6 @@ durableJournalStoreContract(
       filename: JournalDatabaseLocator.make(":memory:")
     }),
   () => {
-    it.effect(
-      "restarts one planned fixture workflow from its managed SQLite history",
-      () =>
-        Effect.scoped(
-          withTemporaryDatabase((filename) => {
-            const runId = RunId.make("restart-run")
-            const target = FixtureTarget.make(
-              new URL("../fixtures/singleton.json", import.meta.url).pathname
-            )
-            return Effect.gen(function*() {
-              let executions = 0
-              const workflow = runWorkflow(target, TaskExecutionCapacity.make(1)).pipe(
-                Effect.provide(
-                  journaledWorkflowInterpreterLayer(
-                    runId,
-                    liveFakeWorkflowInterpreterLayer
-                  )
-                ),
-                Effect.provide(trackerGraphReaderFileLayer),
-                Effect.provide(
-                  Layer.succeed(
-                    TaskWorkStart,
-                    TaskWorkStart.of({
-                      request: () => Effect.sync(() => executions += 1)
-                    })
-                  )
-                ),
-                Effect.provide(
-                  Layer.succeed(
-                    WorkflowTrace,
-                    WorkflowTrace.of({ emit: () => Effect.void })
-                  )
-                ),
-                Effect.provide(sqliteJournalStoreLayer({ filename }))
-              )
-              yield* workflow
-              yield* workflow
-              expect(executions).toBe(1)
-
-              const reopened = yield* Effect.gen(function*() {
-                const journal = yield* JournalStore
-                return yield* journal.read(runId)
-              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-
-              expect(reopened.map(({ event }) => event._tag)).toEqual([
-                "ManagedWorkflowIntent",
-                "ManagedTrackerGraphOutcomeObserved",
-                "ManagedWorkflowIntent",
-                "ManagedTaskExecutionOutcomeObserved"
-              ])
-              expect(reopened.map(({ position }) => position)).toEqual([1, 2, 3, 4])
-            })
-          })
-        )
-    )
-
     it.effect("migrates the production SQLite journal and enables WAL mode", () =>
       Effect.scoped(
         withTemporaryDatabase((filename) =>
@@ -488,42 +421,3 @@ durableJournalStoreContract(
       ))
   }
 )
-
-it.effect("fails closed instead of repeating an execution with an unresolved intent", () =>
-  Effect.gen(function*() {
-    const runId = RunId.make("ambiguous-run")
-    const taskId = TaskId.make("ambiguous-task")
-    const operation = WorkflowOperation.cases.ExecuteTask.make({
-      operationId: OperationId.make("task-execution:ambiguous-task"),
-      predecessorOperationIds: [OperationId.make("observe-tracker-graph")],
-      taskId
-    })
-    const journal = yield* JournalStore
-    yield* journal.append(
-      runId,
-      JournalRecordKey.make(`operation:${operation.operationId}:intent`),
-      managedWorkflowIntent(operation)
-    )
-    let executions = 0
-    const interpreterLayer = Layer.succeed(
-      WorkflowInterpreter,
-      WorkflowInterpreter.of({
-        executeTask: () => {
-          executions += 1
-          return Effect.succeed(WorkflowOutcome.cases.TaskExecuted.make({}))
-        },
-        readTrackerGraph: () => Effect.die("unused")
-      })
-    )
-    const failure = yield* Effect.flip(
-      Effect.gen(function*() {
-        const interpreter = yield* WorkflowInterpreter
-        return yield* interpreter.executeTask(operation)
-      }).pipe(
-        Effect.provide(journaledWorkflowInterpreterLayer(runId, interpreterLayer))
-      )
-    )
-
-    expect(failure).toBeInstanceOf(JournalReconciliationRequired)
-    expect(executions).toBe(0)
-  }).pipe(Effect.provide(memoryJournalStoreLayer)))

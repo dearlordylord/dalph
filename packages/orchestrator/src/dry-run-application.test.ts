@@ -1,8 +1,7 @@
 import { it } from "@effect/vitest"
-import type { Duration, PlatformError } from "effect"
-import { Clock, Effect, Fiber, FileSystem, Layer, Queue, Ref, Sink, Stdio, Stream } from "effect"
+import type { PlatformError } from "effect"
+import { Effect, FileSystem, Layer, Ref, Sink, Stdio, Stream } from "effect"
 import type { Stdio as StdioService } from "effect/Stdio"
-import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import { FixtureTarget } from "./domain.js"
@@ -30,16 +29,6 @@ const deniedFilesystemMutation = <A>(
 it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
   Effect.gen(function*() {
     const chunks = yield* Ref.make<ReadonlyArray<string>>([])
-    const testClock = yield* TestClock.testClockWith(Effect.succeed)
-    const clock = yield* Clock.Clock
-    const sleeps = yield* Queue.unbounded<Duration.Duration>()
-    const controlledClock = {
-      ...clock,
-      sleep: (duration: Duration.Duration) =>
-        Queue.offer(sleeps, duration).pipe(
-          Effect.andThen(clock.sleep(duration))
-        )
-    }
     const target = new URL("../fixtures/singleton.json", import.meta.url).pathname
     const stdioLayer = Stdio.layerTest({
       args: Effect.succeed(["run", "--dry", target]),
@@ -52,17 +41,10 @@ it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
         })
     })
 
-    const run = yield* dryRunCliApplication.pipe(
-      Effect.provide(stdioLayer),
-      Effect.provide(Layer.succeed(Clock.Clock, controlledClock)),
-      Effect.forkScoped
-    )
-    const duration = yield* Queue.take(sleeps)
-    yield* testClock.adjust(duration)
-    yield* Fiber.join(run)
+    yield* dryRunCliApplication.pipe(Effect.provide(stdioLayer))
 
     expect(dryApplicationEnvironmentIsNarrow).toBe(true)
-    expect(yield* Ref.get(chunks)).toHaveLength(4)
+    expect(yield* Ref.get(chunks)).toHaveLength(11)
   }))
 
 it.effect("replaces fixture reads at the complete dry CLI boundary", () =>

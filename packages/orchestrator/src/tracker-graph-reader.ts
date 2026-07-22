@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
 import { FixtureTarget, type TrackerTarget } from "./domain.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
 
@@ -72,6 +72,38 @@ interface TrackerGraphReaderService {
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
   "@dalph/TrackerGraphReader"
 ) {}
+
+interface TestTrackerGraphReaderService extends TrackerGraphReaderService {
+  readonly requestedTargets: () => Effect.Effect<ReadonlyArray<TrackerTarget>>
+  readonly setSnapshot: (snapshot: TaskDagSnapshot) => Effect.Effect<void>
+}
+
+export class TestTrackerGraphReader extends Context.Service<
+  TestTrackerGraphReader,
+  TestTrackerGraphReaderService
+>()("@dalph/TrackerGraphReader/Test") {}
+
+export const trackerGraphReaderTestLayer = (
+  initialSnapshot: TaskDagSnapshot
+) =>
+  Layer.effectContext(
+    Effect.gen(function*() {
+      const snapshot = yield* Ref.make(initialSnapshot)
+      const targets = yield* Ref.make<ReadonlyArray<TrackerTarget>>([])
+      const service = TestTrackerGraphReader.of({
+        read: Effect.fn("TrackerGraphReader.Test.read")(function*(target) {
+          yield* Ref.update(targets, (current) => [...current, target])
+          return yield* Ref.get(snapshot)
+        }),
+        requestedTargets: () => Ref.get(targets),
+        setSnapshot: (next) => Ref.set(snapshot, next)
+      })
+      return Context.empty().pipe(
+        Context.add(TrackerGraphReader, service),
+        Context.add(TestTrackerGraphReader, service)
+      )
+    })
+  )
 
 interface FixtureReaderService {
   readonly read: (

@@ -2,96 +2,84 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, FileSystem, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import { CoordinatorLock, CoordinatorLockHeld } from "./coordinator-lock.js"
-import { GitCommonDirectoryTarget, TaskId } from "./domain.js"
-import { coordinatorOwnedTaskWorkStartLayer, productionTaskWorkStartLayer } from "./live-task-work-start.js"
-import { TaskRunner, TaskWorkStart } from "./task-work-start.js"
+import {
+  AttemptId,
+  GitCommitSha,
+  GitCommonDirectoryTarget,
+  OperationId,
+  PlannedTaskAttempt,
+  ProviderObservationId,
+  ProviderRequestId,
+  RunId,
+  TaskBranchRef,
+  TaskId,
+  TaskLifecycle,
+  TaskWorkSessionId,
+  WorktreeLocator
+} from "./domain.js"
+import { controlledCoordinatorLockLayer, coordinatorOwnedTaskRunnerLayer, coordinatorOwnershipLayer } from "./index.js"
+import { MatchingTaskWorkSessionReported, TaskRunner, TaskWorkStartRequest } from "./task-work-start.js"
 
-it.effect("acquires ownership before exposing and guards every task-work start request", () =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const observations = yield* Ref.make<ReadonlyArray<string>>([])
-      const target = GitCommonDirectoryTarget.make("/repository/.git")
-      const taskId = TaskId.make("task-1")
-      const coordinatorLockLayer = Layer.succeed(
-        CoordinatorLock,
-        CoordinatorLock.of({
-          acquire: Effect.fn("CoordinatorLock.Test.acquire")(function*(observedTarget) {
-            yield* Ref.update(observations, (current) => [
-              ...current,
-              `acquire:${observedTarget}`
-            ])
-            return {
-              runMutation: <A, E, R>(request: Effect.Effect<A, E, R>) =>
-                Ref.update(observations, (current) => [...current, "guard"]).pipe(
-                  Effect.andThen(request)
-                )
-            }
+it.effect("shares one ownership capability across guarded starts and read-only lookups", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-owner-" })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const starts = yield* Ref.make(0)
+    const lookups = yield* Ref.make(0)
+    const runnerLayer = Layer.succeed(
+      TaskRunner,
+      TaskRunner.of({
+        lookupTaskWorkSession: Effect.fn("TaskRunner.OwnershipTest.lookup")(function*(lookup) {
+          yield* Ref.update(lookups, (count) => count + 1)
+          return MatchingTaskWorkSessionReported.make({
+            observationId: ProviderObservationId.make("ownership-lookup"),
+            sessionId: TaskWorkSessionId.make(`session:${lookup.operationId}`),
+            work: { _tag: "NoProviderWorkReported" }
           })
+        }),
+        requestTaskWorkStart: Effect.fn("TaskRunner.OwnershipTest.start")(function*() {
+          yield* Ref.update(starts, (count) => count + 1)
+          return {
+            observationId: ProviderObservationId.make("ownership-request-observation"),
+            providerRequestId: ProviderRequestId.make("ownership-request")
+          }
         })
-      )
-      const taskRunnerLayer = Layer.succeed(
-        TaskRunner,
-        TaskRunner.of({
-          requestTaskWorkStart: Effect.fn("TaskRunner.Test.requestTaskWorkStart")(function*(observedTaskId) {
-            yield* Ref.update(observations, (current) => [
-              ...current,
-              `request:${observedTaskId}`
-            ])
-          })
-        })
-      )
-      yield* Effect.gen(function*() {
-        const taskWorkStart = yield* TaskWorkStart
-        expect(yield* Ref.get(observations)).toEqual([
-          "acquire:/repository/.git"
-        ])
-
-        yield* taskWorkStart.request(taskId)
-        yield* taskWorkStart.request(taskId)
-
-        expect(yield* Ref.get(observations)).toEqual([
-          "acquire:/repository/.git",
-          "guard",
-          "request:task-1",
-          "guard",
-          "request:task-1"
-        ])
-      }).pipe(
-        Effect.provide(
-          coordinatorOwnedTaskWorkStartLayer(target, taskRunnerLayer)
-        ),
-        Effect.provide(coordinatorLockLayer)
-      )
-    })
-  ))
-
-it.effect("production composition rejects a second coordinator before task-work start", () =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const fileSystem = yield* FileSystem.FileSystem
-      const gitCommonDirectory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-live-task-work-start-test-"
       })
-      const target = GitCommonDirectoryTarget.make(gitCommonDirectory)
-      const requests = yield* Ref.make(0)
-      const taskRunnerLayer = Layer.succeed(
-        TaskRunner,
-        TaskRunner.of({
-          requestTaskWorkStart: Effect.fn("TaskRunner.Test.production")(function*() {
-            yield* Ref.update(requests, (count) => count + 1)
-          })
-        })
-      )
-      const makeLayer = () =>
-        productionTaskWorkStartLayer(target, taskRunnerLayer).pipe(
-          Layer.provide(NodeFileSystem.layer)
-        )
+    )
+    const ownedRunnerLayer = coordinatorOwnedTaskRunnerLayer(runnerLayer).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+    const taskId = TaskId.make("task")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("attempt"),
+      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      branch: TaskBranchRef.make("refs/heads/task"),
+      runId: RunId.make("run"),
+      taskId,
+      worktree: WorktreeLocator.make(`${directory}/task`)
+    })
+    const request = TaskWorkStartRequest.make({
+      operationId: OperationId.make("operation"),
+      plannedAttempt,
+      task: {
+        id: taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    })
 
-      yield* Layer.build(makeLayer())
-      const failure = yield* Layer.build(makeLayer()).pipe(Effect.flip)
+    yield* Effect.gen(function*() {
+      const runner = yield* TaskRunner
+      yield* runner.requestTaskWorkStart(request)
+      yield* runner.lookupTaskWorkSession({
+        operationId: request.operationId,
+        plannedAttempt
+      })
+    }).pipe(Effect.provide(ownedRunnerLayer))
 
-      expect(failure).toBeInstanceOf(CoordinatorLockHeld)
-      expect(yield* Ref.get(requests)).toBe(0)
-    }).pipe(Effect.provide(NodeFileSystem.layer))
-  ))
+    expect(yield* Ref.get(starts)).toBe(1)
+    expect(yield* Ref.get(lookups)).toBe(1)
+  }).pipe(Effect.provide(NodeFileSystem.layer)))

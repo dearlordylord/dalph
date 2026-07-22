@@ -5,7 +5,7 @@ import {
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
-  type CoordinatorOwnership,
+  type CoordinatorOwnershipCapability,
   type CoordinatorOwnershipError,
   CoordinatorOwnershipLost,
   guardCoordinatorMutation,
@@ -174,7 +174,7 @@ export const nodeCoordinatorLockAdapterLayer = Layer.effect(
           Effect.forkScoped
         )
 
-        const runMutation: CoordinatorOwnership["runMutation"] = (mutation) =>
+        const runMutation: CoordinatorOwnershipCapability["runMutation"] = (mutation) =>
           guardCoordinatorMutation(
             signal,
             observe.pipe(
