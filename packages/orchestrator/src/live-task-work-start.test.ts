@@ -4,6 +4,8 @@ import { Effect, FileSystem, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
+  ClaimOwner,
+  ClaimToken,
   GitCommitSha,
   GitCommonDirectoryTarget,
   OperationId,
@@ -17,7 +19,15 @@ import {
   TaskWorkSessionId,
   WorktreeLocator
 } from "./domain.js"
-import { controlledCoordinatorLockLayer, coordinatorOwnedTaskRunnerLayer, coordinatorOwnershipLayer } from "./index.js"
+import {
+  controlledCoordinatorLockLayer,
+  controlledTrackerMutationLayer,
+  coordinatorOwnedTaskRunnerLayer,
+  coordinatorOwnedTrackerMutationLayer,
+  coordinatorOwnershipLayer,
+  TaskClaimAcquisition,
+  TrackerMutation
+} from "./index.js"
 import { MatchingTaskWorkSessionReported, TaskRunner, TaskWorkStartRequest } from "./task-work-start.js"
 
 it.effect("shares one ownership capability across guarded starts and read-only lookups", () =>
@@ -82,4 +92,35 @@ it.effect("shares one ownership capability across guarded starts and read-only l
 
     expect(yield* Ref.get(starts)).toBe(1)
     expect(yield* Ref.get(lookups)).toBe(1)
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("guards claim acquisition and release while leaving observation read-only", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "dalph-claim-owner-"
+    })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const ownedTrackerLayer = coordinatorOwnedTrackerMutationLayer(
+      controlledTrackerMutationLayer
+    ).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+    const acquisition = TaskClaimAcquisition.make({
+      operationId: OperationId.make("owned-claim-operation"),
+      owner: ClaimOwner.make("owned-claim-owner"),
+      taskId: TaskId.make("owned-claim-task"),
+      token: ClaimToken.make("owned-claim-token")
+    })
+
+    yield* Effect.gen(function*() {
+      const tracker = yield* TrackerMutation
+      expect((yield* tracker.readTaskClaim(acquisition.taskId))._tag).toBe(
+        "UnclaimedTask"
+      )
+      const claim = yield* tracker.acquireTaskClaim(acquisition)
+      expect(yield* tracker.readTaskClaim(acquisition.taskId)).toEqual(claim)
+      yield* tracker.releaseTaskClaim(claim)
+    }).pipe(Effect.provide(ownedTrackerLayer))
   }).pipe(Effect.provide(NodeFileSystem.layer)))

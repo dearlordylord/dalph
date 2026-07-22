@@ -3,14 +3,23 @@ import { ConfigProvider, Effect, Layer, Option, Redacted, Ref, Schema } from "ef
 import * as Headers from "effect/unstable/http/Headers"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./domain.js"
+import {
+  GithubIssueNumber,
+  GithubIssueTarget,
+  GithubRepositoryName,
+  GithubRepositoryOwner,
+  OperationId
+} from "./domain.js"
 import {
   GithubCursor,
   GithubGraphqlClient,
   githubGraphqlClientConfigLayer,
   githubGraphqlClientLayer,
   GithubGraphqlRequest,
-  GithubIssueNodeId
+  GithubIssueNodeId,
+  GithubLabelName,
+  GithubLabelNodeId,
+  GithubRepositoryNodeId
 } from "./github-graphql-client.js"
 
 const EncodedRequestBody = Schema.Struct({ body: Schema.String })
@@ -82,12 +91,26 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
         GithubGraphqlRequest.cases.ReadBlockedBy.make({
           cursor: GithubCursor.make("cursor"),
           issueNodeId: GithubIssueNodeId.make("issue")
+        }),
+        GithubGraphqlRequest.cases.FindClaimLabel.make({
+          labelName: GithubLabelName.make("dalph-claim-task"),
+          repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
+        }),
+        GithubGraphqlRequest.cases.CreateClaimLabel.make({
+          description: "claim-description",
+          labelName: GithubLabelName.make("dalph-claim-task"),
+          operationId: OperationId.make("claim-operation"),
+          repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
+        }),
+        GithubGraphqlRequest.cases.DeleteClaimLabel.make({
+          labelNodeId: GithubLabelNodeId.make("claim-label-node"),
+          operationId: OperationId.make("release-operation")
         })
       ], (request) => client.execute(request))
     }).pipe(Effect.provide(clientLayer))
 
     const requests = yield* Ref.get(observed)
-    expect(requests).toHaveLength(4)
+    expect(requests).toHaveLength(7)
     const request = requests[0]
     expect(request).toBeDefined()
     if (request === undefined) return
@@ -106,7 +129,10 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     expect(requests.map(({ body }) => body)).toEqual(expect.arrayContaining([
       expect.stringContaining("query ReadIssue"),
       expect.stringContaining("query ReadSubIssues"),
-      expect.stringContaining("query ReadBlockedBy")
+      expect.stringContaining("query ReadBlockedBy"),
+      expect.stringContaining("query FindClaimLabel"),
+      expect.stringContaining("mutation CreateClaimLabel"),
+      expect.stringContaining("mutation DeleteClaimLabel")
     ]))
   }))
 

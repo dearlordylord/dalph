@@ -197,6 +197,38 @@ Provider evidence: [GitHub Issue GraphQL fields](https://docs.github.com/en/grap
 and [GitHub GraphQL query limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api),
 plus [GitHub issue edit history](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/editing-an-issue).
 
+## GitHub Task Claims
+
+The GitHub Issues adapter represents one active task claim as a repository
+label record whose deterministic name is `dalph-claim-` plus a bounded SHA-256
+digest of the opaque `TaskId`. The label description is a schema-versioned
+payload containing the exact `OperationId`, `ClaimOwner`, and `ClaimToken`.
+The deterministic name associates the tracker-owned label record with the
+`TaskId` even across a crash between label creation and later workflow
+observations. The compact payload is bounded by GitHub's 100-character label
+description limit; an owner or token that cannot be represented fails before
+the request crosses the tracker boundary.
+
+GitHub repository label names are unique. Atomic label creation is therefore
+the adapter's create-if-unclaimed boundary: two competing creates for one task
+cannot create two claim records. Every returned error or malformed response is
+followed by a fresh repository-label lookup before the generic claim protocol
+can authorize a repeat. Release first compares the complete owner/token claim,
+then deletes the exact opaque GitHub label node ID. A delayed release for a
+deleted label cannot delete a replacement label with a new node ID.
+
+The journal records the exact claim-acquisition operation before label
+creation. At coordinator restart, an intent without a durable acquired outcome
+is reconciled with the same operation, owner, and token; the generic protocol
+rereads the repository label before it can repeat the request.
+
+The coordinator's Git common-directory ownership capability guards label
+creation and deletion. Claim lookup remains read-only. After the adapter proves
+claim ownership, Dalph performs a new complete task-graph read; only an open
+task still present in the target closure can emit `TrackerExecutionAdmitted`.
+Dry-run records claim intent without receiving tracker mutation authority and
+cannot emit that admission.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

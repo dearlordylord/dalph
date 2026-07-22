@@ -3,10 +3,10 @@ import type { RunId } from "./domain.js"
 import {
   intentRecordKey,
   JournalStore,
-  managedWorkflowIntent,
-  managedWorkflowOutcome,
   outcomeRecordKey,
   providerObservationRequestRecordKey,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
   TaskWorkSessionEstablishedEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkSessionLookupFailed,
@@ -17,13 +17,16 @@ import {
   taskWorkStartFailedRecordKey,
   TaskWorkStartRequestAcknowledged,
   TaskWorkStartRequested,
-  TaskWorkStartRequestFailed
+  TaskWorkStartRequestFailed,
+  trackerGraphObservationIntent,
+  trackerGraphOutcomeObserved
 } from "./journal-store.js"
 import { TaskRunner } from "./task-work-start.js"
 import {
   emitTaskWorkSessionNonConvergence,
   makeTrackerGraphObservedOutcome,
   runTaskWorkSessionEstablishmentProtocol,
+  TaskClaimAcquiredTrace,
   TaskWorkSessionEstablishedTrace,
   TaskWorkSessionEvidenceContradiction,
   TaskWorkSessionRunContradiction,
@@ -31,6 +34,36 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
+
+/** Reconciles exact claim intents that lack a durable authoritative outcome. */
+export const recoverTaskClaimAcquisitions = Effect.fn(
+  "WorkflowRecovery.recoverTaskClaimAcquisitions"
+)(function*(runId: RunId) {
+  const interpreter = yield* WorkflowInterpreter
+  const journal = yield* JournalStore
+  const trace = yield* WorkflowTrace
+  const records = yield* journal.read(runId)
+  const acquiredOperationIds = new Set(
+    records.flatMap(({ event }) => event._tag === "TaskClaimAcquired" ? [event.claim.operationId] : [])
+  )
+  const unresolved = records.flatMap(({ event }) =>
+    event._tag === "TaskClaimAcquisitionIntended"
+      && !acquiredOperationIds.has(event.operation.acquisition.operationId)
+      ? [event.operation]
+      : []
+  )
+  return yield* Effect.forEach(
+    unresolved,
+    (operation) =>
+      interpreter.acquireTaskClaim(operation).pipe(
+        Effect.tap((result) =>
+          result._tag === "AuthoritativeTaskClaimAcquired"
+            ? trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
+            : Effect.void
+        )
+      )
+  )
+})
 
 /** Reconstructs unresolved session-establishment operations from ordered journal history. */
 export const recoverTaskWorkSessionEstablishments = Effect.fn(
@@ -83,18 +116,41 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         const records = yield* journal.read(runId)
         const key = intentRecordKey(operation.operationId)
         if (!records.some((record) => record.key === key)) {
-          yield* journal.append(runId, key, managedWorkflowIntent(operation))
+          yield* journal.append(runId, key, trackerGraphObservationIntent(operation))
         }
         const snapshot = yield* interpreter.readTrackerGraph(operation)
         yield* journal.append(
           runId,
           outcomeRecordKey(operation.operationId),
-          managedWorkflowOutcome(
+          trackerGraphOutcomeObserved(
             operation.operationId,
             makeTrackerGraphObservedOutcome(snapshot)
           )
         )
         return snapshot
+      })
+
+      const acquireTaskClaim = Effect.fn(
+        "WorkflowInterpreter.Journaled.acquireTaskClaim"
+      )(function*(operation) {
+        const key = intentRecordKey(operation.acquisition.operationId)
+        yield* journal.append(
+          runId,
+          key,
+          TaskClaimAcquisitionIntendedEvent.make({ operation, version: 2 })
+        )
+        const result = yield* interpreter.acquireTaskClaim(operation)
+        if (result._tag === "AuthoritativeTaskClaimAcquired") {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.acquisition.operationId),
+            TaskClaimAcquiredEvent.make({
+              claim: result.claim,
+              version: 2
+            })
+          )
+        }
+        return result
       })
 
       const establishTaskWorkSession = Effect.fn(
@@ -251,6 +307,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         return outcome
       })
 
-      return WorkflowInterpreter.of({ establishTaskWorkSession, readTrackerGraph })
+      return WorkflowInterpreter.of({
+        acquireTaskClaim,
+        establishTaskWorkSession,
+        readTrackerGraph
+      })
     })
   ).pipe(Layer.provide(interpreterLayer))

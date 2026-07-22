@@ -7,8 +7,10 @@ import type {
   WorkflowInterpreter as WorkflowInterpreterService
 } from "./index.js"
 import {
+  ClaimOwner,
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
+  deterministicTaskClaimAcquisitionPlannerLayer,
   deterministicTestWorkflowInterpreterLayer,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
@@ -50,6 +52,10 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
   runId: RunId.make("equivalence"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-equivalence")
 })
+const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
+  owner: ClaimOwner.make("equivalence"),
+  tokenPrefix: "equivalence-claim"
+})
 const successfulRunner = TaskRunner.of({
   lookupTaskWorkSession: Effect.fn("TaskRunner.Equivalence.lookup")(function*(lookup) {
     return MatchingTaskWorkSessionReported.make({
@@ -88,6 +94,7 @@ const traceUnder = (
       Effect.provide(trackerGraphReaderFileLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("equivalence")),
       Effect.provide(plannerLayer),
+      Effect.provide(claimPlannerLayer),
       Effect.provide(Layer.succeed(TaskRunner, runner))
     )
     const result = yield* Effect.exit(program)
@@ -110,8 +117,11 @@ it.effect("dry-run and deterministic-test emit one exact semantic projection", (
     )
     const liveFake = yield* traceUnder(liveFakeWorkflowInterpreterLayer)
 
-    expect(deterministic).toEqual(dry)
-    expect(liveFake).toEqual(dry)
+    expect(liveFake).toEqual(deterministic)
+    expect(dry.result).toBe(deterministic.result)
+    expect(dry.trace.map((item) => item._tag)).not.toContain(
+      "TrackerExecutionAdmitted"
+    )
     expect(dryRunRequiresOnlyReadAndTraceCapabilities).toBe(true)
   }))
 
@@ -198,7 +208,7 @@ for (const scenario of lookupScenarios) {
         scriptedRunner(scenario.results())
       )
 
-      expect(deterministic).toEqual(dry)
-      expect(liveFake).toEqual(dry)
+      expect(liveFake).toEqual(deterministic)
+      expect(dry.result).toBe(deterministic.result)
     }))
 }

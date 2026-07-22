@@ -3,9 +3,12 @@ import { ProviderObservationId, ProviderRequestId, TaskWorkSessionId } from "./d
 import type { TaskRunnerService } from "./task-work-start.js"
 import { MatchingTaskWorkSessionReported, TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
+import { controlledTrackerMutationLayer, TrackerMutation } from "./tracker-mutation.js"
 import {
+  acquireTaskClaimThrough,
   emitTaskWorkSessionNonConvergence,
   runTaskWorkSessionEstablishmentProtocol,
+  TaskClaimAcquisitionSimulated,
   taskWorkSessionTraceObserver,
   WorkflowInterpreter,
   WorkflowTrace
@@ -19,11 +22,17 @@ const taskRunnerInterpreterLayer = (
     Effect.gen(function*() {
       const reader = yield* TrackerGraphReader
       const runner = yield* TaskRunner
+      const tracker = yield* TrackerMutation
       const trace = yield* WorkflowTrace
       const readTrackerGraph = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
       )(function*(operation) {
         return yield* reader.read(operation.target)
+      })
+      const acquireTaskClaim = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.acquireTaskClaim`
+      )(function*(operation) {
+        return yield* acquireTaskClaimThrough(tracker, operation)
       })
       const establishTaskWorkSession = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.establishTaskWorkSession`
@@ -37,12 +46,23 @@ const taskRunnerInterpreterLayer = (
           Effect.tapError((failure) => emitTaskWorkSessionNonConvergence(failure, operation, trace))
         )
       })
-      return WorkflowInterpreter.of({ establishTaskWorkSession, readTrackerGraph })
+      return WorkflowInterpreter.of({
+        acquireTaskClaim,
+        establishTaskWorkSession,
+        readTrackerGraph
+      })
     })
   )
 
-export const deterministicTestWorkflowInterpreterLayer = taskRunnerInterpreterLayer("DeterministicTest")
-export const taskRunnerWorkflowInterpreterLayer = taskRunnerInterpreterLayer("TaskRunner")
+export const deterministicTestWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
+  "DeterministicTest"
+).pipe(Layer.provide(controlledTrackerMutationLayer))
+export const trackerMutationWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
+  "TaskRunner"
+)
+export const taskRunnerWorkflowInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
+  Layer.provide(controlledTrackerMutationLayer)
+)
 export const liveFakeWorkflowInterpreterLayer = taskRunnerWorkflowInterpreterLayer
 
 export const makeDryRunWorkflowInterpreterLayer = (
@@ -62,6 +82,11 @@ export const makeDryRunWorkflowInterpreterLayer = (
       )(function*(operation) {
         return yield* reader.read(operation.target)
       })
+      const acquireTaskClaim = Effect.fn(
+        "WorkflowInterpreter.DryRun.acquireTaskClaim"
+      )(function*(operation) {
+        return TaskClaimAcquisitionSimulated.make({ operation })
+      })
       const establishTaskWorkSession = Effect.fn(
         "WorkflowInterpreter.DryRun.establishTaskWorkSession"
       )(function*(operation) {
@@ -74,7 +99,11 @@ export const makeDryRunWorkflowInterpreterLayer = (
           Effect.tapError((failure) => emitTaskWorkSessionNonConvergence(failure, operation, trace))
         )
       })
-      return WorkflowInterpreter.of({ establishTaskWorkSession, readTrackerGraph })
+      return WorkflowInterpreter.of({
+        acquireTaskClaim,
+        establishTaskWorkSession,
+        readTrackerGraph
+      })
     })
   )
 

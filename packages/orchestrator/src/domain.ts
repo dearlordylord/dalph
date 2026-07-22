@@ -47,6 +47,17 @@ export type TaskId = typeof TaskId.Type
 export const OperationId = Schema.NonEmptyString.pipe(Schema.brand("OperationId"))
 export type OperationId = typeof OperationId.Type
 
+/** Identifies the configured Dalph owner recorded in one task claim. */
+export const ClaimOwner = Schema.NonEmptyString.pipe(Schema.brand("ClaimOwner"))
+export type ClaimOwner = typeof ClaimOwner.Type
+
+/**
+ * Authorizes changes to one exact task claim. It is not a run, operation,
+ * provider-user, task, or coordinator identity.
+ */
+export const ClaimToken = Schema.NonEmptyString.pipe(Schema.brand("ClaimToken"))
+export type ClaimToken = typeof ClaimToken.Type
+
 /** Identifies one recoverable managed traversal, not a task or operation. */
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type

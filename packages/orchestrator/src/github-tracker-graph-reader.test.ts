@@ -67,6 +67,10 @@ const connection = (
 
 const responseFor = (request: GithubGraphqlRequest) => {
   switch (request._tag) {
+    case "FindClaimLabel":
+    case "CreateClaimLabel":
+    case "DeleteClaimLabel":
+      return page({ errors: [{ message: "unexpected claim request" }] })
     case "ResolveIssue":
       return page({
         data: {

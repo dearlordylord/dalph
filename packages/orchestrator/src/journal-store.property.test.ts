@@ -13,7 +13,12 @@ import {
   TaskLifecycle,
   WorktreeLocator
 } from "./domain.js"
-import { intentRecordKey, JournalStore, managedWorkflowIntent, memoryJournalStoreLayer } from "./journal-store.js"
+import {
+  intentRecordKey,
+  JournalStore,
+  memoryJournalStoreLayer,
+  trackerGraphObservationIntent
+} from "./journal-store.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import {
   causalGraphProjection,
@@ -116,11 +121,11 @@ it("preserves the causal graph across legal concurrent journal interleavings", a
             yield* journal.append(
               runId,
               intentRecordKey(operation.operationId),
-              managedWorkflowIntent(operation)
+              trackerGraphObservationIntent(operation)
             )
           }
           return (yield* journal.read(runId)).flatMap(({ event }) =>
-            event._tag === "ManagedWorkflowIntent" ? [event.operation] : []
+            event._tag === "TrackerGraphObservationIntentRecorded" ? [event.operation] : []
           )
         }).pipe(Effect.provide(memoryJournalStoreLayer))
       )

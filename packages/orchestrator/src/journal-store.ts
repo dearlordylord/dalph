@@ -16,28 +16,45 @@ import {
   TaskWorkStartRequestAcknowledgement,
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
-import { type WorkflowOperation, WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
+import { ActiveTaskClaim } from "./tracker-mutation.js"
+import { WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
 import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow-outcome.js"
 
-/**
- * Records a managed operation before its state-changing request. It is
- * workflow history, not proof of tracker, Git, or task-work-provider facts.
- */
-const ManagedWorkflowIntent = Schema.TaggedStruct("ManagedWorkflowIntent", {
-  operation: WorkflowOperationSchema
-})
+/** Records selection of a read-only tracker-graph observation in workflow history. */
+const TrackerGraphObservationIntentRecorded = Schema.TaggedStruct(
+  "TrackerGraphObservationIntentRecorded",
+  { operation: WorkflowOperationSchema.cases.ReadTrackerGraph }
+)
 
 /** Records one tracker-graph observation without replacing tracker authority. */
-const ManagedTrackerGraphOutcomeObserved = Schema.TaggedStruct(
-  "ManagedTrackerGraphOutcomeObserved",
+const TrackerGraphOutcomeObservedEvent = Schema.TaggedStruct(
+  "TrackerGraphOutcomeObserved",
   {
     operationId: OperationId,
     outcome: WorkflowOutcomeSchema.cases.TrackerGraphObserved
   }
 )
 
-// Version 2 is the first canonical task-work event vocabulary.
+// Version 2 is the first canonical workflow event vocabulary.
 const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
+
+/** Records immutable claim intent before a task-tracker mutation can cross its boundary. */
+export const TaskClaimAcquisitionIntendedEvent = Schema.TaggedStruct(
+  "TaskClaimAcquisitionIntended",
+  {
+    operation: WorkflowOperationSchema.cases.AcquireTaskClaim,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records the exact claim after a fresh task-tracker observation proves it. */
+export const TaskClaimAcquiredEvent = Schema.TaggedStruct(
+  "TaskClaimAcquired",
+  {
+    claim: ActiveTaskClaim,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
 
 /** Records the immutable intent before a task-work start request can cross its boundary. */
 export const TaskWorkSessionEstablishmentIntentRecorded = Schema.TaggedStruct(
@@ -130,8 +147,10 @@ const TaskWorkSessionResultReportedEvent = Schema.TaggedStruct(
 )
 
 export const WorkflowJournalEvent = Schema.Union([
-  ManagedWorkflowIntent,
-  ManagedTrackerGraphOutcomeObserved,
+  TrackerGraphObservationIntentRecorded,
+  TrackerGraphOutcomeObservedEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquiredEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkStartRequested,
   TaskWorkStartRequestAcknowledged,
@@ -144,14 +163,14 @@ export const WorkflowJournalEvent = Schema.Union([
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
-export const managedWorkflowIntent = (
-  operation: WorkflowOperation
-): typeof ManagedWorkflowIntent.Type => ManagedWorkflowIntent.make({ operation })
+export const trackerGraphObservationIntent = (
+  operation: typeof WorkflowOperationSchema.cases.ReadTrackerGraph.Type
+): typeof TrackerGraphObservationIntentRecorded.Type => TrackerGraphObservationIntentRecorded.make({ operation })
 
-export const managedWorkflowOutcome = (
+export const trackerGraphOutcomeObserved = (
   operationId: OperationId,
   outcome: typeof WorkflowOutcomeSchema.cases.TrackerGraphObserved.Type
-): typeof ManagedTrackerGraphOutcomeObserved.Type => ManagedTrackerGraphOutcomeObserved.make({ operationId, outcome })
+): typeof TrackerGraphOutcomeObservedEvent.Type => TrackerGraphOutcomeObservedEvent.make({ operationId, outcome })
 
 export interface JournalRecord {
   readonly runId: RunId

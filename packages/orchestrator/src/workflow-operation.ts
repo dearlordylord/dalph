@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { TrackerTarget } from "./domain.js"
 import { OperationId, TrackerTarget as TrackerTargetSchema } from "./domain.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
+import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(
   Schema.isUnique()
@@ -33,10 +34,32 @@ const EstablishTaskWorkSessionOperation = Schema.TaggedStruct(
   )
 )
 
+const AcquireTaskClaimOperation = Schema.TaggedStruct(
+  "AcquireTaskClaim",
+  {
+    acquisition: TaskClaimAcquisition,
+    predecessorOperationIds: CausalPredecessorOperationIds
+  }
+).check(
+  Schema.makeFilter((operation) =>
+    operation.predecessorOperationIds.includes(operation.acquisition.operationId)
+      ? {
+        path: ["predecessorOperationIds"],
+        issue: "an operation cannot causally precede itself"
+      }
+      : undefined
+  )
+)
+
 export const WorkflowOperation = Object.assign(
-  Schema.Union([ReadTrackerGraphOperation, EstablishTaskWorkSessionOperation]),
+  Schema.Union([
+    ReadTrackerGraphOperation,
+    AcquireTaskClaimOperation,
+    EstablishTaskWorkSessionOperation
+  ]),
   {
     cases: {
+      AcquireTaskClaim: AcquireTaskClaimOperation,
       EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
     }
@@ -53,6 +76,8 @@ interface CausalGraphEntry {
 export const workflowOperationId = (operation: WorkflowOperation): OperationId =>
   operation._tag === "ReadTrackerGraph"
     ? operation.operationId
+    : operation._tag === "AcquireTaskClaim"
+    ? operation.acquisition.operationId
     : operation.request.operationId
 
 const orderedBefore = -1
@@ -74,12 +99,26 @@ export const causalGraphProjection = (
 
 export const makeTrackerGraphObservationOperation = (
   operationId: OperationId,
-  target: TrackerTarget
+  target: TrackerTarget,
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
 ): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
   WorkflowOperation.cases.ReadTrackerGraph.make({
     operationId,
-    predecessorOperationIds: [],
+    predecessorOperationIds: [...new Set(predecessorOperationIds)].sort(compareOperationIds),
     target
+  })
+
+export const makeTaskClaimAcquisitionOperation = (
+  fields: {
+    readonly acquisition: TaskClaimAcquisition
+    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  }
+): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
+  WorkflowOperation.cases.AcquireTaskClaim.make({
+    acquisition: fields.acquisition,
+    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
+      compareOperationIds
+    )
   })
 
 export const makeTaskWorkSessionEstablishmentOperation = (

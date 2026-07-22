@@ -9,6 +9,7 @@ import {
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 import { TaskRunner } from "./task-work-start.js"
+import { TrackerMutation } from "./tracker-mutation.js"
 
 /** Acquires one scoped ownership capability for all live state-changing adapters. */
 export const coordinatorOwnershipLayer = (
@@ -49,6 +50,35 @@ export const coordinatorOwnedTaskRunnerLayer = <E, R>(
       })
     })
   ).pipe(Layer.provide(taskRunnerLayer))
+
+/** Guards claim acquisition and release while leaving claim observation read-only. */
+export const coordinatorOwnedTrackerMutationLayer = <E, R>(
+  trackerMutationLayer: Layer.Layer<TrackerMutation, E, R>
+) =>
+  Layer.effect(
+    TrackerMutation,
+    Effect.gen(function*() {
+      const ownership = yield* CoordinatorOwnership
+      const tracker = yield* TrackerMutation
+      return TrackerMutation.of({
+        acquireTaskClaim: Effect.fn(
+          "TrackerMutation.CoordinatorOwned.acquireTaskClaim"
+        )(function*(acquisition) {
+          return yield* ownership.runMutation(
+            tracker.acquireTaskClaim(acquisition)
+          )
+        }),
+        readTaskClaim: tracker.readTaskClaim,
+        releaseTaskClaim: Effect.fn(
+          "TrackerMutation.CoordinatorOwned.releaseTaskClaim"
+        )(function*(claim) {
+          return yield* ownership.runMutation(
+            tracker.releaseTaskClaim(claim)
+          )
+        })
+      })
+    })
+  ).pipe(Layer.provide(trackerMutationLayer))
 
 /** Production ownership acquisition using the OS-backed coordinator lock. */
 export const productionCoordinatorOwnershipLayer = (

@@ -8,6 +8,7 @@ import {
 } from "../test/task-work-session-crash-scenarios.js"
 import {
   AttemptId,
+  controlledTrackerMutationLayer,
   GitCommitSha,
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
@@ -264,7 +265,8 @@ for (const scenario of crashScenarios) {
       const applicationLayer = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(directory),
-        runnerLayer
+        runnerLayer,
+        controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(Layer.succeed(
           TrackerGraphReader,
@@ -351,7 +353,8 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
       GitCommonDirectoryTarget.make(directory),
-      runnerLayer
+      runnerLayer,
+      controlledTrackerMutationLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TrackerGraphReader,

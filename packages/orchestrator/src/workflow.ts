@@ -2,6 +2,8 @@ import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import { OperationId, PlannedTaskAttempt, ProviderObservationId, RunId } from "./domain.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
+import type { TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
+import { runTaskClaimAcquisitionProtocol } from "./task-claim-protocol.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import {
   decideTaskWorkSessionRecovery,
@@ -23,11 +25,20 @@ import {
 } from "./task-work-start.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
+import {
+  ActiveTaskClaim,
+  type TaskClaimConflict,
+  type TaskClaimOwnershipConflict,
+  type TaskClaimReadFailure,
+  type TaskClaimRequestFailure,
+  type TrackerMutationService
+} from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
   compareOperationIds,
+  makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
   workflowOperationId
@@ -191,6 +202,19 @@ export const runTaskWorkSessionEstablishmentProtocol = Effect.fn(
 })
 
 interface WorkflowInterpreterService {
+  readonly acquireTaskClaim: (
+    operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
+  ) => Effect.Effect<
+    TaskClaimAcquisitionResult,
+    | CoordinatorOwnershipError
+    | JournalStoreContradiction
+    | JournalStoreError
+    | TaskClaimAcquisitionDidNotConverge
+    | TaskClaimConflict
+    | TaskClaimOwnershipConflict
+    | TaskClaimReadFailure
+    | TaskClaimRequestFailure
+  >
   readonly establishTaskWorkSession: (
     operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type
   ) => Effect.Effect<
@@ -215,6 +239,24 @@ export class WorkflowInterpreter extends Context.Service<
   WorkflowInterpreterService
 >()("@dalph/WorkflowInterpreter") {}
 
+/** The real tracker proved the exact task claim after a fresh observation. */
+export const AuthoritativeTaskClaimAcquired = Schema.TaggedStruct(
+  "AuthoritativeTaskClaimAcquired",
+  { claim: ActiveTaskClaim }
+)
+
+/** Dry-run records intended ownership without claiming or reading claim state. */
+export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct(
+  "TaskClaimAcquisitionSimulated",
+  { operation: WorkflowOperation.cases.AcquireTaskClaim }
+)
+
+const TaskClaimAcquisitionResult = Schema.Union([
+  AuthoritativeTaskClaimAcquired,
+  TaskClaimAcquisitionSimulated
+])
+type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
+
 /** Records selection of one immutable workflow operation. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
   operation: WorkflowOperation
@@ -228,9 +270,48 @@ export const TrackerGraphOutcomeObserved = Schema.TaggedStruct(
   }
 )
 
-/** Records one held unit of bounded task-work capacity without claiming work started. */
-export const TaskWorkCapacityReserved = Schema.TaggedStruct(
-  "TaskWorkCapacityReserved",
+/** Records immutable claim intent before any task-tracker state-changing request. */
+export const TaskClaimAcquisitionIntended = Schema.TaggedStruct(
+  "TaskClaimAcquisitionIntended",
+  { operation: WorkflowOperation.cases.AcquireTaskClaim }
+)
+
+/** Records the exact claim only after a fresh tracker claim observation. */
+export const TaskClaimAcquiredTrace = Schema.TaggedStruct(
+  "TaskClaimAcquired",
+  {
+    claim: ActiveTaskClaim,
+    operation: WorkflowOperation.cases.AcquireTaskClaim
+  }
+)
+
+/**
+ * Records tracker execution admission after a post-claim graph read proves the
+ * task is open and within the run's current tracker target closure.
+ */
+export const TrackerExecutionAdmitted = Schema.TaggedStruct(
+  "TrackerExecutionAdmitted",
+  {
+    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
+    observationOperation: WorkflowOperation.cases.ReadTrackerGraph
+  }
+)
+
+/**
+ * Records one held unit of bounded task-work capacity. It is neither tracker
+ * execution admission nor evidence that a task-work provider started work.
+ */
+export const TaskExecutionAdmitted = Schema.TaggedStruct(
+  "TaskExecutionAdmitted",
+  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
+)
+
+/**
+ * Records provider evidence that task work began. Session establishment alone
+ * cannot emit this event; issue #46 owns its first production observation.
+ */
+export const TaskExecutionStarted = Schema.TaggedStruct(
+  "TaskExecutionStarted",
   { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
 )
 
@@ -310,7 +391,11 @@ export const TaskWorkSessionEstablishmentDidNotConvergeTrace = Schema.TaggedStru
 export const TraceItem = Schema.Union([
   OperationSelected,
   TrackerGraphOutcomeObserved,
-  TaskWorkCapacityReserved,
+  TaskClaimAcquisitionIntended,
+  TaskClaimAcquiredTrace,
+  TrackerExecutionAdmitted,
+  TaskExecutionAdmitted,
+  TaskExecutionStarted,
   TaskWorkStartRequestedTrace,
   TaskWorkStartRequestAcknowledgedTrace,
   TaskWorkStartRequestFailedTrace,
@@ -360,6 +445,17 @@ export const taskWorkSessionTraceObserver = (
     yield* trace.emit(TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
   })
 })
+
+export const acquireTaskClaimThrough = (
+  tracker: TrackerMutationService,
+  operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
+) =>
+  runTaskClaimAcquisitionProtocol(
+    tracker,
+    operation.acquisition
+  ).pipe(
+    Effect.map((claim) => AuthoritativeTaskClaimAcquired.make({ claim }))
+  )
 
 export const emitTaskWorkSessionNonConvergence = (
   failure: TaskWorkSessionProtocolFailure,

@@ -2,8 +2,9 @@ import { NodeTerminal } from "@effect/platform-node"
 import { Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { runCliFromStdio } from "./cli.js"
-import { GitCommitSha, RunId, WorktreeLocator } from "./domain.js"
+import { ClaimOwner, GitCommitSha, RunId, WorktreeLocator } from "./domain.js"
 import { dryRunWorkflowInterpreterLayer } from "./dry-run-simulator.js"
+import { deterministicTaskClaimAcquisitionPlannerLayer } from "./task-claim-planning.js"
 import { deterministicOperationIdAllocatorLayer, deterministicPlannedTaskAttemptLayer } from "./task-work-planning.js"
 import { traceOutputStdioLayer } from "./trace-output.js"
 import { type FixtureReader, fixtureReaderFileLayer, trackerGraphReaderLayer } from "./tracker-graph-reader.js"
@@ -58,6 +59,10 @@ export const dryCliEnvironmentLayer = Layer.mergeAll(
 const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer(
   "dry-run-operation"
 )
+const dryRunTaskClaimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
+  owner: ClaimOwner.make("dry-run"),
+  tokenPrefix: "dry-run-claim"
+})
 
 const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
@@ -73,6 +78,7 @@ export const makeDryRunCliApplication = (
     Effect.provide(workflowTraceOutputLayer),
     Effect.provide(traceOutputStdioLayer),
     Effect.provide(dryRunOperationIdAllocatorLayer),
+    Effect.provide(dryRunTaskClaimPlannerLayer),
     Effect.provide(dryRunPlannedTaskAttemptLayer),
     Effect.provide(trackerGraphReaderLayer),
     Effect.provide(fixtureReaderLayer),

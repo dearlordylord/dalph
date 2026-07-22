@@ -6,6 +6,7 @@ import { TaskWorkSessionCrashScenario } from "../test/task-work-session-crash-sc
 import type { WorkflowOutcome } from "./index.js"
 import {
   AttemptId,
+  controlledTrackerMutationLayer,
   GitCommitSha,
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
@@ -85,7 +86,8 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
       GitCommonDirectoryTarget.make(directory),
-      runnerLayer
+      runnerLayer,
+      controlledTrackerMutationLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TrackerGraphReader,

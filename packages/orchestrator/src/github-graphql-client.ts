@@ -3,7 +3,7 @@ import { Config, Context, Effect, Layer, type Redacted, Schema } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import { GithubIssueTarget } from "./domain.js"
+import { GithubIssueTarget, OperationId } from "./domain.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
 export const GithubIssueNodeId = Schema.NonEmptyString.pipe(
@@ -17,11 +17,37 @@ export const GithubRepositoryNodeId = Schema.NonEmptyString.pipe(
 )
 export type GithubRepositoryNodeId = typeof GithubRepositoryNodeId.Type
 
+/** Identifies one GitHub label record used only inside the tracker adapter. */
+export const GithubLabelNodeId = Schema.NonEmptyString.pipe(
+  Schema.brand("GithubLabelNodeId")
+)
+export type GithubLabelNodeId = typeof GithubLabelNodeId.Type
+
+/** Identifies one repository-scoped GitHub label by its provider name. */
+export const GithubLabelName = Schema.NonEmptyString.pipe(
+  Schema.brand("GithubLabelName")
+)
+export type GithubLabelName = typeof GithubLabelName.Type
+
 /** Continues one GitHub connection read; it is not a journal or presentation position. */
 export const GithubCursor = Schema.NonEmptyString.pipe(Schema.brand("GithubCursor"))
 export type GithubCursor = typeof GithubCursor.Type
 
 export const GithubGraphqlRequest = Schema.TaggedUnion({
+  FindClaimLabel: {
+    labelName: GithubLabelName,
+    repositoryNodeId: GithubRepositoryNodeId
+  },
+  CreateClaimLabel: {
+    description: Schema.NonEmptyString,
+    labelName: GithubLabelName,
+    operationId: OperationId,
+    repositoryNodeId: GithubRepositoryNodeId
+  },
+  DeleteClaimLabel: {
+    labelNodeId: GithubLabelNodeId,
+    operationId: OperationId
+  },
   ResolveIssue: { target: GithubIssueTarget },
   ReadIssue: { issueNodeId: GithubIssueNodeId },
   ReadSubIssues: {
@@ -41,6 +67,9 @@ export const GithubGraphqlResponse = Schema.Struct({
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
 const GithubGraphqlOperation = Schema.Literals([
+  "CreateClaimLabel",
+  "DeleteClaimLabel",
+  "FindClaimLabel",
   "ReadBlockedBy",
   "ReadIssue",
   "ReadSubIssues",
@@ -119,11 +148,59 @@ const readBlockedByQuery = `query ReadBlockedBy($issueNodeId: ID!, $cursor: Stri
   }
 }`
 
+const findClaimLabelQuery = `query FindClaimLabel($repositoryNodeId: ID!, $labelName: String!) {
+  node(id: $repositoryNodeId) {
+    ... on Repository {
+      id
+      label(name: $labelName) { id name description }
+    }
+  }
+}`
+
+const createClaimLabelMutation =
+  `mutation CreateClaimLabel($repositoryNodeId: ID!, $labelName: String!, $description: String!, $operationId: String!) {
+  createLabel(input: { repositoryId: $repositoryNodeId, name: $labelName, color: "5319E7", description: $description, clientMutationId: $operationId }) {
+    label { id name description }
+  }
+}`
+
+const deleteClaimLabelMutation = `mutation DeleteClaimLabel($labelNodeId: ID!, $operationId: String!) {
+  deleteLabel(input: { id: $labelNodeId, clientMutationId: $operationId }) {
+    clientMutationId
+  }
+}`
+
 const requestBody = (request: GithubGraphqlRequest): {
   readonly query: string
   readonly variables: Readonly<Record<string, unknown>>
 } => {
   switch (request._tag) {
+    case "FindClaimLabel":
+      return {
+        query: findClaimLabelQuery,
+        variables: {
+          labelName: request.labelName,
+          repositoryNodeId: request.repositoryNodeId
+        }
+      }
+    case "CreateClaimLabel":
+      return {
+        query: createClaimLabelMutation,
+        variables: {
+          description: request.description,
+          labelName: request.labelName,
+          operationId: request.operationId,
+          repositoryNodeId: request.repositoryNodeId
+        }
+      }
+    case "DeleteClaimLabel":
+      return {
+        query: deleteClaimLabelMutation,
+        variables: {
+          labelNodeId: request.labelNodeId,
+          operationId: request.operationId
+        }
+      }
     case "ResolveIssue":
       return {
         query: resolveIssueQuery,

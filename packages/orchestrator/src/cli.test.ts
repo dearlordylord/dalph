@@ -3,9 +3,11 @@ import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
+  ClaimOwner,
   CliUsageError,
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
+  deterministicTaskClaimAcquisitionPlannerLayer,
   dryRunWorkflowInterpreterLayer,
   GitCommitSha,
   runCli,
@@ -24,6 +26,10 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
   runId: RunId.make("cli-test"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-cli-test")
 })
+const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
+  owner: ClaimOwner.make("cli-test"),
+  tokenPrefix: "cli-test-claim"
+})
 
 const runArguments = (
   args: ReadonlyArray<string>,
@@ -36,6 +42,7 @@ const runArguments = (
     Effect.provide(trackerGraphReaderFileLayer),
     Effect.provide(deterministicOperationIdAllocatorLayer("cli-test")),
     Effect.provide(plannerLayer),
+    Effect.provide(claimPlannerLayer),
     Effect.provide(NodeServices.layer)
   )
 
@@ -60,7 +67,9 @@ it.effect("runs the dry CLI through the task-work session workflow", () =>
       "TrackerGraphOutcomeObserved",
       "OperationSelected",
       "TrackerGraphOutcomeObserved",
-      "TaskWorkCapacityReserved",
+      "OperationSelected",
+      "TaskClaimAcquisitionIntended",
+      "TaskExecutionAdmitted",
       "OperationSelected",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",

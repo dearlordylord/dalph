@@ -101,6 +101,24 @@ task. It is distinct from `RunId`, `TaskId`, `OperationId`, and provider-user
 identity unless an accepted specification explicitly relates them.
 _Avoid_: Run identity, GitHub assignee, coordinator process ID
 
+**Claim token**:
+The unguessable Dalph-assigned capability recorded with one task claim. A
+release or later claim change must name the exact current claim owner and token;
+a token from an earlier claim cannot authorize a replacement claim.
+_Avoid_: Operation identity, run identity, provider-user identity
+
+**Task claim acquisition intended**:
+The workflow-history fact recorded before Dalph asks the task tracker to create
+one exact task claim. It neither proves that the request crossed the boundary
+nor that the tracker accepted it.
+_Avoid_: Task claimed, tracker execution admitted
+
+**Task claim acquired**:
+A fresh task-tracker claim observation proves that the exact intended owner and
+token currently own the task. It does not prove that the task remains open or
+inside the run's current task-tracker target closure.
+_Avoid_: Claim request acknowledged, tracker execution admitted
+
 **Completion claim**:
 The temporary task-tracker record that replaces one exact active task claim
 immediately before Dalph asks the task tracker to mark the task complete. It
@@ -200,11 +218,24 @@ configured grouping/query selector and prerequisite expansion. Selection does
 not claim the task, reserve capacity, or prove that work started.
 _Avoid_: Tracker execution admission, task admission, task start
 
-**Task-work capacity reserved**:
-The coordinator reserves one unit of its bounded task-work capacity for one
-runnable planned task attempt. The reservation does not prove that a session,
+**Tracker execution admitted**:
+After claim acquisition, a fresh read through the real task-tracker boundary
+proves that the claimed task is open and remains in the run's task-tracker
+target closure. Dry-run, rejected claims, inaccessible reads, and missing or
+non-open tasks cannot establish this event.
+_Avoid_: Task claim acquired, task execution admitted, task execution started
+
+**Task execution admitted**:
+The coordinator admits one runnable planned task attempt into its bounded
+task-work capacity. Admission does not prove tracker scope or that a session,
 provider work unit, or worker process started.
-_Avoid_: Task execution admission, tracker execution admission, task start
+_Avoid_: Tracker execution admitted, task execution started
+
+**Task execution started**:
+The task-work provider reports evidence that task work began. Claim ownership,
+bounded capacity, a start request, or task-work session establishment alone
+cannot establish this event.
+_Avoid_: Tracker execution admitted, task execution admitted, task-work start requested
 
 **Task-work start requested**:
 The coordinator asks the task runner to start task work by requesting a new

@@ -3,8 +3,10 @@ import { Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import {
+  ClaimOwner,
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
+  deterministicTaskClaimAcquisitionPlannerLayer,
   FixtureTarget,
   GitCommitSha,
   liveFakeWorkflowInterpreterLayer,
@@ -32,6 +34,10 @@ const planningLayers = [
     baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
     runId: RunId.make("workflow-test"),
     worktreeRoot: WorktreeLocator.make("/tmp/dalph-workflow-test")
+  }),
+  deterministicTaskClaimAcquisitionPlannerLayer({
+    owner: ClaimOwner.make("workflow-test"),
+    tokenPrefix: "workflow-test-claim"
   })
 ] as const
 
@@ -62,7 +68,8 @@ const runLayered = <A, E, R>(
     Effect.provide(Layer.succeed(TaskRunner, runner)),
     Effect.provide(trackerGraphReaderFileLayer),
     Effect.provide(planningLayers[0]),
-    Effect.provide(planningLayers[1])
+    Effect.provide(planningLayers[1]),
+    Effect.provide(planningLayers[2])
   )
 
 it.effect("emits every distinct task-work session-establishment phenomenon", () =>
@@ -84,7 +91,13 @@ it.effect("emits every distinct task-work session-establishment phenomenon", () 
       "TrackerGraphOutcomeObserved",
       "OperationSelected",
       "TrackerGraphOutcomeObserved",
-      "TaskWorkCapacityReserved",
+      "OperationSelected",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "OperationSelected",
+      "TrackerGraphOutcomeObserved",
+      "TrackerExecutionAdmitted",
+      "TaskExecutionAdmitted",
       "OperationSelected",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -143,7 +156,7 @@ it.effect("does not send a start request when capacity trace output fails", () =
       WorkflowTrace,
       WorkflowTrace.of({
         emit: (item) =>
-          item._tag === "TaskWorkCapacityReserved"
+          item._tag === "TaskExecutionAdmitted"
             ? Effect.fail(failure)
             : Effect.void
       })
@@ -206,7 +219,8 @@ it.effect("revalidates tracker eligibility immediately before task-work start", 
         WorkflowTrace.of({ emit: () => Effect.void })
       )),
       Effect.provide(planningLayers[0]),
-      Effect.provide(planningLayers[1])
+      Effect.provide(planningLayers[1]),
+      Effect.provide(planningLayers[2])
     )
 
     expect(yield* Ref.get(reads)).toBe(2)

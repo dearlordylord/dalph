@@ -30,6 +30,11 @@ interface IssueProjection {
   readonly prerequisiteNodeIds: ReadonlyArray<GithubIssueNodeId>
 }
 
+type GithubTrackerGraphReadRequest = Exclude<
+  GithubGraphqlRequest,
+  { readonly _tag: "CreateClaimLabel" | "DeleteClaimLabel" | "FindClaimLabel" }
+>
+
 const adapterError = (
   operation: GithubTrackerReadOperation,
   reason: TrackerAdapterReadFailureReason,
@@ -125,7 +130,7 @@ const githubTarget = (
     : Effect.succeed(target)
 
 const operationForRequest = (
-  request: GithubGraphqlRequest
+  request: GithubTrackerGraphReadRequest
 ): GithubTrackerReadOperation => {
   switch (request._tag) {
     case "ResolveIssue":
@@ -157,7 +162,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
     ) {
       const selectedTarget = yield* githubTarget(target)
       const execute = Effect.fn("GithubTrackerGraphReader.execute")(function*(
-        request: GithubGraphqlRequest
+        request: GithubTrackerGraphReadRequest
       ) {
         const operation = operationForRequest(request)
         const response = yield* client.execute(request).pipe(

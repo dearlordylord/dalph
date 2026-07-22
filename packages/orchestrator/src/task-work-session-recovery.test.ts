@@ -474,6 +474,7 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
   const baseLayer = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      acquireTaskClaim: () => Effect.die("unused claim acquisition"),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
       readTrackerGraph: () => Effect.succeed(snapshot)
     })
@@ -498,8 +499,8 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
     expect(yield* interpreter.readTrackerGraph(graphOperation)).toEqual(snapshot)
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
-      "ManagedWorkflowIntent",
-      "ManagedTrackerGraphOutcomeObserved"
+      "TrackerGraphObservationIntentRecorded",
+      "TrackerGraphOutcomeObserved"
     ])
   }).pipe(
     Effect.provide(layer),

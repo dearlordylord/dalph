@@ -18,11 +18,11 @@ through a read-only dry-run interpreter. Dry-run completion timing is
 reproducible, while the semantic trace preserves the order in which concurrent
 outcomes are observed.
 
-The current CLI is deliberately fixture-only and requires `--dry`. It does not
-yet read live GitHub state, claim tasks, create worktrees or sessions, integrate
-accepted results, recover from the durable SQLite journal, or establish a
-terminal run disposition. Those capabilities remain owned by the open
-implementation tickets in the repository issue tracker.
+The current CLI is deliberately fixture-only and requires `--dry`. The
+production package now contains the complete GitHub graph reader and an atomic
+label-backed task-claim adapter, while CLI registration of those live adapters
+remains separate work. The CLI does not yet create worktrees, run real task
+work, integrate accepted results, or establish a terminal run disposition.
 
 ## Repository map
 

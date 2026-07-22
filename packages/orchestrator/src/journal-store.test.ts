@@ -15,11 +15,11 @@ import {
   JournalStorageUnavailable,
   JournalStore,
   JournalStoreContradiction,
-  managedWorkflowIntent,
   memoryJournalStoreLayer,
   OperationId,
   RunId,
   sqliteJournalStoreLayer,
+  trackerGraphObservationIntent,
   WorkflowOperation
 } from "./index.js"
 import { classifyJournalStorageFailure } from "./sqlite-journal-store.js"
@@ -59,7 +59,7 @@ const withSqliteClient = <A, E, R>(
   )
 
 const intent = (operationId: string, taskId: string) =>
-  managedWorkflowIntent(
+  trackerGraphObservationIntent(
     WorkflowOperation.cases.ReadTrackerGraph.make({
       operationId: OperationId.make(operationId),
       predecessorOperationIds: [],
