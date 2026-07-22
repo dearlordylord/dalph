@@ -6,16 +6,20 @@ import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionAdmitted, TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
+import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   makeTrackerGraphObservedOutcome,
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TaskWorkSessionEstablishedTrace,
+  TaskWorktreeReadyTrace,
+  TaskWorktreeReconciliationSimulatedTrace,
   type TraceItem,
   TrackerExecutionAdmitted,
   TrackerGraphOutcomeObserved,
@@ -119,25 +123,58 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           ? TaskAttemptPlanAcknowledged.make({ operation: planOperation })
           : TaskAttemptPlanRecordingSimulated.make({ operation: planOperation })
       )
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: yield* allocator.allocate(),
+        plannedAttempt,
+        predecessorOperationIds: [planOperation.operationId]
+      })
+      yield* emit(OperationSelected.make({ operation: worktreeOperation }))
+      const worktreeResult = yield* interpreter.reconcileTaskWorktree(
+        worktreeOperation
+      )
+      yield* emit(
+        worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
+          ? TaskWorktreeReadyTrace.make({
+            operation: worktreeOperation,
+            proof: worktreeResult.proof
+          })
+          : TaskWorktreeReconciliationSimulatedTrace.make({
+            operation: worktreeOperation
+          })
+      )
       const request = TaskWorkStartRequest.make({
         operationId: yield* allocator.allocate(),
         plannedAttempt,
         task: taskForAttempt
       })
       const operation = makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [planOperation.operationId],
+        predecessorOperationIds: [
+          planOperation.operationId,
+          worktreeOperation.operationId
+        ],
         request
       })
       yield* emit(OperationSelected.make({ operation }))
-      yield* emit(TaskExecutionAdmitted.make({ operation }))
-      if (planResult._tag === "TaskAttemptPlanRecordAcknowledged") {
+      if (
+        planResult._tag === "TaskAttemptPlanRecordAcknowledged"
+        && worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
+      ) {
+        yield* emit(TaskExecutionAdmitted.make({ operation }))
         const outcome = yield* interpreter.establishTaskWorkSession(operation)
         yield* emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
-      } else {
+      } else if (
+        planResult._tag === "TaskAttemptPlanRecordingSimulated"
+        && worktreeResult._tag === "TaskWorktreeReconciliationSimulated"
+      ) {
+        yield* emit(TaskExecutionAdmitted.make({ operation }))
         const outcome = yield* interpreter.simulateTaskWorkSession(operation)
         yield* emit(
           TaskWorkSessionEstablishmentSimulatedTrace.make({ operation, outcome })
         )
+      } else {
+        return yield* new TaskWorktreeExecutionModeContradiction({
+          operationId: worktreeOperation.operationId
+        })
       }
     }),
     { concurrency: capacity, discard: true }

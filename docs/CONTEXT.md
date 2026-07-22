@@ -135,6 +135,23 @@ discovers any of those execution resources. Planning it does not prove that an
 external resource exists or that task work started.
 _Avoid_: Task, task work, task-work session, retry counter
 
+**Planned worktree ready**:
+A fresh Git observation proving that one planned task attempt's exact worktree
+path is registered to its exact branch, reporting current `HEAD`, and that Git
+successfully checked the attempt's declared Base SHA as an ancestor of that
+`HEAD`. This proof is logged before Dalph asks the task-work provider to begin
+agent work.
+_Avoid_: Worktree created, branch exists, task execution admitted
+
+**Git worktree reconciliation fact**:
+A typed fresh Git observation that prevents Dalph from creating or using the
+planned worktree: an existing but unregistered target path, the planned branch
+registered at a foreign path, a different branch registered at the planned
+path, contradictory Git records, or a declared Base that is not an ancestor of
+current `HEAD`. Dalph preserves the resource and fact for operator repair; it
+does not repair, move, reset, clean, or delete the resource.
+_Avoid_: Git error, worktree cleanup candidate, recoverable mismatch
+
 **Task revision**:
 The canonical revision of one normalized task's tracker-observed content bound
 to a planned task attempt. It is distinct from the revision of the complete

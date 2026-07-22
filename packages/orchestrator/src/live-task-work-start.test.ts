@@ -17,13 +17,16 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  TaskRevision,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
+import { GitWorktree, gitWorktreeTestLayer, PlannedWorktreeAbsent } from "./git-worktree.js"
 import {
   controlledCoordinatorLockLayer,
   controlledTrackerMutationLayer,
+  coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
@@ -130,4 +133,37 @@ it.effect("guards claim acquisition and release while leaving observation read-o
       expect(yield* tracker.readTaskClaim(acquisition.taskId)).toEqual(claim)
       yield* tracker.releaseTaskClaim(claim)
     }).pipe(Effect.provide(ownedTrackerLayer))
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("guards worktree creation while leaving Git observation read-only", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-git-owner-" })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const ownedGitLayer = coordinatorOwnedGitWorktreeLayer(
+      gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))
+    ).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("git-owned-attempt"),
+      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      branch: TaskBranchRef.make("refs/heads/git-owned"),
+      executor: TaskExecutorLocator.make("executor:test"),
+      runId: RunId.make("git-owned-run"),
+      session: TaskWorkSessionLocator.make("git-owned-session"),
+      taskId: TaskId.make("git-owned-task"),
+      taskRevision: TaskRevision.make("git-owned-revision"),
+      worktree: WorktreeLocator.make(`${directory}/worktree`)
+    })
+
+    yield* Effect.gen(function*() {
+      const git = yield* GitWorktree
+      expect((yield* git.readPlannedWorktree(plannedAttempt))._tag)
+        .toBe("PlannedWorktreeAbsent")
+      yield* git.createPlannedWorktree(plannedAttempt)
+      expect((yield* git.readPlannedWorktree(plannedAttempt))._tag)
+        .toBe("PlannedWorktreeReady")
+    }).pipe(Effect.provide(ownedGitLayer))
   }).pipe(Effect.provide(NodeFileSystem.layer)))

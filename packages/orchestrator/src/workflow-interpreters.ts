@@ -1,4 +1,10 @@
 import { Effect, Layer } from "effect"
+import {
+  GitWorktree,
+  gitWorktreeTestLayer,
+  PlannedWorktreeAbsent,
+  runGitWorktreeReconciliation
+} from "./git-worktree.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
@@ -6,10 +12,12 @@ import { controlledTrackerMutationLayer, TrackerMutation } from "./tracker-mutat
 import { WorkflowOutcome } from "./workflow-outcome.js"
 import {
   acquireTaskClaimThrough,
+  AuthoritativeTaskWorktreeReady,
   emitTaskWorkSessionNonConvergence,
   runTaskWorkSessionEstablishmentProtocol,
   TaskClaimAcquisitionSimulated,
   taskWorkSessionTraceObserver,
+  TaskWorktreeReconciliationSimulated,
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
@@ -24,13 +32,15 @@ const simulateTaskWorkSession = Effect.fn(
 })
 
 const taskRunnerInterpreterLayer = (
-  operationPrefix: "TaskRunner" | "DeterministicTest"
+  operationPrefix: "TaskRunner" | "DeterministicTest",
+  worktreeMode: "Authoritative" | "Simulated"
 ) =>
   Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       const reader = yield* TrackerGraphReader
       const runner = yield* TaskRunner
+      const gitWorktree = yield* GitWorktree
       const tracker = yield* TrackerMutation
       const trace = yield* WorkflowTrace
       const readTrackerGraph = Effect.fn(
@@ -60,10 +70,23 @@ const taskRunnerInterpreterLayer = (
       )(function*(operation) {
         return TaskAttemptPlanRecordingSimulated.make({ operation })
       })
+      const reconcileTaskWorktree = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.reconcileTaskWorktree`
+      )(function*(operation) {
+        if (worktreeMode === "Simulated") {
+          return TaskWorktreeReconciliationSimulated.make({ operation })
+        }
+        const proof = yield* runGitWorktreeReconciliation(
+          gitWorktree,
+          operation.plannedAttempt
+        )
+        return AuthoritativeTaskWorktreeReady.make({ proof })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
         recordTaskAttemptPlan,
+        reconcileTaskWorktree,
         readTrackerGraph,
         simulateTaskWorkSession
       })
@@ -71,13 +94,22 @@ const taskRunnerInterpreterLayer = (
   )
 
 export const deterministicTestWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
-  "DeterministicTest"
-).pipe(Layer.provide(controlledTrackerMutationLayer))
-export const trackerMutationWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
-  "TaskRunner"
+  "DeterministicTest",
+  "Simulated"
+).pipe(
+  Layer.provide(controlledTrackerMutationLayer),
+  Layer.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
 )
-export const taskRunnerWorkflowInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
-  Layer.provide(controlledTrackerMutationLayer)
+export const trackerMutationWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
+  "TaskRunner",
+  "Authoritative"
+)
+export const taskRunnerWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
+  "TaskRunner",
+  "Simulated"
+).pipe(
+  Layer.provide(controlledTrackerMutationLayer),
+  Layer.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
 )
 export const liveFakeWorkflowInterpreterLayer = taskRunnerWorkflowInterpreterLayer
 
@@ -105,10 +137,16 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
       )(function*(operation) {
         return TaskAttemptPlanRecordingSimulated.make({ operation })
       })
+      const reconcileTaskWorktree = Effect.fn(
+        "WorkflowInterpreter.DryRun.reconcileTaskWorktree"
+      )(function*(operation) {
+        return TaskWorktreeReconciliationSimulated.make({ operation })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession: () => Effect.die("dry-run cannot establish a provider task-work session"),
         recordTaskAttemptPlan,
+        reconcileTaskWorktree,
         readTrackerGraph,
         simulateTaskWorkSession
       })

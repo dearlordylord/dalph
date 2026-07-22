@@ -1,10 +1,10 @@
 import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import { OperationId, PlannedTaskAttempt, ProviderObservationId, RunId } from "./domain.js"
+import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "./git-worktree.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
-import type { TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
-import { runTaskClaimAcquisitionProtocol } from "./task-claim-protocol.js"
+import { runTaskClaimAcquisitionProtocol, type TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import * as TaskExecutionTrace from "./task-execution-trace.js"
 import {
@@ -25,6 +25,7 @@ import {
   TaskWorkStartRequestAcknowledgement,
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
+import * as TaskWorktree from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
 import {
@@ -35,6 +36,7 @@ import {
   type TaskClaimRequestFailure,
   type TrackerMutationService
 } from "./tracker-mutation.js"
+import * as TrackerTrace from "./tracker-workflow-trace.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 export {
@@ -43,6 +45,7 @@ export {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   workflowOperationId
 } from "./workflow-operation.js"
@@ -52,6 +55,15 @@ export {
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionLookupDidNotConverge
 } from "./task-work-session-recovery-decision.js"
+export {
+  AuthoritativeTaskWorktreeReady,
+  TaskWorktreeExecutionModeContradiction,
+  TaskWorktreeHistoryContradiction,
+  TaskWorktreeReadyTrace,
+  TaskWorktreeReconciliationSimulated,
+  TaskWorktreeReconciliationSimulatedTrace
+} from "./task-worktree-reconciliation.js"
+export * from "./tracker-workflow-trace.js"
 export { makeTrackerGraphObservedOutcome, WorkflowOutcome } from "./workflow-outcome.js"
 
 /** Fresh provider evidence contradicts an earlier matching-session report. */
@@ -112,6 +124,7 @@ const silentTaskWorkSessionProtocolObserver: TaskWorkSessionProtocolObserver = {
 
 type TaskWorkSessionProtocolFailure =
   | CoordinatorOwnershipError
+  | TaskWorktree.TaskWorktreeHistoryContradiction
   | TaskWorkSessionObservationError
   | typeof TaskWorkSessionCorrelationConflict.Type
   | TaskWorkSessionEstablishmentDidNotConverge
@@ -238,6 +251,19 @@ interface WorkflowInterpreterService {
   readonly recordTaskAttemptPlan: (
     operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
   ) => Effect.Effect<TaskAttemptPlan.TaskAttemptPlanRecordingResult, TaskAttemptPlanRecordingError>
+  readonly reconcileTaskWorktree: (
+    operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type
+  ) => Effect.Effect<
+    TaskWorktree.TaskWorktreeReconciliationResult,
+    | CoordinatorOwnershipError
+    | GitWorktreeCreateFailure
+    | GitWorktreeObservationError
+    | JournalStoreContradiction
+    | JournalStoreError
+    | TaskAttemptPlan.TaskAttemptPlanHistoryContradiction
+    | TaskAttemptPlan.TaskAttemptPlanRunContradiction
+    | TaskWorktree.TaskWorktreeHistoryContradiction
+  >
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
   ) => Effect.Effect<
@@ -273,46 +299,6 @@ const TaskClaimAcquisitionResult = Schema.Union([
   TaskClaimAcquisitionSimulated
 ])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
-
-/** Records selection of one immutable workflow operation. */
-export const OperationSelected = Schema.TaggedStruct("OperationSelected", {
-  operation: WorkflowOperation
-})
-
-export const TrackerGraphOutcomeObserved = Schema.TaggedStruct(
-  "TrackerGraphOutcomeObserved",
-  {
-    operation: WorkflowOperation.cases.ReadTrackerGraph,
-    outcome: WorkflowOutcome.cases.TrackerGraphObserved
-  }
-)
-
-/** Records immutable claim intent before any task-tracker state-changing request. */
-export const TaskClaimAcquisitionIntended = Schema.TaggedStruct(
-  "TaskClaimAcquisitionIntended",
-  { operation: WorkflowOperation.cases.AcquireTaskClaim }
-)
-
-/** Records the exact claim only after a fresh tracker claim observation. */
-export const TaskClaimAcquiredTrace = Schema.TaggedStruct(
-  "TaskClaimAcquired",
-  {
-    claim: ActiveTaskClaim,
-    operation: WorkflowOperation.cases.AcquireTaskClaim
-  }
-)
-
-/**
- * Records tracker execution admission after a post-claim graph read proves the
- * task is open and within the run's current tracker target closure.
- */
-export const TrackerExecutionAdmitted = Schema.TaggedStruct(
-  "TrackerExecutionAdmitted",
-  {
-    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
-    observationOperation: WorkflowOperation.cases.ReadTrackerGraph
-  }
-)
 
 export const TaskWorkStartRequestedTrace = Schema.TaggedStruct(
   "TaskWorkStartRequested",
@@ -388,13 +374,15 @@ export const TaskWorkSessionEstablishmentDidNotConvergeTrace = Schema.TaggedStru
 )
 
 export const TraceItem = Schema.Union([
-  OperationSelected,
-  TrackerGraphOutcomeObserved,
-  TaskClaimAcquisitionIntended,
-  TaskClaimAcquiredTrace,
+  TrackerTrace.OperationSelected,
+  TrackerTrace.TrackerGraphOutcomeObserved,
+  TrackerTrace.TaskClaimAcquisitionIntended,
+  TrackerTrace.TaskClaimAcquiredTrace,
   TaskAttemptPlan.TaskAttemptPlanAcknowledged,
   TaskAttemptPlan.TaskAttemptPlanRecordingSimulated,
-  TrackerExecutionAdmitted,
+  TrackerTrace.TrackerExecutionAdmitted,
+  TaskWorktree.TaskWorktreeReadyTrace,
+  TaskWorktree.TaskWorktreeReconciliationSimulatedTrace,
   TaskExecutionTrace.TaskExecutionAdmitted,
   TaskExecutionTrace.TaskExecutionStarted,
   TaskWorkStartRequestedTrace,

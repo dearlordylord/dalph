@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import {
+  AuthoritativeTaskWorktreeReady,
   ClaimOwner,
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -12,18 +13,23 @@ import {
   liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
   PlannedTaskAttemptPlanner,
+  PlannedWorktreeReady,
   ProviderObservationId,
   ProviderRequestId,
   RunId,
   runWorkflow,
+  TaskAttemptPlanRecordAcknowledged,
   TaskExecutorLocator,
   TaskRunner,
   TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
+  TaskWorktreeExecutionModeContradiction,
   TraceOutputError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
+  WorkflowInterpreter,
+  WorkflowOutcome,
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
@@ -66,10 +72,11 @@ const runLayered = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   traceLayer: Layer.Layer<WorkflowTrace>,
   runner = successfulTaskRunner,
-  attemptPlannerLayer = planningLayers[1]
+  attemptPlannerLayer = planningLayers[1],
+  interpreterLayer = liveFakeWorkflowInterpreterLayer
 ) =>
   effect.pipe(
-    Effect.provide(liveFakeWorkflowInterpreterLayer),
+    Effect.provide(interpreterLayer),
     Effect.provide(traceLayer),
     Effect.provide(Layer.succeed(TaskRunner, runner)),
     Effect.provide(trackerGraphReaderFileLayer),
@@ -106,9 +113,98 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "OperationSelected",
       "TaskAttemptPlanRecordingSimulated",
       "OperationSelected",
+      "TaskWorktreeReconciliationSimulated",
+      "OperationSelected",
       "TaskExecutionAdmitted",
       "TaskWorkSessionEstablishmentSimulated"
     ])
+  }))
+
+it.effect("establishes task work only after an authoritative worktree proof", () =>
+  Effect.gen(function*() {
+    const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
+    const liveInterpreterLayer = Layer.effect(
+      WorkflowInterpreter,
+      Effect.gen(function*() {
+        const delegate = yield* WorkflowInterpreter
+        return WorkflowInterpreter.of({
+          ...delegate,
+          establishTaskWorkSession: (operation) =>
+            Effect.succeed(
+              WorkflowOutcome.cases.TaskWorkSessionEstablished.make({
+                operationId: operation.request.operationId,
+                sessionId: TaskWorkSessionId.make("live-session")
+              })
+            ),
+          recordTaskAttemptPlan: (operation) =>
+            Effect.succeed(
+              TaskAttemptPlanRecordAcknowledged.make({
+                plannedAttempt: operation.plannedAttempt
+              })
+            ),
+          reconcileTaskWorktree: (operation) =>
+            Effect.succeed(AuthoritativeTaskWorktreeReady.make({
+              proof: PlannedWorktreeReady.make({
+                baseSha: operation.plannedAttempt.baseSha,
+                branch: operation.plannedAttempt.branch,
+                headSha: operation.plannedAttempt.baseSha,
+                worktree: operation.plannedAttempt.worktree
+              })
+            }))
+        })
+      })
+    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    yield* runLayered(
+      runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
+      Layer.succeed(
+        WorkflowTrace,
+        WorkflowTrace.of({
+          emit: (item) => Ref.update(items, (current) => [...current, item])
+        })
+      ),
+      successfulTaskRunner,
+      planningLayers[1],
+      liveInterpreterLayer
+    )
+
+    const tags = (yield* Ref.get(items)).map((item) => item._tag)
+    expect(tags.indexOf("TaskWorktreeReady")).toBeLessThan(
+      tags.indexOf("TaskWorkSessionEstablished")
+    )
+  }))
+
+it.effect("rejects acknowledged planning paired with simulated Git reconciliation", () =>
+  Effect.gen(function*() {
+    const starts = yield* Ref.make(0)
+    const mixedLayer = Layer.effect(
+      WorkflowInterpreter,
+      Effect.gen(function*() {
+        const delegate = yield* WorkflowInterpreter
+        return WorkflowInterpreter.of({
+          ...delegate,
+          establishTaskWorkSession: () =>
+            Ref.update(starts, (value) => value + 1).pipe(
+              Effect.andThen(Effect.die("mixed mode must not start agent work"))
+            ),
+          recordTaskAttemptPlan: (operation) =>
+            Effect.succeed(
+              TaskAttemptPlanRecordAcknowledged.make({
+                plannedAttempt: operation.plannedAttempt
+              })
+            )
+        })
+      })
+    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    const failure = yield* runLayered(
+      runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
+      Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      successfulTaskRunner,
+      planningLayers[1],
+      mixedLayer
+    ).pipe(Effect.flip)
+
+    expect(failure).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
+    expect(yield* Ref.get(starts)).toBe(0)
   }))
 
 it.effect("reserves no more than the configured concurrent task attempts", () =>

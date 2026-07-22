@@ -260,6 +260,31 @@ operation is a direct causal predecessor. Missing, duplicate, non-causal, and
 mismatched plan evidence fail with a typed contradiction before provider
 mutation.
 
+## Exact Git Worktree Reconciliation
+
+After the journal acknowledges one immutable planned task attempt and before
+Dalph asks the task-work provider to begin agent work, Dalph records one exact
+worktree-reconciliation intent. It then reads Git's registered worktrees and
+the planned branch. Only a fresh observation that both resources are absent may
+authorize `git worktree add`; an existing planned branch may authorize adding
+that branch only after Git proves the declared Base is its ancestor.
+
+Every create request is followed by a fresh Git read, including when the Git
+command returns an uncertain failure. Dalph proceeds only with a
+`PlannedWorktreeReady` proof containing the declared Base, current `HEAD`, exact
+branch ref, and exact worktree path after `merge-base --is-ancestor` succeeds.
+The task-work-session operation causally depends on both the acknowledged plan
+and this worktree-reconciliation operation. Dry-run projects the same operation
+without reading or changing Git and cannot fabricate a Base/HEAD proof.
+
+If the declared Base is not an ancestor of current `HEAD`, Dalph stops without
+resetting or recreating the branch. A target directory that Git does not
+register, a planned branch registered at a foreign worktree, a different branch
+registered at the planned path, duplicate registrations, detached planned
+worktrees, and malformed Git output remain distinct typed reconciliation facts.
+Dalph preserves every observed resource; this workflow performs no repair,
+clean, move, reset, prune, or deletion.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

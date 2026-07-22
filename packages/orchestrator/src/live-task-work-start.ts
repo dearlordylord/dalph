@@ -7,6 +7,7 @@ import {
   CoordinatorOwnership
 } from "./coordinator-lock.js"
 import type { GitCommonDirectoryTarget } from "./domain.js"
+import { GitWorktree } from "./git-worktree.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerMutation } from "./tracker-mutation.js"
@@ -79,6 +80,28 @@ export const coordinatorOwnedTrackerMutationLayer = <E, R>(
       })
     })
   ).pipe(Layer.provide(trackerMutationLayer))
+
+/** Guards only Git worktree creation; Git observations remain read-only. */
+export const coordinatorOwnedGitWorktreeLayer = <E, R>(
+  gitWorktreeLayer: Layer.Layer<GitWorktree, E, R>
+) =>
+  Layer.effect(
+    GitWorktree,
+    Effect.gen(function*() {
+      const ownership = yield* CoordinatorOwnership
+      const gitWorktree = yield* GitWorktree
+      return GitWorktree.of({
+        createPlannedWorktree: Effect.fn(
+          "GitWorktree.CoordinatorOwned.createPlannedWorktree"
+        )(function*(plannedAttempt) {
+          return yield* ownership.runMutation(
+            gitWorktree.createPlannedWorktree(plannedAttempt)
+          )
+        }),
+        readPlannedWorktree: gitWorktree.readPlannedWorktree
+      })
+    })
+  ).pipe(Layer.provide(gitWorktreeLayer))
 
 /** Production ownership acquisition using the OS-backed coordinator lock. */
 export const productionCoordinatorOwnershipLayer = (

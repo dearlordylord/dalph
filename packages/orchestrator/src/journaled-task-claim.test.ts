@@ -21,7 +21,7 @@ import {
   WorkflowTrace
 } from "./index.js"
 import { intentRecordKey } from "./journal-store.js"
-import { recoverTaskClaimAcquisitions } from "./journaled-workflow-interpreter.js"
+import { recoverTaskClaimAcquisitions } from "./workflow-recovery.js"
 
 it.effect("journals claim intent before the authoritative acquired outcome", () => {
   const runId = RunId.make("journaled-claim-run")
@@ -46,6 +46,7 @@ it.effect("journals claim intent before the authoritative acquired outcome", () 
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
@@ -101,6 +102,7 @@ it.effect("records simulated claim intent without an authoritative outcome", () 
       acquireTaskClaim: () => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
@@ -155,6 +157,7 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
@@ -177,6 +180,7 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
       intentRecordKey(acquisition.operationId),
       TaskClaimAcquisitionIntendedEvent.make({ operation, version: 2 })
     )
+    yield* recoverTaskClaimAcquisitions(runId)
     yield* recoverTaskClaimAcquisitions(runId)
     const records = yield* journal.read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([

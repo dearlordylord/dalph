@@ -69,11 +69,30 @@ const RecordTaskAttemptPlanOperation = Schema.TaggedStruct(
   )
 )
 
+const ReconcileTaskWorktreeOperation = Schema.TaggedStruct(
+  "ReconcileTaskWorktree",
+  {
+    operationId: OperationId,
+    plannedAttempt: PlannedTaskAttempt,
+    predecessorOperationIds: CausalPredecessorOperationIds
+  }
+).check(
+  Schema.makeFilter((operation) =>
+    operation.predecessorOperationIds.includes(operation.operationId)
+      ? {
+        path: ["predecessorOperationIds"],
+        issue: "an operation cannot causally precede itself"
+      }
+      : undefined
+  )
+)
+
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
     AcquireTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
+    ReconcileTaskWorktreeOperation,
     EstablishTaskWorkSessionOperation
   ]),
   {
@@ -81,6 +100,7 @@ export const WorkflowOperation = Object.assign(
       AcquireTaskClaim: AcquireTaskClaimOperation,
       EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
+      ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
     }
   }
@@ -99,6 +119,8 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     : operation._tag === "AcquireTaskClaim"
     ? operation.acquisition.operationId
     : operation._tag === "RecordTaskAttemptPlan"
+    ? operation.operationId
+    : operation._tag === "ReconcileTaskWorktree"
     ? operation.operationId
     : operation.request.operationId
 
@@ -166,4 +188,18 @@ export const makeTaskWorkSessionEstablishmentOperation = (
   WorkflowOperation.cases.EstablishTaskWorkSession.make({
     ...fields,
     predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
+  })
+
+export const makeTaskWorktreeReconciliationOperation = (
+  fields: {
+    readonly operationId: OperationId
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  }
+): typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type =>
+  WorkflowOperation.cases.ReconcileTaskWorktree.make({
+    ...fields,
+    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
+      compareOperationIds
+    )
   })

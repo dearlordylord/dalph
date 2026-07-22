@@ -1,8 +1,9 @@
 import { Effect, Layer } from "effect"
-import type { RunId } from "./domain.js"
+import type { OperationId, PlannedTaskAttempt, RunId } from "./domain.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
+  type JournalRecord,
   JournalStore,
   outcomeRecordKey,
   providerObservationRequestRecordKey,
@@ -20,6 +21,8 @@ import {
   TaskWorkStartRequestAcknowledged,
   TaskWorkStartRequested,
   TaskWorkStartRequestFailed,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
@@ -30,12 +33,11 @@ import {
   TaskAttemptPlanRunContradiction
 } from "./task-attempt-plan-recording.js"
 import { TaskRunner } from "./task-work-start.js"
+import { TaskWorktreeHistoryContradiction } from "./task-worktree-reconciliation.js"
 import {
   emitTaskWorkSessionNonConvergence,
   makeTrackerGraphObservedOutcome,
   runTaskWorkSessionEstablishmentProtocol,
-  TaskClaimAcquiredTrace,
-  TaskWorkSessionEstablishedTrace,
   TaskWorkSessionEvidenceContradiction,
   TaskWorkSessionRunContradiction,
   taskWorkSessionTraceObserver,
@@ -43,67 +45,99 @@ import {
   WorkflowTrace
 } from "./workflow.js"
 
-/** Reconciles exact claim intents that lack a durable authoritative outcome. */
-export const recoverTaskClaimAcquisitions = Effect.fn(
-  "WorkflowRecovery.recoverTaskClaimAcquisitions"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const acquiredOperationIds = new Set(
-    records.flatMap(({ event }) => event._tag === "TaskClaimAcquired" ? [event.claim.operationId] : [])
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TaskClaimAcquisitionIntended"
-      && !acquiredOperationIds.has(event.operation.acquisition.operationId)
-      ? [event.operation]
+const requireAcknowledgedPlan = Effect.fn(
+  "WorkflowJournal.requireAcknowledgedPlan"
+)(function*(
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  operationId: OperationId,
+  predecessorOperationIds: ReadonlyArray<OperationId>
+) {
+  const plans = records.flatMap(({ event }) =>
+    event._tag === "TaskAttemptPlanned"
+      && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
+      ? [event]
       : []
   )
-  return yield* Effect.forEach(
-    unresolved,
-    (operation) =>
-      interpreter.acquireTaskClaim(operation).pipe(
-        Effect.tap((result) =>
-          result._tag === "AuthoritativeTaskClaimAcquired"
-            ? trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
-            : Effect.void
-        )
-      )
-  )
+  const plan = plans[0]
+  if (plan === undefined || plans.length !== 1) {
+    return yield* new TaskAttemptPlanHistoryContradiction({
+      attemptId: plannedAttempt.attemptId,
+      operationId,
+      reason: plans.length === 0 ? "Missing" : "MultiplePlans"
+    })
+  }
+  if (!predecessorOperationIds.includes(plan.operation.operationId)) {
+    return yield* new TaskAttemptPlanHistoryContradiction({
+      attemptId: plannedAttempt.attemptId,
+      operationId,
+      reason: "CausalPredecessorMissing"
+    })
+  }
+  if (!samePlannedTaskAttempt(plan.operation.plannedAttempt, plannedAttempt)) {
+    return yield* new TaskAttemptPlanHistoryContradiction({
+      attemptId: plannedAttempt.attemptId,
+      operationId,
+      reason: "PlanMismatch"
+    })
+  }
 })
 
-/** Reconstructs unresolved session-establishment operations from ordered journal history. */
-export const recoverTaskWorkSessionEstablishments = Effect.fn(
-  "WorkflowRecovery.recoverTaskWorkSessionEstablishments"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  // Issue #50 owns total validation/upcasting of ordered managed history. This
-  // issue consumes records that already crossed the JournalStore schema boundary.
-  const established = new Set(
-    records.flatMap(({ event }) =>
-      event._tag === "TaskWorkSessionEstablished"
-        ? [event.outcome.operationId]
+const requireReadyWorktree = Effect.fn("WorkflowJournal.requireReadyWorktree")(
+  function*(
+    records: ReadonlyArray<JournalRecord>,
+    plannedAttempt: PlannedTaskAttempt,
+    operationId: OperationId,
+    predecessorOperationIds: ReadonlyArray<OperationId>
+  ) {
+    const intents = records.flatMap(({ event }) =>
+      event._tag === "TaskWorktreeReconciliationIntended"
+        && predecessorOperationIds.includes(event.operation.operationId)
+        ? [event]
         : []
     )
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
-      && !established.has(event.operation.request.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(
-    unresolved,
-    (operation) =>
-      interpreter.establishTaskWorkSession(operation).pipe(
-        Effect.tap((outcome) => trace.emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome })))
-      )
-  )
-})
+    const intent = intents[0]
+    if (intent === undefined || intents.length !== 1) {
+      return yield* new TaskWorktreeHistoryContradiction({
+        attemptId: plannedAttempt.attemptId,
+        operationId,
+        reason: intents.length === 0 ? "MissingIntent" : "MultipleIntents"
+      })
+    }
+    if (!samePlannedTaskAttempt(intent.operation.plannedAttempt, plannedAttempt)) {
+      return yield* new TaskWorktreeHistoryContradiction({
+        attemptId: plannedAttempt.attemptId,
+        operationId,
+        reason: "PlanMismatch"
+      })
+    }
+    const proofs = records.flatMap(({ event }) =>
+      event._tag === "TaskWorktreeReady"
+        && event.operationId === intent.operation.operationId
+        ? [event.proof]
+        : []
+    )
+    const proof = proofs[0]
+    if (proof === undefined || proofs.length !== 1) {
+      return yield* new TaskWorktreeHistoryContradiction({
+        attemptId: plannedAttempt.attemptId,
+        operationId,
+        reason: proofs.length === 0 ? "MissingProof" : "MultipleProofs"
+      })
+    }
+    if (
+      proof.baseSha !== plannedAttempt.baseSha
+      || proof.branch !== plannedAttempt.branch
+      || proof.worktree !== plannedAttempt.worktree
+    ) {
+      return yield* new TaskWorktreeHistoryContradiction({
+        attemptId: plannedAttempt.attemptId,
+        operationId,
+        reason: "ProofMismatch"
+      })
+    }
+  }
+)
 
 /** Adds durable intent, fresh-result checks, and outcomes to the live interpreter. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
@@ -181,6 +215,43 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         })
       })
 
+      const reconcileTaskWorktree = Effect.fn(
+        "WorkflowInterpreter.Journaled.reconcileTaskWorktree"
+      )(function*(operation) {
+        if (operation.plannedAttempt.runId !== runId) {
+          return yield* new TaskAttemptPlanRunContradiction({
+            journalRunId: runId,
+            operationId: operation.operationId,
+            plannedAttemptRunId: operation.plannedAttempt.runId
+          })
+        }
+        const records = yield* journal.read(runId)
+        yield* requireAcknowledgedPlan(
+          records,
+          operation.plannedAttempt,
+          operation.operationId,
+          operation.predecessorOperationIds
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(operation.operationId),
+          TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 2 })
+        )
+        const result = yield* interpreter.reconcileTaskWorktree(operation)
+        if (result._tag === "AuthoritativeTaskWorktreeReady") {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            TaskWorktreeReadyEvent.make({
+              operationId: operation.operationId,
+              proof: result.proof,
+              version: 2
+            })
+          )
+        }
+        return result
+      })
+
       const establishTaskWorkSession = Effect.fn(
         "WorkflowInterpreter.Journaled.establishTaskWorkSession"
       )(function*(operation) {
@@ -193,42 +264,18 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         }
         const records = yield* journal.read(runId)
         const plannedAttempt = operation.request.plannedAttempt
-        const planEvents = records.flatMap(({ event }) =>
-          event._tag === "TaskAttemptPlanned"
-            && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-            ? [event]
-            : []
+        yield* requireAcknowledgedPlan(
+          records,
+          plannedAttempt,
+          operation.request.operationId,
+          operation.predecessorOperationIds
         )
-        if (planEvents.length === 0) {
-          return yield* new TaskAttemptPlanHistoryContradiction({
-            attemptId: plannedAttempt.attemptId,
-            operationId: operation.request.operationId,
-            reason: "Missing"
-          })
-        }
-        if (planEvents.length > 1) {
-          return yield* new TaskAttemptPlanHistoryContradiction({
-            attemptId: plannedAttempt.attemptId,
-            operationId: operation.request.operationId,
-            reason: "MultiplePlans"
-          })
-        }
-        // The empty case was rejected above, so reduction has a durable plan to return.
-        const planEvent = planEvents.reduce((first) => first)
-        if (!operation.predecessorOperationIds.includes(planEvent.operation.operationId)) {
-          return yield* new TaskAttemptPlanHistoryContradiction({
-            attemptId: plannedAttempt.attemptId,
-            operationId: operation.request.operationId,
-            reason: "CausalPredecessorMissing"
-          })
-        }
-        if (!samePlannedTaskAttempt(planEvent.operation.plannedAttempt, plannedAttempt)) {
-          return yield* new TaskAttemptPlanHistoryContradiction({
-            attemptId: plannedAttempt.attemptId,
-            operationId: operation.request.operationId,
-            reason: "PlanMismatch"
-          })
-        }
+        yield* requireReadyWorktree(
+          records,
+          plannedAttempt,
+          operation.request.operationId,
+          operation.predecessorOperationIds
+        )
         const intentKey = intentRecordKey(operation.request.operationId)
         const hasIntent = records.some(({ key }) => key === intentKey)
         const previousMatchingEvent = records.findLast(({ event }) =>
@@ -376,6 +423,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         acquireTaskClaim,
         establishTaskWorkSession,
         recordTaskAttemptPlan,
+        reconcileTaskWorktree,
         readTrackerGraph,
         simulateTaskWorkSession: interpreter.simulateTaskWorkSession
       })

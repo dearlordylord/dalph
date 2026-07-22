@@ -8,6 +8,7 @@ import {
   ProviderObservationId,
   RunId
 } from "./domain.js"
+import { PlannedWorktreeReady } from "./git-worktree.js"
 import {
   TaskWorkSessionLookup,
   TaskWorkSessionLookupFailure,
@@ -62,6 +63,25 @@ export const TaskAttemptPlannedEvent = Schema.TaggedStruct(
   "TaskAttemptPlanned",
   {
     operation: WorkflowOperationSchema.cases.RecordTaskAttemptPlan,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records exact Git create-or-rediscover intent before any Git state-changing request. */
+export const TaskWorktreeReconciliationIntendedEvent = Schema.TaggedStruct(
+  "TaskWorktreeReconciliationIntended",
+  {
+    operation: WorkflowOperationSchema.cases.ReconcileTaskWorktree,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records declared Base, current HEAD, and the successful ancestor proof read from Git. */
+export const TaskWorktreeReadyEvent = Schema.TaggedStruct(
+  "TaskWorktreeReady",
+  {
+    operationId: OperationId,
+    proof: PlannedWorktreeReady,
     version: Schema.Literal(workflowJournalEventVersion)
   }
 )
@@ -162,6 +182,8 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
   TaskAttemptPlannedEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  TaskWorktreeReadyEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkStartRequested,
   TaskWorkStartRequestAcknowledged,

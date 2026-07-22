@@ -49,6 +49,24 @@ export {
   WorktreeLocator
 } from "./domain.js"
 export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
+export { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
+export {
+  CompetingWorktreeRegistrations,
+  ConflictingWorktreeRegistration,
+  ContradictoryWorktreeState,
+  ForeignWorktreeRegistration,
+  GitWorktree,
+  GitWorktreeCreateFailure,
+  GitWorktreeReadFailure,
+  gitWorktreeTestLayer,
+  PlannedBranchReady,
+  PlannedWorktreeAbsent,
+  PlannedWorktreeReady,
+  runGitWorktreeReconciliation,
+  TestGitWorktree,
+  UntrackedWorktreePath,
+  WorktreeBaseMismatch
+} from "./git-worktree.js"
 export {
   GithubGraphqlClient,
   GithubGraphqlRequest,
@@ -72,22 +90,22 @@ export {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved,
   WorkflowJournalEvent
 } from "./journal-store.js"
+export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 export {
-  journaledWorkflowInterpreterLayer,
-  recoverTaskClaimAcquisitions,
-  recoverTaskWorkSessionEstablishments
-} from "./journaled-workflow-interpreter.js"
-export {
+  coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
+export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 export { productionWorkflowInterpreterLayer } from "./production-application.js"
 export {
   journalDatabaseLocatorConfig,
@@ -184,15 +202,22 @@ export {
   taskRunnerWorkflowInterpreterLayer,
   trackerMutationWorkflowInterpreterLayer
 } from "./workflow-interpreters.js"
+export {
+  recoverTaskClaimAcquisitions,
+  recoverTaskWorkSessionEstablishments,
+  recoverTaskWorktreeReconciliations
+} from "./workflow-recovery.js"
 export { runWorkflow } from "./workflow-run.js"
 export { encodeTraceItem, semanticTrace, workflowTraceOutputLayer } from "./workflow-trace-output.js"
 export {
   AuthoritativeTaskClaimAcquired,
+  AuthoritativeTaskWorktreeReady,
   causalGraphProjection,
   decideTaskWorkSessionRecovery,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   OperationSelected,
   TaskClaimAcquiredTrace,
@@ -211,6 +236,11 @@ export {
   TaskWorkStartRequestAcknowledgedTrace,
   TaskWorkStartRequestedTrace,
   TaskWorkStartRequestFailedTrace,
+  TaskWorktreeExecutionModeContradiction,
+  TaskWorktreeHistoryContradiction,
+  TaskWorktreeReadyTrace,
+  TaskWorktreeReconciliationSimulated,
+  TaskWorktreeReconciliationSimulatedTrace,
   TraceItem,
   TrackerExecutionAdmitted,
   TrackerGraphOutcomeObserved,

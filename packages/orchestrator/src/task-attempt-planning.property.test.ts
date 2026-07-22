@@ -8,10 +8,12 @@ import {
   deterministicPlannedTaskAttemptLayer,
   GitCommitSha,
   makeTaskAttemptPlanOperation,
+  makeTaskWorktreeReconciliationOperation,
   OperationId,
   PlannedTaskAttempt,
   PlannedTaskAttemptPlanner,
   RunId,
+  TaskBranchRef,
   TaskExecutorLocator,
   taskRevisionFor,
   TaskWorkSessionLocator,
@@ -19,6 +21,22 @@ import {
   workflowOperationId,
   WorktreeLocator
 } from "./index.js"
+
+it.each([
+  "main",
+  "refs/heads/",
+  "refs/heads/a..b",
+  "refs/heads/a//b",
+  "refs/heads/a.lock",
+  "refs/heads/a@{b",
+  "refs/heads/.hidden",
+  "refs/heads/trailing/",
+  "refs/heads/trailing.",
+  "refs/heads/space name",
+  "refs/heads/caret^name"
+])("rejects Git-invalid task branch ref %s", (branch) => {
+  expect(() => Schema.decodeUnknownSync(TaskBranchRef)(branch)).toThrow()
+})
 
 it.effect("binds every exact attempt identity and resource locator", () =>
   Effect.gen(function*() {
@@ -62,7 +80,7 @@ it("roundtrips arbitrary valid attempt plans through the persisted Schema bounda
   fc.assert(fc.property(
     fc.record({
       attemptId: nonEmpty,
-      branch: nonEmpty,
+      branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
       executor: nonEmpty,
       runId: nonEmpty,
       session: nonEmpty,
@@ -113,6 +131,34 @@ it("projects plan operation identity and rejects self-causality", () => {
     worktree: "/worktree"
   })
   const operation = makeTaskAttemptPlanOperation({
+    operationId,
+    plannedAttempt: plan,
+    predecessorOperationIds: []
+  })
+
+  expect(workflowOperationId(operation)).toBe(operationId)
+  expect(
+    Schema.decodeUnknownResult(WorkflowOperation)({
+      ...Schema.encodeUnknownSync(WorkflowOperation)(operation),
+      predecessorOperationIds: [operationId]
+    })._tag
+  ).toBe("Failure")
+})
+
+it("projects worktree operation identity and rejects self-causality", () => {
+  const operationId = OperationId.make("worktree-operation")
+  const plan = Schema.decodeUnknownSync(PlannedTaskAttempt)({
+    attemptId: "attempt",
+    baseSha: "0123456789abcdef0123456789abcdef01234567",
+    branch: "refs/heads/task",
+    executor: "executor",
+    runId: "run",
+    session: "session",
+    taskId: "task",
+    taskRevision: "revision",
+    worktree: "/worktree"
+  })
+  const operation = makeTaskWorktreeReconciliationOperation({
     operationId,
     plannedAttempt: plan,
     predecessorOperationIds: []

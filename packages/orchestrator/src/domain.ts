@@ -85,9 +85,22 @@ export const WorktreeLocator = Schema.NonEmptyString.pipe(
 export type WorktreeLocator = typeof WorktreeLocator.Type
 
 /** Locates the exact Git branch ref reserved for a planned task attempt. */
-export const TaskBranchRef = Schema.NonEmptyString.pipe(
-  Schema.brand("TaskBranchRef")
-)
+const isValidTaskBranchRef = (ref: string): boolean => {
+  if (!ref.startsWith("refs/heads/") || ref === "refs/heads/") return false
+  if (
+    ref.includes("..")
+    || ref.includes("//")
+    || ref.includes("@{")
+    || ref.endsWith("/")
+    || ref.endsWith(".")
+    || /[\u0000-\u0020\u007f~^:?*\[\\]/.test(ref)
+  ) return false
+  return ref.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"))
+}
+
+export const TaskBranchRef = Schema.String.check(
+  Schema.makeFilter((ref) => isValidTaskBranchRef(ref) ? undefined : "must be a valid refs/heads Git ref")
+).pipe(Schema.brand("TaskBranchRef"))
 export type TaskBranchRef = typeof TaskBranchRef.Type
 
 /** Locates the configured executor that will receive one planned task attempt. */

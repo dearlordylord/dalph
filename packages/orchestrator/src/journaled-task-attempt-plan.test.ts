@@ -73,6 +73,7 @@ const baseInterpreterLayer = Layer.succeed(
     establishTaskWorkSession: () => Effect.die("unused session"),
     readTrackerGraph: () => Effect.die("unused graph"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
+    reconcileTaskWorktree: () => Effect.die("unused worktree"),
     simulateTaskWorkSession: () => Effect.die("unused simulation")
   })
 )
@@ -232,6 +233,7 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
               operation: "JournalStore.append"
             })
           ),
+        reconcileTaskWorktree: () => Effect.die("unused worktree"),
         simulateTaskWorkSession: () =>
           Ref.update(starts, (count) => count + 1).pipe(
             Effect.andThen(Effect.die("session simulation must not run"))

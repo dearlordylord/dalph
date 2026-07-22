@@ -39,9 +39,11 @@ import { taskRunnerWorkflowInterpreterLayer } from "../src/workflow-interpreters
 import {
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../src/workflow.js"
+import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
 
 type Evidence = "Absent" | "Conflict" | "Matching" | "Unreadable"
 const lookupBound = 3n
@@ -211,11 +213,19 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
     const selected = yield* requireOperation()
     const fiber = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
+      const planOperationId = selected.predecessorOperationIds[0] ?? OperationId.make("mbt-predecessor")
+      const worktreeOperationId = selected.predecessorOperationIds[1] ?? OperationId.make("mbt-worktree")
       yield* interpreter.recordTaskAttemptPlan(makeTaskAttemptPlanOperation({
-        operationId: selected.predecessorOperationIds[0] ?? OperationId.make("mbt-predecessor"),
+        operationId: planOperationId,
         plannedAttempt: selected.request.plannedAttempt,
         predecessorOperationIds: []
       }))
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: worktreeOperationId,
+        plannedAttempt: selected.request.plannedAttempt,
+        predecessorOperationIds: [planOperationId]
+      })
+      yield* recordReadyWorktreeEvidence(worktreeOperation)
       return yield* interpreter.establishTaskWorkSession(selected)
     }).pipe(
       Effect.onExit((exit) =>
@@ -325,7 +335,10 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
           task
         })
         operation = makeTaskWorkSessionEstablishmentOperation({
-          predecessorOperationIds: [OperationId.make("mbt-predecessor")],
+          predecessorOperationIds: [
+            OperationId.make("mbt-predecessor"),
+            OperationId.make("mbt-worktree")
+          ],
           request
         })
       }),

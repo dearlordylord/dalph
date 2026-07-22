@@ -13,9 +13,11 @@ import {
   JournalStore,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   MatchingTaskWorkSessionReported,
   OperationId,
   PlannedTaskAttempt,
+  PlannedWorktreeReady,
   productionWorkflowInterpreterLayer,
   ProviderObservationId,
   ProviderRequestId,
@@ -38,8 +40,11 @@ import {
 import {
   attemptPlanRecordKey,
   intentRecordKey,
+  outcomeRecordKey,
   TaskAttemptPlannedEvent,
-  TaskWorkSessionEstablishmentIntentRecorded
+  TaskWorkSessionEstablishmentIntentRecorded,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent
 } from "./journal-store.js"
 
 it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenario.AfterOutcomeRecorded}`, () =>
@@ -77,8 +82,13 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
       plannedAttempt,
       predecessorOperationIds: []
     })
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("production-worktree-operation"),
+      plannedAttempt,
+      predecessorOperationIds: [planOperation.operationId]
+    })
     const operation = makeTaskWorkSessionEstablishmentOperation({
-      predecessorOperationIds: [planOperation.operationId],
+      predecessorOperationIds: [planOperation.operationId, worktreeOperation.operationId],
       request
     })
     const requests = yield* Ref.make(0)
@@ -124,6 +134,25 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
         runId,
         attemptPlanRecordKey(plannedAttempt.attemptId),
         TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 2 })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: 2
+        })
       )
       yield* journal.append(
         runId,

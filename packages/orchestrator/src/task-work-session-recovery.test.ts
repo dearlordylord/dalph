@@ -13,12 +13,14 @@ import {
   JournalStoreContradiction,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   MatchingTaskWorkSessionReported,
   memoryJournalStoreLayer,
   NoMatchingTaskWorkSessionReported,
   OperationId,
   PlannedTaskAttempt,
+  PlannedWorktreeReady,
   ProviderObservationId,
   ProviderRequestId,
   recoverTaskWorkSessionEstablishments,
@@ -41,6 +43,7 @@ import {
   TaskWorkSessionRunContradiction,
   TaskWorkStartRequest,
   TaskWorkStartRequestFailure,
+  TaskWorktreeHistoryContradiction,
   TraceOutputError,
   TrackerGraphReader,
   WorkflowInterpreter,
@@ -49,9 +52,12 @@ import {
 } from "./index.js"
 import {
   intentRecordKey,
+  outcomeRecordKey,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkSessionReported,
-  taskWorkSessionReportedRecordKey
+  taskWorkSessionReportedRecordKey,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent
 } from "./journal-store.js"
 import type { TaskRunnerService } from "./task-work-start.js"
 import { runTaskWorkSessionEstablishmentProtocol } from "./workflow.js"
@@ -83,12 +89,43 @@ const planOperation = makeTaskAttemptPlanOperation({
   plannedAttempt,
   predecessorOperationIds: []
 })
+const worktreeOperationId = OperationId.make("operation-reconcile-worktree")
+const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: worktreeOperationId,
+  plannedAttempt,
+  predecessorOperationIds: [planOperationId]
+})
+const worktreeProof = PlannedWorktreeReady.make({
+  baseSha: plannedAttempt.baseSha,
+  branch: plannedAttempt.branch,
+  headSha: plannedAttempt.baseSha,
+  worktree: plannedAttempt.worktree
+})
 const operation = makeTaskWorkSessionEstablishmentOperation({
-  predecessorOperationIds: [planOperationId],
+  predecessorOperationIds: [planOperationId, worktreeOperationId],
   request
 })
 const recordPlannedAttempt = Effect.gen(function*() {
-  yield* (yield* WorkflowInterpreter).recordTaskAttemptPlan(planOperation)
+  const interpreter = yield* WorkflowInterpreter
+  const journal = yield* JournalStore
+  yield* interpreter.recordTaskAttemptPlan(planOperation)
+  yield* journal.append(
+    runId,
+    intentRecordKey(worktreeOperationId),
+    TaskWorktreeReconciliationIntendedEvent.make({
+      operation: worktreeOperation,
+      version: 2
+    })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(worktreeOperationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperationId,
+      proof: worktreeProof,
+      version: 2
+    })
+  )
 })
 
 it.effect("repeats one exact start request only after fresh authoritative absence", () =>
@@ -152,6 +189,8 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
 
     expect(result.records.map(({ event }) => event._tag)).toEqual([
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -498,6 +537,7 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
       acquireTaskClaim: () => Effect.die("unused claim acquisition"),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
+      reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.succeed(snapshot),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
@@ -580,6 +620,8 @@ it.effect("journals uncertain start and unreadable lookup evidence before non-co
 
     expect(tags).toEqual([
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestFailed",
@@ -808,6 +850,38 @@ it.effect("rejects a changed payload under an already committed operation identi
 
     expect(failure).toBeInstanceOf(TaskAttemptPlanHistoryContradiction)
     expect(failure).toMatchObject({ reason: "PlanMismatch" })
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("rejects session establishment without exact ready-worktree journal evidence", () =>
+  Effect.gen(function*() {
+    const layer = journaledWorkflowInterpreterLayer(
+      runId,
+      taskRunnerWorkflowInterpreterLayer
+    ).pipe(
+      Layer.provide(Layer.succeed(
+        TaskRunner,
+        TaskRunner.of({
+          lookupTaskWorkSession: () => Effect.die("lookup must not run"),
+          requestTaskWorkStart: () => Effect.die("request must not run")
+        })
+      )),
+      Layer.provide(Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({ read: () => Effect.die("tracker read must not run") })
+      )),
+      Layer.provide(Layer.succeed(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      ))
+    )
+    const failure = yield* Effect.gen(function*() {
+      const interpreter = yield* WorkflowInterpreter
+      yield* interpreter.recordTaskAttemptPlan(planOperation)
+      return yield* interpreter.establishTaskWorkSession(operation).pipe(Effect.flip)
+    }).pipe(Effect.provide(layer))
+
+    expect(failure).toBeInstanceOf(TaskWorktreeHistoryContradiction)
+    expect(failure).toMatchObject({ reason: "MissingIntent" })
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects a planned attempt from another journal run", () =>

@@ -15,10 +15,12 @@ import {
   JournalStore,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
+  makeTaskWorktreeReconciliationOperation,
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
   OperationId,
   PlannedTaskAttempt,
+  PlannedWorktreeReady,
   productionWorkflowInterpreterLayer,
   ProviderObservationId,
   ProviderRequestId,
@@ -38,6 +40,14 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  TaskAttemptPlannedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent
+} from "./journal-store.js"
 
 /** Shared typed metadata for the provider/request crash-boundary acceptance lane. */
 const crashScenarios = [
@@ -47,6 +57,8 @@ const crashScenarios = [
     expectedRequests: 1,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -63,6 +75,8 @@ const crashScenarios = [
     expectedRequests: 1,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -75,6 +89,8 @@ const crashScenarios = [
     expectedRequests: 2,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkSessionLookupRequested",
       "TaskWorkSessionReported",
@@ -91,6 +107,8 @@ const crashScenarios = [
     expectedRequests: 1,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -105,6 +123,8 @@ const crashScenarios = [
     expectedRequests: 2,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -123,6 +143,8 @@ const crashScenarios = [
     expectedRequests: 1,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -139,6 +161,8 @@ const crashScenarios = [
     expectedRequests: 2,
     expectedTags: [
       "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
       "TaskWorkSessionEstablishmentIntentRecorded",
       "TaskWorkStartRequested",
       "TaskWorkStartRequestAcknowledged",
@@ -193,12 +217,17 @@ for (const scenario of crashScenarios) {
         task
       })
       const planOperationId = OperationId.make("planned-attempt-operation")
-      const predecessorOperationIds = [planOperationId]
       const planOperation = makeTaskAttemptPlanOperation({
         operationId: planOperationId,
         plannedAttempt,
         predecessorOperationIds: []
       })
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make(`worktree-${scenario.boundary}`),
+        plannedAttempt,
+        predecessorOperationIds: [planOperationId]
+      })
+      const predecessorOperationIds = [planOperationId, worktreeOperation.operationId]
       const operation = makeTaskWorkSessionEstablishmentOperation({
         predecessorOperationIds,
         request
@@ -299,9 +328,35 @@ for (const scenario of crashScenarios) {
       const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({
         DALPH_JOURNAL_DATABASE: filename
       }))
+      yield* Effect.gen(function*() {
+        const journal = yield* JournalStore
+        yield* journal.append(
+          runId,
+          attemptPlanRecordKey(plannedAttempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 2 })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReadyEvent.make({
+            operationId: worktreeOperation.operationId,
+            proof: PlannedWorktreeReady.make({
+              baseSha: plannedAttempt.baseSha,
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              worktree: plannedAttempt.worktree
+            }),
+            version: 2
+          })
+        )
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       const runCoordinator = Effect.gen(function*() {
         const interpreter = yield* WorkflowInterpreter
-        yield* interpreter.recordTaskAttemptPlan(planOperation)
         return yield* interpreter.establishTaskWorkSession(operation)
       }).pipe(
         Effect.provide(applicationLayer),
@@ -353,9 +408,14 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
       plannedAttempt,
       predecessorOperationIds: []
     })
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("before-intent-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: [planOperation.operationId]
+    })
     const makeOperation = (operationId: OperationId) =>
       makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [planOperation.operationId],
+        predecessorOperationIds: [planOperation.operationId, worktreeOperation.operationId],
         request: TaskWorkStartRequest.make({
           operationId,
           plannedAttempt,
@@ -412,10 +472,35 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
     expect(beforeRecovery).toEqual([])
 
+    yield* Effect.gen(function*() {
+      const journal = yield* JournalStore
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 2 })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: 2
+        })
+      )
+    }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
     const outcome = yield* Effect.gen(function*() {
-      const interpreter = yield* WorkflowInterpreter
-      yield* interpreter.recordTaskAttemptPlan(planOperation)
-      return yield* interpreter.establishTaskWorkSession(replacement)
+      return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(replacement)
     }).pipe(Effect.provide(applicationLayer), Effect.provide(configLayer))
     expect(outcome.operationId).toBe(replacement.request.operationId)
     expect(outcome.operationId).not.toBe(discarded.request.operationId)
