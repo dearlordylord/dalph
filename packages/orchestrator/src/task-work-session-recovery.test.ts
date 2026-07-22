@@ -545,7 +545,8 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.succeed(snapshot),
       simulateTaskExecution: () => Effect.die("unused execution simulation"),
-      simulateTaskWorkSession: () => Effect.die("unused simulation")
+      simulateTaskWorkSession: () => Effect.die("unused simulation"),
+      sealImplementationEvidence: () => Effect.die("unused evidence sealing")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(

@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import type { TrackerTarget } from "./domain.js"
 import { OperationId, PlannedTaskAttempt, TrackerTarget as TrackerTargetSchema } from "./domain.js"
-import { TaskExecutionRequest } from "./task-execution.js"
+import { TaskExecutionOutcome, TaskExecutionRequest } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
@@ -105,6 +105,33 @@ const ExecuteTaskWorkOperation = Schema.TaggedStruct(
   )
 )
 
+const SealImplementationEvidenceOperation = Schema.TaggedStruct(
+  "SealImplementationEvidence",
+  {
+    operationId: OperationId,
+    execution: Schema.TaggedUnion({
+      SuccessfulExecution: { outcome: TaskExecutionOutcome.cases.Succeeded },
+      SimulatedExecution: { predecessorOperationId: OperationId }
+    }),
+    plannedAttempt: PlannedTaskAttempt,
+    predecessorOperationIds: CausalPredecessorOperationIds
+  }
+).check(
+  Schema.makeFilter((operation) =>
+    operation.predecessorOperationIds.length === 1
+      && operation.predecessorOperationIds[0] === (
+          operation.execution._tag === "SuccessfulExecution"
+            ? operation.execution.outcome.operationId
+            : operation.execution.predecessorOperationId
+        )
+      ? undefined
+      : {
+        path: ["predecessorOperationIds"],
+        issue: "implementation evidence must directly follow its successful execution"
+      }
+  )
+)
+
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
@@ -112,13 +139,15 @@ export const WorkflowOperation = Object.assign(
     RecordTaskAttemptPlanOperation,
     ReconcileTaskWorktreeOperation,
     EstablishTaskWorkSessionOperation,
-    ExecuteTaskWorkOperation
+    ExecuteTaskWorkOperation,
+    SealImplementationEvidenceOperation
   ]),
   {
     cases: {
       AcquireTaskClaim: AcquireTaskClaimOperation,
       EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
       ExecuteTaskWork: ExecuteTaskWorkOperation,
+      SealImplementationEvidence: SealImplementationEvidenceOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
@@ -144,6 +173,8 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     ? operation.operationId
     : operation._tag === "ExecuteTaskWork"
     ? operation.request.operationId
+    : operation._tag === "SealImplementationEvidence"
+    ? operation.operationId
     : operation.request.operationId
 
 const orderedBefore = -1
@@ -235,4 +266,22 @@ export const makeTaskExecutionOperation = (
   WorkflowOperation.cases.ExecuteTaskWork.make({
     ...fields,
     predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
+  })
+
+export const makeImplementationEvidenceSealingOperation = (
+  fields: {
+    readonly operationId: OperationId
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly execution:
+      | { readonly _tag: "SuccessfulExecution"; readonly outcome: typeof TaskExecutionOutcome.cases.Succeeded.Type }
+      | { readonly _tag: "SimulatedExecution"; readonly predecessorOperationId: OperationId }
+  }
+): typeof WorkflowOperation.cases.SealImplementationEvidence.Type =>
+  WorkflowOperation.cases.SealImplementationEvidence.make({
+    ...fields,
+    predecessorOperationIds: [
+      fields.execution._tag === "SuccessfulExecution"
+        ? fields.execution.outcome.operationId
+        : fields.execution.predecessorOperationId
+    ]
   })

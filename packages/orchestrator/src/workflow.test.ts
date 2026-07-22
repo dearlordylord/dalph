@@ -8,6 +8,8 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  EvidenceDigest,
+  EvidenceReference,
   FixtureTarget,
   GitCommitSha,
   liveFakeWorkflowInterpreterLayer,
@@ -18,6 +20,7 @@ import {
   ProviderRequestId,
   RunId,
   runWorkflow,
+  SealedImplementationEvidence,
   TaskAttemptPlanRecordAcknowledged,
   TaskExecutorLocator,
   TaskRunner,
@@ -119,13 +122,16 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "TaskWorkSessionEstablishmentSimulated",
       "OperationSelected",
       "TaskExecutionAdmitted",
-      "TaskExecutionSimulated"
+      "TaskExecutionSimulated",
+      "OperationSelected",
+      "ImplementationEvidenceSealingSimulated"
     ])
   }))
 
 it.effect("establishes task work only after an authoritative worktree proof", () =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
+    const sealAuthoritatively = yield* Ref.make(false)
     const liveInterpreterLayer = Layer.effect(
       WorkflowInterpreter,
       Effect.gen(function*() {
@@ -164,12 +170,49 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
                 headSha: operation.plannedAttempt.baseSha,
                 worktree: operation.plannedAttempt.worktree
               })
-            }))
+            })),
+          sealImplementationEvidence: Effect.fn("WorkflowTest.sealImplementationEvidence")(function*(operation) {
+            if (!(yield* Ref.get(sealAuthoritatively))) {
+              return yield* delegate.sealImplementationEvidence(operation)
+            }
+            const diff = EvidenceReference.make({
+              byteLength: 1,
+              digest: EvidenceDigest.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            })
+            return SealedImplementationEvidence.make({
+              manifest: {
+                diff,
+                implementationOutput: diff,
+                plannedBaseSha: operation.plannedAttempt.baseSha,
+                predecessorOperationId: operation.execution._tag === "SuccessfulExecution"
+                  ? operation.execution.outcome.operationId
+                  : operation.execution.predecessorOperationId,
+                runId: operation.plannedAttempt.runId,
+                stage: "Implementation",
+                taskId: operation.plannedAttempt.taskId
+              },
+              manifestReference: diff
+            })
+          })
         })
       })
     ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    const liveProgram = runWorkflow(
+      FixtureTarget.make(fixture("singleton")),
+      TaskWorkCapacity.make(1)
+    )
+    expect(
+      yield* runLayered(
+        liveProgram,
+        Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+        successfulTaskRunner,
+        planningLayers[1],
+        liveInterpreterLayer
+      ).pipe(Effect.flip)
+    ).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
+    yield* Ref.set(sealAuthoritatively, true)
     yield* runLayered(
-      runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
+      liveProgram,
       Layer.succeed(
         WorkflowTrace,
         WorkflowTrace.of({

@@ -1,15 +1,18 @@
 import { NodeServices } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
-import type { GitCommonDirectoryTarget, RunId } from "./domain.js"
+import { EvidenceStoreLocator, type GitCommonDirectoryTarget, type RunId } from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
+import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
+  coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
+import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
 import type { TaskExecutor } from "./task-execution.js"
@@ -17,6 +20,7 @@ import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
 import { trackerMutationWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
+  recoverImplementationEvidenceSealings,
   recoverTaskClaimAcquisitions,
   recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
@@ -65,6 +69,15 @@ export const productionWorkflowInterpreterLayer = <
   const journalLayer = productionJournalStoreLayer.pipe(
     Layer.provide(ownershipLayer)
   )
+  const evidenceStoreLayer = coordinatorOwnedEvidenceStoreLayer(
+    nodeEvidenceStoreLayer(
+      EvidenceStoreLocator.make(`${target}/dalph-evidence`)
+    ).pipe(Layer.provide(NodeServices.layer))
+  ).pipe(Layer.provide(ownershipLayer))
+  const evidenceSourceLayer = nodeImplementationEvidenceSourceLayer().pipe(
+    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(NodeServices.layer)
+  )
   const baseInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(taskExecutorLayer),
@@ -75,7 +88,8 @@ export const productionWorkflowInterpreterLayer = <
   const interpreterLayer = journaledWorkflowInterpreterLayer(
     runId,
     baseInterpreterLayer,
-    taskExecutorLayer
+    taskExecutorLayer,
+    Layer.merge(evidenceStoreLayer, evidenceSourceLayer)
   ).pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(journalLayer)
@@ -88,6 +102,7 @@ export const productionWorkflowInterpreterLayer = <
       yield* recoverTaskWorktreeReconciliations(runId)
       yield* recoverTaskWorkSessionEstablishments(runId)
       yield* recoverTaskExecutions(runId)
+      yield* recoverImplementationEvidenceSealings(runId)
       return interpreter
     })
   ).pipe(

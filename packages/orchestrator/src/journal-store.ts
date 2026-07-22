@@ -9,6 +9,7 @@ import {
   RunId
 } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
+import { ImplementationEvidenceJournalEvent } from "./implementation-evidence-journal.js"
 import {
   TaskExecutionObservationFailure,
   TaskExecutionReport,
@@ -270,7 +271,8 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskExecutionRequestFailed,
   TaskExecutionObservationFailed,
   TaskExecutionReported,
-  TaskExecutionOutcomeObservedEvent
+  TaskExecutionOutcomeObservedEvent,
+  ImplementationEvidenceJournalEvent
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
@@ -485,8 +487,7 @@ export const taskWorkSessionReportedRecordKey = (
 export const taskExecutionRequestReturnedRecordKey = (
   operationId: OperationId,
   observationId: ProviderObservationId
-): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:task-execution-request-returned:${observationId}`)
+) => JournalRecordKey.make(`operation:${operationId}:task-execution-request-returned:${observationId}`)
 
 export const taskExecutionRequestAttemptRecordKey = (
   operationId: OperationId

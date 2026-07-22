@@ -5,6 +5,7 @@ import {
   PlannedWorktreeAbsent,
   runGitWorktreeReconciliation
 } from "./git-worktree.js"
+import { ImplementationEvidenceSealingSimulated } from "./implementation-evidence.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskExecutionModeContradiction, TaskExecutor, taskExecutorTestLayer } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -113,6 +114,15 @@ const taskRunnerInterpreterLayer = (
         )
         return AuthoritativeTaskWorktreeReady.make({ proof })
       })
+      const sealImplementationEvidence = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.sealImplementationEvidence`
+      )(function*(operation) {
+        return ImplementationEvidenceSealingSimulated.make({
+          operationId: operation.operationId,
+          predecessorOperationId: operation.predecessorOperationIds[0],
+          stage: "Implementation"
+        })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
@@ -120,6 +130,7 @@ const taskRunnerInterpreterLayer = (
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        sealImplementationEvidence,
         simulateTaskExecution,
         simulateTaskWorkSession
       })
@@ -177,6 +188,15 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
       )(function*(operation) {
         return TaskWorktreeReconciliationSimulated.make({ operation })
       })
+      const sealImplementationEvidence = Effect.fn(
+        "WorkflowInterpreter.DryRun.sealImplementationEvidence"
+      )(function*(operation) {
+        return ImplementationEvidenceSealingSimulated.make({
+          operationId: operation.operationId,
+          predecessorOperationId: operation.predecessorOperationIds[0],
+          stage: "Implementation"
+        })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession: () => Effect.die("dry-run cannot establish a provider task-work session"),
@@ -184,6 +204,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        sealImplementationEvidence,
         simulateTaskExecution,
         simulateTaskWorkSession
       })

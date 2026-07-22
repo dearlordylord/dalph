@@ -3,6 +3,7 @@ import type { RunId } from "./domain.js"
 import { JournalStore } from "./journal-store.js"
 import { TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import {
+  SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskWorkSessionEstablishedTrace,
   TaskWorktreeReadyTrace,
@@ -109,3 +110,30 @@ export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExec
       ))
   }
 )
+
+/** Completes unresolved sealing intents through the same idempotent evidence protocol. */
+export const recoverImplementationEvidenceSealings = Effect.fn(
+  "WorkflowRecovery.recoverImplementationEvidenceSealings"
+)(function*(runId: RunId) {
+  const interpreter = yield* WorkflowInterpreter
+  const journal = yield* JournalStore
+  const trace = yield* WorkflowTrace
+  const records = yield* journal.read(runId)
+  const sealed = new Set(
+    records.flatMap(({ event }) => event._tag === "ImplementationEvidenceSealed" ? [event.operationId] : [])
+  )
+  const unresolved = records.flatMap(({ event }) =>
+    event._tag === "ImplementationEvidenceSealingIntended"
+      && !sealed.has(event.operation.operationId)
+      ? [event.operation]
+      : []
+  )
+  return yield* Effect.forEach(unresolved, (operation) =>
+    interpreter.sealImplementationEvidence(operation).pipe(
+      Effect.tap((result) =>
+        result._tag === "SealedImplementationEvidence"
+          ? trace.emit(SealedImplementationEvidenceTrace.make({ operation, sealed: result }))
+          : Effect.void
+      )
+    ))
+})

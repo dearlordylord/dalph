@@ -311,6 +311,25 @@ exact session. Nonzero exit and interruption preserve WIP and bounded partial
 output. This observation does not decide task-tracker success.
 _Avoid_: Task execution started, task completed successfully, review result
 
+**Implementation evidence object**:
+One complete byte sequence stored atomically under its SHA-256 content address
+in the EvidenceStore. An object may contain executor output, a Git diff, or a
+stage manifest; its presence alone does not authorize review.
+_Avoid_: Workflow journal event, cached output, review result
+
+**Implementation evidence manifest**:
+The immutable implementation-stage record that names the exact successful task
+execution operation as its causal predecessor and references the complete
+content-addressed executor-output and Git-diff objects. Dalph seals the manifest
+only after both referenced objects are readable from the EvidenceStore.
+_Avoid_: Partial evidence, mutable report, task completion
+
+**Implementation review authorization**:
+A value decoded from one complete sealed implementation evidence manifest.
+Unsealed bytes, partial manifests, dry-run projections, and live-fake
+projections cannot establish it.
+_Avoid_: Review request, successful process exit, simulated evidence
+
 **Task-work start requested**:
 The coordinator asks the task runner to start task work by requesting a new
 provider session or running unit for one planned task attempt. Sending the

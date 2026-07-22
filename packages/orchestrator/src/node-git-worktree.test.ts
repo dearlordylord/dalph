@@ -115,7 +115,9 @@ const scriptedAdapterLayer = (
     Layer.provide(Layer.succeed(
       GitCommand,
       GitCommand.of({
-        run: (_directory, args) => execute(args)
+        run: (_directory, args) => execute(args),
+        runInWorktree: () => Effect.die("unused worktree command"),
+        runBytesInWorktree: () => Effect.die("unused byte worktree command")
       })
     )),
     Layer.provide(NodeServices.layer)
@@ -360,7 +362,9 @@ describe("node GitWorktree adapter", () => {
             run: (_directory, args) =>
               Effect.succeed(
                 args[0] === "worktree" ? commandResult(0) : commandResult(1)
-              )
+              ),
+            runInWorktree: () => Effect.die("unused worktree command"),
+            runBytesInWorktree: () => Effect.die("unused byte worktree command")
           })
         )),
         Layer.provide(Layer.succeed(

@@ -13,6 +13,7 @@ export {
   AttemptId,
   ClaimOwner,
   ClaimToken,
+  EvidenceStoreLocator,
   FailedProcessExitCode,
   FixtureTarget,
   GitCommitSha,
@@ -78,6 +79,8 @@ export {
 } from "./github-graphql-client.js"
 export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader.js"
 export { githubTrackerMutationLayer, githubTrackerMutationNodeLayer } from "./github-tracker-mutation.js"
+export * from "./implementation-evidence-journal.js"
+export * from "./implementation-evidence.js"
 export {
   JournalDataCorruption,
   JournalSchemaIncompatible,
@@ -99,6 +102,7 @@ export {
 } from "./journal-store.js"
 export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 export {
+  coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
@@ -107,6 +111,7 @@ export {
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
+export { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 export { productionWorkflowInterpreterLayer } from "./production-application.js"
 export {
@@ -211,6 +216,7 @@ export {
   trackerMutationWorkflowInterpreterLayer
 } from "./workflow-interpreters.js"
 export {
+  recoverImplementationEvidenceSealings,
   recoverTaskClaimAcquisitions,
   recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
@@ -223,6 +229,8 @@ export {
   AuthoritativeTaskWorktreeReady,
   causalGraphProjection,
   decideTaskWorkSessionRecovery,
+  ImplementationEvidenceSealingSimulatedTrace,
+  makeImplementationEvidenceSealingOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -230,6 +238,7 @@ export {
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   OperationSelected,
+  SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TaskClaimAcquisitionSimulated,

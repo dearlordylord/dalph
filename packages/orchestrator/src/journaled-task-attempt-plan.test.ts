@@ -77,7 +77,8 @@ const baseInterpreterLayer = Layer.succeed(
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.die("unused worktree"),
     simulateTaskExecution: () => Effect.die("unused execution simulation"),
-    simulateTaskWorkSession: () => Effect.die("unused simulation")
+    simulateTaskWorkSession: () => Effect.die("unused simulation"),
+    sealImplementationEvidence: () => Effect.die("unused evidence sealing")
   })
 )
 
@@ -242,7 +243,8 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
         simulateTaskWorkSession: () =>
           Ref.update(starts, (count) => count + 1).pipe(
             Effect.andThen(Effect.die("session simulation must not run"))
-          )
+          ),
+        sealImplementationEvidence: () => Effect.die("evidence sealing must not run")
       })
     )
     const result = yield* runWorkflow(

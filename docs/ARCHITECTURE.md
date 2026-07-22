@@ -322,6 +322,40 @@ allocate a replacement operation identity, or discard the worktree. Dry-run
 uses the planned session locator in the same exhaustive operation algebra but
 cannot fabricate a provider session or process identity.
 
+## Immutable Implementation Evidence
+
+Only a successful exact task-execution outcome selects implementation-evidence
+sealing. The sealing operation directly names that execution operation as its
+causal predecessor. It reads the completed attempt's Git diff through the Git
+boundary and stores the diff and bounded executor output as separate immutable
+EvidenceStore objects.
+
+Diff collection snapshots the exact linked worktree through a scoped temporary
+Git index and object database. The repository's real object database is exposed
+only as a read-only alternate, so staged and untracked bytes can be represented
+without changing the target index or object inventory. Repository clean filters
+still define Git's snapshot semantics; target filters used during orchestration
+must therefore be deterministic and free of external side effects.
+
+The EvidenceStore derives every object identity from the complete byte content.
+Its filesystem adapter writes a private partial file and atomically publishes a
+same-filesystem hard link at the SHA-256 address. Repeated writes of identical
+bytes return the same reference; reads verify both digest and byte length.
+
+The implementation-stage manifest is stored last and references both evidence
+objects, the planned Base SHA, task, run, and successful execution predecessor.
+Consequently, a crash can leave unreachable content-addressed objects but never
+a manifest that authorizes review before all referenced bytes are sealed.
+Recovery repeats the same content-addressed writes and returns an already
+journaled sealed outcome when present. A journaled live interpreter requires
+the exact successful execution outcome before it records sealing intent.
+
+Dry-run and live-fake select the same sealing operation after their execution
+projection, but emit only `ImplementationEvidenceSealingSimulated`. That value
+contains stage and predecessor ordering without a manifest or evidence
+reference and therefore cannot pass the implementation-review authorization
+boundary.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

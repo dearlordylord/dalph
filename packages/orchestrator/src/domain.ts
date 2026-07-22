@@ -170,6 +170,12 @@ export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
 )
 export type JournalDatabaseLocator = typeof JournalDatabaseLocator.Type
 
+/** Locates one EvidenceStore root, not a worktree or workflow journal. */
+export const EvidenceStoreLocator = Schema.NonEmptyString.pipe(
+  Schema.brand("EvidenceStoreLocator")
+)
+export type EvidenceStoreLocator = typeof EvidenceStoreLocator.Type
+
 /** Names a requested Git common-directory path before canonical resolution. */
 export const GitCommonDirectoryTarget = Schema.NonEmptyString.pipe(
   Schema.brand("GitCommonDirectoryTarget")

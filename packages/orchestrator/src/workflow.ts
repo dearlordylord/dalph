@@ -2,6 +2,13 @@ import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import { OperationId, RunId } from "./domain.js"
 import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "./git-worktree.js"
+import type {
+  EvidenceStoreFailure,
+  ImplementationDiffReadFailure,
+  ImplementationEvidenceHistoryContradiction,
+  ImplementationEvidenceModeContradiction
+} from "./implementation-evidence.js"
+import { ImplementationEvidenceSealingSimulated, SealedImplementationEvidence } from "./implementation-evidence.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
 import { runTaskClaimAcquisitionProtocol, type TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
@@ -44,6 +51,7 @@ import type { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
   compareOperationIds,
+  makeImplementationEvidenceSealingOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -254,6 +262,18 @@ interface WorkflowInterpreterService {
     typeof WorkflowOutcome.cases.TaskExecutionObserved.Type,
     TaskExecutionWorkflow.TaskExecutionProtocolFailure
   >
+  readonly sealImplementationEvidence: (
+    operation: typeof WorkflowOperation.cases.SealImplementationEvidence.Type
+  ) => Effect.Effect<
+    typeof SealedImplementationEvidence.Type | typeof ImplementationEvidenceSealingSimulated.Type,
+    | CoordinatorOwnershipError
+    | EvidenceStoreFailure
+    | ImplementationDiffReadFailure
+    | ImplementationEvidenceHistoryContradiction
+    | ImplementationEvidenceModeContradiction
+    | JournalStoreContradiction
+    | JournalStoreError
+  >
   readonly simulateTaskWorkSession: (
     operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type
   ) => Effect.Effect<
@@ -314,6 +334,24 @@ const TaskClaimAcquisitionResult = Schema.Union([
 ])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
+/** Exposes the complete immutable implementation-stage review input. */
+export const SealedImplementationEvidenceTrace = Schema.TaggedStruct(
+  "ImplementationEvidenceSealed",
+  {
+    operation: WorkflowOperation.cases.SealImplementationEvidence,
+    sealed: SealedImplementationEvidence
+  }
+)
+
+/** Projects sealing order without claiming that any evidence bytes exist. */
+export const ImplementationEvidenceSealingSimulatedTrace = Schema.TaggedStruct(
+  "ImplementationEvidenceSealingSimulated",
+  {
+    operation: WorkflowOperation.cases.SealImplementationEvidence,
+    simulation: ImplementationEvidenceSealingSimulated
+  }
+)
+
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
   TrackerTrace.TrackerGraphOutcomeObserved,
@@ -328,6 +366,8 @@ export const TraceItem = Schema.Union([
   TaskExecutionTrace.TaskExecutionStarted,
   TaskExecutionTrace.TaskExecutionOutcomeObserved,
   TaskExecutionTrace.TaskExecutionSimulated,
+  SealedImplementationEvidenceTrace,
+  ImplementationEvidenceSealingSimulatedTrace,
   TaskExecutionWorkflow.TaskExecutionRequestReturnedTrace,
   TaskExecutionWorkflow.TaskExecutionRequestFailedTrace,
   TaskExecutionWorkflow.TaskExecutionObservationFailedTrace,

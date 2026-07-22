@@ -69,7 +69,8 @@ const baseLayer = Layer.succeed(
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.succeed(AuthoritativeTaskWorktreeReady.make({ proof })),
     simulateTaskExecution: () => Effect.die("unused execution simulation"),
-    simulateTaskWorkSession: () => Effect.die("unused simulation")
+    simulateTaskWorkSession: () => Effect.die("unused simulation"),
+    sealImplementationEvidence: () => Effect.die("unused evidence sealing")
   })
 )
 
@@ -158,7 +159,8 @@ it.effect("does not fabricate a ready proof from a simulated recovery result", (
           TaskWorktreeReconciliationSimulated.make({ operation })
         ),
       simulateTaskExecution: () => Effect.die("unused execution simulation"),
-      simulateTaskWorkSession: () => Effect.die("unused simulation")
+      simulateTaskWorkSession: () => Effect.die("unused simulation"),
+      sealImplementationEvidence: () => Effect.die("unused evidence sealing")
     })
   )
   return Effect.gen(function*() {

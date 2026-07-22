@@ -51,7 +51,8 @@ it.effect("journals claim intent before the authoritative acquired outcome", () 
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskExecution: () => Effect.die("unused execution simulation"),
-      simulateTaskWorkSession: () => Effect.die("unused simulation")
+      simulateTaskWorkSession: () => Effect.die("unused simulation"),
+      sealImplementationEvidence: () => Effect.die("unused evidence sealing")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
@@ -109,7 +110,8 @@ it.effect("records simulated claim intent without an authoritative outcome", () 
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskExecution: () => Effect.die("unused execution simulation"),
-      simulateTaskWorkSession: () => Effect.die("unused simulation")
+      simulateTaskWorkSession: () => Effect.die("unused simulation"),
+      sealImplementationEvidence: () => Effect.die("unused evidence sealing")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
@@ -166,7 +168,8 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
       simulateTaskExecution: () => Effect.die("unused execution simulation"),
-      simulateTaskWorkSession: () => Effect.die("unused simulation")
+      simulateTaskWorkSession: () => Effect.die("unused simulation"),
+      sealImplementationEvidence: () => Effect.die("unused evidence sealing")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(

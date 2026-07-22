@@ -1,9 +1,13 @@
 import { Effect, Layer } from "effect"
-import type { OperationId, PlannedTaskAttempt, RunId } from "./domain.js"
+import type { RunId } from "./domain.js"
+import {
+  EvidenceStore,
+  ImplementationEvidenceSource,
+  testImplementationEvidenceServicesLayer
+} from "./implementation-evidence.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
-  type JournalRecord,
   JournalStore,
   outcomeRecordKey,
   providerObservationRequestRecordKey,
@@ -26,16 +30,13 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
+import { makeJournaledImplementationEvidence } from "./journaled-implementation-evidence.js"
 import { makeJournaledTaskExecution } from "./journaled-task-execution.js"
 import { requireAcknowledgedPlan } from "./task-attempt-plan-journal-evidence.js"
-import {
-  samePlannedTaskAttempt,
-  TaskAttemptPlanRecordAcknowledged,
-  TaskAttemptPlanRunContradiction
-} from "./task-attempt-plan-recording.js"
+import { TaskAttemptPlanRecordAcknowledged, TaskAttemptPlanRunContradiction } from "./task-attempt-plan-recording.js"
 import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
-import { TaskWorktreeHistoryContradiction } from "./task-worktree-reconciliation.js"
+import { requireReadyWorktree } from "./task-worktree-journal-evidence.js"
 import {
   emitTaskWorkSessionNonConvergence,
   makeTrackerGraphObservedOutcome,
@@ -47,67 +48,23 @@ import {
   WorkflowTrace
 } from "./workflow.js"
 
-const requireReadyWorktree = Effect.fn("WorkflowJournal.requireReadyWorktree")(
-  function*(
-    records: ReadonlyArray<JournalRecord>,
-    plannedAttempt: PlannedTaskAttempt,
-    operationId: OperationId,
-    predecessorOperationIds: ReadonlyArray<OperationId>
-  ) {
-    const intents = records.flatMap(({ event }) =>
-      event._tag === "TaskWorktreeReconciliationIntended"
-        && predecessorOperationIds.includes(event.operation.operationId)
-        ? [event]
-        : []
-    )
-    const intent = intents[0]
-    if (intent === undefined || intents.length !== 1) {
-      return yield* new TaskWorktreeHistoryContradiction({
-        attemptId: plannedAttempt.attemptId,
-        operationId,
-        reason: intents.length === 0 ? "MissingIntent" : "MultipleIntents"
-      })
-    }
-    if (!samePlannedTaskAttempt(intent.operation.plannedAttempt, plannedAttempt)) {
-      return yield* new TaskWorktreeHistoryContradiction({
-        attemptId: plannedAttempt.attemptId,
-        operationId,
-        reason: "PlanMismatch"
-      })
-    }
-    const proofs = records.flatMap(({ event }) =>
-      event._tag === "TaskWorktreeReady"
-        && event.operationId === intent.operation.operationId
-        ? [event.proof]
-        : []
-    )
-    const proof = proofs[0]
-    if (proof === undefined || proofs.length !== 1) {
-      return yield* new TaskWorktreeHistoryContradiction({
-        attemptId: plannedAttempt.attemptId,
-        operationId,
-        reason: proofs.length === 0 ? "MissingProof" : "MultipleProofs"
-      })
-    }
-    if (
-      proof.baseSha !== plannedAttempt.baseSha
-      || proof.branch !== plannedAttempt.branch
-      || proof.worktree !== plannedAttempt.worktree
-    ) {
-      return yield* new TaskWorktreeHistoryContradiction({
-        attemptId: plannedAttempt.attemptId,
-        operationId,
-        reason: "ProofMismatch"
-      })
-    }
-  }
-)
-
 /** Adds durable intent, fresh-result checks, and outcomes to the live interpreter. */
-export const journaledWorkflowInterpreterLayer = <E, R, ExecutorError, ExecutorRequirements>(
+export const journaledWorkflowInterpreterLayer = <
+  E,
+  R,
+  ExecutorError,
+  ExecutorRequirements,
+  EvidenceError = never,
+  EvidenceRequirements = never
+>(
   runId: RunId,
   interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
-  taskExecutorLayer: Layer.Layer<TaskExecutor, ExecutorError, ExecutorRequirements>
+  taskExecutorLayer: Layer.Layer<TaskExecutor, ExecutorError, ExecutorRequirements>,
+  evidenceServicesLayer?: Layer.Layer<
+    EvidenceStore | ImplementationEvidenceSource,
+    EvidenceError,
+    EvidenceRequirements
+  >
 ) =>
   Layer.effect(
     WorkflowInterpreter,
@@ -117,6 +74,8 @@ export const journaledWorkflowInterpreterLayer = <E, R, ExecutorError, ExecutorR
       const taskExecutor = yield* TaskExecutor
       const taskRunner = yield* TaskRunner
       const trace = yield* WorkflowTrace
+      const evidenceStore = yield* EvidenceStore
+      const evidenceSource = yield* ImplementationEvidenceSource
 
       const readTrackerGraph = Effect.fn(
         "WorkflowInterpreter.Journaled.readTrackerGraph"
@@ -392,6 +351,13 @@ export const journaledWorkflowInterpreterLayer = <E, R, ExecutorError, ExecutorR
         trace
       })
 
+      const sealEvidence = makeJournaledImplementationEvidence({
+        evidenceSource,
+        evidenceStore,
+        journal,
+        runId
+      })
+
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
@@ -399,11 +365,13 @@ export const journaledWorkflowInterpreterLayer = <E, R, ExecutorError, ExecutorR
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        sealImplementationEvidence: sealEvidence,
         simulateTaskExecution: interpreter.simulateTaskExecution,
         simulateTaskWorkSession: interpreter.simulateTaskWorkSession
       })
     })
   ).pipe(
     Layer.provide(interpreterLayer),
-    Layer.provide(taskExecutorLayer)
+    Layer.provide(taskExecutorLayer),
+    Layer.provide(evidenceServicesLayer ?? testImplementationEvidenceServicesLayer)
   )

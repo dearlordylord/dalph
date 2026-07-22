@@ -14,6 +14,8 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-pla
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import {
+  ImplementationEvidenceSealingSimulatedTrace,
+  makeImplementationEvidenceSealingOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -22,6 +24,7 @@ import {
   makeTrackerGraphObservationOperation,
   makeTrackerGraphObservedOutcome,
   OperationSelected,
+  SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TaskWorkSessionEstablishedTrace,
@@ -186,6 +189,21 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           operation: executionOperation,
           outcome: executionOutcome
         }))
+        if (executionOutcome.outcome._tag === "Succeeded") {
+          const evidenceOperation = makeImplementationEvidenceSealingOperation({
+            operationId: yield* allocator.allocate(),
+            execution: { _tag: "SuccessfulExecution", outcome: executionOutcome.outcome },
+            plannedAttempt
+          })
+          yield* emit(OperationSelected.make({ operation: evidenceOperation }))
+          const sealed = yield* interpreter.sealImplementationEvidence(evidenceOperation)
+          if (sealed._tag !== "SealedImplementationEvidence") {
+            return yield* new TaskWorktreeExecutionModeContradiction({
+              operationId: evidenceOperation.operationId
+            })
+          }
+          yield* emit(SealedImplementationEvidenceTrace.make({ operation: evidenceOperation, sealed }))
+        }
       } else if (
         planResult._tag === "TaskAttemptPlanRecordingSimulated"
         && worktreeResult._tag === "TaskWorktreeReconciliationSimulated"
@@ -211,6 +229,25 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         yield* emit(TaskExecutionSimulated.make({
           operation: executionOperation,
           outcome: executionOutcome
+        }))
+        const evidenceOperation = makeImplementationEvidenceSealingOperation({
+          operationId: yield* allocator.allocate(),
+          execution: {
+            _tag: "SimulatedExecution",
+            predecessorOperationId: executionOperation.request.operationId
+          },
+          plannedAttempt
+        })
+        yield* emit(OperationSelected.make({ operation: evidenceOperation }))
+        const simulation = yield* interpreter.sealImplementationEvidence(evidenceOperation)
+        if (simulation._tag === "SealedImplementationEvidence") {
+          return yield* new TaskWorktreeExecutionModeContradiction({
+            operationId: evidenceOperation.operationId
+          })
+        }
+        yield* emit(ImplementationEvidenceSealingSimulatedTrace.make({
+          operation: evidenceOperation,
+          simulation
         }))
       } else {
         return yield* new TaskWorktreeExecutionModeContradiction({

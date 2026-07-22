@@ -8,6 +8,7 @@ import {
 } from "./coordinator-lock.js"
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
+import { EvidenceStore } from "./implementation-evidence.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -125,6 +126,24 @@ export const coordinatorOwnedGitWorktreeLayer = <E, R>(
       })
     })
   ).pipe(Layer.provide(gitWorktreeLayer))
+
+/** Guards evidence publication while content verification remains read-only. */
+export const coordinatorOwnedEvidenceStoreLayer = <E, R>(
+  evidenceStoreLayer: Layer.Layer<EvidenceStore, E, R>
+) =>
+  Layer.effect(
+    EvidenceStore,
+    Effect.gen(function*() {
+      const ownership = yield* CoordinatorOwnership
+      const store = yield* EvidenceStore
+      return EvidenceStore.of({
+        put: Effect.fn("EvidenceStore.CoordinatorOwned.put")(function*(bytes) {
+          return yield* ownership.runMutation(store.put(bytes))
+        }),
+        read: store.read
+      })
+    })
+  ).pipe(Layer.provide(evidenceStoreLayer))
 
 /** Production ownership acquisition using the OS-backed coordinator lock. */
 export const productionCoordinatorOwnershipLayer = (
