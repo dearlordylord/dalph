@@ -3,6 +3,10 @@ import { it } from "@effect/vitest"
 import { ConfigProvider, Effect, Exit, FileSystem, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
+  type TaskWorkSessionCrashScenario,
+  TaskWorkSessionCrashScenario as CrashScenario
+} from "../test/task-work-session-crash-scenarios.js"
+import {
   AttemptId,
   GitCommitSha,
   GitCommonDirectoryTarget,
@@ -29,17 +33,6 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
-
-const CrashScenario = {
-  AfterAcknowledgementRecorded: "AfterAcknowledgementRecorded",
-  AfterAcknowledgementRecordedWithoutCreation: "AfterAcknowledgementRecordedWithoutCreation",
-  AfterAbsenceReportRecorded: "AfterAbsenceReportRecorded",
-  AfterIntentBeforeRequest: "AfterIntentBeforeRequest",
-  AfterMatchingReportRecorded: "AfterMatchingReportRecorded",
-  AfterRequestCrossed: "AfterRequestCrossed",
-  AfterRequestCrossedWithoutCreation: "AfterRequestCrossedWithoutCreation"
-} as const
-type CrashScenario = typeof CrashScenario[keyof typeof CrashScenario]
 
 /** Shared typed metadata for the provider/request crash-boundary acceptance lane. */
 const crashScenarios = [
@@ -149,7 +142,7 @@ const crashScenarios = [
     ]
   }
 ] as const satisfies ReadonlyArray<{
-  readonly boundary: CrashScenario
+  readonly boundary: TaskWorkSessionCrashScenario
   readonly expectedLookups: number
   readonly expectedRequests: number
   readonly expectedTags: ReadonlyArray<string>
@@ -212,6 +205,13 @@ for (const scenario of crashScenarios) {
             }),
           requestTaskWorkStart: () =>
             Effect.gen(function*() {
+              if (
+                scenario.boundary === CrashScenario.AfterIntentBeforeRequest
+                && !(yield* Ref.get(crashed))
+              ) {
+                yield* Ref.set(crashed, true)
+                return yield* Effect.interrupt
+              }
               const count = yield* Ref.updateAndGet(requests, (value) => value + 1)
               const firstAbsenceScenarioRequest = (
                 scenario.boundary === CrashScenario.AfterAbsenceReportRecorded
@@ -264,13 +264,7 @@ for (const scenario of crashScenarios) {
       const applicationLayer = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(directory),
-        runnerLayer,
-        {
-          afterTaskWorkSessionIntentCommitted: () =>
-            scenario.boundary === CrashScenario.AfterIntentBeforeRequest
-              ? Ref.set(crashed, true).pipe(Effect.andThen(Effect.interrupt))
-              : Effect.void
-        }
+        runnerLayer
       ).pipe(
         Layer.provide(Layer.succeed(
           TrackerGraphReader,
@@ -306,7 +300,7 @@ for (const scenario of crashScenarios) {
     }).pipe(Effect.provide(NodeFileSystem.layer)))
 }
 
-it.effect("allocates a new candidate after death before intent acknowledgement", () =>
+it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowledgement}`, () =>
   Effect.gen(function*() {
     const fileSystem = yield* FileSystem.FileSystem
     const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-before-intent-" })

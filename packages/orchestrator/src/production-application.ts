@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect"
 import type { GitCommonDirectoryTarget, RunId } from "./domain.js"
-import type { WorkflowRecoveryBoundaryObserver } from "./journaled-workflow-interpreter.js"
 import {
   journaledWorkflowInterpreterLayer,
   recoverTaskWorkSessionEstablishments
@@ -18,8 +17,7 @@ import { WorkflowInterpreter } from "./workflow.js"
 export const productionWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
   target: GitCommonDirectoryTarget,
-  taskRunnerAdapterLayer: Layer.Layer<TaskRunner, E, R>,
-  boundaryObserver?: WorkflowRecoveryBoundaryObserver
+  taskRunnerAdapterLayer: Layer.Layer<TaskRunner, E, R>
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const taskRunnerLayer = coordinatorOwnedTaskRunnerLayer(
@@ -34,8 +32,7 @@ export const productionWorkflowInterpreterLayer = <E, R>(
 
   const interpreterLayer = journaledWorkflowInterpreterLayer(
     runId,
-    baseInterpreterLayer,
-    boundaryObserver
+    baseInterpreterLayer
   ).pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(journalLayer)

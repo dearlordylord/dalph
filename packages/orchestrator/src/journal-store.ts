@@ -117,7 +117,10 @@ export const TaskWorkSessionEstablishedEvent = Schema.TaggedStruct(
   }
 )
 
-/** Records a terminal provider result without deciding task-tracker success. */
+/**
+ * Records a terminal provider result without deciding task-tracker success.
+ * Issue #29 owns connecting this later result-observation operation end to end.
+ */
 const TaskWorkSessionResultReportedEvent = Schema.TaggedStruct(
   "TaskWorkSessionResultReported",
   {

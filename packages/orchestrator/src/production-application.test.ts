@@ -1,7 +1,9 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { ConfigProvider, Effect, Exit, FileSystem, Layer, Ref } from "effect"
+import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Ref } from "effect"
 import { expect } from "vitest"
+import { TaskWorkSessionCrashScenario } from "../test/task-work-session-crash-scenarios.js"
+import type { WorkflowOutcome } from "./index.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -30,7 +32,7 @@ import {
 } from "./index.js"
 import { intentRecordKey, TaskWorkSessionEstablishmentIntentRecorded } from "./journal-store.js"
 
-it.effect("recovers configured SQLite history across production ownership scopes", () =>
+it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenario.AfterOutcomeRecorded}`, () =>
   Effect.gen(function*() {
     const fileSystem = yield* FileSystem.FileSystem
     const directory = yield* fileSystem.makeTempDirectoryScoped({
@@ -114,15 +116,18 @@ it.effect("recovers configured SQLite history across production ownership scopes
       Effect.provide(applicationLayer),
       Effect.provide(configLayer)
     )
-    const firstOutcome = yield* runCoordinator
-    const crashAfterOutcome = Effect.gen(function*() {
-      yield* WorkflowInterpreter
-      return yield* Effect.interrupt
-    }).pipe(
+    const outcomeRecorded = yield* Deferred.make<
+      typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type
+    >()
+    const coordinator = yield* runCoordinator.pipe(
+      Effect.tap((outcome) => Deferred.succeed(outcomeRecorded, outcome)),
+      Effect.andThen(Effect.never),
       Effect.provide(applicationLayer),
-      Effect.provide(configLayer)
+      Effect.provide(configLayer),
+      Effect.forkDetach
     )
-    expect(Exit.isFailure(yield* Effect.exit(crashAfterOutcome))).toBe(true)
+    const firstOutcome = yield* Deferred.await(outcomeRecorded)
+    yield* Fiber.interrupt(coordinator)
     const replayedOutcome = yield* runCoordinator
 
     expect(firstOutcome).toMatchObject({

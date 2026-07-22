@@ -39,13 +39,7 @@ type TaskWorkSessionRecoveryDecision =
     readonly _tag: "Established"
     readonly outcome: typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type
   }
-  | {
-    readonly _tag: "Failed"
-    readonly error:
-      | typeof TaskWorkSessionCorrelationConflict.Type
-      | TaskWorkSessionEstablishmentDidNotConverge
-      | TaskWorkSessionLookupDidNotConverge
-  }
+  | { readonly _tag: "Failed"; readonly error: typeof TaskWorkSessionCorrelationConflict.Type }
   | { readonly _tag: "RepeatRequest"; readonly retry: TaskWorkSessionRetry }
   | { readonly _tag: "RetryLookup"; readonly retry: TaskWorkSessionRetry }
 
@@ -55,23 +49,15 @@ type ReportDecision = Exclude<TaskWorkSessionRecoveryDecision, RetryLookupDecisi
 /** The total provider-observation decision shared by live recovery and MBT. */
 export function decideTaskWorkSessionRecovery(
   operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
-  observation: TaskWorkSessionLookupFailure,
-  atLookupBound: false
+  observation: TaskWorkSessionLookupFailure
 ): RetryLookupDecision
 export function decideTaskWorkSessionRecovery(
   operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
-  observation: TaskWorkSessionReport,
-  atLookupBound: false
+  observation: TaskWorkSessionReport
 ): ReportDecision
 export function decideTaskWorkSessionRecovery(
   operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
-  observation: TaskWorkSessionReport | TaskWorkSessionLookupFailure,
-  atLookupBound: boolean
-): TaskWorkSessionRecoveryDecision
-export function decideTaskWorkSessionRecovery(
-  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
-  observation: TaskWorkSessionReport | TaskWorkSessionLookupFailure,
-  atLookupBound: boolean
+  observation: TaskWorkSessionReport | TaskWorkSessionLookupFailure
 ): TaskWorkSessionRecoveryDecision {
   if (observation instanceof TaskWorkSessionLookupFailure) {
     const error = new TaskWorkSessionLookupDidNotConverge({
@@ -79,9 +65,7 @@ export function decideTaskWorkSessionRecovery(
       operationId: operation.request.operationId,
       plannedAttempt: operation.request.plannedAttempt
     })
-    return atLookupBound
-      ? { _tag: "Failed", error }
-      : { _tag: "RetryLookup", retry: { _tag: "Retry", atBoundError: error } }
+    return { _tag: "RetryLookup", retry: { _tag: "Retry", atBoundError: error } }
   }
   switch (observation._tag) {
     case "MatchingTaskWorkSessionReported":
@@ -100,9 +84,7 @@ export function decideTaskWorkSessionRecovery(
         plannedAttempt: operation.request.plannedAttempt,
         report: observation
       })
-      return atLookupBound
-        ? { _tag: "Failed", error }
-        : { _tag: "RepeatRequest", retry: { _tag: "Retry", atBoundError: error } }
+      return { _tag: "RepeatRequest", retry: { _tag: "Retry", atBoundError: error } }
     }
   }
 }

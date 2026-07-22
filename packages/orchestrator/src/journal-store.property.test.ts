@@ -17,6 +17,7 @@ import { intentRecordKey, JournalStore, managedWorkflowIntent, memoryJournalStor
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import {
   causalGraphProjection,
+  compareOperationIds,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
   WorkflowOperation,
@@ -54,6 +55,17 @@ it("preserves operation identity and direct predecessors across journal codec ro
 
       expect(decoded).toEqual(operation)
       expect(workflowOperationId(decoded)).toBe(operation.request.operationId)
+    }
+  ))
+})
+
+it("uses one locale-independent canonical order for operation identities", () => {
+  fc.assert(fc.property(
+    fc.uniqueArray(fc.string({ minLength: 1, maxLength: 12 }), { maxLength: 20 }),
+    (identities) => {
+      const branded = identities.map((identity) => OperationId.make(identity))
+      const expected = branded.toSorted((left, right) => left < right ? -1 : left > right ? 1 : 0)
+      expect(branded.toSorted(compareOperationIds)).toEqual(expected)
     }
   ))
 })

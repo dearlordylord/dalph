@@ -138,6 +138,21 @@ container, virtual machine, agent run, or process; Dalph does not call it an
 operating-system process unless the provider reports an OS process ID.
 _Avoid_: Worker process, task-work session
 
+**Provider work-unit availability**:
+The task-work provider adapter's explicit observation of one registry-known
+provider work unit: available with current details, confirmed purged by the
+native provider, or temporarily unreadable. Purged and unreadable units remain
+known members of their task-work session rather than disappearing from its
+history.
+_Avoid_: Task-work session existence, provider work-unit result, empty provider listing
+
+**Provider work unit purged**:
+The provider adapter proves that one registry-known provider work unit existed
+and that its native record was intentionally removed. Its task-work session
+remains established, but that work unit cannot be resumed; later workflow must
+select replacement, preservation, or failure explicitly.
+_Avoid_: Provider work unit absent, provider work unit temporarily unreadable, no matching task-work session reported
+
 **Dalph-assigned identity**:
 An identity Dalph creates before recording or requesting a workflow action, such
 as a `RunId` or `OperationId`.
@@ -165,9 +180,19 @@ _Avoid_: Task runner, task tracker
 
 **Task-work provider adapter**:
 The part of the task runner that translates start requests and session lookups
-for one concrete task-work provider. A local adapter reads OS processes; a
-future Sandcastle adapter reads Sandcastle sessions and work units.
+for one concrete task-work provider. It is an application boundary, not a
+deployment boundary: an adapter may wrap a local CLI, operating-system process,
+SDK, filesystem-backed runner, or remote API. A local adapter reads OS
+processes; a future Sandcastle adapter reads Sandcastle sessions and work units.
 _Avoid_: Task runner, task-work provider, execution service
+
+**Task-work provider correlation registry**:
+Provider-adapter-owned durable metadata that correlates one exact `OperationId`
+and planned task attempt with its provider-assigned task-work session and
+provider work units. It survives for the lifetime of every recoverable run even
+when a provider removes native session details. It is neither Dalph workflow
+journal state nor a retained transcript or cached process listing.
+_Avoid_: Dalph workflow journal, task-work provider cache, workflow projection, native session retention
 
 **Task selected by the task-tracker target**:
 A task belongs to the task-tracker target closure after Dalph applies the
@@ -198,8 +223,32 @@ _Avoid_: Task-work start requested, retry
 The task runner returns the completed session lookup. The report distinguishes
 an absent session, a matching session with its provider work units or worker
 processes, and conflicting records instead of collapsing them into “executed.”
-Failure to query the provider produces no report.
+For a matching session, every registry-known provider work unit is reported as
+available, confirmed purged, or temporarily unreadable. Failure to establish
+the session correlation itself produces no session report.
 _Avoid_: Task execution started, task started, executed
+
+**No matching task-work session reported**:
+The task-work provider adapter proves from complete durable correlation metadata
+that no current or historical task-work session matches the exact `OperationId`
+and planned task attempt. A request error, empty native session listing, purged
+native session, or unavailable registry cannot establish this report.
+_Avoid_: Task-work session lookup failure, native session absent, task-work session correlation conflict
+
+**Task-work session correlation conflict**:
+A fresh task-work session lookup reports multiple matches, an identity or
+payload mismatch, or other provider records that contradict the exact
+`OperationId` and planned task attempt. Dalph preserves the conflicting
+provider evidence and blocks the affected workflow operation instead of
+choosing a session, requesting another one, or overriding provider authority.
+_Avoid_: Task-work session reported, execution resource conflict, lookup failure, operator-selected session
+
+**Task-work session lookup failure**:
+The task runner could not obtain an authoritative task-work session report from
+the configured provider. It records why the fresh result check could not
+answer, leaves the task-work start operation unresolved, and authorizes only a
+later fresh result check.
+_Avoid_: No matching task-work session reported, task-work session correlation conflict, task-work session established
 
 **Task-work session result reported**:
 The provider's terminal completion, failure, or interruption for one task-work
@@ -215,9 +264,17 @@ SDK, CLI, or agent tool call.
 _Avoid_: Generic operation, tool call, task
 
 **Operation identity**:
-The stable Dalph-assigned identity that links one workflow operation's recorded
-intent, any state-changing request, fresh reads, and recorded outcome.
+The stable Dalph-assigned identity allocated when one workflow operation is
+selected. Once its intent is committed, the identity links that immutable
+intent to any state-changing request, fresh result checks, recovery, repeats of
+that same request, and its recorded outcome.
 _Avoid_: Task identity, attempt identity, journal position
+
+**Causal predecessor**:
+A workflow operation whose recorded outcome or decision was necessary to select
+another workflow operation. Direct `OperationId` references record this
+relationship; journal adjacency and tracker task dependencies do not.
+_Avoid_: Previous journal event, task prerequisite, earlier operation
 
 **State-changing request**:
 A request that may change state outside Dalph's journal: for example, claiming
@@ -238,6 +295,22 @@ request targeted: the task tracker for a claim, Git for a ref, or the task runne
 reading the task-work provider through its configured adapter for a task-work
 session. Journal replay and cached projections are not fresh result checks.
 _Avoid_: External authority observation, fact-owner observation
+
+**Task-work start request acknowledgement**:
+The provider response saying one task-work start request returned. Dalph records
+it as managed workflow history, but it does not prove that a task-work session
+exists and never replaces the required fresh result check.
+_Avoid_: Task-work session reported, task-work session result reported, recovery authority
+
+**Task-work session established**:
+The managed workflow outcome recorded after a fresh result check reports exactly
+one task-work session matching the start request's stable `OperationId` and
+complete planned task attempt. It says only that the requested session for that
+one planned task attempt exists. An established session may normally contain no
+provider work unit or worker process yet; requesting that work is a distinct
+workflow operation. The session's current state and terminal result remain
+separate provider observations.
+_Avoid_: Task-work start request acknowledgement, task-work session result reported, task completed successfully
 
 **Uncertain-request recovery rules**:
 The explicit mapping from a recorded intent plus a fresh result check through

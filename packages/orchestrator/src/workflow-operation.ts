@@ -55,6 +55,14 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     ? operation.operationId
     : operation.request.operationId
 
+const orderedBefore = -1
+const orderedSame = 0
+const orderedAfter = 1
+
+/** Canonical code-unit order; independent of host locale and presentation rules. */
+export const compareOperationIds = (left: OperationId, right: OperationId): number =>
+  left < right ? orderedBefore : left > right ? orderedAfter : orderedSame
+
 /** Projects causality independently of the journal order used to observe it. */
 export const causalGraphProjection = (
   operations: ReadonlyArray<WorkflowOperation>
@@ -62,7 +70,7 @@ export const causalGraphProjection = (
   operations.map((operation) => ({
     operationId: workflowOperationId(operation),
     predecessorOperationIds: operation.predecessorOperationIds
-  })).toSorted((left, right) => left.operationId.localeCompare(right.operationId))
+  })).toSorted((left, right) => compareOperationIds(left.operationId, right.operationId))
 
 export const makeTrackerGraphObservationOperation = (
   operationId: OperationId,
@@ -82,5 +90,5 @@ export const makeTaskWorkSessionEstablishmentOperation = (
 ): typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type =>
   WorkflowOperation.cases.EstablishTaskWorkSession.make({
     ...fields,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort()
+    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
   })

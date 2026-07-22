@@ -2,7 +2,7 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFSet, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Effect, Schema } from "effect"
-import { makeTaskWorkSessionRecoveryTestControl } from "./task-work-session-recovery-test-control.js"
+import { makeTaskWorkSessionRecoveryHarness } from "../test/task-work-session-recovery-harness.js"
 
 const actionSchema = {
   commitIntent: {},
@@ -56,7 +56,7 @@ const setsEqual = <A>(left: ReadonlySet<A>, right: ReadonlySet<A>): boolean =>
 /** Every generated Quint action calls one public deterministic test control. */
 const recoveryConformanceDriver = defineDriver(
   actionSchema,
-  makeTaskWorkSessionRecoveryTestControl
+  makeTaskWorkSessionRecoveryHarness
 )
 
 quintIt(it.effect, "replays the recovery model through the TypeScript boundary", {

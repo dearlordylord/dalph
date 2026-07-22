@@ -86,6 +86,37 @@ projection as proof that work occurred.
 | Runnable frontiers and resource-readiness views | Derived in the live coordinator process | Recompute them from fresh task-tracker, Git, and task-runner reads plus Dalph-recorded journal history |
 | Workflow-comparison-trace entries, presentation cursors, and graph indexes | Derived presentation data, even when an output store retains a copy | Rebuild them from committed journal records in original `(RunId, JournalPosition)` order without reordering or renumbering history. After restart, reread the task tracker and Git, ask the task runner for a fresh task-work session report, and record new journal events for those reads and reports. Preserve returned identities or revisions and leave unreadable intervals explicit. Dry-run and deterministic-test comparison traces remain process-local and do not write the Dalph workflow journal |
 
+A task-work provider adapter may satisfy its correlation contract with a
+provider-owned durable registry outside the Dalph workflow journal. That
+registry retains the exact operation, planned-attempt, task-work-session, and
+provider-work-unit correlation for every recoverable run even when the native
+provider has a shorter session-retention period. Native session absence, an
+empty provider listing, or any request error whose contract does not explicitly
+prove pre-creation rejection does not prove non-creation. When the adapter
+cannot read complete correlation history, it returns a typed task-work session
+lookup failure instead of reporting that no matching session exists.
+
+An established task-work session with no provider work unit or worker process
+is a normal explicit state. Establishing the durable session and asking the
+adapter to start or resume work inside that session are distinct workflow
+operations. Dalph records each operation's intent and observed outcome
+separately. After restart it can therefore distinguish a session awaiting its
+first work request from an uncertain work-unit or worker-process request.
+
+A matching task-work session report preserves every registry-known provider
+work unit even when native details are no longer readable. Each work unit is
+tagged as available, confirmed purged, or temporarily unreadable. Confirmed
+purge leaves the enclosing task-work session established but forbids resuming
+that work unit. Temporary unreadability authorizes only another observation;
+neither condition is collapsed into an absent task-work session.
+
+A task-work session correlation conflict leaves the session-establishment
+operation unresolved under its existing `OperationId`. Dalph may only perform
+a fresh lookup after provider-owned correlation data is repaired or follow a
+separate run-disposition decision. Repair does not authorize selecting one
+conflicting session, changing the planned attempt, or issuing another session
+creation request.
+
 A journal event record is durable after Dalph receives successful
 acknowledgement of its append. Presentation may apply process-local backpressure
 after acknowledgement, but a crash before presentation output does not erase
@@ -110,6 +141,14 @@ not sufficient for recovery: journal history validation must read events in
 order, check rules between them, and return either a valid recovery state or
 typed validation errors. Dalph does not persist that derived state. See
 [ADR 0001](adr/0001-versioned-journal-evolution.md).
+
+Journal history validation rejects structurally impossible managed history,
+such as an observation without its operation intent, an outcome without its
+required observation, or mismatched operation and planned-attempt references.
+Two well-formed provider reports that disagree remain valid journal history but
+produce a typed provider-evidence conflict. Failure to obtain complete provider
+evidence remains a typed lookup failure. Neither external condition is
+reclassified as journal corruption.
 
 ## Tracker Target Closure
 

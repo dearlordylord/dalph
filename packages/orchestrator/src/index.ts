@@ -141,6 +141,7 @@ export {
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
   OperationSelected,
+  ProviderObservationIdentityReused,
   TaskWorkCapacityReserved,
   TaskWorkSessionEstablishedTrace,
   TaskWorkSessionEstablishmentDidNotConverge,

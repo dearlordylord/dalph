@@ -5,7 +5,6 @@ import { validSnapshot } from "../test/task-dag.js"
 import {
   AttemptId,
   CoordinatorOwnershipLost,
-  decideTaskWorkSessionRecovery,
   FixtureTarget,
   GitCommitSha,
   GitCommonDirectoryLocator,
@@ -20,6 +19,7 @@ import {
   OperationId,
   PlannedTaskAttempt,
   ProviderObservationId,
+  ProviderObservationIdentityReused,
   ProviderRequestId,
   recoverTaskWorkSessionEstablishments,
   RunId,
@@ -73,19 +73,6 @@ const request = TaskWorkStartRequest.make({ operationId, plannedAttempt, task })
 const operation = makeTaskWorkSessionEstablishmentOperation({
   predecessorOperationIds: [OperationId.make("operation-plan-attempt")],
   request
-})
-
-it("classifies lookup and establishment exhaustion at the activation bound", () => {
-  const unreadable = new TaskWorkSessionLookupFailure({
-    detail: "provider registry unavailable at bound",
-    observationId: ProviderObservationId.make("bound-unreadable")
-  })
-  const absent = NoMatchingTaskWorkSessionReported.make({
-    observationId: ProviderObservationId.make("bound-absence")
-  })
-
-  expect(decideTaskWorkSessionRecovery(operation, unreadable, true)._tag).toBe("Failed")
-  expect(decideTaskWorkSessionRecovery(operation, absent, true)._tag).toBe("Failed")
 })
 
 it.effect("repeats one exact start request only after fresh authoritative absence", () =>
@@ -158,6 +145,47 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
       "TaskWorkSessionReported",
       "TaskWorkSessionEstablished"
     ])
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("fails closed when a provider reuses one observation identity for another call", () =>
+  Effect.gen(function*() {
+    const reused = ProviderObservationId.make("reused-provider-observation")
+    const runner = TaskRunner.of({
+      lookupTaskWorkSession: () =>
+        Effect.succeed(MatchingTaskWorkSessionReported.make({
+          observationId: reused,
+          sessionId: TaskWorkSessionId.make("identity-reuse-session"),
+          work: { _tag: "NoProviderWorkReported" }
+        })),
+      requestTaskWorkStart: () =>
+        Effect.succeed({
+          observationId: reused,
+          providerRequestId: ProviderRequestId.make("identity-reuse-request")
+        })
+    })
+    const layer = journaledWorkflowInterpreterLayer(
+      runId,
+      taskRunnerWorkflowInterpreterLayer
+    ).pipe(
+      Layer.provide(Layer.succeed(TaskRunner, runner)),
+      Layer.provide(Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({ read: () => Effect.die("unused tracker read") })
+      )),
+      Layer.provide(Layer.succeed(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      ))
+    )
+
+    const failure = yield* Effect.gen(function*() {
+      return yield* (yield* WorkflowInterpreter)
+        .establishTaskWorkSession(operation)
+        .pipe(Effect.flip)
+    }).pipe(Effect.provide(layer))
+
+    expect(failure).toBeInstanceOf(ProviderObservationIdentityReused)
+    expect(failure).toMatchObject({ observationId: reused, operationId })
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("performs exactly three fresh lookups before typed unreadable non-convergence", () =>

@@ -27,6 +27,7 @@ import { WorkflowOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
+  compareOperationIds,
   makeTaskWorkSessionEstablishmentOperation,
   makeTrackerGraphObservationOperation,
   workflowOperationId
@@ -51,6 +52,15 @@ export class TaskWorkSessionEvidenceContradiction
   )
 {}
 
+/** One provider observation identity was reused for a distinct completed call. */
+export class ProviderObservationIdentityReused extends Schema.TaggedErrorClass<ProviderObservationIdentityReused>()(
+  "ProviderObservationIdentityReused",
+  {
+    observationId: ProviderObservationId,
+    operationId: OperationId
+  }
+) {}
+
 /** The planned attempt belongs to a different recoverable workflow run. */
 export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<TaskWorkSessionRunContradiction>()(
   "TaskWorkSessionRunContradiction",
@@ -64,6 +74,7 @@ export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<Tas
 type TaskWorkSessionObservationError =
   | JournalStoreContradiction
   | JournalStoreError
+  | ProviderObservationIdentityReused
   | TaskWorkSessionEvidenceContradiction
   | TaskWorkSessionRunContradiction
   | TraceOutputError
@@ -158,8 +169,7 @@ export const runTaskWorkSessionEstablishmentProtocol = Effect.fn(
       if (failed !== undefined) return failed
       const decision = decideTaskWorkSessionRecovery(
         operation,
-        lookupResult.failure,
-        false
+        lookupResult.failure
       )
       return yield* Effect.fail(decision.retry)
     }
@@ -169,8 +179,7 @@ export const runTaskWorkSessionEstablishmentProtocol = Effect.fn(
     if (failed !== undefined) return failed
     const decision = decideTaskWorkSessionRecovery(
       operation,
-      report,
-      false
+      report
     )
     if (decision._tag === "RepeatRequest") {
       yield* Ref.set(pendingRequest, true)

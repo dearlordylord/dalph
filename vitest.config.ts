@@ -7,7 +7,6 @@ export default defineConfig({
         "**/*.d.ts",
         "**/*.test.ts",
         "**/*.spec.ts",
-        "**/*-test-control.ts",
         "test/**"
       ],
       include: ["src/**/*.ts", "packages/*/src/**/*.ts"],
