@@ -330,7 +330,7 @@ export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:outcome`)
 
-export const taskWorkStartRequestedRecordKey = (
+export const providerObservationRequestRecordKey = (
   observationId: ProviderObservationId
 ): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
 
@@ -343,10 +343,6 @@ export const taskWorkStartFailedRecordKey = (
   operationId: OperationId,
   observationId: ProviderObservationId
 ): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-failed:${observationId}`)
-
-export const taskWorkSessionLookupRequestedRecordKey = (
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
 
 export const taskWorkSessionReportedRecordKey = (
   operationId: OperationId,

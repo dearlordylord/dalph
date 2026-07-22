@@ -6,18 +6,17 @@ import {
   managedWorkflowIntent,
   managedWorkflowOutcome,
   outcomeRecordKey,
+  providerObservationRequestRecordKey,
   TaskWorkSessionEstablishedEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorkSessionLookupFailed,
   TaskWorkSessionLookupRequested,
-  taskWorkSessionLookupRequestedRecordKey,
   TaskWorkSessionReported,
   taskWorkSessionReportedRecordKey,
   taskWorkStartAcknowledgedRecordKey,
   taskWorkStartFailedRecordKey,
   TaskWorkStartRequestAcknowledged,
   TaskWorkStartRequested,
-  taskWorkStartRequestedRecordKey,
   TaskWorkStartRequestFailed
 } from "./journal-store.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -142,7 +141,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           lookupFailed: Effect.fn("WorkflowJournal.lookupFailed")(function*(lookup, failure) {
             yield* journal.append(
               runId,
-              taskWorkSessionLookupRequestedRecordKey(failure.observationId),
+              providerObservationRequestRecordKey(failure.observationId),
               TaskWorkSessionLookupRequested.make({
                 lookup,
                 observationId: failure.observationId,
@@ -163,7 +162,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           sessionReported: Effect.fn("WorkflowJournal.sessionReported")(function*(lookup, report) {
             yield* journal.append(
               runId,
-              taskWorkSessionLookupRequestedRecordKey(report.observationId),
+              providerObservationRequestRecordKey(report.observationId),
               TaskWorkSessionLookupRequested.make({
                 lookup,
                 observationId: report.observationId,
@@ -200,7 +199,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           startFailed: Effect.fn("WorkflowJournal.startFailed")(function*(request, failure) {
             yield* journal.append(
               runId,
-              taskWorkStartRequestedRecordKey(failure.observationId),
+              providerObservationRequestRecordKey(failure.observationId),
               TaskWorkStartRequested.make({
                 observationId: failure.observationId,
                 request,
@@ -217,7 +216,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           startRequested: Effect.fn("WorkflowJournal.startRequested")(function*(request, acknowledgement) {
             yield* journal.append(
               runId,
-              taskWorkStartRequestedRecordKey(acknowledgement.observationId),
+              providerObservationRequestRecordKey(acknowledgement.observationId),
               TaskWorkStartRequested.make({
                 observationId: acknowledgement.observationId,
                 request,
