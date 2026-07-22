@@ -145,6 +145,13 @@ export const WorkerProcessId = Schema.Int.check(
 ).pipe(Schema.brand("WorkerProcessId"))
 export type WorkerProcessId = typeof WorkerProcessId.Type
 
+/** A provider-reported positive safe-integer status that proves task work failed. */
+export const FailedProcessExitCode = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("FailedProcessExitCode"))
+export type FailedProcessExitCode = typeof FailedProcessExitCode.Type
+
 /** Identifies one durable managed-history fact within a run. */
 export const JournalRecordKey = Schema.NonEmptyString.pipe(
   Schema.brand("JournalRecordKey")

@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import type { TrackerTarget } from "./domain.js"
 import { OperationId, PlannedTaskAttempt, TrackerTarget as TrackerTargetSchema } from "./domain.js"
+import { TaskExecutionRequest } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
@@ -87,18 +88,37 @@ const ReconcileTaskWorktreeOperation = Schema.TaggedStruct(
   )
 )
 
+const ExecuteTaskWorkOperation = Schema.TaggedStruct(
+  "ExecuteTaskWork",
+  {
+    predecessorOperationIds: CausalPredecessorOperationIds,
+    request: TaskExecutionRequest
+  }
+).check(
+  Schema.makeFilter((operation) =>
+    operation.predecessorOperationIds.includes(operation.request.operationId)
+      ? {
+        path: ["predecessorOperationIds"],
+        issue: "an operation cannot causally precede itself"
+      }
+      : undefined
+  )
+)
+
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
     AcquireTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
     ReconcileTaskWorktreeOperation,
-    EstablishTaskWorkSessionOperation
+    EstablishTaskWorkSessionOperation,
+    ExecuteTaskWorkOperation
   ]),
   {
     cases: {
       AcquireTaskClaim: AcquireTaskClaimOperation,
       EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
+      ExecuteTaskWork: ExecuteTaskWorkOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
@@ -122,6 +142,8 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     ? operation.operationId
     : operation._tag === "ReconcileTaskWorktree"
     ? operation.operationId
+    : operation._tag === "ExecuteTaskWork"
+    ? operation.request.operationId
     : operation.request.operationId
 
 const orderedBefore = -1
@@ -202,4 +224,15 @@ export const makeTaskWorktreeReconciliationOperation = (
     predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
       compareOperationIds
     )
+  })
+
+export const makeTaskExecutionOperation = (
+  fields: {
+    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+    readonly request: TaskExecutionRequest
+  }
+): typeof WorkflowOperation.cases.ExecuteTaskWork.Type =>
+  WorkflowOperation.cases.ExecuteTaskWork.make({
+    ...fields,
+    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
   })

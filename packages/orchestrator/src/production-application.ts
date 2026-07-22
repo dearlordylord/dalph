@@ -5,17 +5,20 @@ import { nodeGitCommandLayer } from "./git-command.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
   coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
+import type { TaskExecutor } from "./task-execution.js"
 import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
 import { trackerMutationWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
   recoverTaskClaimAcquisitions,
+  recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
   recoverTaskWorktreeReconciliations
 } from "./workflow-recovery.js"
@@ -26,6 +29,8 @@ import { WorkflowInterpreter } from "./workflow.js"
  * the guarded task runner, and the recovering workflow interpreter.
  */
 export const productionWorkflowInterpreterLayer = <
+  ExecutorError,
+  ExecutorRequirements,
   RunnerError,
   RunnerRequirements,
   TrackerError,
@@ -33,6 +38,7 @@ export const productionWorkflowInterpreterLayer = <
 >(
   runId: RunId,
   target: GitCommonDirectoryTarget,
+  taskExecutorAdapterLayer: Layer.Layer<TaskExecutor, ExecutorError, ExecutorRequirements>,
   taskRunnerAdapterLayer: Layer.Layer<TaskRunner, RunnerError, RunnerRequirements>,
   trackerMutationAdapterLayer: Layer.Layer<
     TrackerMutation,
@@ -43,6 +49,9 @@ export const productionWorkflowInterpreterLayer = <
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const taskRunnerLayer = coordinatorOwnedTaskRunnerLayer(
     taskRunnerAdapterLayer
+  ).pipe(Layer.provide(ownershipLayer))
+  const taskExecutorLayer = coordinatorOwnedTaskExecutorLayer(
+    taskExecutorAdapterLayer
   ).pipe(Layer.provide(ownershipLayer))
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(
     trackerMutationAdapterLayer
@@ -58,13 +67,15 @@ export const productionWorkflowInterpreterLayer = <
   )
   const baseInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
     Layer.provide(taskRunnerLayer),
+    Layer.provide(taskExecutorLayer),
     Layer.provide(gitWorktreeLayer),
     Layer.provide(trackerMutationLayer)
   )
 
   const interpreterLayer = journaledWorkflowInterpreterLayer(
     runId,
-    baseInterpreterLayer
+    baseInterpreterLayer,
+    taskExecutorLayer
   ).pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(journalLayer)
@@ -76,6 +87,7 @@ export const productionWorkflowInterpreterLayer = <
       yield* recoverTaskClaimAcquisitions(runId)
       yield* recoverTaskWorktreeReconciliations(runId)
       yield* recoverTaskWorkSessionEstablishments(runId)
+      yield* recoverTaskExecutions(runId)
       return interpreter
     })
   ).pipe(

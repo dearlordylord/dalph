@@ -26,12 +26,14 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
+import { makeJournaledTaskExecution } from "./journaled-task-execution.js"
+import { requireAcknowledgedPlan } from "./task-attempt-plan-journal-evidence.js"
 import {
   samePlannedTaskAttempt,
-  TaskAttemptPlanHistoryContradiction,
   TaskAttemptPlanRecordAcknowledged,
   TaskAttemptPlanRunContradiction
 } from "./task-attempt-plan-recording.js"
+import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TaskWorktreeHistoryContradiction } from "./task-worktree-reconciliation.js"
 import {
@@ -44,44 +46,6 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
-
-const requireAcknowledgedPlan = Effect.fn(
-  "WorkflowJournal.requireAcknowledgedPlan"
-)(function*(
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  operationId: OperationId,
-  predecessorOperationIds: ReadonlyArray<OperationId>
-) {
-  const plans = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned"
-      && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-      ? [event]
-      : []
-  )
-  const plan = plans[0]
-  if (plan === undefined || plans.length !== 1) {
-    return yield* new TaskAttemptPlanHistoryContradiction({
-      attemptId: plannedAttempt.attemptId,
-      operationId,
-      reason: plans.length === 0 ? "Missing" : "MultiplePlans"
-    })
-  }
-  if (!predecessorOperationIds.includes(plan.operation.operationId)) {
-    return yield* new TaskAttemptPlanHistoryContradiction({
-      attemptId: plannedAttempt.attemptId,
-      operationId,
-      reason: "CausalPredecessorMissing"
-    })
-  }
-  if (!samePlannedTaskAttempt(plan.operation.plannedAttempt, plannedAttempt)) {
-    return yield* new TaskAttemptPlanHistoryContradiction({
-      attemptId: plannedAttempt.attemptId,
-      operationId,
-      reason: "PlanMismatch"
-    })
-  }
-})
 
 const requireReadyWorktree = Effect.fn("WorkflowJournal.requireReadyWorktree")(
   function*(
@@ -140,15 +104,17 @@ const requireReadyWorktree = Effect.fn("WorkflowJournal.requireReadyWorktree")(
 )
 
 /** Adds durable intent, fresh-result checks, and outcomes to the live interpreter. */
-export const journaledWorkflowInterpreterLayer = <E, R>(
+export const journaledWorkflowInterpreterLayer = <E, R, ExecutorError, ExecutorRequirements>(
   runId: RunId,
-  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>
+  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
+  taskExecutorLayer: Layer.Layer<TaskExecutor, ExecutorError, ExecutorRequirements>
 ) =>
   Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
       const journal = yield* JournalStore
+      const taskExecutor = yield* TaskExecutor
       const taskRunner = yield* TaskRunner
       const trace = yield* WorkflowTrace
 
@@ -419,13 +385,25 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         return outcome
       })
 
+      const executeTaskWork = makeJournaledTaskExecution({
+        executor: taskExecutor,
+        journal,
+        runId,
+        trace
+      })
+
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
+        executeTaskWork,
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        simulateTaskExecution: interpreter.simulateTaskExecution,
         simulateTaskWorkSession: interpreter.simulateTaskWorkSession
       })
     })
-  ).pipe(Layer.provide(interpreterLayer))
+  ).pipe(
+    Layer.provide(interpreterLayer),
+    Layer.provide(taskExecutorLayer)
+  )

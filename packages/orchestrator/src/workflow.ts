@@ -1,28 +1,30 @@
 import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
-import { OperationId, PlannedTaskAttempt, ProviderObservationId, RunId } from "./domain.js"
+import { OperationId, RunId } from "./domain.js"
 import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "./git-worktree.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
 import { runTaskClaimAcquisitionProtocol, type TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import * as TaskExecutionTrace from "./task-execution-trace.js"
+import * as TaskExecutionWorkflow from "./task-execution-workflow.js"
 import {
   decideTaskWorkSessionRecovery,
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionLookupDidNotConverge
 } from "./task-work-session-recovery-decision.js"
+import * as TaskWorkSessionTrace from "./task-work-session-trace.js"
 import type {
   TaskRunnerService,
   TaskWorkSessionCorrelationConflict,
   TaskWorkSessionLookup,
-  TaskWorkStartRequest
+  TaskWorkSessionLookupFailure,
+  TaskWorkStartRequest,
+  TaskWorkStartRequestAcknowledgement
 } from "./task-work-start.js"
 import {
   MatchingTaskWorkSessionReported,
-  TaskWorkSessionLookupFailure,
   TaskWorkSessionReport,
-  TaskWorkStartRequestAcknowledgement,
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
 import * as TaskWorktree from "./task-worktree-reconciliation.js"
@@ -38,23 +40,26 @@ import {
 } from "./tracker-mutation.js"
 import * as TrackerTrace from "./tracker-workflow-trace.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-import { WorkflowOutcome } from "./workflow-outcome.js"
+import type { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
   compareOperationIds,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskExecutionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   workflowOperationId
 } from "./workflow-operation.js"
 export { WorkflowOperation }
+export { runTaskExecutionProtocol, taskExecutionTraceObserver } from "./task-execution-workflow.js"
 export {
   decideTaskWorkSessionRecovery,
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionLookupDidNotConverge
 } from "./task-work-session-recovery-decision.js"
+export * from "./task-work-session-trace.js"
 export {
   AuthoritativeTaskWorktreeReady,
   TaskWorktreeExecutionModeContradiction,
@@ -243,11 +248,20 @@ interface WorkflowInterpreterService {
     typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type,
     TaskWorkSessionProtocolFailure
   >
+  readonly executeTaskWork: (
+    operation: typeof WorkflowOperation.cases.ExecuteTaskWork.Type
+  ) => Effect.Effect<
+    typeof WorkflowOutcome.cases.TaskExecutionObserved.Type,
+    TaskExecutionWorkflow.TaskExecutionProtocolFailure
+  >
   readonly simulateTaskWorkSession: (
     operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type
   ) => Effect.Effect<
     typeof WorkflowOutcome.cases.TaskWorkSessionEstablishmentSimulated.Type
   >
+  readonly simulateTaskExecution: (
+    operation: typeof WorkflowOperation.cases.ExecuteTaskWork.Type
+  ) => Effect.Effect<typeof WorkflowOutcome.cases.TaskExecutionSimulated.Type>
   readonly recordTaskAttemptPlan: (
     operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
   ) => Effect.Effect<TaskAttemptPlan.TaskAttemptPlanRecordingResult, TaskAttemptPlanRecordingError>
@@ -300,79 +314,6 @@ const TaskClaimAcquisitionResult = Schema.Union([
 ])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
-export const TaskWorkStartRequestedTrace = Schema.TaggedStruct(
-  "TaskWorkStartRequested",
-  { operation: WorkflowOperation.cases.EstablishTaskWorkSession }
-)
-
-export const TaskWorkStartRequestAcknowledgedTrace = Schema.TaggedStruct(
-  "TaskWorkStartRequestAcknowledged",
-  {
-    acknowledgement: TaskWorkStartRequestAcknowledgement,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
-export const TaskWorkStartRequestFailedTrace = Schema.TaggedStruct(
-  "TaskWorkStartRequestFailed",
-  {
-    failure: TaskWorkStartRequestFailure,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
-export const TaskWorkSessionLookupRequestedTrace = Schema.TaggedStruct(
-  "TaskWorkSessionLookupRequested",
-  {
-    lookup: Schema.Struct({
-      operationId: OperationId,
-      plannedAttempt: PlannedTaskAttempt
-    }),
-    observationId: ProviderObservationId,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
-export const TaskWorkSessionLookupFailedTrace = Schema.TaggedStruct(
-  "TaskWorkSessionLookupFailed",
-  {
-    failure: TaskWorkSessionLookupFailure,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
-export const TaskWorkSessionReportedTrace = Schema.TaggedStruct(
-  "TaskWorkSessionReported",
-  {
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession,
-    report: TaskWorkSessionReport
-  }
-)
-
-export const TaskWorkSessionEstablishedTrace = Schema.TaggedStruct(
-  "TaskWorkSessionEstablished",
-  {
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession,
-    outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished
-  }
-)
-
-export const TaskWorkSessionLookupDidNotConvergeTrace = Schema.TaggedStruct(
-  "TaskWorkSessionLookupDidNotConverge",
-  {
-    failure: TaskWorkSessionLookupDidNotConverge,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
-export const TaskWorkSessionEstablishmentDidNotConvergeTrace = Schema.TaggedStruct(
-  "TaskWorkSessionEstablishmentDidNotConverge",
-  {
-    failure: TaskWorkSessionEstablishmentDidNotConverge,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  }
-)
-
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
   TrackerTrace.TrackerGraphOutcomeObserved,
@@ -385,16 +326,22 @@ export const TraceItem = Schema.Union([
   TaskWorktree.TaskWorktreeReconciliationSimulatedTrace,
   TaskExecutionTrace.TaskExecutionAdmitted,
   TaskExecutionTrace.TaskExecutionStarted,
-  TaskWorkStartRequestedTrace,
-  TaskWorkStartRequestAcknowledgedTrace,
-  TaskWorkStartRequestFailedTrace,
-  TaskWorkSessionLookupRequestedTrace,
-  TaskWorkSessionLookupFailedTrace,
-  TaskWorkSessionReportedTrace,
-  TaskWorkSessionEstablishedTrace,
+  TaskExecutionTrace.TaskExecutionOutcomeObserved,
+  TaskExecutionTrace.TaskExecutionSimulated,
+  TaskExecutionWorkflow.TaskExecutionRequestReturnedTrace,
+  TaskExecutionWorkflow.TaskExecutionRequestFailedTrace,
+  TaskExecutionWorkflow.TaskExecutionObservationFailedTrace,
+  TaskExecutionWorkflow.TaskExecutionReportedTrace,
+  TaskWorkSessionTrace.TaskWorkStartRequestedTrace,
+  TaskWorkSessionTrace.TaskWorkStartRequestAcknowledgedTrace,
+  TaskWorkSessionTrace.TaskWorkStartRequestFailedTrace,
+  TaskWorkSessionTrace.TaskWorkSessionLookupRequestedTrace,
+  TaskWorkSessionTrace.TaskWorkSessionLookupFailedTrace,
+  TaskWorkSessionTrace.TaskWorkSessionReportedTrace,
+  TaskWorkSessionTrace.TaskWorkSessionEstablishedTrace,
   TaskExecutionTrace.TaskWorkSessionEstablishmentSimulatedTrace,
-  TaskWorkSessionLookupDidNotConvergeTrace,
-  TaskWorkSessionEstablishmentDidNotConvergeTrace
+  TaskWorkSessionTrace.TaskWorkSessionLookupDidNotConvergeTrace,
+  TaskWorkSessionTrace.TaskWorkSessionEstablishmentDidNotConvergeTrace
 ])
 export type TraceItem = typeof TraceItem.Type
 
@@ -411,28 +358,28 @@ export const taskWorkSessionTraceObserver = (
   trace: WorkflowTraceService
 ): TaskWorkSessionProtocolObserver => ({
   lookupFailed: Effect.fn("WorkflowTrace.taskWorkSessionLookupFailed")(function*(lookup, failure) {
-    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupRequestedTrace.make({
       lookup,
       observationId: failure.observationId,
       operation
     }))
-    yield* trace.emit(TaskWorkSessionLookupFailedTrace.make({ failure, operation }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupFailedTrace.make({ failure, operation }))
   }),
   sessionReported: Effect.fn("WorkflowTrace.taskWorkSessionReported")(function*(lookup, report) {
-    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupRequestedTrace.make({
       lookup,
       observationId: report.observationId,
       operation
     }))
-    yield* trace.emit(TaskWorkSessionReportedTrace.make({ operation, report }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionReportedTrace.make({ operation, report }))
   }),
   startFailed: Effect.fn("WorkflowTrace.taskWorkStartFailed")(function*(_request, failure) {
-    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
-    yield* trace.emit(TaskWorkStartRequestFailedTrace.make({ failure, operation }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestFailedTrace.make({ failure, operation }))
   }),
   startRequested: Effect.fn("WorkflowTrace.taskWorkStartRequested")(function*(_request, acknowledgement) {
-    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
-    yield* trace.emit(TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
   })
 })
 
@@ -453,7 +400,7 @@ export const emitTaskWorkSessionNonConvergence = (
   trace: WorkflowTraceService
 ) =>
   failure instanceof TaskWorkSessionLookupDidNotConverge
-    ? trace.emit(TaskWorkSessionLookupDidNotConvergeTrace.make({ failure, operation }))
+    ? trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupDidNotConvergeTrace.make({ failure, operation }))
     : failure instanceof TaskWorkSessionEstablishmentDidNotConverge
-    ? trace.emit(TaskWorkSessionEstablishmentDidNotConvergeTrace.make({ failure, operation }))
+    ? trace.emit(TaskWorkSessionTrace.TaskWorkSessionEstablishmentDidNotConvergeTrace.make({ failure, operation }))
     : Effect.void

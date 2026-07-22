@@ -5,6 +5,8 @@ import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import {
   AttemptId,
+  FailedProcessExitCode,
+  FailedTaskExecutionReported,
   FixtureTarget,
   GitCommitSha,
   MatchingTaskWorkSessionReported,
@@ -14,7 +16,13 @@ import {
   ProviderObservationId,
   RunId,
   TaskBranchRef,
+  TaskExecutionLookup,
+  TaskExecutionObservationFailure,
+  TaskExecutionRequest,
+  TaskExecutionSessionBinding,
+  TaskExecutor,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -24,11 +32,14 @@ import {
   TaskWorkSessionLocator,
   TaskWorkSessionLookupFailure,
   TaskWorkStartRequest,
+  TestTaskExecutor,
   TestTaskRunner,
   TestTrackerGraphReader,
   TrackerGraphReader,
   trackerGraphReaderTestLayer,
+  WorkerProcessId,
   WorkflowOperation,
+  workflowOperationId,
   WorktreeLocator
 } from "./index.js"
 import { freshOperationIdAllocatorLayer } from "./task-work-planning.js"
@@ -58,6 +69,20 @@ const request = TaskWorkStartRequest.make({
 })
 const lookup = { operationId: request.operationId, plannedAttempt }
 
+const executionRequest = TaskExecutionRequest.make({
+  operationId: OperationId.make("test-layer-execution-operation"),
+  plannedAttempt,
+  session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+    sessionId: TaskWorkSessionId.make("test-layer-execution-session")
+  }),
+  task
+})
+const executionLookup = TaskExecutionLookup.make({
+  operationId: executionRequest.operationId,
+  plannedAttempt,
+  sessionId: TaskWorkSessionId.make("test-layer-execution-session")
+})
+
 it.effect("injects one controllable task runner through its production and test roles", () =>
   Effect.gen(function*() {
     const runner = yield* TaskRunner
@@ -84,6 +109,37 @@ it.effect("injects one controllable task runner through its production and test 
     expect(yield* control.requests()).toEqual([request])
     expect(yield* control.lookups()).toEqual([lookup, lookup, lookup])
   }).pipe(Effect.provide(taskRunnerTestLayer)))
+
+it.effect("injects one controllable task executor through its production and test roles", () =>
+  Effect.gen(function*() {
+    const executor = yield* TaskExecutor
+    const control = yield* TestTaskExecutor
+    const failed = FailedTaskExecutionReported.make({
+      exitCode: FailedProcessExitCode.make(23),
+      observationId: ProviderObservationId.make("controlled-execution-report"),
+      operationId: executionRequest.operationId,
+      partialOutput: "controlled partial output",
+      processId: WorkerProcessId.make(401),
+      sessionId: executionLookup.sessionId,
+      wipPreserved: true
+    })
+    const unreadable = new TaskExecutionObservationFailure({
+      detail: "controlled execution observation failure",
+      observationId: ProviderObservationId.make("controlled-execution-unreadable"),
+      operationId: executionRequest.operationId
+    })
+    yield* control.setObservations([failed, unreadable])
+
+    expect(yield* executor.requestTaskExecution(executionRequest)).toMatchObject({
+      providerRequestId: "test-execution-provider-request:test-layer-execution-operation"
+    })
+    expect(yield* executor.observeTaskExecution(executionLookup)).toEqual(failed)
+    expect(yield* executor.observeTaskExecution(executionLookup).pipe(Effect.flip)).toEqual(unreadable)
+    expect(yield* executor.observeTaskExecution(executionLookup).pipe(Effect.flip))
+      .toBeInstanceOf(TaskExecutionObservationFailure)
+    expect(yield* control.requests()).toEqual([executionRequest])
+    expect(yield* control.lookups()).toEqual([executionLookup, executionLookup, executionLookup])
+  }).pipe(Effect.provide(taskExecutorTestLayer)))
 
 it.effect("injects an independently controllable tracker graph reader", () => {
   const first = validSnapshot({ revision: "first", tasks: [] })
@@ -118,6 +174,20 @@ it("rejects an establishment operation that causally precedes itself", () => {
       request
     })
   ).toThrow("an operation cannot causally precede itself")
+})
+
+it("rejects self-causal execution and projects its operation identity", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(WorkflowOperation)({
+      _tag: "ExecuteTaskWork",
+      predecessorOperationIds: [executionRequest.operationId],
+      request: executionRequest
+    })
+  ).toThrow("an operation cannot causally precede itself")
+  expect(workflowOperationId(WorkflowOperation.cases.ExecuteTaskWork.make({
+    predecessorOperationIds: [],
+    request: executionRequest
+  }))).toBe(executionRequest.operationId)
 })
 
 it("rejects a start request whose planned attempt belongs to another task", () => {

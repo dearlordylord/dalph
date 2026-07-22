@@ -28,6 +28,7 @@ import {
   TaskAttemptPlanHistoryContradiction,
   TaskBranchRef,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -156,7 +157,8 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
     })
     const interpreterLayer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
       Layer.provide(Layer.succeed(
@@ -222,7 +224,8 @@ it.effect("fails closed when a provider reuses one observation identity for anot
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
       Layer.provide(Layer.succeed(
@@ -368,7 +371,8 @@ it.effect("reconstructs an unresolved operation from journal history and replays
     )
     const interpreterLayer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
       Layer.provide(Layer.succeed(
@@ -536,13 +540,15 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused claim acquisition"),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
+      executeTaskWork: () => Effect.die("unused execution"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.succeed(snapshot),
+      simulateTaskExecution: () => Effect.die("unused execution simulation"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
+  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
     Layer.provide(Layer.succeed(
       TaskRunner,
       TaskRunner.of({
@@ -597,7 +603,8 @@ it.effect("journals uncertain start and unreadable lookup evidence before non-co
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
       Layer.provide(Layer.succeed(
@@ -657,7 +664,8 @@ it.effect("blocks a repeat when fresh absence contradicts a recorded matching re
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
       Layer.provide(Layer.succeed(
@@ -707,7 +715,8 @@ it.effect("rejects a fresh matching report for a different provider session", ()
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TaskRunner,
@@ -817,7 +826,8 @@ it.effect("rejects a changed payload under an already committed operation identi
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TaskRunner,
@@ -856,7 +866,8 @@ it.effect("rejects session establishment without exact ready-worktree journal ev
   Effect.gen(function*() {
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TaskRunner,
@@ -898,7 +909,8 @@ it.effect("rejects a planned attempt from another journal run", () =>
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer
+      taskRunnerWorkflowInterpreterLayer,
+      taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
         TaskRunner,

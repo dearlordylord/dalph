@@ -9,6 +9,7 @@ import {
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
+import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerMutation } from "./tracker-mutation.js"
 
@@ -51,6 +52,28 @@ export const coordinatorOwnedTaskRunnerLayer = <E, R>(
       })
     })
   ).pipe(Layer.provide(taskRunnerLayer))
+
+/** Guards only process start/resume; execution observations remain read-only. */
+export const coordinatorOwnedTaskExecutorLayer = <E, R>(
+  taskExecutorLayer: Layer.Layer<TaskExecutor, E, R>
+) =>
+  Layer.effect(
+    TaskExecutor,
+    Effect.gen(function*() {
+      const ownership = yield* CoordinatorOwnership
+      const executor = yield* TaskExecutor
+      return TaskExecutor.of({
+        observeTaskExecution: executor.observeTaskExecution,
+        requestTaskExecution: Effect.fn(
+          "TaskExecutor.CoordinatorOwned.requestTaskExecution"
+        )(function*(request) {
+          return yield* ownership.runMutation(
+            executor.requestTaskExecution(request)
+          )
+        })
+      })
+    })
+  ).pipe(Layer.provide(taskExecutorLayer))
 
 /** Guards claim acquisition and release while leaving claim observation read-only. */
 export const coordinatorOwnedTrackerMutationLayer = <E, R>(

@@ -16,6 +16,7 @@ import {
   TaskAttemptPlanRunContradiction,
   TaskBranchRef,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskRevision,
   TaskRunner,
@@ -63,9 +64,11 @@ const baseLayer = Layer.succeed(
   WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("unused claim"),
     establishTaskWorkSession: () => Effect.die("unused session"),
+    executeTaskWork: () => Effect.die("unused execution"),
     readTrackerGraph: () => Effect.die("unused graph"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.succeed(AuthoritativeTaskWorktreeReady.make({ proof })),
+    simulateTaskExecution: () => Effect.die("unused execution simulation"),
     simulateTaskWorkSession: () => Effect.die("unused simulation")
   })
 )
@@ -75,7 +78,7 @@ const silentTraceLayer = Layer.succeed(
   WorkflowTrace.of({ emit: () => Effect.void })
 )
 
-const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
+const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
   Layer.provide(Layer.succeed(
     TaskRunner,
     TaskRunner.of({
@@ -147,12 +150,14 @@ it.effect("does not fabricate a ready proof from a simulated recovery result", (
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused claim"),
       establishTaskWorkSession: () => Effect.die("unused session"),
+      executeTaskWork: () => Effect.die("unused execution"),
       readTrackerGraph: () => Effect.die("unused graph"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: (operation) =>
         Effect.succeed(
           TaskWorktreeReconciliationSimulated.make({ operation })
         ),
+      simulateTaskExecution: () => Effect.die("unused execution simulation"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )

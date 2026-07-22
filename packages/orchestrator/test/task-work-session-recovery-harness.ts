@@ -26,6 +26,7 @@ import {
 } from "../src/journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "../src/journaled-workflow-interpreter.js"
 import { taskRevisionFor } from "../src/task-dag.js"
+import { taskExecutorTestLayer } from "../src/task-execution.js"
 import {
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -198,7 +199,11 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
       })
   })
 
-  const interpreterLayer = journaledWorkflowInterpreterLayer(runId, taskRunnerWorkflowInterpreterLayer).pipe(
+  const interpreterLayer = journaledWorkflowInterpreterLayer(
+    runId,
+    taskRunnerWorkflowInterpreterLayer,
+    taskExecutorTestLayer
+  ).pipe(
     Layer.provide(Layer.succeed(TaskRunner, runner)),
     Layer.provide(Layer.succeed(
       TrackerGraphReader,

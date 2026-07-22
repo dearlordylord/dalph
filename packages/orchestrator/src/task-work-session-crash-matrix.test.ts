@@ -28,6 +28,7 @@ import {
   sqliteJournalStoreLayer,
   TaskBranchRef,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -315,6 +316,7 @@ for (const scenario of crashScenarios) {
       const applicationLayer = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(directory),
+        taskExecutorTestLayer,
         runnerLayer,
         controlledTrackerMutationLayer
       ).pipe(
@@ -445,6 +447,7 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
       GitCommonDirectoryTarget.make(directory),
+      taskExecutorTestLayer,
       runnerLayer,
       controlledTrackerMutationLayer
     ).pipe(

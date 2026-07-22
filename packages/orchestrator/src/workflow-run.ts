@@ -3,13 +3,20 @@ import type { TaskWorkCapacity, TrackerTarget } from "./domain.js"
 import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
 import { taskRevisionFor } from "./task-dag.js"
-import { TaskExecutionAdmitted, TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
+import {
+  TaskExecutionAdmitted,
+  TaskExecutionOutcomeObserved,
+  TaskExecutionSimulated,
+  TaskWorkSessionEstablishmentSimulatedTrace
+} from "./task-execution-trace.js"
+import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskExecutionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
@@ -159,18 +166,52 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         planResult._tag === "TaskAttemptPlanRecordAcknowledged"
         && worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
       ) {
-        yield* emit(TaskExecutionAdmitted.make({ operation }))
         const outcome = yield* interpreter.establishTaskWorkSession(operation)
         yield* emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
+        const executionOperation = makeTaskExecutionOperation({
+          predecessorOperationIds: [operation.request.operationId],
+          request: TaskExecutionRequest.make({
+            operationId: yield* allocator.allocate(),
+            plannedAttempt,
+            session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+              sessionId: outcome.sessionId
+            }),
+            task: taskForAttempt
+          })
+        })
+        yield* emit(OperationSelected.make({ operation: executionOperation }))
+        yield* emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
+        const executionOutcome = yield* interpreter.executeTaskWork(executionOperation)
+        yield* emit(TaskExecutionOutcomeObserved.make({
+          operation: executionOperation,
+          outcome: executionOutcome
+        }))
       } else if (
         planResult._tag === "TaskAttemptPlanRecordingSimulated"
         && worktreeResult._tag === "TaskWorktreeReconciliationSimulated"
       ) {
-        yield* emit(TaskExecutionAdmitted.make({ operation }))
         const outcome = yield* interpreter.simulateTaskWorkSession(operation)
         yield* emit(
           TaskWorkSessionEstablishmentSimulatedTrace.make({ operation, outcome })
         )
+        const executionOperation = makeTaskExecutionOperation({
+          predecessorOperationIds: [operation.request.operationId],
+          request: TaskExecutionRequest.make({
+            operationId: yield* allocator.allocate(),
+            plannedAttempt,
+            session: TaskExecutionSessionBinding.cases.PlannedSession.make({
+              session: outcome.session
+            }),
+            task: taskForAttempt
+          })
+        })
+        yield* emit(OperationSelected.make({ operation: executionOperation }))
+        yield* emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
+        const executionOutcome = yield* interpreter.simulateTaskExecution(executionOperation)
+        yield* emit(TaskExecutionSimulated.make({
+          operation: executionOperation,
+          outcome: executionOutcome
+        }))
       } else {
         return yield* new TaskWorktreeExecutionModeContradiction({
           operationId: worktreeOperation.operationId

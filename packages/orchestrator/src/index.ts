@@ -13,6 +13,7 @@ export {
   AttemptId,
   ClaimOwner,
   ClaimToken,
+  FailedProcessExitCode,
   FixtureTarget,
   GitCommitSha,
   GitCommonDirectoryLocator,
@@ -99,6 +100,7 @@ export {
 export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 export {
   coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
@@ -135,8 +137,14 @@ export {
   TaskDagWire,
   taskRevisionFor
 } from "./task-dag.js"
-export { TaskExecutionAdmitted, TaskExecutionStarted } from "./task-execution-trace.js"
+export {
+  TaskExecutionAdmitted,
+  TaskExecutionOutcomeObserved,
+  TaskExecutionSimulated,
+  TaskExecutionStarted
+} from "./task-execution-trace.js"
 export { TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
+export * from "./task-execution.js"
 export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -204,6 +212,7 @@ export {
 } from "./workflow-interpreters.js"
 export {
   recoverTaskClaimAcquisitions,
+  recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
   recoverTaskWorktreeReconciliations
 } from "./workflow-recovery.js"
@@ -216,6 +225,7 @@ export {
   decideTaskWorkSessionRecovery,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskExecutionOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,

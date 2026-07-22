@@ -28,6 +28,7 @@ import {
   TaskBranchRef,
   TaskClaimAcquisitionSimulated,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -71,14 +72,16 @@ const baseInterpreterLayer = Layer.succeed(
   WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("unused claim"),
     establishTaskWorkSession: () => Effect.die("unused session"),
+    executeTaskWork: () => Effect.die("unused execution"),
     readTrackerGraph: () => Effect.die("unused graph"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.die("unused worktree"),
+    simulateTaskExecution: () => Effect.die("unused execution simulation"),
     simulateTaskWorkSession: () => Effect.die("unused simulation")
   })
 )
 
-const journaledLayer = journaledWorkflowInterpreterLayer(runId, baseInterpreterLayer).pipe(
+const journaledLayer = journaledWorkflowInterpreterLayer(runId, baseInterpreterLayer, taskExecutorTestLayer).pipe(
   Layer.provide(Layer.succeed(
     TaskRunner,
     TaskRunner.of({
@@ -225,6 +228,7 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
           Ref.update(starts, (count) => count + 1).pipe(
             Effect.andThen(Effect.die("session mutation must not run"))
           ),
+        executeTaskWork: () => Effect.die("execution must not run"),
         readTrackerGraph: () => Effect.succeed(snapshot),
         recordTaskAttemptPlan: () =>
           Effect.fail(
@@ -234,6 +238,7 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
             })
           ),
         reconcileTaskWorktree: () => Effect.die("unused worktree"),
+        simulateTaskExecution: () => Effect.die("execution simulation must not run"),
         simulateTaskWorkSession: () =>
           Ref.update(starts, (count) => count + 1).pipe(
             Effect.andThen(Effect.die("session simulation must not run"))

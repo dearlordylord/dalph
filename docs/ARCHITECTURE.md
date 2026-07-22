@@ -285,6 +285,43 @@ worktrees, and malformed Git output remain distinct typed reconciliation facts.
 Dalph preserves every observed resource; this workflow performs no repair,
 clean, move, reset, prune, or deletion.
 
+## Exact Task Execution Reconciliation
+
+After Dalph establishes the exact provider-assigned task-work session, it
+selects a distinct task-execution operation and admits that operation to bounded
+task-work capacity. The operation binds the immutable planned attempt, exact
+session identity, normalized task revision, and a new `OperationId`. Session
+establishment is a causal predecessor; it is not evidence that worker-process
+execution began.
+
+The journal commits task-execution intent and then an exact request-attempt
+record before the configured executor may start or resume a process. Every
+request return, typed adapter failure, and fresh process observation retains
+that admission `OperationId`; adapters cannot replace it. A request
+acknowledgement never emits `TaskExecutionStarted`. Dalph emits that event only
+after validating a fresh provider observation of the exact running or terminal
+worker process.
+
+On restart, an execution intent without a durable outcome authorizes a fresh
+provider observation before any later retry policy may repeat a process
+request. An intent without a request-attempt record proves that the first
+request remains safe. After a request-attempt crash, Dalph observes first and
+may complete the exact request only after authoritative evidence proves that no
+process exists. Running reports remain explicit nonterminal evidence and pin
+the worker-process identity for later observations; successful, nonzero-exit,
+and interrupted outcomes remain discriminated. Equivalent terminal evidence
+may arrive under a new provider-observation identity, but changed outcome or
+process evidence is a typed contradiction. Nonzero exit and interruption
+retain the provider session, worker-process identity, preserved-WIP proof, and
+bounded partial output.
+Ambiguous terminal evidence remains a typed unresolved outcome.
+
+Stale, replaced, foreign, and untracked sessions are typed reconciliation facts
+that block the attempt. Dalph does not choose a different provider record,
+allocate a replacement operation identity, or discard the worktree. Dry-run
+uses the planned session locator in the same exhaustive operation algebra but
+cannot fabricate a provider session or process identity.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

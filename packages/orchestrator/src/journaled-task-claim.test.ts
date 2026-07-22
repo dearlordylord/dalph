@@ -15,6 +15,7 @@ import {
   TaskClaimAcquisition,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionSimulated,
+  taskExecutorTestLayer,
   TaskId,
   TaskRunner,
   WorkflowInterpreter,
@@ -45,13 +46,15 @@ it.effect("journals claim intent before the authoritative acquired outcome", () 
           })
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
+      executeTaskWork: () => Effect.die("unused execution"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskExecution: () => Effect.die("unused execution simulation"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
+  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
     Layer.provide(Layer.succeed(
       TaskRunner,
       TaskRunner.of({
@@ -101,13 +104,15 @@ it.effect("records simulated claim intent without an authoritative outcome", () 
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
+      executeTaskWork: () => Effect.die("unused execution"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskExecution: () => Effect.die("unused execution simulation"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
+  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
     Layer.provide(Layer.succeed(
       TaskRunner,
       TaskRunner.of({
@@ -156,13 +161,15 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
           })
         ),
       establishTaskWorkSession: () => Effect.die("unused establishment"),
+      executeTaskWork: () => Effect.die("unused execution"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.die("unused graph read"),
+      simulateTaskExecution: () => Effect.die("unused execution simulation"),
       simulateTaskWorkSession: () => Effect.die("unused simulation")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer).pipe(
+  const layer = journaledWorkflowInterpreterLayer(runId, baseLayer, taskExecutorTestLayer).pipe(
     Layer.provide(Layer.succeed(
       TaskRunner,
       TaskRunner.of({

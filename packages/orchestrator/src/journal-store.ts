@@ -10,6 +10,13 @@ import {
 } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
 import {
+  TaskExecutionObservationFailure,
+  TaskExecutionReport,
+  TaskExecutionRequest,
+  TaskExecutionRequestAcknowledgement,
+  TaskExecutionRequestFailure
+} from "./task-execution.js"
+import {
   TaskWorkSessionLookup,
   TaskWorkSessionLookupFailure,
   TaskWorkSessionReport,
@@ -176,6 +183,70 @@ const TaskWorkSessionResultReportedEvent = Schema.TaggedStruct(
   }
 )
 
+/** Records immutable execution intent before a worker-process request can cross its boundary. */
+export const TaskExecutionIntentRecorded = Schema.TaggedStruct(
+  "TaskExecutionIntentRecorded",
+  { operation: WorkflowOperationSchema.cases.ExecuteTaskWork, version: Schema.Literal(workflowJournalEventVersion) }
+)
+
+/** Records the exact request immediately before it may cross the adapter boundary. */
+export const TaskExecutionRequestAttemptRecorded = Schema.TaggedStruct(
+  "TaskExecutionRequestAttemptRecorded",
+  {
+    request: TaskExecutionRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records an execution request acknowledgement without treating it as process-start evidence. */
+export const TaskExecutionRequestReturned = Schema.TaggedStruct(
+  "TaskExecutionRequestReturned",
+  {
+    acknowledgement: TaskExecutionRequestAcknowledgement,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records a request whose adapter return cannot prove whether a process started. */
+export const TaskExecutionRequestFailed = Schema.TaggedStruct(
+  "TaskExecutionRequestFailed",
+  {
+    failure: TaskExecutionRequestFailure,
+    request: TaskExecutionRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records an unreadable process observation without inventing an outcome. */
+export const TaskExecutionObservationFailed = Schema.TaggedStruct(
+  "TaskExecutionObservationFailed",
+  {
+    failure: TaskExecutionObservationFailure,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records fresh execution-substrate evidence for one exact operation and session. */
+export const TaskExecutionReported = Schema.TaggedStruct(
+  "TaskExecutionReported",
+  {
+    operationId: OperationId,
+    report: TaskExecutionReport,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
+/** Records the discriminated process outcome without deciding task success. */
+export const TaskExecutionOutcomeObservedEvent = Schema.TaggedStruct(
+  "TaskExecutionOutcomeObserved",
+  {
+    outcome: WorkflowOutcomeSchema.cases.TaskExecutionObserved,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+
 export const WorkflowJournalEvent = Schema.Union([
   TrackerGraphObservationIntentRecorded,
   TrackerGraphOutcomeObservedEvent,
@@ -192,7 +263,14 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorkSessionLookupFailed,
   TaskWorkSessionReported,
   TaskWorkSessionEstablishedEvent,
-  TaskWorkSessionResultReportedEvent
+  TaskWorkSessionResultReportedEvent,
+  TaskExecutionIntentRecorded,
+  TaskExecutionRequestAttemptRecorded,
+  TaskExecutionRequestReturned,
+  TaskExecutionRequestFailed,
+  TaskExecutionObservationFailed,
+  TaskExecutionReported,
+  TaskExecutionOutcomeObservedEvent
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
@@ -291,7 +369,7 @@ export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalSt
   }
 ) {}
 
-interface JournalStoreService {
+export interface JournalStoreService {
   readonly append: (
     runId: RunId,
     key: JournalRecordKey,
@@ -403,3 +481,29 @@ export const taskWorkSessionReportedRecordKey = (
   operationId: OperationId,
   observationId: ProviderObservationId
 ): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-session-reported:${observationId}`)
+
+export const taskExecutionRequestReturnedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:task-execution-request-returned:${observationId}`)
+
+export const taskExecutionRequestAttemptRecordKey = (
+  operationId: OperationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-attempt`)
+
+export const taskExecutionRequestFailedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-failed:${observationId}`)
+
+export const taskExecutionReportedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-reported:${observationId}`)
+
+export const taskExecutionObservationFailedRecordKey = (
+  operationId: OperationId,
+  observationId: ProviderObservationId
+): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:task-execution-observation-failed:${observationId}`)

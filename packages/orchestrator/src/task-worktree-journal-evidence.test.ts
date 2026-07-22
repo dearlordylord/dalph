@@ -16,6 +16,7 @@ import {
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -84,7 +85,8 @@ const readyEvent = TaskWorktreeReadyEvent.make({
 })
 const interpreterLayer = journaledWorkflowInterpreterLayer(
   runId,
-  taskRunnerWorkflowInterpreterLayer
+  taskRunnerWorkflowInterpreterLayer,
+  taskExecutorTestLayer
 ).pipe(
   Layer.provide(Layer.succeed(
     TaskRunner,

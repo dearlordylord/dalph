@@ -28,6 +28,7 @@ import {
   TraceOutputError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
+  WorkerProcessId,
   WorkflowInterpreter,
   WorkflowOutcome,
   WorkflowTrace,
@@ -115,8 +116,10 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "OperationSelected",
       "TaskWorktreeReconciliationSimulated",
       "OperationSelected",
+      "TaskWorkSessionEstablishmentSimulated",
+      "OperationSelected",
       "TaskExecutionAdmitted",
-      "TaskWorkSessionEstablishmentSimulated"
+      "TaskExecutionSimulated"
     ])
   }))
 
@@ -129,6 +132,17 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
         const delegate = yield* WorkflowInterpreter
         return WorkflowInterpreter.of({
           ...delegate,
+          executeTaskWork: (operation) =>
+            Effect.succeed(WorkflowOutcome.cases.TaskExecutionObserved.make({
+              outcome: {
+                _tag: "Succeeded",
+                observationId: ProviderObservationId.make("live-process-observation"),
+                operationId: operation.request.operationId,
+                output: "scripted implementation complete",
+                processId: WorkerProcessId.make(101),
+                sessionId: TaskWorkSessionId.make("live-session")
+              }
+            })),
           establishTaskWorkSession: (operation) =>
             Effect.succeed(
               WorkflowOutcome.cases.TaskWorkSessionEstablished.make({

@@ -163,6 +163,13 @@ The branded locator selecting the configured executor for one planned task
 attempt. It is not a provider-assigned task-work-session identity.
 _Avoid_: Task runner, task-work session ID, worker process ID
 
+**Task executor**:
+The task-runner application boundary that starts or resumes the configured
+implementer in one exact established task-work session and freshly observes its
+worker process. It does not establish sessions, allocate workflow operation
+identities, or decide task-tracker success.
+_Avoid_: Task runner as a whole, task-work provider, task executor locator
+
 **Task-work-session locator**:
 The branded, Dalph-planned locator used to create or rediscover one exact
 task-work session. A task-work provider may later report a distinct native
@@ -273,6 +280,36 @@ The task-work provider reports evidence that task work began. Claim ownership,
 bounded capacity, a start request, or task-work session establishment alone
 cannot establish this event.
 _Avoid_: Tracker execution admitted, task execution admitted, task-work start requested
+
+**Task execution request**:
+The coordinator asks the configured executor to start or resume one worker
+process in the exact provider-assigned task-work session established for a
+planned attempt. The request retains the `OperationId` allocated at task
+execution admission. Dalph records the exact request attempt immediately before
+the adapter boundary; its return does not prove that a process began or exited.
+_Avoid_: Task-work session establishment, task execution started, task execution outcome
+
+**Task execution observation**:
+A fresh task-work-provider read correlating the admission `OperationId`, exact
+task-work session, and worker process. A running or terminal observation proves
+that task execution started. A running observation remains nonterminal; only a
+terminal observation reports success, nonzero exit, or interruption; provider
+uncertainty remains explicit.
+_Avoid_: Request acknowledgement, task execution admission, task completion
+
+**Task execution session conflict**:
+Fresh provider evidence that the session associated with an execution request
+is stale, replaced, foreign, or absent from durable provider correlation.
+Dalph preserves the evidence and does not select another session, create a
+replacement identity, or advance the attempt.
+_Avoid_: Task-work session lookup failure, task execution outcome, retry
+
+**Task execution outcome observation**:
+The discriminated successful, nonzero-exit, or interrupted process
+fact returned by the task-work provider for one admission `OperationId` and
+exact session. Nonzero exit and interruption preserve WIP and bounded partial
+output. This observation does not decide task-tracker success.
+_Avoid_: Task execution started, task completed successfully, review result
 
 **Task-work start requested**:
 The coordinator asks the task runner to start task work by requesting a new

@@ -25,6 +25,7 @@ import {
   sqliteJournalStoreLayer,
   TaskBranchRef,
   TaskExecutorLocator,
+  taskExecutorTestLayer,
   TaskId,
   TaskLifecycle,
   taskRevisionFor,
@@ -114,6 +115,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
       GitCommonDirectoryTarget.make(directory),
+      taskExecutorTestLayer,
       runnerLayer,
       controlledTrackerMutationLayer
     ).pipe(

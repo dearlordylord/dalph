@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import type { RunId } from "./domain.js"
 import { JournalStore } from "./journal-store.js"
+import { TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import {
   TaskClaimAcquiredTrace,
   TaskWorkSessionEstablishedTrace,
@@ -83,3 +84,28 @@ export const recoverTaskWorkSessionEstablishments = Effect.fn(
       Effect.tap((outcome) => trace.emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome })))
     ))
 })
+
+/** Observes unresolved exact execution intents before any later retry policy exists. */
+export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExecutions")(
+  function*(runId: RunId) {
+    const interpreter = yield* WorkflowInterpreter
+    const journal = yield* JournalStore
+    const trace = yield* WorkflowTrace
+    const records = yield* journal.read(runId)
+    const observed = new Set(records.flatMap(({ event }) =>
+      event._tag === "TaskExecutionOutcomeObserved"
+        ? [event.outcome.outcome.operationId]
+        : []
+    ))
+    const unresolved = records.flatMap(({ event }) =>
+      event._tag === "TaskExecutionIntentRecorded"
+        && !observed.has(event.operation.request.operationId)
+        ? [event.operation]
+        : []
+    )
+    return yield* Effect.forEach(unresolved, (operation) =>
+      interpreter.executeTaskWork(operation).pipe(
+        Effect.tap((outcome) => trace.emit(TaskExecutionOutcomeObserved.make({ operation, outcome })))
+      ))
+  }
+)
