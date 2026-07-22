@@ -142,7 +142,7 @@ export const makeJournaledImplementationEvidence = (
       yield* options.journal.append(
         options.runId,
         intentRecordKey(operation.operationId),
-        ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 2 })
+        ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
       )
     }
     const sealed = yield* sealImplementationEvidence(
@@ -160,7 +160,7 @@ export const makeJournaledImplementationEvidence = (
       ImplementationEvidenceSealedEvent.make({
         operationId: operation.operationId,
         sealed,
-        version: 2
+        version: 3
       })
     )
     return sealed

@@ -115,7 +115,7 @@ const recordPlannedAttempt = Effect.gen(function*() {
     intentRecordKey(worktreeOperationId),
     TaskWorktreeReconciliationIntendedEvent.make({
       operation: worktreeOperation,
-      version: 2
+      version: 3
     })
   )
   yield* journal.append(
@@ -124,7 +124,7 @@ const recordPlannedAttempt = Effect.gen(function*() {
     TaskWorktreeReadyEvent.make({
       operationId: worktreeOperationId,
       proof: worktreeProof,
-      version: 2
+      version: 3
     })
   )
 })
@@ -388,7 +388,7 @@ it.effect("reconstructs an unresolved operation from journal history and replays
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
       )
       const recovered = yield* recoverTaskWorkSessionEstablishments(runId)
       const directReplay = yield* (yield* WorkflowInterpreter)
@@ -687,12 +687,12 @@ it.effect("blocks a repeat when fresh absence contradicts a recorded matching re
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
       )
       yield* journal.append(
         runId,
         taskWorkSessionReportedRecordKey(operationId, previousReport.observationId),
-        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 2 })
+        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 3 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(operation)
@@ -744,12 +744,12 @@ it.effect("rejects a fresh matching report for a different provider session", ()
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
       )
       yield* journal.append(
         runId,
         taskWorkSessionReportedRecordKey(operationId, previousReport.observationId),
-        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 2 })
+        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 3 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(operation)
@@ -854,7 +854,7 @@ it.effect("rejects a changed payload under an already committed operation identi
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(changedOperation)

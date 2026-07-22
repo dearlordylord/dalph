@@ -122,7 +122,7 @@ export const journaledWorkflowInterpreterLayer = <
         yield* journal.append(
           runId,
           key,
-          TaskClaimAcquisitionIntendedEvent.make({ operation, version: 2 })
+          TaskClaimAcquisitionIntendedEvent.make({ operation, version: 3 })
         )
         const result = yield* interpreter.acquireTaskClaim(operation)
         if (result._tag === "AuthoritativeTaskClaimAcquired") {
@@ -131,7 +131,7 @@ export const journaledWorkflowInterpreterLayer = <
             outcomeRecordKey(operation.acquisition.operationId),
             TaskClaimAcquiredEvent.make({
               claim: result.claim,
-              version: 2
+              version: 3
             })
           )
         }
@@ -151,7 +151,7 @@ export const journaledWorkflowInterpreterLayer = <
         yield* journal.append(
           runId,
           attemptPlanRecordKey(operation.plannedAttempt.attemptId),
-          TaskAttemptPlannedEvent.make({ operation, version: 2 })
+          TaskAttemptPlannedEvent.make({ operation, version: 3 })
         )
         return TaskAttemptPlanRecordAcknowledged.make({
           plannedAttempt: operation.plannedAttempt
@@ -178,7 +178,7 @@ export const journaledWorkflowInterpreterLayer = <
         yield* journal.append(
           runId,
           intentRecordKey(operation.operationId),
-          TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 2 })
+          TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 3 })
         )
         const result = yield* interpreter.reconcileTaskWorktree(operation)
         if (result._tag === "AuthoritativeTaskWorktreeReady") {
@@ -188,7 +188,7 @@ export const journaledWorkflowInterpreterLayer = <
             TaskWorktreeReadyEvent.make({
               operationId: operation.operationId,
               proof: result.proof,
-              version: 2
+              version: 3
             })
           )
         }
@@ -235,7 +235,7 @@ export const journaledWorkflowInterpreterLayer = <
           intentKey,
           TaskWorkSessionEstablishmentIntentRecorded.make({
             operation,
-            version: 2
+            version: 3
           })
         )
         const existing = records.find(
@@ -256,7 +256,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkSessionLookupRequested.make({
                 lookup,
                 observationId: failure.observationId,
-                version: 2
+                version: 3
               })
             )
             yield* journal.append(
@@ -265,7 +265,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkSessionLookupFailed.make({
                 failure,
                 operationId: operation.request.operationId,
-                version: 2
+                version: 3
               })
             )
             yield* traceObserver.lookupFailed(lookup, failure)
@@ -277,7 +277,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkSessionLookupRequested.make({
                 lookup,
                 observationId: report.observationId,
-                version: 2
+                version: 3
               })
             )
             yield* journal.append(
@@ -286,7 +286,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkSessionReported.make({
                 operationId: operation.request.operationId,
                 report,
-                version: 2
+                version: 3
               })
             )
             yield* traceObserver.sessionReported(lookup, report)
@@ -314,13 +314,13 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkStartRequested.make({
                 observationId: failure.observationId,
                 request,
-                version: 2
+                version: 3
               })
             )
             yield* journal.append(
               runId,
               taskWorkStartFailedRecordKey(operation.request.operationId, failure.observationId),
-              TaskWorkStartRequestFailed.make({ failure, request, version: 2 })
+              TaskWorkStartRequestFailed.make({ failure, request, version: 3 })
             )
             yield* traceObserver.startFailed(request, failure)
           }),
@@ -331,7 +331,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkStartRequested.make({
                 observationId: acknowledgement.observationId,
                 request,
-                version: 2
+                version: 3
               })
             )
             yield* journal.append(
@@ -340,7 +340,7 @@ export const journaledWorkflowInterpreterLayer = <
               TaskWorkStartRequestAcknowledged.make({
                 acknowledgement,
                 operationId: operation.request.operationId,
-                version: 2
+                version: 3
               })
             )
             yield* traceObserver.startRequested(request, acknowledgement)
@@ -357,7 +357,7 @@ export const journaledWorkflowInterpreterLayer = <
         yield* journal.append(
           runId,
           outcomeRecordKey(operation.request.operationId),
-          TaskWorkSessionEstablishedEvent.make({ outcome, version: 2 })
+          TaskWorkSessionEstablishedEvent.make({ outcome, version: 3 })
         )
         return outcome
       })

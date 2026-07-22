@@ -182,6 +182,9 @@ export class ImplementationReviewHistoryContradiction
         "OutcomeWithoutIntent",
         "ReviewMismatch",
         "ReviewerSessionReused",
+        "RetryFactsAfterOutcome",
+        "RetryFactsBeforeIntent",
+        "RetryFactsWithoutIntent",
         "RoundMismatch",
         "RunMismatch"
       ])

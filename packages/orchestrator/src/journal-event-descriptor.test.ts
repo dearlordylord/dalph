@@ -160,7 +160,12 @@ it("defines canonical keys and predecessors for every journal event variant", ()
     [
       event({ _tag: "TechnicalRetryScheduled", retryOrdinal: 2, scope: { operationId } }),
       `operation:${operationId}:technical-retry:2`,
-      `operation:${operationId}:technical-retry-policy`
+      `operation:${operationId}:technical-retry:1:superseded`
+    ],
+    [
+      event({ _tag: "TechnicalRetryDeferralSuperseded", retryOrdinal: 2, scope: { operationId } }),
+      `operation:${operationId}:technical-retry:2:superseded`,
+      `operation:${operationId}:technical-retry:2`
     ]
   ]
 

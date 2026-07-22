@@ -436,11 +436,26 @@ If clock-plus-delay arithmetic cannot produce a nonnegative safe-integer
 schedule fact is appended, a timer waits, or another provider invocation runs.
 
 Coordinator ownership failure and Effect interruption are not technical
-invocation failures and bypass this schedule. These durable records make the
-active budget observable, but this implementation does not claim that restart
-waits the remaining delay or avoids double consumption. Retry recovery across
-coordinator interruption belongs to issue #51 and must reconcile the persisted
-facts before superseding any deferral.
+invocation failures and bypass this schedule. On restart, the interpreter
+reuses the captured policy and exact invocation scope. A scheduled deferral in
+the future waits only `notBefore - now` through the Effect clock; an overdue
+deferral is immediately eligible. Immediately before the next provider call,
+the journal records `TechnicalRetryDeferralSuperseded` for that exact ordinal.
+A later typed technical failure alone may schedule the following ordinal.
+Every schedule and supersession must follow the exact review or handback intent
+and precede its durable outcome; policy capture alone may precede the intent.
+Technical-retry events form one coherent version-3 protocol, and decoding does
+not infer retry progress from earlier event versions.
+
+Interruption after scheduling but before supersession leaves one pending
+deferral. Interruption after supersession but before a durable provider outcome
+resumes the same ordinal immediately through the provider's create-or-resume
+boundary, which discovers an already-produced result before doing new work.
+Neither crash position allocates a new reviewer session, semantic review round,
+or technical retry ordinal. The total history reducer rejects gaps, crossed
+scopes, delays inconsistent with the captured policy, schedules above the
+captured limit, and a schedule that advances before its predecessor deferral is
+superseded. Dry-run still fabricates no provider invocation or retry fact.
 
 ## Documentation Responsibilities
 

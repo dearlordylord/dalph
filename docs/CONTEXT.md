@@ -348,8 +348,19 @@ The Dalph workflow-journal fact recorded after one typed technical invocation
 failure and before waiting. It binds the active technical retry scope, next
 technical retry ordinal, capped delay, and absolute `notBefore` read from the
 Effect clock. It does not prove that the retry began and does not make a
-coordinator interruption consume or preserve budget.
+coordinator interruption by itself consume or preserve budget; later recovery
+compares it with an exact deferral-supersession intent.
 _Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
+
+**Technical retry deferral superseded**:
+The Dalph workflow-journal intent recorded after one scheduled retry becomes
+eligible and immediately before Dalph asks the same provider invocation to
+create or rediscover its exact result. It retires exactly that scope and retry
+ordinal's deferral. It does not prove that the request crossed the provider
+boundary or consume another technical retry or semantic review round.
+Like its matching schedule, it is valid only after the exact invocation intent
+and before that invocation's durable outcome.
+_Avoid_: Retry completed, timer fired, semantic review advanced
 
 **Reviewer invocation**:
 One request to a fresh independent reviewer, identified by its workflow

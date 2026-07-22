@@ -145,13 +145,13 @@ const seedEstablishedSession = Effect.fn("Test.seedEstablishedSession")(function
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
-    TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 })
   )
   yield* recordReadyWorktreeEvidence(worktreeOperation)
   yield* journal.append(
     runId,
     intentRecordKey(establishment.request.operationId),
-    TaskWorkSessionEstablishmentIntentRecorded.make({ operation: establishment, version: 2 })
+    TaskWorkSessionEstablishmentIntentRecorded.make({ operation: establishment, version: 3 })
   )
   yield* journal.append(
     runId,
@@ -161,7 +161,7 @@ const seedEstablishedSession = Effect.fn("Test.seedEstablishedSession")(function
         operationId: establishment.request.operationId,
         sessionId: establishedSessionId
       }),
-      version: 2
+      version: 3
     })
   )
 })
@@ -173,13 +173,13 @@ const seedSessionIntentOnly = Effect.fn("Test.seedSessionIntentOnly")(function*(
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
-    TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 })
   )
   yield* recordReadyWorktreeEvidence(worktreeOperation)
   yield* journal.append(
     runId,
     intentRecordKey(establishment.request.operationId),
-    TaskWorkSessionEstablishmentIntentRecorded.make({ operation: establishment, version: 2 })
+    TaskWorkSessionEstablishmentIntentRecorded.make({ operation: establishment, version: 3 })
   )
 })
 
@@ -300,7 +300,7 @@ it.effect("restart safely makes the first request after an intent-only crash", (
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     const requests = yield* Ref.make(0)
     const observations = yield* Ref.make(0)
@@ -348,12 +348,12 @@ it.effect("restart observes before repeating after the durable request-attempt b
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     const observations = yield* Ref.make(0)
     const executorLayer = Layer.succeed(
@@ -393,12 +393,12 @@ it.effect("completes an exact request after request-attempt crash and authoritat
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     const requests = yield* Ref.make(0)
     const observations = yield* Ref.make(0)
@@ -499,12 +499,12 @@ it.effect("converges the same terminal evidence from a new observation after a c
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     yield* journal.append(
       runId,
@@ -512,7 +512,7 @@ it.effect("converges the same terminal evidence from a new observation after a c
       TaskExecutionReported.make({
         operationId: operation.request.operationId,
         report,
-        version: 2
+        version: 3
       })
     )
     const executorLayer = Layer.succeed(
@@ -559,12 +559,12 @@ it.effect("rejects changed terminal evidence after a report-to-outcome crash", (
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     yield* journal.append(
       runId,
@@ -572,7 +572,7 @@ it.effect("rejects changed terminal evidence after a report-to-outcome crash", (
       TaskExecutionReported.make({
         operationId: operation.request.operationId,
         report: durableReport,
-        version: 2
+        version: 3
       })
     )
     const executorLayer = Layer.succeed(
@@ -622,12 +622,12 @@ it.effect("rejects a replacement process after a durable running report", () =>
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     yield* journal.append(
       runId,
@@ -635,7 +635,7 @@ it.effect("rejects a replacement process after a durable running report", () =>
       TaskExecutionReported.make({
         operationId: operation.request.operationId,
         report: runningReport,
-        version: 2
+        version: 3
       })
     )
     const executorLayer = Layer.succeed(
@@ -739,12 +739,12 @@ it.effect("rejects duplicate execution intents and outcomes without exact intent
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       JournalRecordKey.make("test:duplicate-execution-intent"),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(journaledLayerFor(
       TaskExecutor.of({
@@ -775,7 +775,7 @@ it.effect("rejects a durable outcome that has no exact execution intent", () =>
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.request.operationId),
-      TaskExecutionOutcomeObservedEvent.make({ outcome, version: 2 })
+      TaskExecutionOutcomeObservedEvent.make({ outcome, version: 3 })
     )
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(journaledLayerFor(
       TaskExecutor.of({
@@ -794,12 +794,12 @@ it.effect("rejects contradictory terminal reports already present in the journal
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     const first = FailedTaskExecutionReported.make({
       exitCode: FailedProcessExitCode.make(25),
@@ -822,7 +822,7 @@ it.effect("rejects contradictory terminal reports already present in the journal
         TaskExecutionReported.make({
           operationId: operation.request.operationId,
           report,
-          version: 2
+          version: 3
         })
       )
     }
@@ -843,7 +843,7 @@ it.effect("recovers legacy request-failure evidence without repeating the reques
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     const requestFailure = new TaskExecutionRequestFailure({
       detail: "legacy request failure evidence",
@@ -853,7 +853,7 @@ it.effect("recovers legacy request-failure evidence without repeating the reques
     yield* journal.append(
       runId,
       taskExecutionRequestFailedRecordKey(operation.request.operationId, requestFailure.observationId),
-      TaskExecutionRequestFailed.make({ failure: requestFailure, request: operation.request, version: 2 })
+      TaskExecutionRequestFailed.make({ failure: requestFailure, request: operation.request, version: 3 })
     )
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(journaledLayerFor(
       TaskExecutor.of({
@@ -880,7 +880,7 @@ it.effect("recovers legacy request acknowledgement without repeating the request
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     const acknowledgement = {
       observationId: ProviderObservationId.make("legacy-request-returned"),
@@ -895,7 +895,7 @@ it.effect("recovers legacy request acknowledgement without repeating the request
       TaskExecutionRequestReturned.make({
         acknowledgement,
         operationId: operation.request.operationId,
-        version: 2
+        version: 3
       })
     )
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(journaledLayerFor(
@@ -923,12 +923,12 @@ it.effect("rejects replacement process identities already durable in journal his
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     yield* journal.append(
       runId,
       taskExecutionRequestAttemptRecordKey(operation.request.operationId),
-      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 2 })
+      TaskExecutionRequestAttemptRecorded.make({ request: operation.request, version: 3 })
     )
     for (const [observation, processId] of [["durable-process-a", 414], ["durable-process-b", 415]] as const) {
       const report = RunningTaskExecutionReported.make({
@@ -943,7 +943,7 @@ it.effect("rejects replacement process identities already durable in journal his
         TaskExecutionReported.make({
           operationId: operation.request.operationId,
           report,
-          version: 2
+          version: 3
         })
       )
     }
@@ -981,7 +981,7 @@ it.effect("rejects multiple durable session outcomes", () =>
           operationId: sessionOperation.request.operationId,
           sessionId
         }),
-        version: 2
+        version: 3
       })
     )
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(journaledLayerFor(
@@ -1016,7 +1016,7 @@ it.effect("rejects multiple causal session intents and attempt mismatch", () =>
       intentRecordKey(replacementSessionOperation.request.operationId),
       TaskWorkSessionEstablishmentIntentRecorded.make({
         operation: replacementSessionOperation,
-        version: 2
+        version: 3
       })
     )
     const multiplePredecessors = makeTaskExecutionOperation({
@@ -1056,7 +1056,7 @@ it.effect("rejects a causal session intent for a different planned attempt", () 
       intentRecordKey(foreignEstablishment.request.operationId),
       TaskWorkSessionEstablishmentIntentRecorded.make({
         operation: foreignEstablishment,
-        version: 2
+        version: 3
       })
     )
     const foreignPredecessor = makeTaskExecutionOperation({
@@ -1074,6 +1074,6 @@ it.effect("rejects a causal session intent for a different planned attempt", () 
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it("keeps execution intent a distinct durable domain event", () => {
-  expect(TaskExecutionIntentRecorded.make({ operation, version: 2 })._tag)
+  expect(TaskExecutionIntentRecorded.make({ operation, version: 3 })._tag)
     .toBe("TaskExecutionIntentRecorded")
 })

@@ -242,7 +242,7 @@ export const makeJournaledTaskExecution = (
     yield* journal.append(
       runId,
       key,
-      TaskExecutionIntentRecorded.make({ operation, version: 2 })
+      TaskExecutionIntentRecorded.make({ operation, version: 3 })
     )
     const durableReports = yield* durableExecutionReports(records, operation.request.operationId)
     const traceObserver = taskExecutionTraceObserver(operation, trace)
@@ -252,7 +252,7 @@ export const makeJournaledTaskExecution = (
           yield* journal.append(
             runId,
             taskExecutionRequestAttemptRecordKey(request.operationId),
-            TaskExecutionRequestAttemptRecorded.make({ request, version: 2 })
+            TaskExecutionRequestAttemptRecorded.make({ request, version: 3 })
           )
         }
       ),
@@ -264,7 +264,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionObservationFailed.make({
               failure,
               operationId: lookup.operationId,
-              version: 2
+              version: 3
             })
           )
           yield* traceObserver.observationFailed(lookup, failure)
@@ -299,7 +299,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionReported.make({
               operationId: lookup.operationId,
               report,
-              version: 2
+              version: 3
             })
           )
           yield* traceObserver.outcomeReported(lookup, report)
@@ -310,7 +310,7 @@ export const makeJournaledTaskExecution = (
           yield* journal.append(
             runId,
             taskExecutionRequestFailedRecordKey(request.operationId, failure.observationId),
-            TaskExecutionRequestFailed.make({ failure, request, version: 2 })
+            TaskExecutionRequestFailed.make({ failure, request, version: 3 })
           )
           yield* traceObserver.requestFailed(request, failure)
         }
@@ -323,7 +323,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionRequestReturned.make({
               acknowledgement,
               operationId: request.operationId,
-              version: 2
+              version: 3
             })
           )
           yield* traceObserver.requestReturned(request, acknowledgement)
@@ -342,7 +342,7 @@ export const makeJournaledTaskExecution = (
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.request.operationId),
-      TaskExecutionOutcomeObservedEvent.make({ outcome, version: 2 })
+      TaskExecutionOutcomeObservedEvent.make({ outcome, version: 3 })
     )
     return outcome
   })

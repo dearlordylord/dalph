@@ -25,6 +25,7 @@ import {
 } from "./implementation-review.js"
 import { intentRecordKey, type JournalRecord, type JournalStoreService, outcomeRecordKey } from "./journal-store.js"
 import { samePlannedTaskAttempt } from "./task-attempt-plan-recording.js"
+import { firstTechnicalRetryAdmissionContradiction } from "./technical-retry-temporal.js"
 import { captureTechnicalRetryPolicy, type TechnicalRetryPolicy, TechnicalRetryScope } from "./technical-retry.js"
 import type { WorkflowOperation } from "./workflow-operation.js"
 
@@ -282,6 +283,8 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
         : []
     )
     if (outcomes.length > 1) return yield* failHistory(request.operationId, "MultipleOutcomes")
+    const retryTemporalFailure = firstTechnicalRetryAdmissionContradiction(records, request.operationId)
+    if (retryTemporalFailure !== undefined) return yield* failHistory(request.operationId, retryTemporalFailure)
     if (outcomes[0] !== undefined) {
       if (intents[0] === undefined) return yield* failHistory(request.operationId, "OutcomeWithoutIntent")
       if (!reviewMatchesRequest(outcomes[0], request)) {
@@ -316,7 +319,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation, version: 2 })
+      ImplementationReviewIntendedEvent.make({ operation, version: 3 })
     )
     const disposition = yield* capturedTechnicalRetry.run(options.reviewer.createOrResume(request))
     const review = yield* sealImplementationReview(request, disposition).pipe(
@@ -325,7 +328,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     yield* options.journal.append(
       options.runId,
       outcomeRecordKey(request.operationId),
-      ImplementationReviewCompletedEvent.make({ review, version: 2 })
+      ImplementationReviewCompletedEvent.make({ review, version: 3 })
     )
     return review
   })
@@ -355,6 +358,8 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
         : []
     )
     if (outcomes.length > 1) return yield* failHistory(request.operationId, "MultipleOutcomes")
+    const retryTemporalFailure = firstTechnicalRetryAdmissionContradiction(records, request.operationId)
+    if (retryTemporalFailure !== undefined) return yield* failHistory(request.operationId, retryTemporalFailure)
     const reviewEvents = records.filter(({ event }) =>
       event._tag === "ImplementationReviewCompleted"
       && event.review.manifest.operationId === request.reviewOperationId
@@ -411,7 +416,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
-      ReviewFindingsHandbackIntendedEvent.make({ operation, version: 2 })
+      ReviewFindingsHandbackIntendedEvent.make({ operation, version: 3 })
     )
     const acknowledgement = yield* capturedTechnicalRetry.run(options.handback.deliverOrResume(request))
     if (!handbackAcknowledgesRequest(acknowledgement, request)) {
@@ -420,7 +425,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     yield* options.journal.append(
       options.runId,
       outcomeRecordKey(request.operationId),
-      ReviewFindingsHandbackCompletedEvent.make({ acknowledgement, version: 2 })
+      ReviewFindingsHandbackCompletedEvent.make({ acknowledgement, version: 3 })
     )
     return acknowledgement
   })

@@ -11,6 +11,8 @@ import {
 } from "./domain.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { type JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
+import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
 import {
   claimAuthorityMatches,
   executionAuthorityMatches,
@@ -137,6 +139,10 @@ export const reduceManagedHistory = (
   const seenOperationIds = new Set<OperationId>()
   const eventKindsByOperation = new Map<OperationId, ReadonlySet<JournalEventTag>>()
   const plannedAttemptByOperation = new Map<OperationId, PlannedTaskAttempt>()
+  const technicalRetryFacts = new Map<
+    OperationId,
+    Array<{ readonly event: TechnicalRetryJournalEvent; readonly position: JournalPosition }>
+  >()
 
   records.forEach((record, index) => {
     const expectedPosition = index + 1
@@ -314,6 +320,16 @@ export const reduceManagedHistory = (
       )
     }
     seenKeys.add(record.key)
+    if (
+      record.event._tag === "TechnicalRetryPolicyCaptured"
+      || record.event._tag === "TechnicalRetryScheduled"
+      || record.event._tag === "TechnicalRetryDeferralSuperseded"
+    ) {
+      technicalRetryFacts.set(
+        operationId,
+        [...(technicalRetryFacts.get(operationId) ?? []), { event: record.event, position: record.position }]
+      )
+    }
     if (descriptor.session._tag === "ProducedSession") establishedSessionIds.add(descriptor.session.sessionId)
     const transition = TransitionRuleByEventKind[record.event._tag]
     if (transition?._tag === "Intent") {
@@ -464,6 +480,26 @@ export const reduceManagedHistory = (
       }
     }
   })
+
+  for (const [operationId, positionedFacts] of technicalRetryFacts) {
+    const analysis = analyzeTechnicalRetryFacts(positionedFacts.map(({ event }) => event))
+    for (const [factIndex, positionedFact] of positionedFacts.entries()) {
+      for (const issue of analysis.issues.filter((candidate) => candidate.factIndex === factIndex)) {
+        issues.push(
+          issue._tag === "Identity"
+            ? new ManagedHistoryIdentityIssue({ detail: issue.detail, position: positionedFact.position, runId })
+            : new ManagedHistorySemanticIssue({ detail: issue.detail, position: positionedFact.position, runId })
+        )
+      }
+    }
+    for (const issue of analyzeTechnicalRetryTemporalFacts(records, operationId)) {
+      issues.push(
+        issue._tag === "Identity"
+          ? new ManagedHistoryIdentityIssue({ detail: issue.detail, position: issue.position, runId })
+          : new ManagedHistorySemanticIssue({ detail: issue.detail, position: issue.position, runId })
+      )
+    }
+  }
 
   return issues.length === 0
     ? { _tag: "ValidManagedHistory", records, runId }

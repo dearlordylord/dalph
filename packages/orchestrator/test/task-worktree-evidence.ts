@@ -17,7 +17,7 @@ export const recordReadyWorktreeEvidence = (
     yield* journal.append(
       operation.plannedAttempt.runId,
       intentRecordKey(operation.operationId),
-      TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 2 })
+      TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 3 })
     )
     yield* journal.append(
       operation.plannedAttempt.runId,
@@ -30,7 +30,7 @@ export const recordReadyWorktreeEvidence = (
           headSha: operation.plannedAttempt.baseSha,
           worktree: operation.plannedAttempt.worktree
         }),
-        version: 2
+        version: 3
       })
     )
   })

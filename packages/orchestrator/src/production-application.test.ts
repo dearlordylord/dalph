@@ -169,12 +169,12 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
       yield* journal.append(
         runId,
         attemptPlanRecordKey(plannedAttempt.attemptId),
-        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 })
+        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 })
       )
       yield* journal.append(
         runId,
         intentRecordKey(worktreeOperation.operationId),
-        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 2 })
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 3 })
       )
       yield* journal.append(
         runId,
@@ -187,13 +187,13 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
             headSha: plannedAttempt.baseSha,
             worktree: plannedAttempt.worktree
           }),
-          version: 2
+          version: 3
         })
       )
       yield* journal.append(
         runId,
         intentRecordKey(request.operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
       )
     }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
     yield* runGit(`${directory}/task`, "commit", "--allow-empty", "-m", "implementation progress")

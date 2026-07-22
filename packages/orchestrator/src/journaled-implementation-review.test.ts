@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Ref, Result, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Result, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
@@ -21,6 +21,8 @@ import {
   TaskWorkSessionLocator,
   TechnicalRetryDelayMillis,
   TechnicalRetryLimit,
+  TechnicalRetryNotBefore,
+  TechnicalRetryOrdinal,
   WorkerProcessId,
   WorktreeLocator
 } from "./domain.js"
@@ -79,7 +81,15 @@ import {
 } from "./journaled-implementation-review.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import { TechnicalRetryPolicy } from "./technical-retry.js"
+import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
+import {
+  TechnicalRetryPolicy,
+  TechnicalRetryPolicyCapturedEvent,
+  technicalRetryPolicyRecordKey,
+  TechnicalRetryScheduledEvent,
+  technicalRetryScheduledRecordKey,
+  TechnicalRetryScope
+} from "./technical-retry.js"
 import {
   makeImplementationEvidenceSealingOperation,
   makeImplementationReviewOperation,
@@ -142,14 +152,14 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
   yield* journal.append(
     runId,
     intentRecordKey(executionOperationId),
-    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 2 })
+    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 3 })
   )
   yield* journal.append(
     runId,
     outcomeRecordKey(executionOperationId),
     TaskExecutionOutcomeObservedEvent.make({
       outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({ outcome }),
-      version: 2
+      version: 3
     })
   )
   const evidenceOperation = makeImplementationEvidenceSealingOperation({
@@ -160,7 +170,7 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
   yield* journal.append(
     runId,
     intentRecordKey(evidenceOperation.operationId),
-    ImplementationEvidenceSealingIntendedEvent.make({ operation: evidenceOperation, version: 2 })
+    ImplementationEvidenceSealingIntendedEvent.make({ operation: evidenceOperation, version: 3 })
   )
   const sealed = yield* sealImplementationEvidence(
     evidenceOperation.operationId,
@@ -179,7 +189,7 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
     ImplementationEvidenceSealedEvent.make({
       operationId: evidenceOperation.operationId,
       sealed,
-      version: 2
+      version: 3
     })
   )
   return { evidenceOperation, executionOperationId, sealed }
@@ -344,6 +354,187 @@ it.effect("retries review and findings handback failures inside distinct durable
     expect(retryEvents.every(({ scope }) => scope.semanticRound === SemanticReviewRound.make(1))).toBe(true)
   }).pipe(Effect.provide(testLayer)))
 
+it.effect("discovers an interrupted reviewer result under the same operation, session, round, and budget", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const store = yield* EvidenceStore
+    const evidence = yield* appendExecutionAndEvidence(1)
+    const operation = reviewOperation(evidence)
+    if (operation.request._tag !== "AuthorizedImplementationReview") return yield* Effect.die("invalid fixture")
+    const firstResultStored = yield* Deferred.make<void>()
+    const resultIsDiscoverable = yield* Ref.make(false)
+    const providerCalls = yield* Ref.make<ReadonlyArray<typeof operation.request>>([])
+    const providerCreations = yield* Ref.make(0)
+    const accepted = ImplementationReviewDisposition.cases.Accepted.make({})
+    const reviewer = ImplementationReviewer.of({
+      createOrResume: Effect.fn("ReviewTest.createOrDiscoverAfterInterruption")(function*(request) {
+        yield* Ref.update(providerCalls, (requests) => [...requests, request])
+        if (!(yield* Ref.get(resultIsDiscoverable))) {
+          yield* Ref.set(resultIsDiscoverable, true)
+          yield* Ref.update(providerCreations, (count) => count + 1)
+          yield* Deferred.succeed(firstResultStored, undefined)
+          return yield* Effect.never
+        }
+        return accepted
+      })
+    })
+    const protocol = makeJournaledImplementationReview({
+      evidenceStore: store,
+      handback: ReviewFindingsHandback.of({ deliverOrResume: () => Effect.die("unused") }),
+      journal,
+      reviewer,
+      runId
+    })
+
+    const interrupted = yield* protocol(operation).pipe(Effect.forkScoped)
+    yield* Deferred.await(firstResultStored)
+    yield* Fiber.interrupt(interrupted)
+    const beforeRecovery = (yield* journal.read(runId)).map(({ event }) => event)
+    expect(beforeRecovery.filter(({ _tag }) => _tag === "TechnicalRetryScheduled")).toHaveLength(0)
+
+    const recovered = yield* protocol(operation)
+    expect(recovered.manifest.disposition).toEqual(accepted)
+    expect(recovered.manifest.operationId).toBe(operation.request.operationId)
+    expect(recovered.manifest.reviewerSessionId).toBe(operation.request.reviewerSessionId)
+    expect(recovered.manifest.round).toBe(operation.request.round)
+    expect(yield* Ref.get(providerCreations)).toBe(1)
+    const calls = yield* Ref.get(providerCalls)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual(calls[1])
+    expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "TechnicalRetryPolicyCaptured"))
+      .toHaveLength(1)
+  }).pipe(Effect.provide(testLayer)))
+
+it.effect("refuses to append a missing review intent after durable retry invocation facts", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const store = yield* EvidenceStore
+    const evidence = yield* appendExecutionAndEvidence(1)
+    const operation = reviewOperation(evidence)
+    if (operation.request._tag !== "AuthorizedImplementationReview") return yield* Effect.die("invalid fixture")
+    const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+      operationId: operation.request.operationId,
+      reviewerSessionId: operation.request.reviewerSessionId,
+      semanticRound: operation.request.round
+    })
+    const retryPolicy = TechnicalRetryPolicy.make({
+      initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+      limit: TechnicalRetryLimit.make(1),
+      maximumDelayMillis: TechnicalRetryDelayMillis.make(100)
+    })
+    const retryOrdinal = TechnicalRetryOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      technicalRetryPolicyRecordKey(scope),
+      TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope, version: 3 })
+    )
+    yield* journal.append(
+      runId,
+      technicalRetryScheduledRecordKey(scope, retryOrdinal),
+      TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal,
+        scope,
+        version: 3
+      })
+    )
+    const invocations = yield* Ref.make(0)
+    const protocol = makeJournaledImplementationReview({
+      evidenceStore: store,
+      handback: ReviewFindingsHandback.of({ deliverOrResume: () => Effect.die("unused") }),
+      journal,
+      reviewer: ImplementationReviewer.of({
+        createOrResume: () =>
+          Ref.update(invocations, (count) => count + 1).pipe(Effect.as(
+            ImplementationReviewDisposition.cases.Accepted.make({})
+          ))
+      }),
+      runId,
+      technicalRetryPolicy: retryPolicy
+    })
+
+    const expectedMissingIntent = analyzeTechnicalRetryTemporalFacts(
+      yield* journal.read(runId),
+      operation.request.operationId
+    ).find(({ admissionContradiction }) => admissionContradiction !== undefined)?.admissionContradiction
+    const failure = yield* protocol(operation).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(ImplementationReviewHistoryContradiction)
+    expect(failure).toMatchObject({ reason: expectedMissingIntent })
+    expect(yield* Ref.get(invocations)).toBe(0)
+    expect((yield* journal.read(runId)).some(({ event }) => event._tag === "ImplementationReviewIntended"))
+      .toBe(false)
+
+    yield* journal.append(
+      runId,
+      intentRecordKey(operation.request.operationId),
+      ImplementationReviewIntendedEvent.make({ operation, version: 3 })
+    )
+    const expectedBeforeIntent = analyzeTechnicalRetryTemporalFacts(
+      yield* journal.read(runId),
+      operation.request.operationId
+    ).find(({ admissionContradiction }) => admissionContradiction !== undefined)?.admissionContradiction
+    const beforeIntentFailure = yield* protocol(operation).pipe(Effect.flip)
+    expect(beforeIntentFailure).toBeInstanceOf(ImplementationReviewHistoryContradiction)
+    expect(beforeIntentFailure).toMatchObject({ reason: expectedBeforeIntent })
+    expect(yield* Ref.get(invocations)).toBe(0)
+  }).pipe(Effect.provide(testLayer)))
+
+it.effect("rejects retry invocation facts appended after a durable review outcome", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const store = yield* EvidenceStore
+    const evidence = yield* appendExecutionAndEvidence(1)
+    const operation = reviewOperation(evidence)
+    if (operation.request._tag !== "AuthorizedImplementationReview") return yield* Effect.die("invalid fixture")
+    const invocations = yield* Ref.make(0)
+    const retryPolicy = TechnicalRetryPolicy.make({
+      initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+      limit: TechnicalRetryLimit.make(1),
+      maximumDelayMillis: TechnicalRetryDelayMillis.make(100)
+    })
+    const protocol = makeJournaledImplementationReview({
+      evidenceStore: store,
+      handback: ReviewFindingsHandback.of({ deliverOrResume: () => Effect.die("unused") }),
+      journal,
+      reviewer: ImplementationReviewer.of({
+        createOrResume: () =>
+          Ref.update(invocations, (count) => count + 1).pipe(Effect.as(
+            ImplementationReviewDisposition.cases.Accepted.make({})
+          ))
+      }),
+      runId,
+      technicalRetryPolicy: retryPolicy
+    })
+    yield* protocol(operation)
+    const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+      operationId: operation.request.operationId,
+      reviewerSessionId: operation.request.reviewerSessionId,
+      semanticRound: operation.request.round
+    })
+    const retryOrdinal = TechnicalRetryOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      technicalRetryScheduledRecordKey(scope, retryOrdinal),
+      TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal,
+        scope,
+        version: 3
+      })
+    )
+
+    const expectedAfterOutcome = analyzeTechnicalRetryTemporalFacts(
+      yield* journal.read(runId),
+      operation.request.operationId
+    ).find(({ admissionContradiction }) => admissionContradiction !== undefined)?.admissionContradiction
+    const failure = yield* protocol(operation).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(ImplementationReviewHistoryContradiction)
+    expect(failure).toMatchObject({ reason: expectedAfterOutcome })
+    expect(yield* Ref.get(invocations)).toBe(1)
+  }).pipe(Effect.provide(testLayer)))
+
 it.effect("rejects stale implementer invocation and cross-attempt continuation before review", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
@@ -407,7 +598,7 @@ it.effect("authorizes implementation bytes and reserves reviewer sessions before
     yield* journal.append(
       runId,
       intentRecordKey(foreignIntentOperation.request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation: foreignIntentOperation, version: 2 })
+      ImplementationReviewIntendedEvent.make({ operation: foreignIntentOperation, version: 3 })
     )
     const reused = yield* makeJournaledImplementationReview({
       evidenceStore: store,
@@ -719,7 +910,7 @@ it.effect("classifies invalid recursive review-chain edges before findings deliv
     const source = records[0]
     if (source === undefined) return yield* Effect.die("missing history")
     const reviewRecord = (review: typeof firstReview, ordinal: number) =>
-      extraRecord(source, ordinal, ImplementationReviewCompletedEvent.make({ review, version: 2 }))
+      extraRecord(source, ordinal, ImplementationReviewCompletedEvent.make({ review, version: 3 }))
     const runHandback = (review: typeof firstReview, recordsForChain: ReadonlyArray<JournalRecord>) => {
       const request = ReviewFindingsHandbackRequest.make({
         implementerInvocationId: review.manifest.implementerInvocationId,
@@ -965,17 +1156,17 @@ it.effect("recovers unresolved review and findings handback intents through thei
     const source = (yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId))))[0]
     if (source === undefined) return yield* Effect.die("missing fixture history")
     const records = [
-      extraRecord(source, 20, ImplementationReviewIntendedEvent.make({ operation, version: 2 })),
-      extraRecord(source, 21, ImplementationReviewIntendedEvent.make({ operation: simulatedOperation, version: 2 })),
-      extraRecord(source, 22, ImplementationReviewIntendedEvent.make({ operation: completedOperation, version: 2 })),
-      extraRecord(source, 23, ImplementationReviewCompletedEvent.make({ review: completedReview, version: 2 })),
-      extraRecord(source, 24, ReviewFindingsHandbackIntendedEvent.make({ operation: handbackOperation, version: 2 })),
+      extraRecord(source, 20, ImplementationReviewIntendedEvent.make({ operation, version: 3 })),
+      extraRecord(source, 21, ImplementationReviewIntendedEvent.make({ operation: simulatedOperation, version: 3 })),
+      extraRecord(source, 22, ImplementationReviewIntendedEvent.make({ operation: completedOperation, version: 3 })),
+      extraRecord(source, 23, ImplementationReviewCompletedEvent.make({ review: completedReview, version: 3 })),
+      extraRecord(source, 24, ReviewFindingsHandbackIntendedEvent.make({ operation: handbackOperation, version: 3 })),
       extraRecord(
         source,
         25,
         ReviewFindingsHandbackIntendedEvent.make({
           operation: completedHandbackOperation,
-          version: 2
+          version: 3
         })
       ),
       extraRecord(
@@ -986,7 +1177,7 @@ it.effect("recovers unresolved review and findings handback intents through thei
             operationId: completedHandbackOperation.request.operationId,
             reviewEvidenceReference: review.manifestReference
           }),
-          version: 2
+          version: 3
         })
       )
     ]
@@ -1192,7 +1383,7 @@ it.effect("classifies malformed review and handback histories without provider c
             reviewerSessionId: ReviewerSessionId.make("mismatched-outcome-reviewer")
           }
         },
-        version: 2
+        version: 3
       })
     )
     yield* expectReason(
@@ -1341,7 +1532,7 @@ it.effect("classifies malformed review and handback histories without provider c
     const acceptedReviewEvent = extraRecord(outcomeRecord, 7, {
       _tag: "ImplementationReviewCompleted" as const,
       review: acceptedReview,
-      version: 2 as const
+      version: 3 as const
     })
     yield* expectReason(
       runHandback(
@@ -1374,7 +1565,7 @@ it.effect("classifies malformed review and handback histories without provider c
       3,
       ReviewFindingsHandbackIntendedEvent.make({
         operation: handbackOperation,
-        version: 2
+        version: 3
       })
     )
     const handbackOutcome = extraRecord(
@@ -1382,7 +1573,7 @@ it.effect("classifies malformed review and handback histories without provider c
       4,
       ReviewFindingsHandbackCompletedEvent.make({
         acknowledgement: handbackAcknowledgement,
-        version: 2
+        version: 3
       })
     )
     yield* expectReason(
@@ -1408,7 +1599,7 @@ it.effect("classifies malformed review and handback histories without provider c
           operationId: handbackRequest.operationId,
           reviewEvidenceReference: changedReference
         }),
-        version: 2
+        version: 3
       })
     )
     yield* expectReason(

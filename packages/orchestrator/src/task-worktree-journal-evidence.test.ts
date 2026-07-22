@@ -81,7 +81,7 @@ const readyEvent = TaskWorktreeReadyEvent.make({
     headSha: plannedAttempt.baseSha,
     worktree: plannedAttempt.worktree
   }),
-  version: 2
+  version: 3
 })
 const interpreterLayer = journaledWorkflowInterpreterLayer(
   runId,
@@ -108,7 +108,7 @@ const intentEvent = (attempt = plannedAttempt) =>
       ...worktreeOperation,
       plannedAttempt: attempt
     }),
-    version: 2
+    version: 3
   })
 
 const append = (key: ReturnType<typeof intentRecordKey>, event: Parameters<typeof JournalStore.Service["append"]>[2]) =>

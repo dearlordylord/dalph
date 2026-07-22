@@ -13,13 +13,19 @@ import {
   OperationId,
   PlannedTaskAttempt,
   ProviderObservationId,
+  ReviewerSessionId,
   RunId,
+  SemanticReviewRound,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
+  TechnicalRetryDelayMillis,
+  TechnicalRetryLimit,
+  TechnicalRetryNotBefore,
+  TechnicalRetryOrdinal,
   TrackerRevision,
   WorktreeLocator
 } from "./domain.js"
@@ -41,6 +47,16 @@ import {
 } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { TaskExecutionObservationFailure } from "./task-execution.js"
+import { technicalRetryEventKinds } from "./technical-retry-event-kind.js"
+import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
+import {
+  TechnicalRetryPolicy,
+  TechnicalRetryPolicyCapturedEvent,
+  technicalRetryPolicyRecordKey,
+  TechnicalRetryScheduledEvent,
+  technicalRetryScheduledRecordKey,
+  TechnicalRetryScope
+} from "./technical-retry.js"
 import { makeTrackerGraphObservationOperation, WorkflowOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 
@@ -95,10 +111,26 @@ effectIt.effect("rejects an unsupported immutable event version", () =>
     const failure = yield* Effect.flip(
       decodeAndUpcastJournalEvent({
         ...encoded,
-        version: JournalEventVersion.make(3)
+        version: JournalEventVersion.make(4)
       })
     )
     expect(failure._tag).toBe("JournalEventDecodeIssue")
+  }))
+
+effectIt.effect("rejects pre-v3 technical retry envelopes instead of guessing progress", () =>
+  Effect.gen(function*() {
+    yield* Effect.forEach(technicalRetryEventKinds, (kind) =>
+      Effect.gen(function*() {
+        const failure = yield* Effect.flip(
+          decodeAndUpcastJournalEvent({
+            kind: JournalEventKind.make(kind),
+            payloadJson: "{}",
+            version: JournalEventVersion.make(2)
+          })
+        )
+        expect(failure).toBeInstanceOf(Error)
+        expect(failure).toMatchObject({ _tag: "JournalEventDecodeIssue", kind, version: 2 })
+      }))
   }))
 
 effectIt.effect("rejects valid JSON whose payload is not an event object", () =>
@@ -217,8 +249,8 @@ it("reports duplicate, contradictory, and foreign-run attempt plans", () => {
       runId: RunId.make("foreign-plan-run")
     })
   })
-  const event = TaskAttemptPlannedEvent.make({ operation, version: 2 })
-  const replacementEvent = TaskAttemptPlannedEvent.make({ operation: replacement, version: 2 })
+  const event = TaskAttemptPlannedEvent.make({ operation, version: 3 })
+  const replacementEvent = TaskAttemptPlannedEvent.make({ operation: replacement, version: 3 })
   const reduction = reduceManagedHistory(runId, [
     { event, key: attemptPlanRecordKey(plan.attemptId), position: JournalPosition.make(1), runId },
     {
@@ -243,6 +275,365 @@ it("reports duplicate, contradictory, and foreign-run attempt plans", () => {
   }
 })
 
+it("rejects a technical retry scope that changes the durable semantic review round", () => {
+  const operationId = OperationId.make("crossed-semantic-round")
+  const reviewerSessionId = ReviewerSessionId.make("crossed-semantic-reviewer")
+  const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId,
+    reviewerSessionId,
+    semanticRound: SemanticReviewRound.make(2)
+  })
+  const captured = TechnicalRetryPolicyCapturedEvent.make({
+    policy: TechnicalRetryPolicy.make({
+      initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+      limit: TechnicalRetryLimit.make(2),
+      maximumDelayMillis: TechnicalRetryDelayMillis.make(200)
+    }),
+    scope,
+    version: 3
+  })
+  const intent = event({
+    _tag: "ImplementationReviewIntended",
+    operation: {
+      predecessorOperationIds: [],
+      request: {
+        _tag: "AuthorizedImplementationReview",
+        operationId,
+        plannedAttempt: { runId },
+        reviewerSessionId,
+        round: 1
+      }
+    }
+  })
+  const reduction = reduceManagedHistory(runId, [
+    { event: captured, key: technicalRetryPolicyRecordKey(scope), position: JournalPosition.make(1), runId },
+    { event: intent, key: intentRecordKey(operationId), position: JournalPosition.make(2), runId }
+  ])
+  expect(reduction._tag).toBe("InvalidManagedHistory")
+  if (reduction._tag === "InvalidManagedHistory") {
+    expect(reduction.issues.map(({ detail }) => detail)).toContain(
+      "technical retry scope contradicts the invocation intent for operation crossed-semantic-round"
+    )
+  }
+})
+
+it("rejects a later technical retry schedule before the exact prior deferral is superseded", () => {
+  const operationId = OperationId.make("unsuperseded-deferral")
+  const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId,
+    reviewerSessionId: ReviewerSessionId.make("unsuperseded-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const policy = TechnicalRetryPolicy.make({
+    initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+    limit: TechnicalRetryLimit.make(2),
+    maximumDelayMillis: TechnicalRetryDelayMillis.make(200)
+  })
+  const retryOne = TechnicalRetryScheduledEvent.make({
+    delayMillis: TechnicalRetryDelayMillis.make(100),
+    notBefore: TechnicalRetryNotBefore.make(100),
+    retryOrdinal: TechnicalRetryOrdinal.make(1),
+    scope,
+    version: 3
+  })
+  const retryTwo = TechnicalRetryScheduledEvent.make({
+    delayMillis: TechnicalRetryDelayMillis.make(200),
+    notBefore: TechnicalRetryNotBefore.make(300),
+    retryOrdinal: TechnicalRetryOrdinal.make(2),
+    scope,
+    version: 3
+  })
+  const reduction = reduceManagedHistory(runId, [
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(scope),
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: retryOne,
+      key: technicalRetryScheduledRecordKey(scope, retryOne.retryOrdinal),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: retryTwo,
+      key: technicalRetryScheduledRecordKey(scope, retryTwo.retryOrdinal),
+      position: JournalPosition.make(3),
+      runId
+    }
+  ])
+  expect(reduction._tag).toBe("InvalidManagedHistory")
+  if (reduction._tag === "InvalidManagedHistory") {
+    expect(reduction.issues.map(({ detail }) => detail)).toContain(
+      "a later deferral precedes supersession of the active deferral"
+    )
+  }
+})
+
+it("rejects a retry schedule that physically precedes its exact review intent", () => {
+  const operationId = OperationId.make("retry-before-review-intent")
+  const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId,
+    reviewerSessionId: ReviewerSessionId.make("retry-before-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const policy = TechnicalRetryPolicy.make({
+    initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+    limit: TechnicalRetryLimit.make(1),
+    maximumDelayMillis: TechnicalRetryDelayMillis.make(100)
+  })
+  const scheduled = TechnicalRetryScheduledEvent.make({
+    delayMillis: TechnicalRetryDelayMillis.make(100),
+    notBefore: TechnicalRetryNotBefore.make(100),
+    retryOrdinal: TechnicalRetryOrdinal.make(1),
+    scope,
+    version: 3
+  })
+  const intent = event({
+    _tag: "ImplementationReviewIntended",
+    operation: {
+      predecessorOperationIds: [],
+      request: {
+        _tag: "AuthorizedImplementationReview",
+        operationId,
+        reviewerSessionId: scope.reviewerSessionId,
+        round: scope.semanticRound
+      }
+    },
+    version: 3
+  })
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(scope),
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: scheduled,
+      key: technicalRetryScheduledRecordKey(scope, scheduled.retryOrdinal),
+      position: JournalPosition.make(2),
+      runId
+    },
+    { event: intent, key: intentRecordKey(operationId), position: JournalPosition.make(3), runId }
+  ]
+
+  const reduction = reduceManagedHistory(runId, records)
+  const temporalIssues = analyzeTechnicalRetryTemporalFacts(records, operationId)
+  expect(temporalIssues).toContainEqual(expect.objectContaining({
+    _tag: "Semantic",
+    position: JournalPosition.make(2)
+  }))
+  expect(reduction._tag).toBe("InvalidManagedHistory")
+  if (reduction._tag === "InvalidManagedHistory") {
+    for (const temporalIssue of temporalIssues) {
+      expect(reduction.issues).toContainEqual(expect.objectContaining({
+        _tag: `ManagedHistory${temporalIssue._tag}Issue`,
+        detail: temporalIssue.detail,
+        position: temporalIssue.position
+      }))
+    }
+  }
+})
+
+it("rejects a retry schedule that physically follows its durable review outcome", () => {
+  const operationId = OperationId.make("retry-after-review-outcome")
+  const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId,
+    reviewerSessionId: ReviewerSessionId.make("retry-after-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const policy = TechnicalRetryPolicy.make({
+    initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+    limit: TechnicalRetryLimit.make(1),
+    maximumDelayMillis: TechnicalRetryDelayMillis.make(100)
+  })
+  const scheduled = TechnicalRetryScheduledEvent.make({
+    delayMillis: TechnicalRetryDelayMillis.make(100),
+    notBefore: TechnicalRetryNotBefore.make(100),
+    retryOrdinal: TechnicalRetryOrdinal.make(1),
+    scope,
+    version: 3
+  })
+  const intent = event({
+    _tag: "ImplementationReviewIntended",
+    operation: {
+      predecessorOperationIds: [],
+      request: {
+        _tag: "AuthorizedImplementationReview",
+        operationId,
+        reviewerSessionId: scope.reviewerSessionId,
+        round: scope.semanticRound
+      }
+    },
+    version: 3
+  })
+  const outcome = event({
+    _tag: "ImplementationReviewCompleted",
+    review: { manifest: { operationId } },
+    version: 3
+  })
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(scope),
+      position: JournalPosition.make(1),
+      runId
+    },
+    { event: intent, key: intentRecordKey(operationId), position: JournalPosition.make(2), runId },
+    { event: outcome, key: outcomeRecordKey(operationId), position: JournalPosition.make(3), runId },
+    {
+      event: scheduled,
+      key: technicalRetryScheduledRecordKey(scope, scheduled.retryOrdinal),
+      position: JournalPosition.make(4),
+      runId
+    }
+  ]
+
+  const reduction = reduceManagedHistory(runId, records)
+  const temporalIssues = analyzeTechnicalRetryTemporalFacts(records, operationId)
+  expect(reduction._tag).toBe("InvalidManagedHistory")
+  if (reduction._tag === "InvalidManagedHistory") {
+    for (const temporalIssue of temporalIssues) {
+      expect(reduction.issues).toContainEqual(expect.objectContaining({
+        _tag: `ManagedHistory${temporalIssue._tag}Issue`,
+        detail: temporalIssue.detail,
+        position: temporalIssue.position
+      }))
+    }
+  }
+})
+
+it("classifies orphan and crossed-scope retry facts while accepting exact review and handback bindings", () => {
+  const reviewOperationId = OperationId.make("matching-review-retry")
+  const reviewScope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId: reviewOperationId,
+    reviewerSessionId: ReviewerSessionId.make("matching-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const handbackOperationId = OperationId.make("matching-handback-retry")
+  const reviewedOperationId = OperationId.make("matching-reviewed-operation")
+  const handbackScope = TechnicalRetryScope.cases.ReviewFindingsHandbackInvocation.make({
+    operationId: handbackOperationId,
+    reviewOperationId: reviewedOperationId,
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const orphanOperationId = OperationId.make("orphan-retry-fact")
+  const orphanScope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId: orphanOperationId,
+    reviewerSessionId: ReviewerSessionId.make("orphan-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const foreignOrphanScope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    ...orphanScope,
+    reviewerSessionId: ReviewerSessionId.make("foreign-orphan-reviewer")
+  })
+  const policylessScope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
+    operationId: OperationId.make("policyless-retry-fact"),
+    reviewerSessionId: ReviewerSessionId.make("policyless-reviewer"),
+    semanticRound: SemanticReviewRound.make(1)
+  })
+  const retryPolicy = TechnicalRetryPolicy.make({
+    initialDelayMillis: TechnicalRetryDelayMillis.make(100),
+    limit: TechnicalRetryLimit.make(1),
+    maximumDelayMillis: TechnicalRetryDelayMillis.make(100)
+  })
+  const records = [
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: reviewScope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(reviewScope)
+    },
+    {
+      event: event({
+        _tag: "ImplementationReviewIntended",
+        operation: {
+          predecessorOperationIds: [],
+          request: {
+            _tag: "AuthorizedImplementationReview",
+            operationId: reviewOperationId,
+            plannedAttempt: { runId },
+            reviewerSessionId: reviewScope.reviewerSessionId,
+            round: reviewScope.semanticRound
+          }
+        }
+      }),
+      key: intentRecordKey(reviewOperationId)
+    },
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: handbackScope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(handbackScope)
+    },
+    {
+      event: event({
+        _tag: "ReviewFindingsHandbackIntended",
+        operation: {
+          predecessorOperationIds: [],
+          request: {
+            operationId: handbackOperationId,
+            plannedAttempt: { runId },
+            review: { manifest: { round: handbackScope.semanticRound } },
+            reviewOperationId: reviewedOperationId
+          }
+        }
+      }),
+      key: intentRecordKey(handbackOperationId)
+    },
+    {
+      event: TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal: TechnicalRetryOrdinal.make(1),
+        scope: orphanScope,
+        version: 3
+      }),
+      key: technicalRetryScheduledRecordKey(orphanScope, TechnicalRetryOrdinal.make(1))
+    },
+    {
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: orphanScope, version: 3 }),
+      key: technicalRetryPolicyRecordKey(orphanScope)
+    },
+    {
+      event: TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal: TechnicalRetryOrdinal.make(2),
+        scope: foreignOrphanScope,
+        version: 3
+      }),
+      key: technicalRetryScheduledRecordKey(foreignOrphanScope, TechnicalRetryOrdinal.make(2))
+    },
+    {
+      event: TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal: TechnicalRetryOrdinal.make(1),
+        scope: policylessScope,
+        version: 3
+      }),
+      key: technicalRetryScheduledRecordKey(policylessScope, TechnicalRetryOrdinal.make(1))
+    }
+  ].map((record, index): JournalRecord => ({
+    ...record,
+    position: JournalPosition.make(index + 1),
+    runId
+  }))
+
+  const reduction = reduceManagedHistory(runId, records)
+  expect(reduction._tag).toBe("InvalidManagedHistory")
+  if (reduction._tag === "InvalidManagedHistory") {
+    const details = reduction.issues.map(({ detail }) => detail)
+    expect(details).toContain("technical retry deferral precedes its captured policy")
+    expect(details).toContain("technical retry facts cross active scopes")
+    expect(details).not.toContain(
+      "technical retry scope contradicts the invocation intent for operation matching-review-retry"
+    )
+    expect(details).not.toContain(
+      "technical retry scope contradicts the invocation intent for operation matching-handback-retry"
+    )
+  }
+})
+
 it("reports provider observations and provider outcomes without their required predecessors", () => {
   const operationId = OperationId.make("orphan-provider-operation")
   const outcomeOperationId = OperationId.make("orphan-provider-outcome")
@@ -253,14 +644,14 @@ it("reports provider observations and provider outcomes without their required p
       operationId
     }),
     operationId,
-    version: 2
+    version: 3
   })
   const outcome = TaskWorkSessionEstablishedEvent.make({
     outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished.make({
       operationId: outcomeOperationId,
       sessionId: TaskWorkSessionId.make("orphan-session")
     }),
-    version: 2
+    version: 3
   })
   const reduction = reduceManagedHistory(runId, [
     {
@@ -395,13 +786,13 @@ it("rejects a causal predecessor belonging to a different planned attempt", () =
   })
   const reduction = reduceManagedHistory(runId, [
     {
-      event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: 2 }),
+      event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 }),
       key: attemptPlanRecordKey(first.attemptId),
       position: JournalPosition.make(1),
       runId
     },
     {
-      event: TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 2 }),
+      event: TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 3 }),
       key: intentRecordKey(worktreeOperation.operationId),
       position: JournalPosition.make(2),
       runId
@@ -415,7 +806,7 @@ it("rejects a causal predecessor belonging to a different planned attempt", () =
           headSha: second.baseSha,
           worktree: second.worktree
         }),
-        version: 2
+        version: 3
       }),
       key: outcomeRecordKey(worktreeOperation.operationId),
       position: JournalPosition.make(3),
@@ -604,7 +995,7 @@ it("rejects contradictory terminal reports for one established session", () => {
         result: { _tag: "Completed", evidence: "done" },
         sessionId
       },
-      version: 2
+      version: 3
     }),
     event({
       _tag: "TaskWorkSessionResultReported",
@@ -614,7 +1005,7 @@ it("rejects contradictory terminal reports for one established session", () => {
         result: { _tag: "Failed", evidence: "failed" },
         sessionId
       },
-      version: 2
+      version: 3
     })
   ].map((journalEvent, index): JournalRecord => ({
     event: journalEvent,
@@ -670,7 +1061,7 @@ it("validates attempt-plan causal predecessors for order and full-attempt identi
   const reduction = reduceManagedHistory(
     runId,
     operations.map((operation, index) => ({
-      event: TaskAttemptPlannedEvent.make({ operation, version: 2 }),
+      event: TaskAttemptPlannedEvent.make({ operation, version: 3 }),
       key: attemptPlanRecordKey(operation.plannedAttempt.attemptId),
       position: JournalPosition.make(index + 1),
       runId

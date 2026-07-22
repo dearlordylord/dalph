@@ -47,7 +47,7 @@ import {
   TaskWorkStartRequestFailure
 } from "./task-work-start.js"
 import * as TaskWorktree from "./task-worktree-reconciliation.js"
-import type { TechnicalRetryScheduleOverflow } from "./technical-retry.js"
+import type { TechnicalRetryControlFailure } from "./technical-retry.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
 import {
@@ -265,7 +265,7 @@ type ImplementationReviewWorkflowError =
   | ImplementationReviewNotAuthorized
   | JournalStoreContradiction
   | JournalStoreError
-  | TechnicalRetryScheduleOverflow
+  | TechnicalRetryControlFailure
 
 interface WorkflowInterpreterService {
   readonly handBackReviewFindings: (

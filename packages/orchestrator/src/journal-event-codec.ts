@@ -2,8 +2,11 @@ import { Effect, Schema } from "effect"
 import { JournalEventKind, JournalEventVersion } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { WorkflowJournalEvent } from "./journal-store.js"
+import { technicalRetryEventKinds } from "./technical-retry-event-kind.js"
 
 const CurrentPayload = Schema.Record(Schema.String, Schema.Unknown)
+const normalizedJournalEventVersion = 2
+const technicalRetryKinds = new Set<string>(technicalRetryEventKinds)
 
 /** One normalized journal envelope prepared for immutable persistence. */
 export const EncodedJournalEvent = Schema.Struct({
@@ -42,15 +45,20 @@ const decodePayload = (
 
 /**
  * Converts an immutable historical payload to the current semantic event.
- * Version 1 stored the discriminator in its JSON object; version 2 stores only
- * variant fields because kind and version belong to the normalized envelope.
+ * Version 1 stored the discriminator in its JSON object; later versions store
+ * only variant fields because kind and version belong to the normalized envelope.
  */
 export const decodeAndUpcastJournalEvent = Effect.fn("WorkflowJournal.decodeAndUpcastEvent")(
   function*(encoded: EncodedJournalEvent) {
     const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
-    const candidate: unknown = encoded.version === 1
+    const unsupportedTechnicalRetryVersion = technicalRetryKinds.has(encoded.kind)
+      && encoded.version !== workflowJournalEventVersion
+    const candidate: unknown = unsupportedTechnicalRetryVersion
+      ? undefined
+      : encoded.version === 1
       ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
-      : encoded.version === workflowJournalEventVersion
+      : encoded.version === normalizedJournalEventVersion
+          || encoded.version === workflowJournalEventVersion
       ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
       : undefined
     if (candidate === undefined) {

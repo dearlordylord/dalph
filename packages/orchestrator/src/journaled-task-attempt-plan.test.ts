@@ -168,7 +168,7 @@ it.effect("acknowledges one immutable attempt plan from durable journal history"
     expect(records[0]?.event).toEqual({
       _tag: "TaskAttemptPlanned",
       operation,
-      version: 2
+      version: 3
     })
   }).pipe(Effect.provide(journaledLayer), Effect.provide(memoryJournalStoreLayer))
 })
@@ -181,13 +181,13 @@ it.effect("rejects multiple durable plans for one attempt before session mutatio
       read: () =>
         Effect.succeed([
           {
-            event: TaskAttemptPlannedEvent.make({ operation, version: 2 }),
+            event: TaskAttemptPlannedEvent.make({ operation, version: 3 }),
             key: JournalRecordKey.make("duplicate-plan:first"),
             position: JournalPosition.make(1),
             runId
           },
           {
-            event: TaskAttemptPlannedEvent.make({ operation, version: 2 }),
+            event: TaskAttemptPlannedEvent.make({ operation, version: 3 }),
             key: JournalRecordKey.make("duplicate-plan:second"),
             position: JournalPosition.make(2),
             runId

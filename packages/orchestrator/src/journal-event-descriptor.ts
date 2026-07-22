@@ -1,4 +1,5 @@
 import type { JournalRecordKey, OperationId, PlannedTaskAttempt, TaskWorkSessionId } from "./domain.js"
+import { TechnicalRetryOrdinal } from "./domain.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -15,7 +16,11 @@ import {
   taskWorkStartFailedRecordKey
 } from "./journal-record-key.js"
 import type { WorkflowJournalEvent } from "./journal-store.js"
-import { technicalRetryPolicyRecordKey, technicalRetryScheduledRecordKey } from "./technical-retry.js"
+import {
+  technicalRetryDeferralSupersededRecordKey,
+  technicalRetryPolicyRecordKey,
+  technicalRetryScheduledRecordKey
+} from "./technical-retry.js"
 
 /** Canonical physical identity and predecessor facts derived from one typed event. */
 interface OperationEventDescriptor {
@@ -288,7 +293,18 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return operationEvent({
         expectedKey: technicalRetryScheduledRecordKey(event.scope, event.retryOrdinal),
         operationId: event.scope.operationId,
-        requiredPredecessorKey: technicalRetryPolicyRecordKey(event.scope)
+        requiredPredecessorKey: event.retryOrdinal === 1
+          ? technicalRetryPolicyRecordKey(event.scope)
+          : technicalRetryDeferralSupersededRecordKey(
+            event.scope,
+            TechnicalRetryOrdinal.make(event.retryOrdinal - 1)
+          )
+      })
+    case "TechnicalRetryDeferralSuperseded":
+      return operationEvent({
+        expectedKey: technicalRetryDeferralSupersededRecordKey(event.scope, event.retryOrdinal),
+        operationId: event.scope.operationId,
+        requiredPredecessorKey: technicalRetryScheduledRecordKey(event.scope, event.retryOrdinal)
       })
   }
 }
