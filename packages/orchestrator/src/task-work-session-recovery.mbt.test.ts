@@ -21,6 +21,10 @@ const actionSchema = {
   selectIdentity: {}
 }
 
+// Coverage instrumentation can push this real-service MBT beyond quintIt's
+// 30-second default while the bounded trace count and step count stay fixed.
+const modelBasedTestTimeout = 45_000
+
 const SpecRecoveryProjection = Schema.Struct({
   state: Schema.Struct({
     authorization: Schema.Unknown,
@@ -96,4 +100,4 @@ quintIt(it.effect, "replays the recovery model through the TypeScript boundary",
       && setsEqual(spec.requestPayloads, implementation.requestPayloads)
       && spec.status === implementation.status
   )
-})
+}, modelBasedTestTimeout)
