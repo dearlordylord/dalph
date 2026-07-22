@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { OperationId, PlannedTaskAttempt, ProviderObservationId } from "./domain.js"
 import {
   TaskWorkSessionEstablishmentDidNotConverge,
@@ -12,6 +12,37 @@ import {
 } from "./task-work-start.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
+import type { TaskWorkSessionProtocolObserver, WorkflowTraceService } from "./workflow.js"
+
+export const taskWorkSessionTraceObserver = (
+  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
+  trace: WorkflowTraceService
+): TaskWorkSessionProtocolObserver => ({
+  lookupFailed: Effect.fn("WorkflowTrace.taskWorkSessionLookupFailed")(function*(lookup, failure) {
+    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+      lookup,
+      observationId: failure.observationId,
+      operation
+    }))
+    yield* trace.emit(TaskWorkSessionLookupFailedTrace.make({ failure, operation }))
+  }),
+  sessionReported: Effect.fn("WorkflowTrace.taskWorkSessionReported")(function*(lookup, report) {
+    yield* trace.emit(TaskWorkSessionLookupRequestedTrace.make({
+      lookup,
+      observationId: report.observationId,
+      operation
+    }))
+    yield* trace.emit(TaskWorkSessionReportedTrace.make({ operation, report }))
+  }),
+  startFailed: Effect.fn("WorkflowTrace.taskWorkStartFailed")(function*(_request, failure) {
+    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkStartRequestFailedTrace.make({ failure, operation }))
+  }),
+  startRequested: Effect.fn("WorkflowTrace.taskWorkStartRequested")(function*(_request, acknowledgement) {
+    yield* trace.emit(TaskWorkStartRequestedTrace.make({ operation }))
+    yield* trace.emit(TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
+  })
+})
 
 export const TaskWorkStartRequestedTrace = Schema.TaggedStruct(
   "TaskWorkStartRequested",

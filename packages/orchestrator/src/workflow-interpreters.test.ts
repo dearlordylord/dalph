@@ -106,6 +106,8 @@ it.effect("rejects provider execution in a simulated task-runner interpreter", (
     const interpreter = yield* WorkflowInterpreter
     expect(yield* interpreter.executeTaskWork(plannedOperation).pipe(Effect.flip))
       .toBeInstanceOf(TaskExecutionModeContradiction)
+    expect((yield* Effect.exit(interpreter.handBackReviewFindings(undefined as never)))._tag)
+      .toBe("Failure")
   }).pipe(
     Effect.provide(taskRunnerWorkflowInterpreterLayer),
     Effect.provide(Layer.succeed(TaskRunner, runner)),
@@ -169,6 +171,8 @@ it.effect("keeps dry-run simulation pure for both session binding variants", () 
     expect((yield* interpreter.simulateTaskExecution(plannedOperation)).session)
       .toBe(plannedAttempt.session)
     expect((yield* Effect.exit(interpreter.executeTaskWork(establishedOperation)))._tag)
+      .toBe("Failure")
+    expect((yield* Effect.exit(interpreter.handBackReviewFindings(undefined as never)))._tag)
       .toBe("Failure")
   }).pipe(
     Effect.provide(makeDryRunWorkflowInterpreterLayer()),

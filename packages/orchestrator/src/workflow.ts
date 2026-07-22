@@ -6,9 +6,21 @@ import type {
   EvidenceStoreFailure,
   ImplementationDiffReadFailure,
   ImplementationEvidenceHistoryContradiction,
-  ImplementationEvidenceModeContradiction
+  ImplementationEvidenceModeContradiction,
+  ImplementationEvidenceSealingSimulated,
+  ImplementationReviewNotAuthorized,
+  SealedImplementationEvidence
 } from "./implementation-evidence.js"
-import { ImplementationEvidenceSealingSimulated, SealedImplementationEvidence } from "./implementation-evidence.js"
+import * as ImplementationReviewTrace from "./implementation-review-trace.js"
+import type {
+  ImplementationReviewHistoryContradiction,
+  ImplementationReviewInvocationFailure,
+  ImplementationReviewModeContradiction,
+  ImplementationReviewSimulated,
+  ReviewFindingsHandbackAcknowledged,
+  ReviewFindingsHandbackFailure,
+  SealedImplementationReview
+} from "./implementation-review.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
 import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
 import { runTaskClaimAcquisitionProtocol, type TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
@@ -52,6 +64,8 @@ export {
   causalGraphProjection,
   compareOperationIds,
   makeImplementationEvidenceSealingOperation,
+  makeImplementationReviewOperation,
+  makeReviewFindingsHandbackOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -61,6 +75,13 @@ export {
   workflowOperationId
 } from "./workflow-operation.js"
 export { WorkflowOperation }
+export {
+  ImplementationEvidenceSealingSimulatedTrace,
+  ImplementationReviewCompletedTrace,
+  ImplementationReviewSimulatedTrace,
+  ReviewFindingsHandedBackTrace,
+  SealedImplementationEvidenceTrace
+} from "./implementation-review-trace.js"
 export { runTaskExecutionProtocol, taskExecutionTraceObserver } from "./task-execution-workflow.js"
 export {
   decideTaskWorkSessionRecovery,
@@ -109,7 +130,7 @@ type TaskWorkSessionObservationError =
   | TaskAttemptPlan.TaskAttemptPlanHistoryContradiction
   | TraceOutputError
 
-interface TaskWorkSessionProtocolObserver {
+export interface TaskWorkSessionProtocolObserver {
   readonly lookupFailed: (
     lookup: TaskWorkSessionLookup,
     failure: TaskWorkSessionLookupFailure
@@ -237,6 +258,18 @@ type TaskAttemptPlanRecordingError =
   | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
 interface WorkflowInterpreterService {
+  readonly handBackReviewFindings: (
+    operation: typeof WorkflowOperation.cases.HandBackReviewFindings.Type
+  ) => Effect.Effect<
+    typeof ReviewFindingsHandbackAcknowledged.Type,
+    | CoordinatorOwnershipError
+    | EvidenceStoreFailure
+    | ImplementationReviewHistoryContradiction
+    | ImplementationReviewNotAuthorized
+    | JournalStoreContradiction
+    | JournalStoreError
+    | ReviewFindingsHandbackFailure
+  >
   readonly acquireTaskClaim: (
     operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
   ) => Effect.Effect<
@@ -298,6 +331,19 @@ interface WorkflowInterpreterService {
     | TaskAttemptPlan.TaskAttemptPlanRunContradiction
     | TaskWorktree.TaskWorktreeHistoryContradiction
   >
+  readonly reviewImplementation: (
+    operation: typeof WorkflowOperation.cases.ReviewImplementation.Type
+  ) => Effect.Effect<
+    typeof SealedImplementationReview.Type | typeof ImplementationReviewSimulated.Type,
+    | CoordinatorOwnershipError
+    | EvidenceStoreFailure
+    | ImplementationReviewHistoryContradiction
+    | ImplementationReviewInvocationFailure
+    | ImplementationReviewModeContradiction
+    | ImplementationReviewNotAuthorized
+    | JournalStoreContradiction
+    | JournalStoreError
+  >
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
   ) => Effect.Effect<
@@ -334,24 +380,6 @@ const TaskClaimAcquisitionResult = Schema.Union([
 ])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
-/** Exposes the complete immutable implementation-stage review input. */
-export const SealedImplementationEvidenceTrace = Schema.TaggedStruct(
-  "ImplementationEvidenceSealed",
-  {
-    operation: WorkflowOperation.cases.SealImplementationEvidence,
-    sealed: SealedImplementationEvidence
-  }
-)
-
-/** Projects sealing order without claiming that any evidence bytes exist. */
-export const ImplementationEvidenceSealingSimulatedTrace = Schema.TaggedStruct(
-  "ImplementationEvidenceSealingSimulated",
-  {
-    operation: WorkflowOperation.cases.SealImplementationEvidence,
-    simulation: ImplementationEvidenceSealingSimulated
-  }
-)
-
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
   TrackerTrace.TrackerGraphOutcomeObserved,
@@ -366,8 +394,11 @@ export const TraceItem = Schema.Union([
   TaskExecutionTrace.TaskExecutionStarted,
   TaskExecutionTrace.TaskExecutionOutcomeObserved,
   TaskExecutionTrace.TaskExecutionSimulated,
-  SealedImplementationEvidenceTrace,
-  ImplementationEvidenceSealingSimulatedTrace,
+  ImplementationReviewTrace.SealedImplementationEvidenceTrace,
+  ImplementationReviewTrace.ImplementationEvidenceSealingSimulatedTrace,
+  ImplementationReviewTrace.ImplementationReviewCompletedTrace,
+  ImplementationReviewTrace.ImplementationReviewSimulatedTrace,
+  ImplementationReviewTrace.ReviewFindingsHandedBackTrace,
   TaskExecutionWorkflow.TaskExecutionRequestReturnedTrace,
   TaskExecutionWorkflow.TaskExecutionRequestFailedTrace,
   TaskExecutionWorkflow.TaskExecutionObservationFailedTrace,
@@ -385,7 +416,7 @@ export const TraceItem = Schema.Union([
 ])
 export type TraceItem = typeof TraceItem.Type
 
-interface WorkflowTraceService {
+export interface WorkflowTraceService {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
 }
 
@@ -393,35 +424,7 @@ export class WorkflowTrace extends Context.Service<WorkflowTrace, WorkflowTraceS
   "@dalph/WorkflowTrace"
 ) {}
 
-export const taskWorkSessionTraceObserver = (
-  operation: typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type,
-  trace: WorkflowTraceService
-): TaskWorkSessionProtocolObserver => ({
-  lookupFailed: Effect.fn("WorkflowTrace.taskWorkSessionLookupFailed")(function*(lookup, failure) {
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupRequestedTrace.make({
-      lookup,
-      observationId: failure.observationId,
-      operation
-    }))
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupFailedTrace.make({ failure, operation }))
-  }),
-  sessionReported: Effect.fn("WorkflowTrace.taskWorkSessionReported")(function*(lookup, report) {
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionLookupRequestedTrace.make({
-      lookup,
-      observationId: report.observationId,
-      operation
-    }))
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkSessionReportedTrace.make({ operation, report }))
-  }),
-  startFailed: Effect.fn("WorkflowTrace.taskWorkStartFailed")(function*(_request, failure) {
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestedTrace.make({ operation }))
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestFailedTrace.make({ failure, operation }))
-  }),
-  startRequested: Effect.fn("WorkflowTrace.taskWorkStartRequested")(function*(_request, acknowledgement) {
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestedTrace.make({ operation }))
-    yield* trace.emit(TaskWorkSessionTrace.TaskWorkStartRequestAcknowledgedTrace.make({ acknowledgement, operation }))
-  })
-})
+export { taskWorkSessionTraceObserver } from "./task-work-session-trace.js"
 
 export const acquireTaskClaimThrough = (
   tracker: TrackerMutationService,

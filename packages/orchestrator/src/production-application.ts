@@ -3,10 +3,13 @@ import { Effect, Layer } from "effect"
 import { EvidenceStoreLocator, type GitCommonDirectoryTarget, type RunId } from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
 import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
+import type { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
+import { unavailableImplementationReviewLayer } from "./implementation-review.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
   coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedImplementationReviewLayer,
   coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
@@ -21,6 +24,8 @@ import type { TrackerMutation } from "./tracker-mutation.js"
 import { trackerMutationWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
   recoverImplementationEvidenceSealings,
+  recoverImplementationReviews,
+  recoverReviewFindingsHandbacks,
   recoverTaskClaimAcquisitions,
   recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
@@ -38,7 +43,9 @@ export const productionWorkflowInterpreterLayer = <
   RunnerError,
   RunnerRequirements,
   TrackerError,
-  TrackerRequirements
+  TrackerRequirements,
+  ReviewError = never,
+  ReviewRequirements = never
 >(
   runId: RunId,
   target: GitCommonDirectoryTarget,
@@ -48,6 +55,11 @@ export const productionWorkflowInterpreterLayer = <
     TrackerMutation,
     TrackerError,
     TrackerRequirements
+  >,
+  reviewAdapterLayer?: Layer.Layer<
+    ImplementationReviewer | ReviewFindingsHandback,
+    ReviewError,
+    ReviewRequirements
   >
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
@@ -78,6 +90,9 @@ export const productionWorkflowInterpreterLayer = <
     Layer.provide(nodeGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
+  const reviewLayer = coordinatorOwnedImplementationReviewLayer(
+    reviewAdapterLayer ?? unavailableImplementationReviewLayer
+  ).pipe(Layer.provide(ownershipLayer))
   const baseInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(taskExecutorLayer),
@@ -89,7 +104,8 @@ export const productionWorkflowInterpreterLayer = <
     runId,
     baseInterpreterLayer,
     taskExecutorLayer,
-    Layer.merge(evidenceStoreLayer, evidenceSourceLayer)
+    Layer.merge(evidenceStoreLayer, evidenceSourceLayer),
+    reviewLayer
   ).pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(journalLayer)
@@ -103,6 +119,8 @@ export const productionWorkflowInterpreterLayer = <
       yield* recoverTaskWorkSessionEstablishments(runId)
       yield* recoverTaskExecutions(runId)
       yield* recoverImplementationEvidenceSealings(runId)
+      yield* recoverImplementationReviews(runId)
+      yield* recoverReviewFindingsHandbacks(runId)
       return interpreter
     })
   ).pipe(

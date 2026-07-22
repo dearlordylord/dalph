@@ -9,6 +9,7 @@ import {
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
 import { EvidenceStore } from "./implementation-evidence.js"
+import { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -144,6 +145,37 @@ export const coordinatorOwnedEvidenceStoreLayer = <E, R>(
       })
     })
   ).pipe(Layer.provide(evidenceStoreLayer))
+
+/** Guards reviewer invocation and findings delivery under one coordinator owner. */
+export const coordinatorOwnedImplementationReviewLayer = <E, R>(
+  reviewLayer: Layer.Layer<ImplementationReviewer | ReviewFindingsHandback, E, R>
+) =>
+  Layer.merge(
+    Layer.effect(
+      ImplementationReviewer,
+      Effect.gen(function*() {
+        const ownership = yield* CoordinatorOwnership
+        const reviewer = yield* ImplementationReviewer
+        return ImplementationReviewer.of({
+          createOrResume: Effect.fn("ImplementationReviewer.CoordinatorOwned.invoke")(function*(request) {
+            return yield* ownership.runMutation(reviewer.createOrResume(request))
+          })
+        })
+      })
+    ),
+    Layer.effect(
+      ReviewFindingsHandback,
+      Effect.gen(function*() {
+        const ownership = yield* CoordinatorOwnership
+        const handback = yield* ReviewFindingsHandback
+        return ReviewFindingsHandback.of({
+          deliverOrResume: Effect.fn("ReviewFindingsHandback.CoordinatorOwned.handBack")(function*(request) {
+            return yield* ownership.runMutation(handback.deliverOrResume(request))
+          })
+        })
+      })
+    )
+  ).pipe(Layer.provide(reviewLayer))
 
 /** Production ownership acquisition using the OS-backed coordinator lock. */
 export const productionCoordinatorOwnershipLayer = (

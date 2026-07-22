@@ -12,15 +12,19 @@ import {
   EvidenceReference,
   FixtureTarget,
   GitCommitSha,
+  ImplementationReviewDisposition,
+  ImplementationReviewSimulated,
   liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
   PlannedTaskAttemptPlanner,
   PlannedWorktreeReady,
   ProviderObservationId,
   ProviderRequestId,
+  ReviewFindingId,
   RunId,
   runWorkflow,
   SealedImplementationEvidence,
+  SealedImplementationReview,
   TaskAttemptPlanRecordAcknowledged,
   TaskExecutorLocator,
   TaskRunner,
@@ -124,20 +128,68 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "TaskExecutionAdmitted",
       "TaskExecutionSimulated",
       "OperationSelected",
-      "ImplementationEvidenceSealingSimulated"
+      "ImplementationEvidenceSealingSimulated",
+      "OperationSelected",
+      "ImplementationReviewSimulated"
     ])
+  }))
+
+it.effect("rejects authoritative implementation artifacts in simulated execution", () =>
+  Effect.gen(function*() {
+    const authoritativeEvidenceLayer = Layer.effect(
+      WorkflowInterpreter,
+      Effect.gen(function*() {
+        const delegate = yield* WorkflowInterpreter
+        return WorkflowInterpreter.of({
+          ...delegate,
+          sealImplementationEvidence: () => Effect.succeed({ _tag: "SealedImplementationEvidence" } as never)
+        })
+      })
+    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    const authoritativeReviewLayer = Layer.effect(
+      WorkflowInterpreter,
+      Effect.gen(function*() {
+        const delegate = yield* WorkflowInterpreter
+        return WorkflowInterpreter.of({
+          ...delegate,
+          reviewImplementation: () => Effect.succeed({ _tag: "SealedImplementationReview" } as never)
+        })
+      })
+    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    const program = runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1))
+    const traceLayer = Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+
+    expect(
+      yield* runLayered(program, traceLayer, successfulTaskRunner, planningLayers[1], authoritativeEvidenceLayer)
+        .pipe(Effect.flip)
+    ).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
+    expect(
+      yield* runLayered(program, traceLayer, successfulTaskRunner, planningLayers[1], authoritativeReviewLayer)
+        .pipe(Effect.flip)
+    ).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
   }))
 
 it.effect("establishes task work only after an authoritative worktree proof", () =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
     const sealAuthoritatively = yield* Ref.make(false)
+    const returnFindings = yield* Ref.make(false)
+    const simulateReview = yield* Ref.make(false)
+    const handbacks = yield* Ref.make(0)
     const liveInterpreterLayer = Layer.effect(
       WorkflowInterpreter,
       Effect.gen(function*() {
         const delegate = yield* WorkflowInterpreter
         return WorkflowInterpreter.of({
           ...delegate,
+          handBackReviewFindings: (operation) =>
+            Ref.update(handbacks, (count) => count + 1).pipe(
+              Effect.as({
+                _tag: "ReviewFindingsHandbackAcknowledged" as const,
+                operationId: operation.request.operationId,
+                reviewEvidenceReference: operation.request.review.manifestReference
+              })
+            ),
           executeTaskWork: (operation) =>
             Effect.succeed(WorkflowOutcome.cases.TaskExecutionObserved.make({
               outcome: {
@@ -193,6 +245,42 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
               },
               manifestReference: diff
             })
+          }),
+          reviewImplementation: Effect.fn("WorkflowTest.reviewImplementation")(function*(operation) {
+            if (yield* Ref.get(simulateReview)) {
+              return ImplementationReviewSimulated.make({
+                operationId: operation.request.operationId,
+                predecessorOperationId: operation.request.evidenceSealingOperationId,
+                round: operation.request.round
+              })
+            }
+            if (operation.request._tag !== "AuthorizedImplementationReview") {
+              return yield* Effect.die("live workflow must authorize review")
+            }
+            const reference = operation.request.implementationEvidence.manifestReference
+            return SealedImplementationReview.make({
+              manifest: {
+                disposition: (yield* Ref.get(returnFindings))
+                  ? ImplementationReviewDisposition.cases.Findings.make({
+                    findings: [{
+                      findingId: ReviewFindingId.make("workflow-finding"),
+                      text: "return this finding"
+                    }]
+                  })
+                  : ImplementationReviewDisposition.cases.Accepted.make({}),
+                findingHistory: operation.request.findingHistory,
+                implementationEvidenceReference: reference,
+                implementerInvocationId: operation.request.implementerInvocationId,
+                implementerSessionId: operation.request.implementerSessionId,
+                operationId: operation.request.operationId,
+                plannedAttempt: operation.request.plannedAttempt,
+                predecessorEvidenceReference: operation.request.predecessorEvidenceReference,
+                reviewerSessionId: operation.request.reviewerSessionId,
+                round: operation.request.round,
+                stage: "ImplementationReview"
+              },
+              manifestReference: reference
+            })
           })
         })
       })
@@ -211,6 +299,18 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
       ).pipe(Effect.flip)
     ).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
     yield* Ref.set(sealAuthoritatively, true)
+    yield* Ref.set(simulateReview, true)
+    expect(
+      yield* runLayered(
+        liveProgram,
+        Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+        successfulTaskRunner,
+        planningLayers[1],
+        liveInterpreterLayer
+      ).pipe(Effect.flip)
+    ).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
+    yield* Ref.set(simulateReview, false)
+    yield* Ref.set(returnFindings, true)
     yield* runLayered(
       liveProgram,
       Layer.succeed(
@@ -228,6 +328,8 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
     expect(tags.indexOf("TaskWorktreeReady")).toBeLessThan(
       tags.indexOf("TaskWorkSessionEstablished")
     )
+    expect(tags).toContain("ReviewFindingsHandedBack")
+    expect(yield* Ref.get(handbacks)).toBe(1)
   }))
 
 it.effect("rejects acknowledged planning paired with simulated Git reconciliation", () =>

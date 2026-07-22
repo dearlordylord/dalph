@@ -6,6 +6,7 @@ import {
   runGitWorktreeReconciliation
 } from "./git-worktree.js"
 import { ImplementationEvidenceSealingSimulated } from "./implementation-evidence.js"
+import { ImplementationReviewSimulated } from "./implementation-review.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskExecutionModeContradiction, TaskExecutor, taskExecutorTestLayer } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -123,13 +124,24 @@ const taskRunnerInterpreterLayer = (
           stage: "Implementation"
         })
       })
+      const reviewImplementation = Effect.fn(
+        `WorkflowInterpreter.${operationPrefix}.reviewImplementation`
+      )(function*(operation) {
+        return ImplementationReviewSimulated.make({
+          operationId: operation.request.operationId,
+          predecessorOperationId: operation.request.evidenceSealingOperationId,
+          round: operation.request.round
+        })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
         executeTaskWork,
+        handBackReviewFindings: () => Effect.die("simulated review cannot hand findings to a provider session"),
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        reviewImplementation,
         sealImplementationEvidence,
         simulateTaskExecution,
         simulateTaskWorkSession
@@ -197,13 +209,24 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
           stage: "Implementation"
         })
       })
+      const reviewImplementation = Effect.fn(
+        "WorkflowInterpreter.DryRun.reviewImplementation"
+      )(function*(operation) {
+        return ImplementationReviewSimulated.make({
+          operationId: operation.request.operationId,
+          predecessorOperationId: operation.request.evidenceSealingOperationId,
+          round: operation.request.round
+        })
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession: () => Effect.die("dry-run cannot establish a provider task-work session"),
         executeTaskWork: () => Effect.die("dry-run cannot execute provider task work"),
+        handBackReviewFindings: () => Effect.die("dry-run cannot hand findings to a provider session"),
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        reviewImplementation,
         sealImplementationEvidence,
         simulateTaskExecution,
         simulateTaskWorkSession

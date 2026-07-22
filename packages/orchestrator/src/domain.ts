@@ -121,6 +121,24 @@ export const TaskWorkSessionId = Schema.NonEmptyString.pipe(
 )
 export type TaskWorkSessionId = typeof TaskWorkSessionId.Type
 
+/** Identifies one durable reviewer session, not a task-work or implementer session. */
+export const ReviewerSessionId = Schema.NonEmptyString.pipe(
+  Schema.brand("ReviewerSessionId")
+)
+export type ReviewerSessionId = typeof ReviewerSessionId.Type
+
+/** Orders semantic review rounds for one planned attempt, starting at one. */
+export const SemanticReviewRound = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1)
+).pipe(Schema.brand("SemanticReviewRound"))
+export type SemanticReviewRound = typeof SemanticReviewRound.Type
+
+/** Identifies one reviewer finding across immutable review evidence. */
+export const ReviewFindingId = Schema.NonEmptyString.pipe(
+  Schema.brand("ReviewFindingId")
+)
+export type ReviewFindingId = typeof ReviewFindingId.Type
+
 /** Identifies one task-work-provider response to a start request. */
 export const ProviderRequestId = Schema.NonEmptyString.pipe(
   Schema.brand("ProviderRequestId")

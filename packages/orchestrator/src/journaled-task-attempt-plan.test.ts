@@ -73,6 +73,8 @@ const baseInterpreterLayer = Layer.succeed(
     acquireTaskClaim: () => Effect.die("unused claim"),
     establishTaskWorkSession: () => Effect.die("unused session"),
     executeTaskWork: () => Effect.die("unused execution"),
+    handBackReviewFindings: () => Effect.die("unused review handback"),
+    reviewImplementation: () => Effect.die("unused review"),
     readTrackerGraph: () => Effect.die("unused graph"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.die("unused worktree"),
@@ -230,6 +232,8 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
             Effect.andThen(Effect.die("session mutation must not run"))
           ),
         executeTaskWork: () => Effect.die("execution must not run"),
+        handBackReviewFindings: () => Effect.die("review handback must not run"),
+        reviewImplementation: () => Effect.die("review must not run"),
         readTrackerGraph: () => Effect.succeed(snapshot),
         recordTaskAttemptPlan: () =>
           Effect.fail(

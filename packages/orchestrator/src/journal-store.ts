@@ -10,6 +10,7 @@ import {
 } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
 import { ImplementationEvidenceJournalEvent } from "./implementation-evidence-journal.js"
+import { ImplementationReviewJournalEvent } from "./implementation-review-journal.js"
 import {
   TaskExecutionObservationFailure,
   TaskExecutionReport,
@@ -272,7 +273,8 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskExecutionObservationFailed,
   TaskExecutionReported,
   TaskExecutionOutcomeObservedEvent,
-  ImplementationEvidenceJournalEvent
+  ImplementationEvidenceJournalEvent,
+  ImplementationReviewJournalEvent
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
@@ -417,9 +419,7 @@ export const memoryJournalStoreLayer = Layer.effect(
         const records = current.recordsByRun.get(runId) ?? []
         const existing = records.find((record) => record.key === key)
         if (existing !== undefined) {
-          if (sameEvent(existing.event, event)) {
-            return [Effect.succeed(existing), current] as const
-          }
+          if (sameEvent(existing.event, event)) return [Effect.succeed(existing), current] as const
           return [
             Effect.fail(
               new JournalStoreContradiction({
@@ -448,8 +448,7 @@ export const memoryJournalStoreLayer = Layer.effect(
       return yield* result
     })
     const read = Effect.fn("JournalStore.Memory.read")(function*(runId: RunId) {
-      const current = yield* Ref.get(state)
-      return current.recordsByRun.get(runId) ?? []
+      return (yield* Ref.get(state)).recordsByRun.get(runId) ?? []
     })
 
     return JournalStore.of({ append, read })

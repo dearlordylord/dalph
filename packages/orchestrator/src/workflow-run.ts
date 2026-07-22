@@ -1,5 +1,10 @@
 import { Effect, Semaphore } from "effect"
-import type { TaskWorkCapacity, TrackerTarget } from "./domain.js"
+import { ReviewerSessionId, SemanticReviewRound, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
+import {
+  AuthorizedImplementationReviewRequest,
+  ImplementationReviewRequest,
+  ReviewFindingsHandbackRequest
+} from "./implementation-review.js"
 import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
 import { taskRevisionFor } from "./task-dag.js"
@@ -15,7 +20,11 @@ import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import {
   ImplementationEvidenceSealingSimulatedTrace,
+  ImplementationReviewCompletedTrace,
+  ImplementationReviewSimulatedTrace,
   makeImplementationEvidenceSealingOperation,
+  makeImplementationReviewOperation,
+  makeReviewFindingsHandbackOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -24,6 +33,7 @@ import {
   makeTrackerGraphObservationOperation,
   makeTrackerGraphObservedOutcome,
   OperationSelected,
+  ReviewFindingsHandedBackTrace,
   SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
@@ -203,6 +213,45 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             })
           }
           yield* emit(SealedImplementationEvidenceTrace.make({ operation: evidenceOperation, sealed }))
+          const reviewOperationId = yield* allocator.allocate()
+          const reviewOperation = makeImplementationReviewOperation(
+            AuthorizedImplementationReviewRequest.make({
+              evidenceSealingOperationId: evidenceOperation.operationId,
+              findingHistory: [],
+              implementationEvidence: sealed,
+              implementerInvocationId: executionOutcome.outcome.operationId,
+              implementerSessionId: executionOutcome.outcome.sessionId,
+              operationId: reviewOperationId,
+              plannedAttempt,
+              predecessorEvidenceReference: sealed.manifestReference,
+              reviewerSessionId: ReviewerSessionId.make(`reviewer-session:${reviewOperationId}`),
+              round: SemanticReviewRound.make(1)
+            })
+          )
+          yield* emit(OperationSelected.make({ operation: reviewOperation }))
+          const review = yield* interpreter.reviewImplementation(reviewOperation)
+          if (review._tag !== "SealedImplementationReview") {
+            return yield* new TaskWorktreeExecutionModeContradiction({
+              operationId: reviewOperation.request.operationId
+            })
+          }
+          yield* emit(ImplementationReviewCompletedTrace.make({ operation: reviewOperation, review }))
+          if (review.manifest.disposition._tag === "Findings") {
+            const handbackOperationId = yield* allocator.allocate()
+            const handbackOperation = makeReviewFindingsHandbackOperation(
+              ReviewFindingsHandbackRequest.make({
+                implementerInvocationId: executionOutcome.outcome.operationId,
+                implementerSessionId: executionOutcome.outcome.sessionId,
+                operationId: handbackOperationId,
+                plannedAttempt,
+                review,
+                reviewOperationId: reviewOperation.request.operationId
+              })
+            )
+            yield* emit(OperationSelected.make({ operation: handbackOperation }))
+            const acknowledgement = yield* interpreter.handBackReviewFindings(handbackOperation)
+            yield* emit(ReviewFindingsHandedBackTrace.make({ acknowledgement, operation: handbackOperation }))
+          }
         }
       } else if (
         planResult._tag === "TaskAttemptPlanRecordingSimulated"
@@ -248,6 +297,26 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         yield* emit(ImplementationEvidenceSealingSimulatedTrace.make({
           operation: evidenceOperation,
           simulation
+        }))
+        const reviewOperationId = yield* allocator.allocate()
+        const reviewOperation = makeImplementationReviewOperation(
+          ImplementationReviewRequest.make({
+            _tag: "SimulatedImplementationReview",
+            evidenceSealingOperationId: evidenceOperation.operationId,
+            operationId: reviewOperationId,
+            round: SemanticReviewRound.make(1)
+          })
+        )
+        yield* emit(OperationSelected.make({ operation: reviewOperation }))
+        const reviewSimulation = yield* interpreter.reviewImplementation(reviewOperation)
+        if (reviewSimulation._tag !== "ImplementationReviewSimulated") {
+          return yield* new TaskWorktreeExecutionModeContradiction({
+            operationId: reviewOperation.request.operationId
+          })
+        }
+        yield* emit(ImplementationReviewSimulatedTrace.make({
+          operation: reviewOperation,
+          simulation: reviewSimulation
         }))
       } else {
         return yield* new TaskWorktreeExecutionModeContradiction({

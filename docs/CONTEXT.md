@@ -330,6 +330,39 @@ Unsealed bytes, partial manifests, dry-run projections, and live-fake
 projections cannot establish it.
 _Avoid_: Review request, successful process exit, simulated evidence
 
+**Semantic review round**:
+One reviewer disposition for the latest successful implementer invocation of
+one planned task attempt. A round consumes no technical retry count; later
+retry and convergence policy owns whether another round may begin.
+_Avoid_: Reviewer process, technical retry, task attempt
+
+**Reviewer invocation**:
+One request to a fresh independent reviewer, identified by its workflow
+operation and durable reviewer-session identity before it crosses the reviewer
+boundary. Restart resumes that exact invocation rather than creating another
+semantic round.
+_Avoid_: Review result, implementer invocation, retry attempt
+
+**Reviewer session**:
+The durable identity for one reviewer invocation. A later semantic round must
+use a different reviewer session even when it reviews the same planned task
+attempt.
+_Avoid_: Task-work session, reviewer identity, semantic review round
+
+**Implementation review evidence**:
+An immutable content-addressed manifest that references its immediate evidence
+predecessor, binds the planned attempt, exact worktree, latest implementer
+invocation and session, reviewer session, and semantic round, and retains the
+complete finding history together with the reviewer disposition.
+_Avoid_: Implementation evidence, mutable review report, workflow trace
+
+**Review findings handback**:
+The request that sends one findings-bearing implementation review evidence
+object to the exact task-work session and latest implementer invocation that
+produced the reviewed implementation. A stale invocation, foreign session, or
+different planned attempt cannot receive it.
+_Avoid_: Technical retry, new task attempt, reviewer response
+
 **Task-work start requested**:
 The coordinator asks the task runner to start task work by requesting a new
 provider session or running unit for one planned task attempt. Sending the

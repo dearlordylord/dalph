@@ -34,7 +34,10 @@ export {
   ProviderObservationId,
   ProviderRequestId,
   ProviderWorkUnitId,
+  ReviewerSessionId,
+  ReviewFindingId,
   RunId,
+  SemanticReviewRound,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -81,6 +84,8 @@ export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader
 export { githubTrackerMutationLayer, githubTrackerMutationNodeLayer } from "./github-tracker-mutation.js"
 export * from "./implementation-evidence-journal.js"
 export * from "./implementation-evidence.js"
+export * from "./implementation-review-journal.js"
+export * from "./implementation-review.js"
 export {
   JournalDataCorruption,
   JournalSchemaIncompatible,
@@ -104,6 +109,7 @@ export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpre
 export {
   coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedImplementationReviewLayer,
   coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
@@ -217,6 +223,8 @@ export {
 } from "./workflow-interpreters.js"
 export {
   recoverImplementationEvidenceSealings,
+  recoverImplementationReviews,
+  recoverReviewFindingsHandbacks,
   recoverTaskClaimAcquisitions,
   recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
@@ -230,7 +238,11 @@ export {
   causalGraphProjection,
   decideTaskWorkSessionRecovery,
   ImplementationEvidenceSealingSimulatedTrace,
+  ImplementationReviewCompletedTrace,
+  ImplementationReviewSimulatedTrace,
   makeImplementationEvidenceSealingOperation,
+  makeImplementationReviewOperation,
+  makeReviewFindingsHandbackOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskExecutionOperation,
@@ -238,6 +250,7 @@ export {
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   OperationSelected,
+  ReviewFindingsHandedBackTrace,
   SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,

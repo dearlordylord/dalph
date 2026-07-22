@@ -12,7 +12,9 @@ import {
   PlannedTaskAttempt,
   ProviderObservationId,
   ProviderRequestId,
+  ReviewerSessionId,
   RunId,
+  SemanticReviewRound,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -24,9 +26,25 @@ import {
 } from "./domain.js"
 import { GitWorktree, gitWorktreeTestLayer, PlannedWorktreeAbsent } from "./git-worktree.js"
 import {
+  EvidenceDigest,
+  EvidenceReference,
+  ImplementationEvidenceManifest,
+  SealedImplementationEvidence
+} from "./implementation-evidence.js"
+import {
+  AuthorizedImplementationReviewRequest,
+  ImplementationReviewDisposition,
+  ImplementationReviewer,
+  ReviewFindingsHandback,
+  ReviewFindingsHandbackAcknowledged,
+  ReviewFindingsHandbackRequest,
+  SealedImplementationReview
+} from "./implementation-review.js"
+import {
   controlledCoordinatorLockLayer,
   controlledTrackerMutationLayer,
   coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedImplementationReviewLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
@@ -166,4 +184,114 @@ it.effect("guards worktree creation while leaving Git observation read-only", ()
       expect((yield* git.readPlannedWorktree(plannedAttempt))._tag)
         .toBe("PlannedWorktreeReady")
     }).pipe(Effect.provide(ownedGitLayer))
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("guards reviewer invocation and exact findings handback", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-review-owner-" })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const taskId = TaskId.make("review-owned-task")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("review-owned-attempt"),
+      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      branch: TaskBranchRef.make("refs/heads/review-owned"),
+      executor: TaskExecutorLocator.make("executor:review-owned"),
+      runId: RunId.make("review-owned-run"),
+      session: TaskWorkSessionLocator.make("session:review-owned"),
+      taskId,
+      taskRevision: taskRevisionFor(task),
+      worktree: WorktreeLocator.make(`${directory}/review-worktree`)
+    })
+    const reference = EvidenceReference.make({
+      byteLength: 1,
+      digest: EvidenceDigest.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    })
+    const implementationEvidence = SealedImplementationEvidence.make({
+      manifest: ImplementationEvidenceManifest.make({
+        diff: reference,
+        implementationOutput: reference,
+        plannedBaseSha: plannedAttempt.baseSha,
+        predecessorOperationId: OperationId.make("review-owned-implementer"),
+        runId: plannedAttempt.runId,
+        stage: "Implementation",
+        taskId
+      }),
+      manifestReference: reference
+    })
+    const request = AuthorizedImplementationReviewRequest.make({
+      evidenceSealingOperationId: OperationId.make("review-owned-sealing"),
+      findingHistory: [],
+      implementationEvidence,
+      implementerInvocationId: implementationEvidence.manifest.predecessorOperationId,
+      implementerSessionId: TaskWorkSessionId.make("review-owned-session"),
+      operationId: OperationId.make("review-owned-operation"),
+      plannedAttempt,
+      predecessorEvidenceReference: reference,
+      reviewerSessionId: ReviewerSessionId.make("review-owned-reviewer"),
+      round: SemanticReviewRound.make(1)
+    })
+    const review = SealedImplementationReview.make({
+      manifest: {
+        disposition: ImplementationReviewDisposition.cases.Accepted.make({}),
+        findingHistory: [],
+        implementationEvidenceReference: reference,
+        implementerInvocationId: request.implementerInvocationId,
+        implementerSessionId: request.implementerSessionId,
+        operationId: request.operationId,
+        plannedAttempt,
+        predecessorEvidenceReference: reference,
+        reviewerSessionId: request.reviewerSessionId,
+        round: request.round,
+        stage: "ImplementationReview"
+      },
+      manifestReference: reference
+    })
+    const handbackRequest = ReviewFindingsHandbackRequest.make({
+      implementerInvocationId: request.implementerInvocationId,
+      implementerSessionId: request.implementerSessionId,
+      operationId: OperationId.make("review-owned-handback"),
+      plannedAttempt,
+      review,
+      reviewOperationId: request.operationId
+    })
+    const adapter = Layer.merge(
+      Layer.succeed(
+        ImplementationReviewer,
+        ImplementationReviewer.of({
+          createOrResume: () =>
+            Ref.update(calls, (current) => [...current, "review"]).pipe(
+              Effect.as(ImplementationReviewDisposition.cases.Accepted.make({}))
+            )
+        })
+      ),
+      Layer.succeed(
+        ReviewFindingsHandback,
+        ReviewFindingsHandback.of({
+          deliverOrResume: () =>
+            Ref.update(calls, (current) => [...current, "handback"]).pipe(
+              Effect.as(ReviewFindingsHandbackAcknowledged.make({
+                operationId: handbackRequest.operationId,
+                reviewEvidenceReference: reference
+              }))
+            )
+        })
+      )
+    )
+    const owned = coordinatorOwnedImplementationReviewLayer(adapter).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+    yield* Effect.gen(function*() {
+      yield* (yield* ImplementationReviewer).createOrResume(request)
+      yield* (yield* ReviewFindingsHandback).deliverOrResume(handbackRequest)
+    }).pipe(Effect.provide(owned))
+    expect(yield* Ref.get(calls)).toEqual(["review", "handback"])
   }).pipe(Effect.provide(NodeFileSystem.layer)))

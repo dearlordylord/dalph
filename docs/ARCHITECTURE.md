@@ -356,6 +356,43 @@ contains stage and predecessor ordering without a manifest or evidence
 reference and therefore cannot pass the implementation-review authorization
 boundary.
 
+## Fresh Implementation Review And Exact Handback
+
+One semantic review round begins only from a complete implementation-review
+authorization. Before invoking a reviewer, Dalph records the exact review
+operation, semantic round, and fresh reviewer-session identity. The request
+binds the same planned attempt and worktree, the latest successful implementer
+invocation, and its exact provider session. Journal validation rejects a stale
+invocation, reused reviewer session, foreign provider session, or cross-attempt
+continuation before either provider boundary is called.
+
+The reviewer returns either acceptance or at least one typed finding. Dalph
+stores that disposition in a content-addressed review manifest whose immediate
+predecessor is the sealed implementation evidence for the first round or the
+prior review evidence for a later round. Every manifest retains the complete
+finding history. A later round must advance by exactly one semantic ordinal,
+use a fresh reviewer session, and name a newer successful implementer
+invocation for the same planned attempt.
+
+Findings select a separate handback operation. The handback request carries the
+immutable review evidence and repeats the exact planned attempt, worktree,
+implementer invocation, and provider session binding. The journal records
+intent before provider delivery and records acknowledgement afterward.
+Recovery reuses the journaled review or handback operation and session; it does
+not allocate another semantic round. Reviewer and handback adapters implement
+provider-enforced create-or-resume contracts: reviewer work is idempotent by
+operation plus reviewer-session identity, and findings delivery is idempotent
+by handback operation. An exact repeated payload returns the first accepted
+result without duplicating provider work; reuse of a key with a different
+payload fails. Technical scheduling and bounded semantic
+convergence remain owned by later tickets.
+
+Dry-run and deterministic-test interpreters select the same review operation
+after simulated evidence sealing but return
+`ImplementationReviewSimulated`. They cannot fabricate sealed review evidence,
+a reviewer session observation, a semantic disposition, or a findings
+handback.
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |

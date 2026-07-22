@@ -3,6 +3,8 @@ import type { RunId } from "./domain.js"
 import { JournalStore } from "./journal-store.js"
 import { TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import {
+  ImplementationReviewCompletedTrace,
+  ReviewFindingsHandedBackTrace,
   SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskWorkSessionEstablishedTrace,
@@ -110,6 +112,60 @@ export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExec
       ))
   }
 )
+
+/** Resumes one exact journaled reviewer session without allocating a semantic round. */
+export const recoverImplementationReviews = Effect.fn(
+  "WorkflowRecovery.recoverImplementationReviews"
+)(function*(runId: RunId) {
+  const interpreter = yield* WorkflowInterpreter
+  const journal = yield* JournalStore
+  const trace = yield* WorkflowTrace
+  const records = yield* journal.read(runId)
+  const completed = new Set(records.flatMap(({ event }) =>
+    event._tag === "ImplementationReviewCompleted"
+      ? [event.review.manifest.operationId]
+      : []
+  ))
+  const unresolved = records.flatMap(({ event }) =>
+    event._tag === "ImplementationReviewIntended"
+      && !completed.has(event.operation.request.operationId)
+      ? [event.operation]
+      : []
+  )
+  return yield* Effect.forEach(unresolved, (operation) =>
+    interpreter.reviewImplementation(operation).pipe(
+      Effect.tap((result) =>
+        result._tag === "SealedImplementationReview"
+          ? trace.emit(ImplementationReviewCompletedTrace.make({ operation, review: result }))
+          : Effect.void
+      )
+    ))
+})
+
+/** Resumes an exact findings handback under its journaled implementer binding. */
+export const recoverReviewFindingsHandbacks = Effect.fn(
+  "WorkflowRecovery.recoverReviewFindingsHandbacks"
+)(function*(runId: RunId) {
+  const interpreter = yield* WorkflowInterpreter
+  const journal = yield* JournalStore
+  const trace = yield* WorkflowTrace
+  const records = yield* journal.read(runId)
+  const completed = new Set(records.flatMap(({ event }) =>
+    event._tag === "ReviewFindingsHandbackCompleted"
+      ? [event.acknowledgement.operationId]
+      : []
+  ))
+  const unresolved = records.flatMap(({ event }) =>
+    event._tag === "ReviewFindingsHandbackIntended"
+      && !completed.has(event.operation.request.operationId)
+      ? [event.operation]
+      : []
+  )
+  return yield* Effect.forEach(unresolved, (operation) =>
+    interpreter.handBackReviewFindings(operation).pipe(
+      Effect.tap((acknowledgement) => trace.emit(ReviewFindingsHandedBackTrace.make({ acknowledgement, operation })))
+    ))
+})
 
 /** Completes unresolved sealing intents through the same idempotent evidence protocol. */
 export const recoverImplementationEvidenceSealings = Effect.fn(

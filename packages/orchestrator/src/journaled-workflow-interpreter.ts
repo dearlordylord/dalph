@@ -6,6 +6,11 @@ import {
   testImplementationEvidenceServicesLayer
 } from "./implementation-evidence.js"
 import {
+  ImplementationReviewer,
+  implementationReviewTestLayer,
+  ReviewFindingsHandback
+} from "./implementation-review.js"
+import {
   attemptPlanRecordKey,
   intentRecordKey,
   JournalStore,
@@ -31,6 +36,10 @@ import {
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
 import { makeJournaledImplementationEvidence } from "./journaled-implementation-evidence.js"
+import {
+  makeJournaledImplementationReview,
+  makeJournaledReviewFindingsHandback
+} from "./journaled-implementation-review.js"
 import { makeJournaledTaskExecution } from "./journaled-task-execution.js"
 import { requireAcknowledgedPlan } from "./task-attempt-plan-journal-evidence.js"
 import { TaskAttemptPlanRecordAcknowledged, TaskAttemptPlanRunContradiction } from "./task-attempt-plan-recording.js"
@@ -55,7 +64,9 @@ export const journaledWorkflowInterpreterLayer = <
   ExecutorError,
   ExecutorRequirements,
   EvidenceError = never,
-  EvidenceRequirements = never
+  EvidenceRequirements = never,
+  ReviewError = never,
+  ReviewRequirements = never
 >(
   runId: RunId,
   interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
@@ -64,6 +75,11 @@ export const journaledWorkflowInterpreterLayer = <
     EvidenceStore | ImplementationEvidenceSource,
     EvidenceError,
     EvidenceRequirements
+  >,
+  reviewServicesLayer?: Layer.Layer<
+    ImplementationReviewer | ReviewFindingsHandback,
+    ReviewError,
+    ReviewRequirements
   >
 ) =>
   Layer.effect(
@@ -76,6 +92,8 @@ export const journaledWorkflowInterpreterLayer = <
       const trace = yield* WorkflowTrace
       const evidenceStore = yield* EvidenceStore
       const evidenceSource = yield* ImplementationEvidenceSource
+      const reviewer = yield* ImplementationReviewer
+      const handback = yield* ReviewFindingsHandback
 
       const readTrackerGraph = Effect.fn(
         "WorkflowInterpreter.Journaled.readTrackerGraph"
@@ -357,14 +375,25 @@ export const journaledWorkflowInterpreterLayer = <
         journal,
         runId
       })
+      const reviewOptions = {
+        evidenceStore,
+        handback,
+        journal,
+        reviewer,
+        runId
+      }
+      const reviewImplementation = makeJournaledImplementationReview(reviewOptions)
+      const handBackReviewFindings = makeJournaledReviewFindingsHandback(reviewOptions)
 
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         establishTaskWorkSession,
         executeTaskWork,
+        handBackReviewFindings,
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
         readTrackerGraph,
+        reviewImplementation,
         sealImplementationEvidence: sealEvidence,
         simulateTaskExecution: interpreter.simulateTaskExecution,
         simulateTaskWorkSession: interpreter.simulateTaskWorkSession
@@ -373,5 +402,6 @@ export const journaledWorkflowInterpreterLayer = <
   ).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(taskExecutorLayer),
-    Layer.provide(evidenceServicesLayer ?? testImplementationEvidenceServicesLayer)
+    Layer.provide(evidenceServicesLayer ?? testImplementationEvidenceServicesLayer),
+    Layer.provide(reviewServicesLayer ?? implementationReviewTestLayer)
   )
