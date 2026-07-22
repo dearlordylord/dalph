@@ -1,7 +1,13 @@
+/* eslint-disable max-lines -- The workflow port exposes the complete operation and trace algebra. */
 import { Context, Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import { OperationId, RunId } from "./domain.js"
 import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "./git-worktree.js"
+import {
+  ImplementationConvergenceDispositionRecordedTrace,
+  ImplementationConvergenceSimulatedTrace
+} from "./implementation-convergence-trace.js"
+import type { ImplementationConvergenceResult } from "./implementation-convergence.js"
 import type {
   EvidenceStoreFailure,
   ImplementationDiffReadFailure,
@@ -22,6 +28,7 @@ import type {
   SealedImplementationReview
 } from "./implementation-review.js"
 import type { JournalStoreContradiction, JournalStoreError } from "./journal-store.js"
+import type { ImplementationConvergenceHistoryContradiction } from "./journaled-implementation-convergence.js"
 import * as TaskAttemptPlan from "./task-attempt-plan-recording.js"
 import { runTaskClaimAcquisitionProtocol, type TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
 import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
@@ -64,6 +71,7 @@ import type { WorkflowOutcome } from "./workflow-outcome.js"
 export {
   causalGraphProjection,
   compareOperationIds,
+  makeImplementationDispositionOperation,
   makeImplementationEvidenceSealingOperation,
   makeImplementationReviewOperation,
   makeReviewFindingsHandbackOperation,
@@ -262,12 +270,19 @@ type ImplementationReviewWorkflowError =
   | CoordinatorOwnershipError
   | EvidenceStoreFailure
   | ImplementationReviewHistoryContradiction
+  | ImplementationConvergenceHistoryContradiction
   | ImplementationReviewNotAuthorized
   | JournalStoreContradiction
   | JournalStoreError
   | TechnicalRetryControlFailure
 
-interface WorkflowInterpreterService {
+export interface WorkflowInterpreterService {
+  readonly recordImplementationDisposition: (
+    operation: typeof WorkflowOperation.cases.RecordImplementationDisposition.Type
+  ) => Effect.Effect<
+    ImplementationConvergenceResult,
+    ImplementationReviewWorkflowError
+  >
   readonly handBackReviewFindings: (
     operation: typeof WorkflowOperation.cases.HandBackReviewFindings.Type
   ) => Effect.Effect<
@@ -399,6 +414,8 @@ export const TraceItem = Schema.Union([
   ImplementationReviewTrace.ImplementationReviewCompletedTrace,
   ImplementationReviewTrace.ImplementationReviewSimulatedTrace,
   ImplementationReviewTrace.ReviewFindingsHandedBackTrace,
+  ImplementationConvergenceDispositionRecordedTrace,
+  ImplementationConvergenceSimulatedTrace,
   TaskExecutionWorkflow.TaskExecutionRequestReturnedTrace,
   TaskExecutionWorkflow.TaskExecutionRequestFailedTrace,
   TaskExecutionWorkflow.TaskExecutionObservationFailedTrace,

@@ -95,6 +95,12 @@ completion, or an operator-authorized repair. The task-tracker adapter defines
 the provider-specific atomic claim request and conflict response.
 _Avoid_: Task selection, execution capacity, local process lock
 
+**GitHub task claim record**:
+The repository-scoped GitHub label record that represents one task claim. It is
+distinct from assigning a label to an issue and therefore does not appear in
+the issue's visible label list.
+_Avoid_: Issue label, label-backed lock, issue title
+
 **Claim owner identity**:
 The opaque Dalph-configured identity sent to the task tracker when claiming a
 task. It is distinct from `RunId`, `TaskId`, `OperationId`, and provider-user
@@ -336,6 +342,39 @@ one planned task attempt. A round consumes no technical retry count; later
 retry and convergence policy owns whether another round may begin.
 _Avoid_: Reviewer process, technical retry, task attempt
 
+**Implementation review round limit**:
+The positive bound captured on every review request for one planned attempt.
+It limits successful semantic reviewer dispositions, not retries of a failed
+reviewer or handback invocation. Findings at the limit select implementation
+non-convergence and cannot select another unchanged handback/rework round.
+_Avoid_: Technical retry limit, time limit, implicit progress
+
+**Implementation acceptance**:
+The terminal implementation disposition selected by an accepted sealed review.
+It retains the exact active claim, planned attempt, provider session, complete
+review finding history, authoritative ready-worktree proof, and immutable
+evidence chain that authorized it.
+_Avoid_: Successful process exit, review invocation, tracker task completion
+
+**Implementation non-convergence**:
+The terminal implementation disposition selected when a findings-bearing
+sealed review consumes the captured implementation review round limit. It is a
+semantic result and remains distinct from exhausted technical transport retry.
+_Avoid_: Reviewer failure, handback failure, task execution failure
+
+**Implementation technical retry exhaustion**:
+The terminal implementation disposition selected only after the exact reviewer
+or findings-handback invocation consumes its captured technical retry schedule.
+It retains that failed invocation and its latest complete evidence without
+advancing the semantic round.
+_Avoid_: Implementation non-convergence, finding, coordinator interruption
+
+**Demonstrated resource emergency**:
+Fresh execution-provider evidence that memory, process capacity, or storage was
+exhausted while preserving WIP and bounded partial output. It terminates the
+implementation loop and forbids automatic retry of the unchanged invocation.
+_Avoid_: Nonzero exit, timeout inference, generic execution failure
+
 **Technical retry scope**:
 The exact reviewer invocation or findings-handback invocation whose typed
 technical failures share one captured positive retry limit and bounded
@@ -380,6 +419,10 @@ An immutable content-addressed manifest that references its immediate evidence
 predecessor, binds the planned attempt, exact worktree, latest implementer
 invocation and session, reviewer session, and semantic round, and retains the
 complete finding history together with the reviewer disposition.
+The current review contract has no partial-resolution state: every finding in
+that history remains unresolved and is supplied to the next fresh reviewer
+until one accepted disposition resolves the complete set. The accepted manifest
+retains the history as immutable audit evidence rather than current findings.
 _Avoid_: Implementation evidence, mutable review report, workflow trace
 
 **Review findings handback**:

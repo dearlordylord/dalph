@@ -85,7 +85,9 @@ it.effect("runs the dry CLI through the task-work session workflow", () =>
       "OperationSelected",
       "ImplementationEvidenceSealingSimulated",
       "OperationSelected",
-      "ImplementationReviewSimulated"
+      "ImplementationReviewSimulated",
+      "OperationSelected",
+      "ImplementationConvergenceSimulated"
     ])
   }))
 

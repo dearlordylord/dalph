@@ -130,7 +130,9 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "OperationSelected",
       "ImplementationEvidenceSealingSimulated",
       "OperationSelected",
-      "ImplementationReviewSimulated"
+      "ImplementationReviewSimulated",
+      "OperationSelected",
+      "ImplementationConvergenceSimulated"
     ])
   }))
 
@@ -251,24 +253,30 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
               return ImplementationReviewSimulated.make({
                 operationId: operation.request.operationId,
                 predecessorOperationId: operation.request.evidenceSealingOperationId,
-                round: operation.request.round
+                round: operation.request.round,
+                roundLimit: operation.request.roundLimit
               })
             }
             if (operation.request._tag !== "AuthorizedImplementationReview") {
               return yield* Effect.die("live workflow must authorize review")
             }
             const reference = operation.request.implementationEvidence.manifestReference
+            const findingsThisRound = yield* Ref.getAndSet(returnFindings, false)
+            const currentFinding = {
+              findingId: ReviewFindingId.make("workflow-finding"),
+              text: "return this finding"
+            }
+            const disposition = findingsThisRound
+              ? ImplementationReviewDisposition.cases.Findings.make({
+                findings: [currentFinding]
+              })
+              : ImplementationReviewDisposition.cases.Accepted.make({})
             return SealedImplementationReview.make({
               manifest: {
-                disposition: (yield* Ref.get(returnFindings))
-                  ? ImplementationReviewDisposition.cases.Findings.make({
-                    findings: [{
-                      findingId: ReviewFindingId.make("workflow-finding"),
-                      text: "return this finding"
-                    }]
-                  })
-                  : ImplementationReviewDisposition.cases.Accepted.make({}),
-                findingHistory: operation.request.findingHistory,
+                disposition,
+                findingHistory: findingsThisRound
+                  ? [...operation.request.findingHistory, currentFinding]
+                  : operation.request.findingHistory,
                 implementationEvidenceReference: reference,
                 implementerInvocationId: operation.request.implementerInvocationId,
                 implementerSessionId: operation.request.implementerSessionId,
@@ -277,6 +285,7 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
                 predecessorEvidenceReference: operation.request.predecessorEvidenceReference,
                 reviewerSessionId: operation.request.reviewerSessionId,
                 round: operation.request.round,
+                roundLimit: operation.request.roundLimit,
                 stage: "ImplementationReview"
               },
               manifestReference: reference
@@ -330,6 +339,29 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
     )
     expect(tags).toContain("ReviewFindingsHandedBack")
     expect(yield* Ref.get(handbacks)).toBe(1)
+    const reviewRounds = (yield* Ref.get(items)).flatMap((item) =>
+      item._tag === "ImplementationReviewCompleted"
+        && item.operation.request._tag === "AuthorizedImplementationReview"
+        ? [{ request: item.operation.request, review: item.review }]
+        : []
+    )
+    expect(reviewRounds).toHaveLength(2)
+    expect(reviewRounds[0]?.request.reviewerSessionId).not.toBe(
+      reviewRounds[1]?.request.reviewerSessionId
+    )
+    expect(reviewRounds[1]?.request.findingHistory).toEqual([
+      { findingId: ReviewFindingId.make("workflow-finding"), text: "return this finding" }
+    ])
+    expect(reviewRounds.every((item) => item.request.implementerSessionId === TaskWorkSessionId.make("live-session")))
+      .toBe(true)
+    const terminal = (yield* Ref.get(items)).findLast((item) =>
+      item._tag === "ImplementationConvergenceDispositionRecorded"
+    )
+    expect(
+      terminal?._tag === "ImplementationConvergenceDispositionRecorded"
+        ? terminal.result.disposition._tag
+        : undefined
+    ).toBe("Accepted")
   }))
 
 it.effect("rejects acknowledged planning paired with simulated Git reconciliation", () =>

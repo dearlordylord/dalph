@@ -8,6 +8,7 @@ import {
   RunId
 } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
+import { ImplementationConvergenceDispositionRecordedEvent } from "./implementation-convergence-journal.js"
 import { ImplementationEvidenceJournalEvent } from "./implementation-evidence-journal.js"
 import { ImplementationReviewJournalEvent } from "./implementation-review-journal.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
@@ -275,6 +276,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskExecutionObservationFailed,
   TaskExecutionReported,
   TaskExecutionOutcomeObservedEvent,
+  ImplementationConvergenceDispositionRecordedEvent,
   ImplementationEvidenceJournalEvent,
   ImplementationReviewJournalEvent
 ])

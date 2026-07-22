@@ -22,7 +22,7 @@
     "check:quint": "pnpm quint typecheck specs/taskWorkSessionRecovery.qnt && pnpm quint test specs/taskWorkSessionRecovery_test.qnt --main taskWorkSessionRecoveryTest && pnpm quint run specs/taskWorkSessionRecovery.qnt --invariants requestRequiresIntent everyRequestUsesStableIdentity everyRequestUsesStablePayload causalPredecessorsAreStable absenceAloneAuthorizesRepeat unreadableAndConflictNeverAuthorize establishmentRequiresMatchingReport lookupBoundIsRespected terminalOutcomeIsStable --witnesses intentReached requestReached absenceAuthorizedRepeatReached matchingReached outcomeReached unreadableBoundReached absenceBoundReached conflictReached crashRestartReached --max-steps 40 --max-samples 10000 --verbosity 1",
     "check:secrets": "gitleaks git --redact --no-banner",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
     "test:watch": "vitest",
     "check:all": "node scripts/run-quality-gate.mjs"
   },

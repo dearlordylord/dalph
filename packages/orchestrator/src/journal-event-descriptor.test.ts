@@ -180,3 +180,48 @@ it("defines canonical keys and predecessors for every journal event variant", ()
     ).toBe(requiredPredecessorKey)
   }
 })
+
+it("defines the exact predecessor kind for every convergence terminal", () => {
+  const cases = [
+    ["Accepted", "ImplementationReviewCompleted"],
+    ["ImplementationNonConvergent", "ImplementationReviewCompleted"],
+    ["ReviewTechnicalRetryExhausted", "ImplementationReviewIntended"],
+    ["HandbackTechnicalRetryExhausted", "ReviewFindingsHandbackIntended"],
+    ["ResourceEmergency", "TaskExecutionOutcomeObserved"]
+  ] as const
+  for (const [tag, predecessorKind] of cases) {
+    const descriptor = describeJournalEvent(event({
+      _tag: "ImplementationConvergenceDispositionRecorded",
+      operation: {
+        predecessorOperationIds: ["disposition-predecessor"],
+        request: {
+          _tag: "AuthorizedImplementationConvergenceDisposition",
+          disposition: {
+            _tag: tag,
+            subject: { plannedAttempt: { attemptId: `${tag}-attempt`, runId } }
+          },
+          operationId
+        }
+      }
+    }))
+    expect(descriptor).toMatchObject({
+      expectedKey: `attempt:${tag}-attempt:implementation-disposition`,
+      requiredPredecessorKinds: [predecessorKind]
+    })
+  }
+
+  expect(describeJournalEvent(event({
+    _tag: "ImplementationConvergenceDispositionRecorded",
+    operation: {
+      predecessorOperationIds: [],
+      request: {
+        _tag: "SimulatedImplementationConvergenceDisposition",
+        operationId,
+        plannedAttempt: { attemptId: "simulated-attempt", runId }
+      }
+    }
+  }))).toMatchObject({
+    expectedKey: "attempt:simulated-attempt:implementation-disposition",
+    requiredPredecessorKinds: []
+  })
+})

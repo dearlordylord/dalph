@@ -16,6 +16,7 @@ import {
   PlannedTaskAttempt,
   ProviderObservationId,
   ProviderRequestId,
+  ResourceEmergencyTaskExecutionReported,
   RunId,
   RunningTaskExecutionReported,
   SuccessfulTaskExecutionReported,
@@ -113,6 +114,32 @@ it.effect("reconciles an uncertain request into an exact nonzero process outcome
       wipPreserved: true
     })
     expect(yield* Ref.get(requests)).toBe(1)
+  }))
+
+it.effect("preserves explicit provider resource-emergency evidence as its own terminal outcome", () =>
+  Effect.gen(function*() {
+    const executor = TaskExecutor.of({
+      requestTaskExecution: () => Effect.die("fresh emergency evidence must avoid an unchanged request"),
+      observeTaskExecution: () =>
+        Effect.succeed(ResourceEmergencyTaskExecutionReported.make({
+          cause: "StorageExhausted",
+          detail: "provider proved the task volume is full",
+          observationId: ProviderObservationId.make("resource-emergency-observation"),
+          operationId,
+          partialOutput: "retained partial work",
+          processId: WorkerProcessId.make(212),
+          sessionId,
+          wipPreserved: true
+        }))
+    })
+
+    expect(yield* runTaskExecutionProtocol(executor, operation, false)).toMatchObject({
+      _tag: "ResourceEmergency",
+      cause: "StorageExhausted",
+      detail: "provider proved the task volume is full",
+      partialOutput: "retained partial work",
+      wipPreserved: true
+    })
   }))
 
 it.effect("emits execution start only from fresh exact process evidence", () =>

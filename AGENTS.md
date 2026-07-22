@@ -41,6 +41,12 @@
 
 ## Verification and review
 
+- In explanations and reviews, state the concrete actor, action, and boundary
+  before using canonical shorthand. Prefer “try to create the claim up to
+  three times” over “bounded acquisition,” “check GitHub again” over
+  “perform an authoritative reread,” and “repository label used as the task
+  claim record” over “label-backed lock.” Introduce the canonical term after
+  the concrete behavior is clear.
 - Use focused package tests while developing. Do not inherit target
   repositories' application-specific typecheck, model-checking, or MBT gates
   as Dalph implementation gates.

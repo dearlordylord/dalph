@@ -73,6 +73,7 @@ const interpreter = (
     executeTaskWork: unused,
     handBackReviewFindings: unused,
     readTrackerGraph,
+    recordImplementationDisposition: unused,
     reconcileTaskWorktree: unused,
     recordTaskAttemptPlan: unused,
     reviewImplementation: unused,

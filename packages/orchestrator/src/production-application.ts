@@ -154,6 +154,7 @@ export const productionWorkflowInterpreterLayer = <
         issues.push(...observationIssues)
         if (
           reduction._tag === "InvalidManagedHistory"
+          || observationIssues.length > 0
           || scan.issues.some((issue) => issue.runId === history.runId)
         ) continue
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(

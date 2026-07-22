@@ -5,6 +5,10 @@ import {
   PlannedWorktreeAbsent,
   runGitWorktreeReconciliation
 } from "./git-worktree.js"
+import {
+  AuthoritativeImplementationConvergenceDisposition,
+  ImplementationConvergenceSimulated
+} from "./implementation-convergence.js"
 import { ImplementationEvidenceSealingSimulated } from "./implementation-evidence.js"
 import { ImplementationReviewSimulated } from "./implementation-review.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
@@ -26,6 +30,22 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
+
+const recordImplementationDisposition = Effect.fn(
+  "WorkflowInterpreter.recordImplementationDisposition"
+)(function*(operation) {
+  const request = operation.request
+  return request._tag === "AuthorizedImplementationConvergenceDisposition"
+    ? AuthoritativeImplementationConvergenceDisposition.make({
+      disposition: request.disposition,
+      operationId: request.operationId
+    })
+    : ImplementationConvergenceSimulated.make({
+      operationId: request.operationId,
+      plannedAttempt: request.plannedAttempt,
+      roundLimit: request.roundLimit
+    })
+})
 
 const simulateTaskWorkSession = Effect.fn(
   "WorkflowInterpreter.simulateTaskWorkSession"
@@ -130,7 +150,8 @@ const taskRunnerInterpreterLayer = (
         return ImplementationReviewSimulated.make({
           operationId: operation.request.operationId,
           predecessorOperationId: operation.request.evidenceSealingOperationId,
-          round: operation.request.round
+          round: operation.request.round,
+          roundLimit: operation.request.roundLimit
         })
       })
       return WorkflowInterpreter.of({
@@ -140,6 +161,7 @@ const taskRunnerInterpreterLayer = (
         handBackReviewFindings: () => Effect.die("simulated review cannot hand findings to a provider session"),
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
+        recordImplementationDisposition,
         readTrackerGraph,
         reviewImplementation,
         sealImplementationEvidence,
@@ -215,7 +237,8 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
         return ImplementationReviewSimulated.make({
           operationId: operation.request.operationId,
           predecessorOperationId: operation.request.evidenceSealingOperationId,
-          round: operation.request.round
+          round: operation.request.round,
+          roundLimit: operation.request.roundLimit
         })
       })
       return WorkflowInterpreter.of({
@@ -225,6 +248,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
         handBackReviewFindings: () => Effect.die("dry-run cannot hand findings to a provider session"),
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
+        recordImplementationDisposition,
         readTrackerGraph,
         reviewImplementation,
         sealImplementationEvidence,

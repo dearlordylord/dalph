@@ -10,6 +10,9 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)
 
+export const implementationDispositionRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:implementation-disposition`)
+
 export const providerObservationRequestRecordKey = (
   observationId: ProviderObservationId
 ): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)

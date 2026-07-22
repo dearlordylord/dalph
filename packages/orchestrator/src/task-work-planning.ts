@@ -9,7 +9,7 @@ import {
   WorktreeLocator
 } from "./domain.js"
 
-interface OperationIdAllocatorService {
+export interface OperationIdAllocatorService {
   readonly allocate: () => Effect.Effect<OperationId>
 }
 

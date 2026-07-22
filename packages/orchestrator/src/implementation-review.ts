@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import {
+  ImplementationReviewRoundLimit,
   OperationId,
   PlannedTaskAttempt,
   ReviewerSessionId,
@@ -31,6 +32,7 @@ const uniqueFindingIds = Schema.makeFilter((findings: ReadonlyArray<ReviewFindin
     ? undefined
     : "review finding identities must be unique"
 )
+/** Findings remain unresolved until a later review accepts the complete set; acceptance retains the audit. */
 const ReviewFindingHistory = Schema.Array(ReviewFinding).check(uniqueFindingIds)
 const NonEmptyReviewFindings = Schema.Array(ReviewFinding).check(
   Schema.isMinLength(1),
@@ -48,8 +50,15 @@ export const AuthorizedImplementationReviewRequest = Schema.TaggedStruct("Author
   plannedAttempt: PlannedTaskAttempt,
   predecessorEvidenceReference: EvidenceReference,
   reviewerSessionId: ReviewerSessionId,
-  round: SemanticReviewRound
-})
+  round: SemanticReviewRound,
+  roundLimit: ImplementationReviewRoundLimit
+}).check(
+  Schema.makeFilter((request) =>
+    request.round <= request.roundLimit
+      ? undefined
+      : { path: ["round"], issue: "semantic review round cannot exceed its captured limit" }
+  )
+)
 export type AuthorizedImplementationReviewRequest = typeof AuthorizedImplementationReviewRequest.Type
 
 /** Live review authority or a pure projection that cannot fabricate sealed evidence. */
@@ -58,7 +67,8 @@ export const ImplementationReviewRequest = Schema.Union([
   Schema.TaggedStruct("SimulatedImplementationReview", {
     evidenceSealingOperationId: OperationId,
     operationId: OperationId,
-    round: SemanticReviewRound
+    round: SemanticReviewRound,
+    roundLimit: ImplementationReviewRoundLimit
   })
 ])
 export type ImplementationReviewRequest = typeof ImplementationReviewRequest.Type
@@ -105,6 +115,7 @@ export const ImplementationReviewManifest = Schema.Struct({
   predecessorEvidenceReference: EvidenceReference,
   reviewerSessionId: ReviewerSessionId,
   round: SemanticReviewRound,
+  roundLimit: ImplementationReviewRoundLimit,
   stage: Schema.Literal("ImplementationReview")
 })
 export type ImplementationReviewManifest = typeof ImplementationReviewManifest.Type
@@ -119,7 +130,12 @@ export type SealedImplementationReview = typeof SealedImplementationReview.Type
 /** Dry/test projections retain ordering without fabricating reviewer sessions or findings. */
 export const ImplementationReviewSimulated = Schema.TaggedStruct(
   "ImplementationReviewSimulated",
-  { operationId: OperationId, predecessorOperationId: OperationId, round: SemanticReviewRound }
+  {
+    operationId: OperationId,
+    predecessorOperationId: OperationId,
+    round: SemanticReviewRound,
+    roundLimit: ImplementationReviewRoundLimit
+  }
 )
 
 /** Findings return only to the exact implementer invocation and session that produced the reviewed bytes. */
@@ -258,6 +274,7 @@ export const sealImplementationReview = Effect.fn("ImplementationReview.seal")(f
     predecessorEvidenceReference: request.predecessorEvidenceReference,
     reviewerSessionId: request.reviewerSessionId,
     round: request.round,
+    roundLimit: request.roundLimit,
     stage: "ImplementationReview"
   })
   const manifestReference = yield* store.put(encodeManifest(manifest))

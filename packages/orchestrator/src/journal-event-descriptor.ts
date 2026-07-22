@@ -2,6 +2,7 @@ import type { JournalRecordKey, OperationId, PlannedTaskAttempt, TaskWorkSession
 import { TechnicalRetryOrdinal } from "./domain.js"
 import {
   attemptPlanRecordKey,
+  implementationDispositionRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   providerObservationRequestRecordKey,
@@ -111,6 +112,29 @@ const intentEvent = (
 
 export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventDescriptor => {
   switch (event._tag) {
+    case "ImplementationConvergenceDispositionRecorded": {
+      const request = event.operation.request
+      const plannedAttempt = request._tag === "AuthorizedImplementationConvergenceDisposition"
+        ? request.disposition.subject.plannedAttempt
+        : request.plannedAttempt
+      const requiredKind = request._tag === "SimulatedImplementationConvergenceDisposition"
+        ? []
+        : request.disposition._tag === "Accepted"
+            || request.disposition._tag === "ImplementationNonConvergent"
+        ? ["ImplementationReviewCompleted" as const]
+        : request.disposition._tag === "ReviewTechnicalRetryExhausted"
+        ? ["ImplementationReviewIntended" as const]
+        : request.disposition._tag === "HandbackTechnicalRetryExhausted"
+        ? ["ReviewFindingsHandbackIntended" as const]
+        : ["TaskExecutionOutcomeObserved" as const]
+      return operationEvent({
+        expectedKey: implementationDispositionRecordKey(plannedAttempt.attemptId),
+        operationId: request.operationId,
+        plannedAttempt,
+        requiredOperationIds: event.operation.predecessorOperationIds,
+        requiredPredecessorKinds: requiredKind
+      })
+    }
     case "TrackerGraphObservationIntentRecorded":
       return intentEvent(
         intentRecordKey(event.operation.operationId),

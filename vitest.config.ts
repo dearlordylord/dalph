@@ -1,4 +1,9 @@
 import { defineConfig } from "vitest/config"
+import { coveragePolicy } from "./scripts/coverage-policy.mjs"
+
+const coverageThresholds = Object.fromEntries(
+  coveragePolicy.metrics.map((metric) => [metric, coveragePolicy.threshold])
+)
 
 export default defineConfig({
   test: {
@@ -12,12 +17,7 @@ export default defineConfig({
       include: ["src/**/*.ts", "packages/*/src/**/*.ts"],
       provider: "v8",
       reporter: ["text", "json", "html"],
-      thresholds: {
-        branches: 99,
-        functions: 99,
-        lines: 99,
-        statements: 99
-      }
+      thresholds: coverageThresholds
     },
     environment: "node",
     include: [

@@ -53,5 +53,11 @@ export const executionAuthorityMatches = (
       return observed._tag === "InterruptedTaskExecutionReported"
         && observed.processId === durable.processId
         && observed.partialOutput === durable.partialOutput
+    case "ResourceEmergency":
+      return observed._tag === "ResourceEmergencyTaskExecutionReported"
+        && observed.processId === durable.processId
+        && observed.cause === durable.cause
+        && observed.detail === durable.detail
+        && observed.partialOutput === durable.partialOutput
   }
 }

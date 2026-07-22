@@ -105,6 +105,7 @@ const baseLayer = Layer.succeed(
     handBackReviewFindings: () => Effect.die("unused review handback"),
     reviewImplementation: () => Effect.die("unused review"),
     readTrackerGraph: () => Effect.die("unused graph"),
+    recordImplementationDisposition: () => Effect.die("unused implementation disposition"),
     recordTaskAttemptPlan: () => Effect.die("unused plan"),
     reconcileTaskWorktree: () => Effect.die("unused worktree"),
     sealImplementationEvidence: () => Effect.die("journal wrapper owns sealing"),

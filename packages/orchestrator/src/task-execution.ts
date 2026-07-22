@@ -102,6 +102,18 @@ export const InterruptedTaskExecutionReported = Schema.TaggedStruct("Interrupted
   wipPreserved: Schema.Literal(true)
 })
 
+/** Provider evidence demonstrates a capacity emergency; unchanged automatic execution is forbidden. */
+export const ResourceEmergencyTaskExecutionReported = Schema.TaggedStruct(
+  "ResourceEmergencyTaskExecutionReported",
+  {
+    ...ExecutionEvidence,
+    cause: Schema.Literals(["MemoryExhausted", "ProcessCapacityExhausted", "StorageExhausted"]),
+    detail: Schema.NonEmptyString,
+    partialOutput: ExecutionOutput,
+    wipPreserved: Schema.Literal(true)
+  }
+)
+
 /** The provider cannot determine a terminal process outcome from complete current evidence. */
 export const AmbiguousTaskExecutionReported = Schema.TaggedStruct("AmbiguousTaskExecutionReported", {
   ...ExecutionEvidence,
@@ -133,6 +145,7 @@ export const TaskExecutionReport = Schema.Union([
   SuccessfulTaskExecutionReported,
   FailedTaskExecutionReported,
   InterruptedTaskExecutionReported,
+  ResourceEmergencyTaskExecutionReported,
   AmbiguousTaskExecutionReported,
   TaskExecutionSessionConflictReported
 ])
@@ -144,6 +157,7 @@ export const TaskExecutionStartedReport = Schema.Union([
   SuccessfulTaskExecutionReported,
   FailedTaskExecutionReported,
   InterruptedTaskExecutionReported,
+  ResourceEmergencyTaskExecutionReported,
   AmbiguousTaskExecutionReported
 ])
 export type TaskExecutionStartedReport = typeof TaskExecutionStartedReport.Type
@@ -245,6 +259,13 @@ export const TaskExecutionOutcome = Schema.TaggedUnion({
   },
   Interrupted: {
     ...ExecutionEvidence,
+    partialOutput: ExecutionOutput,
+    wipPreserved: Schema.Literal(true)
+  },
+  ResourceEmergency: {
+    ...ExecutionEvidence,
+    cause: Schema.Literals(["MemoryExhausted", "ProcessCapacityExhausted", "StorageExhausted"]),
+    detail: Schema.NonEmptyString,
     partialOutput: ExecutionOutput,
     wipPreserved: Schema.Literal(true)
   }
@@ -375,6 +396,10 @@ export const taskExecutionOutcomeFromReport = (
     case "InterruptedTaskExecutionReported": {
       const { _tag: _reported, ...evidence } = report
       return Effect.succeed(TaskExecutionOutcome.cases.Interrupted.make(evidence))
+    }
+    case "ResourceEmergencyTaskExecutionReported": {
+      const { _tag: _reported, ...evidence } = report
+      return Effect.succeed(TaskExecutionOutcome.cases.ResourceEmergency.make(evidence))
     }
   }
 }

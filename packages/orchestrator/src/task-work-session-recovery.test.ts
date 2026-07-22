@@ -543,6 +543,7 @@ it.effect("journals tracker reads idempotently through the same interpreter boun
       executeTaskWork: () => Effect.die("unused execution"),
       handBackReviewFindings: () => Effect.die("unused review handback"),
       reviewImplementation: () => Effect.die("unused review"),
+      recordImplementationDisposition: () => Effect.die("unused implementation disposition"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: () => Effect.die("unused worktree"),
       readTrackerGraph: () => Effect.succeed(snapshot),

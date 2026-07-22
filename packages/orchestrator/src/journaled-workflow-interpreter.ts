@@ -35,6 +35,7 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
+import { makeJournaledImplementationDisposition } from "./journaled-implementation-convergence.js"
 import { makeJournaledImplementationEvidence } from "./journaled-implementation-evidence.js"
 import {
   makeJournaledImplementationReview,
@@ -384,6 +385,7 @@ export const journaledWorkflowInterpreterLayer = <
       }
       const reviewImplementation = makeJournaledImplementationReview(reviewOptions)
       const handBackReviewFindings = makeJournaledReviewFindingsHandback(reviewOptions)
+      const recordImplementationDisposition = makeJournaledImplementationDisposition(runId, journal)
 
       return WorkflowInterpreter.of({
         acquireTaskClaim,
@@ -392,6 +394,7 @@ export const journaledWorkflowInterpreterLayer = <
         handBackReviewFindings,
         recordTaskAttemptPlan,
         reconcileTaskWorktree,
+        recordImplementationDisposition,
         readTrackerGraph,
         reviewImplementation,
         sealImplementationEvidence: sealEvidence,

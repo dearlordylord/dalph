@@ -6,6 +6,7 @@ import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  ImplementationReviewRoundLimit,
   JournalPosition,
   JournalRecordKey,
   OperationId,
@@ -26,6 +27,10 @@ import {
   WorkerProcessId,
   WorktreeLocator
 } from "./domain.js"
+import {
+  implementationReviewCausalChainMatches,
+  implementationReviewRequestCausalChainMatches
+} from "./implementation-convergence-history.js"
 import {
   ImplementationEvidenceSealedEvent,
   ImplementationEvidenceSealingIntendedEvent
@@ -61,6 +66,7 @@ import {
   ReviewFindingsHandbackAcknowledged,
   ReviewFindingsHandbackFailure,
   ReviewFindingsHandbackRequest,
+  SealedImplementationReview,
   sealImplementationReview,
   TestImplementationReview,
   unavailableImplementationReviewLayer
@@ -103,6 +109,7 @@ import { recoverImplementationReviews, recoverReviewFindingsHandbacks } from "./
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 const runId = RunId.make("review-run")
+const roundLimit = ImplementationReviewRoundLimit.make(6)
 const sessionId = TaskWorkSessionId.make("implementer-session")
 const taskId = TaskId.make("review-task")
 const task = {
@@ -128,7 +135,8 @@ const finding = ReviewFinding.make({
 })
 
 const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvidence")(function*(
-  ordinal: number
+  ordinal: number,
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
 ) {
   const journal = yield* JournalStore
   const store = yield* EvidenceStore
@@ -141,7 +149,7 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
     sessionId
   })
   const executionOperation = makeTaskExecutionOperation({
-    predecessorOperationIds: [],
+    predecessorOperationIds,
     request: TaskExecutionRequest.make({
       operationId: executionOperationId,
       plannedAttempt: plan,
@@ -195,6 +203,56 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
   return { evidenceOperation, executionOperationId, sealed }
 })
 
+const appendCompletedHandback = Effect.fn("ReviewTest.appendCompletedHandback")(function*(
+  review: ReturnType<typeof SealedImplementationReview.make>
+) {
+  const journal = yield* JournalStore
+  const sessionOperationId = OperationId.make("review-session-establishment")
+  const existing = yield* journal.read(runId)
+  if (!existing.some(({ event }) => event._tag === "TaskWorkSessionEstablished")) {
+    yield* journal.append(runId, intentRecordKey(sessionOperationId), {
+      _tag: "TaskWorkSessionEstablishmentIntentRecorded",
+      operation: {
+        _tag: "EstablishTaskWorkSession",
+        predecessorOperationIds: [],
+        request: { operationId: sessionOperationId, plannedAttempt: plan, task }
+      },
+      version: 3
+    })
+    yield* journal.append(runId, outcomeRecordKey(sessionOperationId), {
+      _tag: "TaskWorkSessionEstablished",
+      outcome: { _tag: "TaskWorkSessionEstablished", operationId: sessionOperationId, sessionId },
+      version: 3
+    })
+  }
+  const request = ReviewFindingsHandbackRequest.make({
+    implementerInvocationId: review.manifest.implementerInvocationId,
+    implementerSessionId: sessionId,
+    operationId: OperationId.make(`handback:${review.manifest.operationId}`),
+    plannedAttempt: plan,
+    review,
+    reviewOperationId: review.manifest.operationId
+  })
+  const operation = makeReviewFindingsHandbackOperation(request)
+  yield* journal.append(
+    runId,
+    intentRecordKey(request.operationId),
+    ReviewFindingsHandbackIntendedEvent.make({ operation, version: 3 })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(request.operationId),
+    ReviewFindingsHandbackCompletedEvent.make({
+      acknowledgement: ReviewFindingsHandbackAcknowledged.make({
+        operationId: request.operationId,
+        reviewEvidenceReference: review.manifestReference
+      }),
+      version: 3
+    })
+  )
+  return { handbackOperationId: request.operationId, sessionOperationId }
+})
+
 interface EvidenceFixture {
   readonly evidenceOperation: ReturnType<typeof makeImplementationEvidenceSealingOperation>
   readonly executionOperationId: OperationId
@@ -220,7 +278,8 @@ const reviewOperation = (
     plannedAttempt: plan,
     predecessorEvidenceReference: fields?.predecessor ?? evidence.sealed.manifestReference,
     reviewerSessionId: fields?.reviewerSessionId ?? ReviewerSessionId.make("reviewer-session-1"),
-    round: fields?.round ?? SemanticReviewRound.make(1)
+    round: fields?.round ?? SemanticReviewRound.make(1),
+    roundLimit
   }))
 
 const testLayer = Layer.merge(memoryJournalStoreLayer, memoryEvidenceStoreLayer).pipe(
@@ -761,7 +820,11 @@ it.effect("extends the immutable chain with complete findings history and a fres
       }),
       runId
     })(firstOperation)
-    const secondEvidence = yield* appendExecutionAndEvidence(2)
+    const handback = yield* appendCompletedHandback(findingsReview)
+    const secondEvidence = yield* appendExecutionAndEvidence(2, [
+      handback.handbackOperationId,
+      handback.sessionOperationId
+    ])
     const secondOperation = reviewOperation(secondEvidence, {
       findingHistory: findingsReview.manifest.findingHistory,
       predecessor: findingsReview.manifestReference,
@@ -782,6 +845,245 @@ it.effect("extends the immutable chain with complete findings history and a fres
     expect(accepted.manifest.findingHistory).toEqual([finding])
     expect(accepted.manifest.reviewerSessionId).not.toBe(findingsReview.manifest.reviewerSessionId)
     expect(yield* secondProtocol(secondOperation)).toEqual(accepted)
+    const records = yield* journal.read(runId)
+    const secondRequest = secondOperation.request
+    if (secondRequest._tag !== "AuthorizedImplementationReview") {
+      return yield* Effect.die("review fixture must be authorized")
+    }
+    expect(implementationReviewCausalChainMatches(records, accepted)).toBe(true)
+    expect(implementationReviewRequestCausalChainMatches(records, secondRequest)).toBe(true)
+    const currentReviewRecord = records.find(({ event }) =>
+      event._tag === "ImplementationReviewCompleted"
+      && event.review.manifest.operationId === accepted.manifest.operationId
+    )
+    if (currentReviewRecord === undefined) return yield* Effect.die("missing current review record")
+    expect(implementationReviewCausalChainMatches(
+      [...records, extraRecord(currentReviewRecord, 30)],
+      accepted
+    )).toBe(false)
+    const without = (tag: JournalRecord["event"]["_tag"]) => records.filter(({ event }) => event._tag !== tag)
+    for (
+      const tag of [
+        "ImplementationEvidenceSealed",
+        "TaskExecutionOutcomeObserved",
+        "TaskExecutionIntentRecorded",
+        "ImplementationEvidenceSealingIntended",
+        "ImplementationReviewIntended",
+        "TaskWorkSessionEstablished",
+        "ImplementationReviewCompleted",
+        "ReviewFindingsHandbackIntended",
+        "ReviewFindingsHandbackCompleted"
+      ] as const
+    ) {
+      expect(
+        implementationReviewRequestCausalChainMatches(
+          without(tag),
+          secondRequest
+        ),
+        `request chain without ${tag}`
+      ).toBe(false)
+    }
+    const shifted = (
+      tag: JournalRecord["event"]["_tag"],
+      position: number
+    ) =>
+      records.map((item) =>
+        item.event._tag === tag
+          ? { ...item, position: JournalPosition.make(position) }
+          : item
+      )
+    expect(
+      implementationReviewRequestCausalChainMatches(
+        shifted("TaskExecutionIntentRecorded", 10_000),
+        secondRequest
+      ),
+      "execution intent after outcome"
+    ).toBe(false)
+    expect(
+      implementationReviewRequestCausalChainMatches(
+        shifted("TaskExecutionOutcomeObserved", 10_000),
+        secondRequest
+      ),
+      "execution outcome after evidence intent"
+    ).toBe(false)
+    expect(
+      implementationReviewRequestCausalChainMatches(
+        shifted("ImplementationEvidenceSealingIntended", 10_000),
+        secondRequest
+      ),
+      "evidence intent after evidence"
+    ).toBe(false)
+    expect(
+      implementationReviewRequestCausalChainMatches(
+        shifted("ImplementationEvidenceSealed", 10_000),
+        secondRequest
+      ),
+      "evidence after review intent"
+    ).toBe(false)
+    expect(
+      implementationReviewCausalChainMatches(
+        without("ReviewFindingsHandbackIntended"),
+        accepted
+      ),
+      "missing handback"
+    ).toBe(false)
+    expect(
+      implementationReviewCausalChainMatches(
+        without("ReviewFindingsHandbackCompleted"),
+        accepted
+      ),
+      "unacknowledged handback"
+    ).toBe(false)
+    expect(
+      implementationReviewCausalChainMatches(
+        without("TaskExecutionOutcomeObserved"),
+        accepted
+      ),
+      "no post-handback execution"
+    ).toBe(false)
+    const wrongSession = records.map((item) =>
+      item.event._tag === "TaskExecutionIntentRecorded"
+        && item.event.operation.request.operationId === accepted.manifest.implementerInvocationId
+        ? {
+          ...item,
+          event: {
+            ...item.event,
+            operation: {
+              ...item.event.operation,
+              request: {
+                ...item.event.operation.request,
+                session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+                  sessionId: TaskWorkSessionId.make("wrong-review-chain-session")
+                })
+              }
+            }
+          }
+        } as JournalRecord
+        : item
+    )
+    expect(implementationReviewCausalChainMatches(wrongSession, accepted), "wrong implementer session").toBe(false)
+    const acceptedPredecessor = records.map((item) =>
+      item.event._tag === "ImplementationReviewCompleted"
+        && item.event.review.manifest.operationId === findingsReview.manifest.operationId
+        ? {
+          ...item,
+          event: {
+            ...item.event,
+            review: {
+              ...item.event.review,
+              manifest: {
+                ...item.event.review.manifest,
+                disposition: ImplementationReviewDisposition.cases.Accepted.make({})
+              }
+            }
+          }
+        } as JournalRecord
+        : item
+    )
+    expect(
+      implementationReviewCausalChainMatches(
+        acceptedPredecessor,
+        accepted
+      ),
+      "accepted review cannot admit round two"
+    ).toBe(false)
+    const lastRecord = records.at(-1)
+    if (lastRecord === undefined) return yield* Effect.die("review fixture must contain records")
+    const reusedReviewer = [
+      ...records,
+      {
+        ...lastRecord,
+        event: {
+          _tag: "ImplementationReviewCompleted" as const,
+          review: SealedImplementationReview.make({
+            manifest: {
+              ...findingsReview.manifest,
+              operationId: OperationId.make("reviewer-reuse-counterexample"),
+              reviewerSessionId: accepted.manifest.reviewerSessionId
+            },
+            manifestReference: findingsReview.manifestReference
+          }),
+          version: 3 as const
+        }
+      }
+    ]
+    expect(implementationReviewCausalChainMatches(reusedReviewer, accepted), "reused reviewer session").toBe(false)
+    const mismatchedHistory = {
+      ...accepted,
+      manifest: { ...accepted.manifest, findingHistory: [] }
+    }
+    expect(
+      implementationReviewCausalChainMatches(
+        records.map((item) =>
+          item.event._tag === "ImplementationReviewCompleted"
+            && item.event.review.manifest.operationId === accepted.manifest.operationId
+            ? { ...item, event: { ...item.event, review: mismatchedHistory } } as JournalRecord
+            : item
+        ),
+        mismatchedHistory
+      ),
+      "mismatched finding history"
+    ).toBe(false)
+    const skippedRound = {
+      ...accepted,
+      manifest: { ...accepted.manifest, round: SemanticReviewRound.make(3) }
+    }
+    expect(
+      implementationReviewCausalChainMatches(
+        records.map((item) =>
+          item.event._tag === "ImplementationReviewCompleted"
+            && item.event.review.manifest.operationId === accepted.manifest.operationId
+            ? { ...item, event: { ...item.event, review: skippedRound } } as JournalRecord
+            : item
+        ),
+        skippedRound
+      ),
+      "skipped semantic round"
+    ).toBe(false)
+
+    const replayFailure = Effect.fn("ReviewTest.replayFailure")(function*(
+      history: ReadonlyArray<JournalRecord>
+    ) {
+      return yield* makeJournaledImplementationReview({
+        evidenceStore: store,
+        handback: ReviewFindingsHandback.of({ deliverOrResume: () => Effect.die("unused handback") }),
+        journal: journalView(history),
+        reviewer: ImplementationReviewer.of({ createOrResume: () => Effect.die("invalid history reached reviewer") }),
+        runId
+      })(secondOperation).pipe(Effect.flip)
+    })
+    const isSecondEvidenceIntent = (item: JournalRecord) =>
+      item.event._tag === "ImplementationEvidenceSealingIntended"
+      && item.event.operation.operationId === secondEvidence.evidenceOperation.operationId
+    expect(
+      yield* replayFailure(records.filter((item) => !isSecondEvidenceIntent(item)))
+    ).toMatchObject({ reason: "EvidenceMismatch" })
+    expect(
+      yield* replayFailure(records.map((item) =>
+        isSecondEvidenceIntent(item)
+          ? { ...item, position: JournalPosition.make(10_000) }
+          : item
+      ))
+    ).toMatchObject({ reason: "EvidenceMismatch" })
+    const establishedSession = records.find(({ event }) => event._tag === "TaskWorkSessionEstablished")
+    if (establishedSession === undefined) return yield* Effect.die("missing established session")
+    expect(
+      yield* replayFailure([...records, extraRecord(establishedSession, 40)])
+    ).toMatchObject({ reason: "ImplementerSessionMismatch" })
+    expect(
+      yield* replayFailure(records.map((item) =>
+        item.event._tag === "TaskExecutionIntentRecorded"
+          && item.event.operation.request.operationId === secondEvidence.executionOperationId
+          ? {
+            ...item,
+            event: {
+              ...item.event,
+              operation: { ...item.event.operation, predecessorOperationIds: [] }
+            }
+          } as JournalRecord
+          : item
+      ))
+    ).toMatchObject({ reason: "ImplementerSessionMismatch" })
   }).pipe(Effect.provide(testLayer)))
 
 it.effect("reauthorizes every predecessor review and implementation object before a later round", () =>
@@ -800,7 +1102,11 @@ it.effect("reauthorizes every predecessor review and implementation object befor
       }),
       runId
     })(firstOperation)
-    const secondEvidence = yield* appendExecutionAndEvidence(2)
+    const handback = yield* appendCompletedHandback(firstReview)
+    const secondEvidence = yield* appendExecutionAndEvidence(2, [
+      handback.handbackOperationId,
+      handback.sessionOperationId
+    ])
     const secondOperation = reviewOperation(secondEvidence, {
       findingHistory: firstReview.manifest.findingHistory,
       predecessor: firstReview.manifestReference,
@@ -894,7 +1200,8 @@ it.effect("classifies invalid recursive review-chain edges before findings deliv
         plannedAttempt: plan,
         predecessorEvidenceReference: firstReview.manifestReference,
         reviewerSessionId: ReviewerSessionId.make(`direct-chain-reviewer-${round}`),
-        round: SemanticReviewRound.make(round)
+        round: SemanticReviewRound.make(round),
+        roundLimit
       })
     const roundTwoRequest = laterRequest(2)
     const roundTwoReview = yield* sealImplementationReview(
@@ -947,6 +1254,68 @@ it.effect("classifies invalid recursive review-chain edges before findings deliv
         reviewRecord(roundThreeReview, 32)
       ]).pipe(Effect.flip)
     ).toMatchObject({ reason: "RoundMismatch" })
+    const changedLimitRequest = AuthorizedImplementationReviewRequest.make({
+      ...roundTwoRequest,
+      operationId: OperationId.make("recursive-changed-limit"),
+      roundLimit: ImplementationReviewRoundLimit.make(5)
+    })
+    const changedLimitReview = yield* sealImplementationReview(
+      changedLimitRequest,
+      ImplementationReviewDisposition.cases.Findings.make({ findings: [currentFinding] })
+    ).pipe(Effect.provideService(EvidenceStore, store))
+    expect(
+      yield* runHandback(changedLimitReview, [
+        ...records,
+        reviewRecord(changedLimitReview, 33)
+      ]).pipe(Effect.flip)
+    ).toMatchObject({ reason: "RoundMismatch" })
+    const incompleteHistoryRequest = AuthorizedImplementationReviewRequest.make({
+      ...roundTwoRequest,
+      findingHistory: [],
+      operationId: OperationId.make("recursive-incomplete-history")
+    })
+    const incompleteHistoryReview = yield* sealImplementationReview(
+      incompleteHistoryRequest,
+      ImplementationReviewDisposition.cases.Findings.make({ findings: [currentFinding] })
+    ).pipe(Effect.provideService(EvidenceStore, store))
+    expect(
+      yield* runHandback(incompleteHistoryReview, [
+        ...records,
+        reviewRecord(incompleteHistoryReview, 34)
+      ]).pipe(Effect.flip)
+    ).toMatchObject({ reason: "FindingHistoryMismatch" })
+    expect(
+      yield* runHandback(roundTwoReview, [
+        ...records,
+        reviewRecord(firstReview, 35),
+        reviewRecord(roundTwoReview, 36)
+      ]).pipe(Effect.flip)
+    ).toMatchObject({ reason: "MissingEvidence" })
+    const foreignPlan = {
+      ...plan,
+      attemptId: AttemptId.make("foreign-recursive-attempt")
+    }
+    const crossAttemptPredecessor = SealedImplementationReview.make({
+      ...firstReview,
+      manifest: { ...firstReview.manifest, plannedAttempt: foreignPlan }
+    })
+    expect(
+      yield* runHandback(roundTwoReview, [
+        ...records.map((item) =>
+          item.event._tag === "ImplementationReviewCompleted"
+            && item.event.review.manifest.operationId === firstReview.manifest.operationId
+            ? {
+              ...item,
+              event: ImplementationReviewCompletedEvent.make({
+                review: crossAttemptPredecessor,
+                version: 3
+              })
+            }
+            : item
+        ),
+        reviewRecord(roundTwoReview, 37)
+      ]).pipe(Effect.flip)
+    ).toMatchObject({ reason: "CrossAttemptContinuation" })
   }).pipe(Effect.provide(testLayer)))
 
 it.effect("exposes controllable and explicitly unavailable reviewer boundaries", () =>
@@ -1193,6 +1562,7 @@ it.effect("recovers unresolved review and findings handback intents through thei
       executeTaskWork: unused,
       handBackReviewFindings: () => Effect.succeed(acknowledgement),
       readTrackerGraph: unused,
+      recordImplementationDisposition: unused,
       reconcileTaskWorktree: unused,
       recordTaskAttemptPlan: unused,
       reviewImplementation: (candidate) =>
@@ -1201,7 +1571,8 @@ it.effect("recovers unresolved review and findings handback intents through thei
           : Effect.succeed(ImplementationReviewSimulated.make({
             operationId: candidate.request.operationId,
             predecessorOperationId: candidate.request.evidenceSealingOperationId,
-            round: candidate.request.round
+            round: candidate.request.round,
+            roundLimit: candidate.request.roundLimit
           })),
       sealImplementationEvidence: unused,
       simulateTaskExecution: unused,
@@ -1333,11 +1704,25 @@ it.effect("classifies malformed review and handback histories without provider c
       runReview(baseRecords, requestWith({ findingHistory: [finding] })),
       "FindingHistoryMismatch"
     )
+    const executionOutcomeRecord = baseRecords.find(({ event }) => event._tag === "TaskExecutionOutcomeObserved")
+    const evidenceIntentRecord = baseRecords.find(({ event }) => event._tag === "ImplementationEvidenceSealingIntended")
+    if (executionOutcomeRecord === undefined || evidenceIntentRecord === undefined) {
+      return yield* Effect.die("missing causal fixture records")
+    }
+    yield* expectReason(
+      runReview([...baseRecords, extraRecord(executionOutcomeRecord, 40)]),
+      "EvidenceMismatch"
+    )
+    yield* expectReason(
+      runReview([...baseRecords, extraRecord(evidenceIntentRecord, 41)]),
+      "EvidenceMismatch"
+    )
     const simulated = makeImplementationReviewOperation(ImplementationReviewRequest.make({
       _tag: "SimulatedImplementationReview",
       evidenceSealingOperationId: evidence.evidenceOperation.operationId,
       operationId: OperationId.make("simulated-review-history"),
-      round: SemanticReviewRound.make(1)
+      round: SemanticReviewRound.make(1),
+      roundLimit
     }))
     expect(yield* runReview(baseRecords, simulated).pipe(Effect.flip)).toMatchObject({
       _tag: "ImplementationReviewModeContradiction"
@@ -1422,6 +1807,7 @@ it.effect("classifies malformed review and handback histories without provider c
         predecessorEvidenceReference: review.manifestReference,
         reviewerSessionId: ReviewerSessionId.make("reviewer-session-round-two"),
         round: SemanticReviewRound.make(2),
+        roundLimit,
         ...fields
       }))
     yield* expectReason(
@@ -1432,7 +1818,66 @@ it.effect("classifies malformed review and handback histories without provider c
       runReview(roundRecords, roundTwoWith({ round: SemanticReviewRound.make(3) })),
       "RoundMismatch"
     )
+    yield* expectReason(
+      runReview(roundRecords, roundTwoWith({ roundLimit: ImplementationReviewRoundLimit.make(5) })),
+      "RoundMismatch"
+    )
     yield* expectReason(runReview(roundRecords, roundTwoWith({ findingHistory: [] })), "FindingHistoryMismatch")
+    const acceptedPredecessorRecords = roundRecords.map((item) =>
+      item.event._tag === "ImplementationReviewCompleted"
+        ? {
+          ...item,
+          event: {
+            ...item.event,
+            review: {
+              ...item.event.review,
+              manifest: {
+                ...item.event.review.manifest,
+                disposition: ImplementationReviewDisposition.cases.Accepted.make({})
+              }
+            }
+          }
+        } as JournalRecord
+        : item
+    )
+    yield* expectReason(
+      runReview(acceptedPredecessorRecords, roundTwoWith()),
+      "HandbackWithoutFindings"
+    )
+    yield* expectReason(runReview(roundRecords, roundTwoWith()), "MissingEvidence")
+    const roundHandbackRequest = ReviewFindingsHandbackRequest.make({
+      implementerInvocationId: review.manifest.implementerInvocationId,
+      implementerSessionId: sessionId,
+      operationId: OperationId.make("classified-round-handback"),
+      plannedAttempt: plan,
+      review,
+      reviewOperationId: review.manifest.operationId
+    })
+    const roundHandbackOperation = makeReviewFindingsHandbackOperation(roundHandbackRequest)
+    const roundHandbackIntent = extraRecord(
+      outcomeRecord,
+      20,
+      ReviewFindingsHandbackIntendedEvent.make({ operation: roundHandbackOperation, version: 3 })
+    )
+    yield* expectReason(
+      runReview([...roundRecords, roundHandbackIntent], roundTwoWith()),
+      "MissingEvidence"
+    )
+    const roundHandbackOutcome = extraRecord(
+      outcomeRecord,
+      21,
+      ReviewFindingsHandbackCompletedEvent.make({
+        acknowledgement: ReviewFindingsHandbackAcknowledged.make({
+          operationId: roundHandbackRequest.operationId,
+          reviewEvidenceReference: review.manifestReference
+        }),
+        version: 3
+      })
+    )
+    yield* expectReason(
+      runReview([...roundRecords, roundHandbackIntent, roundHandbackOutcome], roundTwoWith()),
+      "ImplementerSessionMismatch"
+    )
 
     const handbackRequest = ReviewFindingsHandbackRequest.make({
       implementerInvocationId: evidence.executionOperationId,

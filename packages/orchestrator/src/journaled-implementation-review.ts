@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The journaled review protocol keeps its complete validation algebra together. */
 import { Effect } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import type { PlannedTaskAttempt, RunId } from "./domain.js"
@@ -49,7 +50,8 @@ const reviewMatchesRequest = (
       plannedAttempt: manifest.plannedAttempt,
       predecessorEvidenceReference: manifest.predecessorEvidenceReference,
       reviewerSessionId: manifest.reviewerSessionId,
-      round: manifest.round
+      round: manifest.round,
+      roundLimit: manifest.roundLimit
     },
     {
       findingHistory: extendReviewFindingHistory(request.findingHistory, manifest.disposition),
@@ -60,7 +62,8 @@ const reviewMatchesRequest = (
       plannedAttempt: request.plannedAttempt,
       predecessorEvidenceReference: request.predecessorEvidenceReference,
       reviewerSessionId: request.reviewerSessionId,
-      round: request.round
+      round: request.round,
+      roundLimit: request.roundLimit
     }
   )
 }
@@ -139,19 +142,25 @@ const requireAuthorizedReviewChain = Effect.fn("ImplementationReview.requireAuth
         ) return yield* failHistory(current.manifest.operationId, "FindingHistoryMismatch")
         return
       }
-      const predecessors = records.filter(({ event }) =>
+      const predecessors = records.flatMap(({ event }) =>
         event._tag === "ImplementationReviewCompleted"
-        && sameReference(event.review.manifestReference, current.manifest.predecessorEvidenceReference)
+          && sameReference(event.review.manifestReference, current.manifest.predecessorEvidenceReference)
+          ? [event.review]
+          : []
       )
-      if (predecessors.length !== 1 || predecessors[0]?.event._tag !== "ImplementationReviewCompleted") {
+      const previous = predecessors[0]
+      if (previous === undefined) return yield* failHistory(current.manifest.operationId, "MissingEvidence")
+      if (predecessors.length !== 1) {
         return yield* failHistory(current.manifest.operationId, "MissingEvidence")
       }
-      const previous = predecessors[0].event.review
       if (
         !samePlannedTaskAttempt(previous.manifest.plannedAttempt, current.manifest.plannedAttempt)
         || previous.manifest.implementerInvocationId === current.manifest.implementerInvocationId
       ) return yield* failHistory(current.manifest.operationId, "CrossAttemptContinuation")
       if (previous.manifest.round + 1 !== current.manifest.round) {
+        return yield* failHistory(current.manifest.operationId, "RoundMismatch")
+      }
+      if (previous.manifest.roundLimit !== current.manifest.roundLimit) {
         return yield* failHistory(current.manifest.operationId, "RoundMismatch")
       }
       if (
@@ -171,11 +180,13 @@ const requireReviewPredecessors = Effect.fn("ImplementationReview.requirePredece
     request: AuthorizedImplementationReviewRequest,
     requireLatestInvocation: boolean
   ) {
-    const evidence = records.filter(({ event }) =>
+    const evidence = records.flatMap(({ event, position }) =>
       event._tag === "ImplementationEvidenceSealed"
-      && event.operationId === request.evidenceSealingOperationId
+        && event.operationId === request.evidenceSealingOperationId
+        ? [{ event, position }]
+        : []
     )
-    if (evidence.length !== 1 || evidence[0]?.event._tag !== "ImplementationEvidenceSealed") {
+    if (evidence.length !== 1 || evidence[0] === undefined) {
       return yield* failHistory(request.operationId, "MissingEvidence")
     }
     if (JSON.stringify(request.implementationEvidence) !== JSON.stringify(evidence[0].event.sealed)) {
@@ -191,15 +202,47 @@ const requireReviewPredecessors = Effect.fn("ImplementationReview.requirePredece
       return yield* failHistory(request.operationId, "EvidenceMismatch")
     }
     yield* authorizeImplementationReview(request.implementationEvidence)
+    const executions = successfulExecutionsForAttempt(records, request.plannedAttempt)
+    const invocationExecutions = executions.filter(({ outcome }) =>
+      outcome.operationId === request.implementerInvocationId
+    )
+    const evidenceExecutions = invocationExecutions.filter(({ outcome }) =>
+      outcome.sessionId === request.implementerSessionId
+    )
+    const evidenceIntents = records.flatMap(({ event, position }) =>
+      event._tag === "ImplementationEvidenceSealingIntended"
+        && event.operation.operationId === request.evidenceSealingOperationId
+        && event.operation.execution._tag === "SuccessfulExecution"
+        && sameEncoded(event.operation.execution.outcome, evidenceExecutions[0]?.outcome)
+        && samePlannedTaskAttempt(event.operation.plannedAttempt, request.plannedAttempt)
+        ? [{ event, position }]
+        : []
+    )
+    if (invocationExecutions.length === 0) {
+      return yield* failHistory(request.operationId, "MissingImplementerInvocation")
+    }
+    const evidenceExecution = evidenceExecutions[0]
+    const evidenceIntent = evidenceIntents[0]
+    if (evidenceExecution === undefined) {
+      return yield* failHistory(request.operationId, "ImplementerSessionMismatch")
+    }
+    if (evidenceIntent === undefined) {
+      return yield* failHistory(request.operationId, "EvidenceMismatch")
+    }
+    if (evidenceExecutions.length !== 1 || evidenceIntents.length !== 1) {
+      return yield* failHistory(request.operationId, "EvidenceMismatch")
+    }
+    if (
+      evidenceExecution.position >= evidenceIntent.position
+      || evidenceIntent.position >= evidence[0].position
+    ) return yield* failHistory(request.operationId, "EvidenceMismatch")
     if (requireLatestInvocation) {
-      const executions = successfulExecutionsForAttempt(records, request.plannedAttempt)
-      const latest = executions.toSorted((left, right) => right.position - left.position)[0]
-      if (latest === undefined) return yield* failHistory(request.operationId, "MissingImplementerInvocation")
+      const latest = executions.reduce(
+        (current, candidate) => candidate.position > current.position ? candidate : current,
+        evidenceExecution
+      )
       if (latest.outcome.operationId !== request.implementerInvocationId) {
         return yield* failHistory(request.operationId, "ImplementerInvocationIsNotLatest")
-      }
-      if (latest.outcome.sessionId !== request.implementerSessionId) {
-        return yield* failHistory(request.operationId, "ImplementerSessionMismatch")
       }
     }
     if (
@@ -224,24 +267,93 @@ const requireReviewPredecessors = Effect.fn("ImplementationReview.requirePredece
       }
       return
     }
-    const previous = records.findLast(({ event }) =>
+    const previousRecord = records.findLast(({ event }) =>
       event._tag === "ImplementationReviewCompleted"
       && event.review.manifestReference.digest === request.predecessorEvidenceReference.digest
       && event.review.manifestReference.byteLength === request.predecessorEvidenceReference.byteLength
-    )?.event
-    if (previous?._tag !== "ImplementationReviewCompleted") {
+    )
+    if (previousRecord?.event._tag !== "ImplementationReviewCompleted") {
       return yield* failHistory(request.operationId, "MissingEvidence")
     }
+    const previous = previousRecord.event
     if (
       !samePlannedTaskAttempt(previous.review.manifest.plannedAttempt, request.plannedAttempt)
       || previous.review.manifest.implementerInvocationId === request.implementerInvocationId
     ) return yield* failHistory(request.operationId, "CrossAttemptContinuation")
+    if (previous.review.manifest.disposition._tag !== "Findings") {
+      return yield* failHistory(request.operationId, "HandbackWithoutFindings")
+    }
     if (previous.review.manifest.round + 1 !== request.round) {
+      return yield* failHistory(request.operationId, "RoundMismatch")
+    }
+    if (previous.review.manifest.roundLimit !== request.roundLimit) {
       return yield* failHistory(request.operationId, "RoundMismatch")
     }
     if (JSON.stringify(previous.review.manifest.findingHistory) !== JSON.stringify(request.findingHistory)) {
       return yield* failHistory(request.operationId, "FindingHistoryMismatch")
     }
+    const previousPosition = previousRecord.position
+    const handbackIntents = records.flatMap(({ event, position }) =>
+      event._tag === "ReviewFindingsHandbackIntended"
+        && event.operation.request.reviewOperationId === previous.review.manifest.operationId
+        && sameEncoded(event.operation.request.review, previous.review)
+        && event.operation.request.implementerInvocationId === previous.review.manifest.implementerInvocationId
+        && event.operation.request.implementerSessionId === request.implementerSessionId
+        && samePlannedTaskAttempt(event.operation.request.plannedAttempt, request.plannedAttempt)
+        ? [{ event, position }]
+        : []
+    )
+    if (handbackIntents.length !== 1 || handbackIntents[0] === undefined) {
+      return yield* failHistory(request.operationId, "MissingEvidence")
+    }
+    const handbackIntent = handbackIntents[0]
+    const handbackOperationId = handbackIntent.event.operation.request.operationId
+    const handbackOutcomes = records.filter(({ event }) =>
+      event._tag === "ReviewFindingsHandbackCompleted"
+      && event.acknowledgement.operationId === handbackOperationId
+      && handbackAcknowledgesRequest(event.acknowledgement, handbackIntent.event.operation.request)
+    )
+    if (handbackOutcomes.length !== 1 || handbackOutcomes[0] === undefined) {
+      return yield* failHistory(request.operationId, "MissingEvidence")
+    }
+    const executionIntents = records.flatMap(({ event, position }) =>
+      event._tag === "TaskExecutionIntentRecorded"
+        && event.operation.request.operationId === request.implementerInvocationId
+        ? [{ event, position }]
+        : []
+    )
+    if (executionIntents.length !== 1 || executionIntents[0] === undefined) {
+      return yield* failHistory(request.operationId, "MissingImplementerInvocation")
+    }
+    const executionIntent = executionIntents[0]
+    const session = executionIntent.event.operation.request.session
+    const establishedSessions = records.flatMap(({ event, position }) =>
+      event._tag === "TaskWorkSessionEstablished"
+        && event.outcome.sessionId === request.implementerSessionId
+        && records.some(({ event: candidate }) =>
+          candidate._tag === "TaskWorkSessionEstablishmentIntentRecorded"
+          && candidate.operation.request.operationId === event.outcome.operationId
+          && samePlannedTaskAttempt(candidate.operation.request.plannedAttempt, request.plannedAttempt)
+        )
+        ? [{ event, position }]
+        : []
+    )
+    if (establishedSessions.length !== 1 || establishedSessions[0] === undefined) {
+      return yield* failHistory(request.operationId, "ImplementerSessionMismatch")
+    }
+    const establishedSession = establishedSessions[0]
+    if (
+      session._tag !== "EstablishedSession"
+      || session.sessionId !== request.implementerSessionId
+      || !executionIntent.event.operation.predecessorOperationIds.includes(handbackOperationId)
+      || !executionIntent.event.operation.predecessorOperationIds.includes(
+        establishedSession.event.outcome.operationId
+      )
+      || previousPosition >= handbackIntent.position
+      || handbackIntent.position >= handbackOutcomes[0].position
+      || handbackOutcomes[0].position >= executionIntent.position
+      || executionIntent.position >= evidence[0].position
+    ) return yield* failHistory(request.operationId, "ImplementerSessionMismatch")
     yield* requireAuthorizedReviewChain(records, previous.review)
   }
 )

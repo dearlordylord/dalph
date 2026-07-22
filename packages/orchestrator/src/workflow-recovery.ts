@@ -1,18 +1,17 @@
-/* eslint-disable functional/immutable-data -- Recovery accumulates independent authority reads in journal order. */
+/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { RunId } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
+import { recoverImplementationConvergences } from "./implementation-convergence-recovery.js"
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
 import { type JournalRecord, JournalStore } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
-import { TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
 import { TrackerMutation } from "./tracker-mutation.js"
-import { TrackerGraphOutcomeObserved as TrackerGraphOutcomeObservedTrace } from "./tracker-workflow-trace.js"
 import {
   claimAuthorityMatches,
   executionAuthorityMatches,
@@ -20,16 +19,13 @@ import {
   worktreeAuthorityMatches
 } from "./workflow-authority-relations.js"
 import {
-  ImplementationReviewCompletedTrace,
-  makeTrackerGraphObservedOutcome,
-  ReviewFindingsHandedBackTrace,
-  SealedImplementationEvidenceTrace,
-  TaskClaimAcquiredTrace,
-  TaskWorkSessionEstablishedTrace,
-  TaskWorktreeReadyTrace,
-  WorkflowInterpreter,
-  WorkflowTrace
-} from "./workflow.js"
+  recoverImplementationEvidenceSealings,
+  recoverTaskClaimAcquisitions,
+  recoverTaskExecutions,
+  recoverTaskWorkSessionEstablishments,
+  recoverTaskWorktreeReconciliations,
+  recoverTrackerGraphObservations
+} from "./workflow-operation-recovery.js"
 
 /** A valid history's fresh authority read could not determine a safe next step. */
 export class RecoveryReconciliationIssue extends Schema.TaggedErrorClass<RecoveryReconciliationIssue>()(
@@ -46,215 +42,6 @@ export class RecoveryOwnershipIssue extends Schema.TaggedErrorClass<RecoveryOwne
   "RecoveryOwnershipIssue",
   { detail: Schema.String, runId: RunId }
 ) {}
-
-/** Reconciles an unfinished tracker-graph read through the real tracker boundary. */
-const recoverTrackerGraphObservations = Effect.fn(
-  "WorkflowRecovery.recoverTrackerGraphObservations"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const observed = new Set(
-    records.flatMap(({ event }) => event._tag === "TrackerGraphOutcomeObserved" ? [event.operationId] : [])
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TrackerGraphObservationIntentRecorded"
-      && !observed.has(event.operation.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.readTrackerGraph(operation).pipe(
-      Effect.tap((snapshot) =>
-        trace.emit(TrackerGraphOutcomeObservedTrace.make({
-          operation,
-          outcome: makeTrackerGraphObservedOutcome(snapshot)
-        }))
-      )
-    ))
-})
-
-/** Reconciles exact claim intents that lack a durable authoritative outcome. */
-export const recoverTaskClaimAcquisitions = Effect.fn(
-  "WorkflowRecovery.recoverTaskClaimAcquisitions"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const acquired = new Set(
-    records.flatMap(({ event }) => event._tag === "TaskClaimAcquired" ? [event.claim.operationId] : [])
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TaskClaimAcquisitionIntended"
-      && !acquired.has(event.operation.acquisition.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.acquireTaskClaim(operation).pipe(
-      Effect.tap((result) =>
-        result._tag === "AuthoritativeTaskClaimAcquired"
-          ? trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
-          : Effect.void
-      )
-    ))
-})
-
-/** Reconciles exact Git intents that lack a durable Base/HEAD proof. */
-export const recoverTaskWorktreeReconciliations = Effect.fn(
-  "WorkflowRecovery.recoverTaskWorktreeReconciliations"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const ready = new Set(records.flatMap(({ event }) => event._tag === "TaskWorktreeReady" ? [event.operationId] : []))
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TaskWorktreeReconciliationIntended"
-      && !ready.has(event.operation.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.reconcileTaskWorktree(operation).pipe(
-      Effect.tap((result) =>
-        result._tag === "AuthoritativeTaskWorktreeReady"
-          ? trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
-          : Effect.void
-      )
-    ))
-})
-
-/** Reconstructs unresolved session-establishment operations from ordered history. */
-export const recoverTaskWorkSessionEstablishments = Effect.fn(
-  "WorkflowRecovery.recoverTaskWorkSessionEstablishments"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const established = new Set(
-    records.flatMap(({ event }) => event._tag === "TaskWorkSessionEstablished" ? [event.outcome.operationId] : [])
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
-      && !established.has(event.operation.request.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.establishTaskWorkSession(operation).pipe(
-      Effect.tap((outcome) => trace.emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome })))
-    ))
-})
-
-/** Observes unresolved exact execution intents before any later retry policy exists. */
-export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExecutions")(
-  function*(runId: RunId) {
-    const interpreter = yield* WorkflowInterpreter
-    const journal = yield* JournalStore
-    const trace = yield* WorkflowTrace
-    const records = yield* journal.read(runId)
-    const observed = new Set(records.flatMap(({ event }) =>
-      event._tag === "TaskExecutionOutcomeObserved"
-        ? [event.outcome.outcome.operationId]
-        : []
-    ))
-    const unresolved = records.flatMap(({ event }) =>
-      event._tag === "TaskExecutionIntentRecorded"
-        && !observed.has(event.operation.request.operationId)
-        ? [event.operation]
-        : []
-    )
-    return yield* Effect.forEach(unresolved, (operation) =>
-      interpreter.executeTaskWork(operation).pipe(
-        Effect.tap((outcome) => trace.emit(TaskExecutionOutcomeObserved.make({ operation, outcome })))
-      ))
-  }
-)
-
-/** Resumes one exact journaled reviewer session without allocating a semantic round. */
-export const recoverImplementationReviews = Effect.fn(
-  "WorkflowRecovery.recoverImplementationReviews"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const completed = new Set(records.flatMap(({ event }) =>
-    event._tag === "ImplementationReviewCompleted"
-      ? [event.review.manifest.operationId]
-      : []
-  ))
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "ImplementationReviewIntended"
-      && !completed.has(event.operation.request.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.reviewImplementation(operation).pipe(
-      Effect.tap((result) =>
-        result._tag === "SealedImplementationReview"
-          ? trace.emit(ImplementationReviewCompletedTrace.make({ operation, review: result }))
-          : Effect.void
-      )
-    ))
-})
-
-/** Resumes an exact findings handback under its journaled implementer binding. */
-export const recoverReviewFindingsHandbacks = Effect.fn(
-  "WorkflowRecovery.recoverReviewFindingsHandbacks"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const completed = new Set(records.flatMap(({ event }) =>
-    event._tag === "ReviewFindingsHandbackCompleted"
-      ? [event.acknowledgement.operationId]
-      : []
-  ))
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "ReviewFindingsHandbackIntended"
-      && !completed.has(event.operation.request.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.handBackReviewFindings(operation).pipe(
-      Effect.tap((acknowledgement) => trace.emit(ReviewFindingsHandedBackTrace.make({ acknowledgement, operation })))
-    ))
-})
-
-/** Completes unresolved sealing intents through the same idempotent evidence protocol. */
-export const recoverImplementationEvidenceSealings = Effect.fn(
-  "WorkflowRecovery.recoverImplementationEvidenceSealings"
-)(function*(runId: RunId) {
-  const interpreter = yield* WorkflowInterpreter
-  const journal = yield* JournalStore
-  const trace = yield* WorkflowTrace
-  const records = yield* journal.read(runId)
-  const sealed = new Set(
-    records.flatMap(({ event }) => event._tag === "ImplementationEvidenceSealed" ? [event.operationId] : [])
-  )
-  const unresolved = records.flatMap(({ event }) =>
-    event._tag === "ImplementationEvidenceSealingIntended"
-      && !sealed.has(event.operation.operationId)
-      ? [event.operation]
-      : []
-  )
-  return yield* Effect.forEach(unresolved, (operation) =>
-    interpreter.sealImplementationEvidence(operation).pipe(
-      Effect.tap((result) =>
-        result._tag === "SealedImplementationEvidence"
-          ? trace.emit(SealedImplementationEvidenceTrace.make({ operation, sealed: result }))
-          : Effect.void
-      )
-    ))
-})
 
 const reconciliationIssue = (
   authority: RecoveryReconciliationIssue["authority"],
@@ -419,6 +206,40 @@ export const observeManagedRunAuthorities = Effect.fn(
       case "ReviewFindingsHandbackCompleted":
         checks.push(collect("Reviewer")(evidence.read(event.acknowledgement.reviewEvidenceReference)))
         break
+      case "ImplementationConvergenceDispositionRecorded": {
+        const request = event.operation.request
+        if (request._tag === "SimulatedImplementationConvergenceDisposition") break
+        const disposition = request.disposition
+        const review = disposition._tag === "Accepted"
+            || disposition._tag === "ImplementationNonConvergent"
+          ? disposition.review
+          : disposition._tag === "HandbackTechnicalRetryExhausted"
+          ? disposition.request.review
+          : disposition._tag === "ResourceEmergency"
+              || disposition._tag === "ImplementationExecutionFailed"
+              || disposition._tag === "ImplementationExecutionInterrupted"
+          ? disposition.priorEvidence._tag === "PriorReviewEvidence"
+            ? disposition.priorEvidence.review
+            : undefined
+          : undefined
+        if (review !== undefined) {
+          checks.push(
+            collect("Reviewer")(
+              authorizeImplementationReviewEvidence(review).pipe(Effect.provideService(EvidenceStore, evidence))
+            )
+          )
+        }
+        if (disposition._tag === "ReviewTechnicalRetryExhausted") {
+          checks.push(
+            collect("Evidence")(
+              authorizeImplementationReview(disposition.request.implementationEvidence).pipe(
+                Effect.provideService(EvidenceStore, evidence)
+              )
+            )
+          )
+        }
+        break
+      }
       default:
         break
     }
@@ -442,14 +263,28 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
   if (reduction._tag === "InvalidManagedHistory") return reduction.issues
 
   const collect = (authority: RecoveryReconciliationIssue["authority"]) => collectRefreshIssue(authority, runId)
-  return (yield* Effect.all([
+  const phases = [
     collect("Tracker")(recoverTrackerGraphObservations(runId)),
     collect("Tracker")(recoverTaskClaimAcquisitions(runId)),
     collect("Git")(recoverTaskWorktreeReconciliations(runId)),
     collect("TaskRunner")(recoverTaskWorkSessionEstablishments(runId)),
     collect("TaskExecutor")(recoverTaskExecutions(runId)),
     collect("Evidence")(recoverImplementationEvidenceSealings(runId)),
-    collect("Reviewer")(recoverImplementationReviews(runId)),
-    collect("Reviewer")(recoverReviewFindingsHandbacks(runId))
-  ], { concurrency: 1 })).flat()
+    collect("Reviewer")(recoverImplementationConvergences(runId))
+  ] as const
+  for (const phase of phases) {
+    const issues = yield* phase
+    if (issues.length > 0) return issues
+  }
+  return []
 })
+
+export {
+  recoverImplementationEvidenceSealings,
+  recoverImplementationReviews,
+  recoverReviewFindingsHandbacks,
+  recoverTaskClaimAcquisitions,
+  recoverTaskExecutions,
+  recoverTaskWorkSessionEstablishments,
+  recoverTaskWorktreeReconciliations
+} from "./workflow-operation-recovery.js"

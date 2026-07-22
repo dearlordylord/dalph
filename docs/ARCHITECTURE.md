@@ -387,8 +387,10 @@ stores that disposition in a content-addressed review manifest whose immediate
 predecessor is the sealed implementation evidence for the first round or the
 prior review evidence for a later round. Every manifest retains the complete
 finding history. A later round must advance by exactly one semantic ordinal,
-use a fresh reviewer session, and name a newer successful implementer
-invocation for the same planned attempt.
+preserve the exact unresolved finding history, and use a fresh reviewer
+session. Its predecessor must be findings, followed by the exact acknowledged
+handback and a newer successful implementer invocation in the same established
+session; that invocation's newly sealed evidence alone can admit the review.
 
 Findings select a separate handback operation. The handback request carries the
 immutable review evidence and repeats the exact planned attempt, worktree,
@@ -400,8 +402,7 @@ provider-enforced create-or-resume contracts: reviewer work is idempotent by
 operation plus reviewer-session identity, and findings delivery is idempotent
 by handback operation. An exact repeated payload returns the first accepted
 result without duplicating provider work; reuse of a key with a different
-payload fails. Technical scheduling and bounded semantic
-convergence remain owned by later tickets.
+payload fails.
 
 Dry-run and deterministic-test interpreters select the same review operation
 after simulated evidence sealing but return
@@ -456,6 +457,40 @@ or technical retry ordinal. The total history reducer rejects gaps, crossed
 scopes, delays inconsistent with the captured policy, schedules above the
 captured limit, and a schedule that advances before its predecessor deferral is
 superseded. Dry-run still fabricates no provider invocation or retry fact.
+
+## Bounded Implementation Convergence
+
+The live implementation control plane captures a positive semantic review
+round limit and runs one explicit bounded loop. A successful execution seals
+immutable evidence and selects a fresh independent reviewer. Acceptance records
+`Accepted`. Findings below the limit are handed back to the exact implementer
+invocation and provider session, then select a newer execution in that same
+session and a fresh reviewer session. Each later reviewer receives the complete
+finding history. Findings at the captured limit record
+`ImplementationNonConvergent` without another handback.
+
+Semantic non-convergence is distinct from technical retry exhaustion. Exhausted
+reviewer transport records `ReviewTechnicalRetryExhausted`; exhausted findings
+delivery records `HandbackTechnicalRetryExhausted`. Nonzero execution exit,
+interruption, and demonstrated resource emergency also have distinct terminal
+dispositions. A resource emergency requires explicit provider evidence for
+memory, process-capacity, or storage exhaustion and forbids automatic retry of
+the unchanged execution; Dalph never infers it from an exit code.
+
+Every terminal disposition retains the exact active claim, planned attempt,
+authoritative ready-worktree operation and proof, provider session, applicable
+findings/evidence chain, and selecting failure or outcome. Its direct
+predecessor must contain exactly the embedded review, request, or execution
+outcome; operation identity alone is insufficient. The journal permits one disposition per
+attempt and rejects later attempt events. Restart first reconciles unresolved
+provider intents, then reconstructs the last durable convergence stage. It
+reuses an unresolved review or handback operation, continues an acknowledged
+handback with same-session execution, and does not allocate a semantic round or
+reviewer session merely because the coordinator restarted.
+
+Dry-run selects the same bounded workflow shape but records only an
+`ImplementationConvergenceSimulated` projection. It cannot fabricate a claim,
+provider session, sealed review, findings, acceptance, or failure disposition.
 
 ## Documentation Responsibilities
 

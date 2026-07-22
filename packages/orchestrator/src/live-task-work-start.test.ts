@@ -8,6 +8,7 @@ import {
   ClaimToken,
   GitCommitSha,
   GitCommonDirectoryTarget,
+  ImplementationReviewRoundLimit,
   OperationId,
   PlannedTaskAttempt,
   ProviderObservationId,
@@ -236,7 +237,8 @@ it.effect("guards reviewer invocation and exact findings handback", () =>
       plannedAttempt,
       predecessorEvidenceReference: reference,
       reviewerSessionId: ReviewerSessionId.make("review-owned-reviewer"),
-      round: SemanticReviewRound.make(1)
+      round: SemanticReviewRound.make(1),
+      roundLimit: ImplementationReviewRoundLimit.make(6)
     })
     const review = SealedImplementationReview.make({
       manifest: {
@@ -250,6 +252,7 @@ it.effect("guards reviewer invocation and exact findings handback", () =>
         predecessorEvidenceReference: reference,
         reviewerSessionId: request.reviewerSessionId,
         round: request.round,
+        roundLimit: request.roundLimit,
         stage: "ImplementationReview"
       },
       manifestReference: reference

@@ -133,6 +133,14 @@ export const SemanticReviewRound = Schema.Int.check(
 ).pipe(Schema.brand("SemanticReviewRound"))
 export type SemanticReviewRound = typeof SemanticReviewRound.Type
 
+/** Bounds successful semantic reviewer dispositions for one implementation attempt; it is not a technical retry limit. */
+const maximumImplementationReviewRounds = 20
+export const ImplementationReviewRoundLimit = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1),
+  Schema.isLessThanOrEqualTo(maximumImplementationReviewRounds)
+).pipe(Schema.brand("ImplementationReviewRoundLimit"))
+export type ImplementationReviewRoundLimit = typeof ImplementationReviewRoundLimit.Type
+
 /** Bounds automatic technical retries after an invocation failure; it is not a semantic review-round limit. */
 export const TechnicalRetryLimit = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1),

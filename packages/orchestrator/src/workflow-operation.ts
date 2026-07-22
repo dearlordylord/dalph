@@ -1,6 +1,10 @@
 import { Schema } from "effect"
 import type { TrackerTarget } from "./domain.js"
 import { OperationId, PlannedTaskAttempt, TrackerTarget as TrackerTargetSchema } from "./domain.js"
+import {
+  ImplementationConvergenceDispositionRequest,
+  implementationConvergencePredecessorOperationId
+} from "./implementation-convergence.js"
 import { ImplementationReviewRequest, ReviewFindingsHandbackRequest } from "./implementation-review.js"
 import { TaskExecutionOutcome, TaskExecutionRequest } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
@@ -169,6 +173,27 @@ const HandBackReviewFindingsOperation = Schema.TaggedStruct(
   )
 )
 
+const RecordImplementationDispositionOperation = Schema.TaggedStruct(
+  "RecordImplementationDisposition",
+  {
+    predecessorOperationIds: CausalPredecessorOperationIds,
+    request: ImplementationConvergenceDispositionRequest
+  }
+).check(
+  Schema.makeFilter((operation) => {
+    const expected = operation.request._tag === "AuthorizedImplementationConvergenceDisposition"
+      ? implementationConvergencePredecessorOperationId(operation.request.disposition)
+      : operation.predecessorOperationIds[0]
+    return operation.predecessorOperationIds.length === 1
+        && operation.predecessorOperationIds[0] === expected
+      ? undefined
+      : {
+        path: ["predecessorOperationIds"],
+        issue: "implementation disposition must directly follow the selecting invocation or review"
+      }
+  })
+)
+
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
@@ -179,7 +204,8 @@ export const WorkflowOperation = Object.assign(
     ExecuteTaskWorkOperation,
     SealImplementationEvidenceOperation,
     ReviewImplementationOperation,
-    HandBackReviewFindingsOperation
+    HandBackReviewFindingsOperation,
+    RecordImplementationDispositionOperation
   ]),
   {
     cases: {
@@ -188,6 +214,7 @@ export const WorkflowOperation = Object.assign(
       ExecuteTaskWork: ExecuteTaskWorkOperation,
       HandBackReviewFindings: HandBackReviewFindingsOperation,
       ReviewImplementation: ReviewImplementationOperation,
+      RecordImplementationDisposition: RecordImplementationDispositionOperation,
       SealImplementationEvidence: SealImplementationEvidenceOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
@@ -219,6 +246,8 @@ export const workflowOperationId = (operation: WorkflowOperation): OperationId =
     : operation._tag === "ReviewImplementation"
     ? operation.request.operationId
     : operation._tag === "HandBackReviewFindings"
+    ? operation.request.operationId
+    : operation._tag === "RecordImplementationDisposition"
     ? operation.request.operationId
     : operation.request.operationId
 
@@ -344,5 +373,14 @@ export const makeReviewFindingsHandbackOperation = (
 ): typeof WorkflowOperation.cases.HandBackReviewFindings.Type =>
   WorkflowOperation.cases.HandBackReviewFindings.make({
     predecessorOperationIds: [request.reviewOperationId],
+    request
+  })
+
+export const makeImplementationDispositionOperation = (
+  request: ImplementationConvergenceDispositionRequest,
+  predecessorOperationId: OperationId
+): typeof WorkflowOperation.cases.RecordImplementationDisposition.Type =>
+  WorkflowOperation.cases.RecordImplementationDisposition.make({
+    predecessorOperationIds: [predecessorOperationId],
     request
   })

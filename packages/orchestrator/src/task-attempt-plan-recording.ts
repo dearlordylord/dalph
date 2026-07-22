@@ -2,6 +2,8 @@ import { Schema } from "effect"
 import { AttemptId, OperationId, PlannedTaskAttempt, RunId } from "./domain.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
+export { samePlannedTaskAttempt } from "./planned-task-attempt.js"
+
 /** The attempt plan belongs to a different durable workflow run. */
 export class TaskAttemptPlanRunContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanRunContradiction>()(
   "TaskAttemptPlanRunContradiction",
@@ -50,10 +52,3 @@ export const TaskAttemptPlanRecordingResult = Schema.Union([
   TaskAttemptPlanRecordingSimulated
 ])
 export type TaskAttemptPlanRecordingResult = typeof TaskAttemptPlanRecordingResult.Type
-
-export const samePlannedTaskAttempt = (
-  left: PlannedTaskAttempt,
-  right: PlannedTaskAttempt
-): boolean =>
-  JSON.stringify(Schema.encodeUnknownSync(PlannedTaskAttempt)(left))
-    === JSON.stringify(Schema.encodeUnknownSync(PlannedTaskAttempt)(right))

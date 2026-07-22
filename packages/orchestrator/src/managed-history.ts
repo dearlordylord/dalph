@@ -9,10 +9,22 @@ import {
   RunId,
   type TaskWorkSessionId
 } from "./domain.js"
+import {
+  claimForPlannedAttempt,
+  convergenceDispositionPredecessorMatches,
+  convergenceSubjectWorktreeMatches,
+  implementationReviewCausalChainMatches,
+  implementationReviewRequestCausalChainMatches,
+  reviewFindingsHandbackCausalChainMatches,
+  successfulConvergenceInvocationOutcomeExists,
+  technicalRetryScopeForConvergenceExhaustion
+} from "./implementation-convergence-history.js"
+import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { type JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
 import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
 import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
+import { isExactTaskClaim } from "./tracker-mutation.js"
 import {
   claimAuthorityMatches,
   executionAuthorityMatches,
@@ -143,6 +155,16 @@ export const reduceManagedHistory = (
     OperationId,
     Array<{ readonly event: TechnicalRetryJournalEvent; readonly position: JournalPosition }>
   >()
+  const sessionAttempts = new Map<TaskWorkSessionId, PlannedTaskAttempt>()
+  const sessionOperations = new Map<TaskWorkSessionId, OperationId>()
+  const terminalAttempts = new Set<AttemptId>()
+  const resourceEmergencyAttempts = new Set<AttemptId>()
+  const technicalExhaustions = new Array<{
+    readonly disposition: Extract<ImplementationConvergenceDisposition, {
+      readonly _tag: "HandbackTechnicalRetryExhausted" | "ReviewTechnicalRetryExhausted"
+    }>
+    readonly position: JournalPosition
+  }>()
 
   records.forEach((record, index) => {
     const expectedPosition = index + 1
@@ -217,6 +239,34 @@ export const reduceManagedHistory = (
     }
     {
       const priorAttempt = plannedAttemptByOperation.get(descriptor.operationId)
+      const ownedAttempt = plannedAttempt ?? priorAttempt
+      if (
+        ownedAttempt !== undefined
+        && resourceEmergencyAttempts.has(ownedAttempt.attemptId)
+        && record.event._tag === "TaskExecutionIntentRecorded"
+      ) {
+        issues.push(
+          new ManagedHistorySemanticIssue({
+            detail: `execution intent follows a demonstrated resource emergency for attempt ${ownedAttempt.attemptId}`,
+            position: record.position,
+            runId
+          })
+        )
+      }
+      if (
+        ownedAttempt !== undefined
+        && terminalAttempts.has(ownedAttempt.attemptId)
+        && record.event._tag !== "ImplementationConvergenceDispositionRecorded"
+      ) {
+        issues.push(
+          new ManagedHistorySemanticIssue({
+            detail:
+              `event ${record.event._tag} follows the terminal implementation disposition for attempt ${ownedAttempt.attemptId}`,
+            position: record.position,
+            runId
+          })
+        )
+      }
       if (
         plannedAttempt !== undefined
         && priorAttempt !== undefined
@@ -289,6 +339,11 @@ export const reduceManagedHistory = (
         descriptor.operationId,
         new Set([...(eventKindsByOperation.get(descriptor.operationId) ?? []), record.event._tag])
       )
+      if (
+        ownedAttempt !== undefined
+        && record.event._tag === "TaskExecutionOutcomeObserved"
+        && record.event.outcome.outcome._tag === "ResourceEmergency"
+      ) resourceEmergencyAttempts.add(ownedAttempt.attemptId)
     }
 
     if (record.event._tag === "TaskAttemptPlanned") {
@@ -303,6 +358,86 @@ export const reduceManagedHistory = (
             runId
           })
         )
+      }
+    }
+
+    if (record.event._tag === "TaskWorkSessionEstablished") {
+      const attempt = plannedAttemptByOperation.get(record.event.outcome.operationId)
+      if (attempt !== undefined) sessionAttempts.set(record.event.outcome.sessionId, attempt)
+      sessionOperations.set(record.event.outcome.sessionId, record.event.outcome.operationId)
+    }
+    if (record.event._tag === "ImplementationConvergenceDispositionRecorded") {
+      const request = record.event.operation.request
+      if (request._tag === "SimulatedImplementationConvergenceDisposition") {
+        issues.push(
+          new ManagedHistorySemanticIssue({
+            detail: "simulated implementation convergence cannot be durable workflow history",
+            position: record.position,
+            runId
+          })
+        )
+      } else {
+        const disposition = request.disposition
+        const subject = disposition.subject
+        const claim = claimForPlannedAttempt(records.slice(0, index + 1), subject.plannedAttempt)
+        if (claim === undefined || !isExactTaskClaim(claim, subject.claim)) {
+          issues.push(
+            new ManagedHistoryIdentityIssue({
+              detail:
+                `implementation disposition does not retain the exact acquired claim for task ${subject.claim.taskId}`,
+              position: record.position,
+              runId
+            })
+          )
+        }
+        const priorRecords = records.slice(0, index)
+        if (!convergenceSubjectWorktreeMatches(priorRecords, subject)) {
+          issues.push(
+            new ManagedHistoryIdentityIssue({
+              detail:
+                `implementation disposition does not retain the exact ready worktree for attempt ${subject.plannedAttempt.attemptId}`,
+              position: record.position,
+              runId
+            })
+          )
+        }
+        if (!convergenceDispositionPredecessorMatches(priorRecords, record.event.operation)) {
+          issues.push(
+            new ManagedHistorySemanticIssue({
+              detail: `implementation disposition predecessor does not match its embedded terminal evidence`,
+              position: record.position,
+              runId
+            })
+          )
+        }
+        const sessionAttempt = sessionAttempts.get(subject.sessionId)
+        if (
+          sessionAttempt === undefined
+          || !samePlannedAttempt(sessionAttempt, subject.plannedAttempt)
+          || sessionOperations.get(subject.sessionId) !== subject.sessionEstablishmentOperationId
+        ) {
+          issues.push(
+            new ManagedHistoryIdentityIssue({
+              detail: `implementation disposition session ${subject.sessionId} does not belong to its retained attempt`,
+              position: record.position,
+              runId
+            })
+          )
+        }
+        if (terminalAttempts.has(subject.plannedAttempt.attemptId)) {
+          issues.push(
+            new ManagedHistorySemanticIssue({
+              detail: `attempt ${subject.plannedAttempt.attemptId} has multiple terminal implementation dispositions`,
+              position: record.position,
+              runId
+            })
+          )
+        }
+        terminalAttempts.add(subject.plannedAttempt.attemptId)
+        if (
+          disposition._tag === "ReviewTechnicalRetryExhausted"
+          || disposition._tag === "HandbackTechnicalRetryExhausted"
+        ) technicalExhaustions.push({ disposition, position: record.position })
       }
     }
 
@@ -479,6 +614,18 @@ export const reduceManagedHistory = (
         )
       }
     }
+    if (
+      record.event._tag === "ImplementationReviewCompleted"
+      && !implementationReviewCausalChainMatches(records.slice(0, index + 1), record.event.review)
+    ) {
+      issues.push(
+        new ManagedHistorySemanticIssue({
+          detail: `implementation review round ${record.event.review.manifest.round} lacks its exact causal chain`,
+          position: record.position,
+          runId
+        })
+      )
+    }
   })
 
   for (const [operationId, positionedFacts] of technicalRetryFacts) {
@@ -497,6 +644,34 @@ export const reduceManagedHistory = (
         issue._tag === "Identity"
           ? new ManagedHistoryIdentityIssue({ detail: issue.detail, position: issue.position, runId })
           : new ManagedHistorySemanticIssue({ detail: issue.detail, position: issue.position, runId })
+      )
+    }
+  }
+
+  for (const { disposition, position } of technicalExhaustions) {
+    const scope = technicalRetryScopeForConvergenceExhaustion(disposition)
+    const analysis = analyzeTechnicalRetryFacts(
+      (technicalRetryFacts.get(scope.operationId) ?? []).map(({ event: fact }) => fact),
+      scope
+    )
+    const successfulOutcomeExists = successfulConvergenceInvocationOutcomeExists(records, disposition)
+    const causalChainMatches = disposition._tag === "ReviewTechnicalRetryExhausted"
+      ? implementationReviewRequestCausalChainMatches(records, disposition.request)
+      : reviewFindingsHandbackCausalChainMatches(records, disposition.request)
+    if (
+      successfulOutcomeExists
+      || !causalChainMatches
+      || analysis.policy === undefined
+      || analysis.progress.pendingDeferral !== undefined
+      || Number(analysis.progress.activeRetryOrdinal) !== Number(analysis.policy.limit)
+    ) {
+      issues.push(
+        new ManagedHistorySemanticIssue({
+          detail:
+            `technical exhaustion for operation ${scope.operationId} was recorded before its captured retry limit`,
+          position,
+          runId
+        })
       )
     }
   }

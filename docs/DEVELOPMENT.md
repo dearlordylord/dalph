@@ -32,6 +32,13 @@ reading test:
 5. Put the resolved canonical term in `docs/CONTEXT.md`; document each branded
    type and non-obvious event where it is declared.
 
+Explanations and reviews apply the same test before compressing behavior into
+canonical shorthand. First name the actor, action, and boundary in concrete
+language: prefer “try to create the claim up to three times” over “bounded
+acquisition,” “check GitHub again” over “perform an authoritative reread,” and
+“repository label used as the task claim record” over “label-backed lock.” The
+canonical term may follow once the concrete behavior is clear.
+
 The deliberately absurd reading is useful evidence: if “managed task” sounds
 like an unnamed manager managing a task, the name has hidden a domain actor.
 Humor exposes the ambiguity; the replacement must state the real actor and

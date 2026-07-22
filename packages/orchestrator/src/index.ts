@@ -23,6 +23,7 @@ export {
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
+  ImplementationReviewRoundLimit,
   isDependencySatisfied,
   isTaskOpen,
   JournalDatabaseLocator,
@@ -88,6 +89,8 @@ export {
 } from "./github-graphql-client.js"
 export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader.js"
 export { githubTrackerMutationLayer, githubTrackerMutationNodeLayer } from "./github-tracker-mutation.js"
+export * from "./implementation-convergence-trace.js"
+export * from "./implementation-convergence.js"
 export * from "./implementation-evidence-journal.js"
 export * from "./implementation-evidence.js"
 export * from "./implementation-review-journal.js"
@@ -259,6 +262,7 @@ export {
   ImplementationEvidenceSealingSimulatedTrace,
   ImplementationReviewCompletedTrace,
   ImplementationReviewSimulatedTrace,
+  makeImplementationDispositionOperation,
   makeImplementationEvidenceSealingOperation,
   makeImplementationReviewOperation,
   makeReviewFindingsHandbackOperation,

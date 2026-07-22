@@ -114,6 +114,26 @@ describe("workflow authority relations", () => {
           processId: "process",
           sessionId: "session"
         }
+      ],
+      [
+        {
+          _tag: "ResourceEmergency",
+          cause: "MemoryExhausted",
+          detail: "memory cgroup exhausted",
+          operationId: "execution",
+          partialOutput: "retained",
+          processId: "process",
+          sessionId: "session"
+        },
+        {
+          _tag: "ResourceEmergencyTaskExecutionReported",
+          cause: "MemoryExhausted",
+          detail: "memory cgroup exhausted",
+          operationId: "execution",
+          partialOutput: "retained",
+          processId: "process",
+          sessionId: "session"
+        }
       ]
     ] as const
   )("matches immutable terminal %s evidence", (durable, observed) => {

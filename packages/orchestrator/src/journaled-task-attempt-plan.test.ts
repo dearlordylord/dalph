@@ -76,6 +76,7 @@ const baseInterpreterLayer = Layer.succeed(
     handBackReviewFindings: () => Effect.die("unused review handback"),
     reviewImplementation: () => Effect.die("unused review"),
     readTrackerGraph: () => Effect.die("unused graph"),
+    recordImplementationDisposition: () => Effect.die("unused implementation disposition"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.die("unused worktree"),
     simulateTaskExecution: () => Effect.die("unused execution simulation"),
@@ -236,6 +237,7 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
         handBackReviewFindings: () => Effect.die("review handback must not run"),
         reviewImplementation: () => Effect.die("review must not run"),
         readTrackerGraph: () => Effect.succeed(snapshot),
+        recordImplementationDisposition: () => Effect.die("implementation disposition must not run"),
         recordTaskAttemptPlan: () =>
           Effect.fail(
             new JournalStorageUnavailable({

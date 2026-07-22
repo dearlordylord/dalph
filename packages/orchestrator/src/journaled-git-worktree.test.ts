@@ -68,6 +68,7 @@ const baseLayer = Layer.succeed(
     handBackReviewFindings: () => Effect.die("unused review handback"),
     reviewImplementation: () => Effect.die("unused review"),
     readTrackerGraph: () => Effect.die("unused graph"),
+    recordImplementationDisposition: () => Effect.die("unused implementation disposition"),
     recordTaskAttemptPlan: () => Effect.die("journal wrapper records the plan"),
     reconcileTaskWorktree: () => Effect.succeed(AuthoritativeTaskWorktreeReady.make({ proof })),
     simulateTaskExecution: () => Effect.die("unused execution simulation"),
@@ -157,6 +158,7 @@ it.effect("does not fabricate a ready proof from a simulated recovery result", (
       handBackReviewFindings: () => Effect.die("unused review handback"),
       reviewImplementation: () => Effect.die("unused review"),
       readTrackerGraph: () => Effect.die("unused graph"),
+      recordImplementationDisposition: () => Effect.die("unused implementation disposition"),
       recordTaskAttemptPlan: () => Effect.die("unused plan"),
       reconcileTaskWorktree: (operation) =>
         Effect.succeed(
