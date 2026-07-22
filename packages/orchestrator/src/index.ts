@@ -26,6 +26,8 @@ export {
   isDependencySatisfied,
   isTaskOpen,
   JournalDatabaseLocator,
+  JournalEventKind,
+  JournalEventVersion,
   JournalPosition,
   JournalRecordKey,
   JournalSchemaVersion,
@@ -90,6 +92,8 @@ export * from "./implementation-evidence-journal.js"
 export * from "./implementation-evidence.js"
 export * from "./implementation-review-journal.js"
 export * from "./implementation-review.js"
+export * from "./journal-event-codec.js"
+export * from "./journal-recovery-model.js"
 export {
   JournalDataCorruption,
   JournalSchemaIncompatible,
@@ -120,10 +124,15 @@ export {
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
+export * from "./managed-history.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 export { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
-export { productionWorkflowInterpreterLayer } from "./production-application.js"
+export {
+  productionWorkflowInterpreterLayer,
+  StartupRecoveryBlocked,
+  StartupRecoveryIssue
+} from "./production-application.js"
 export {
   journalDatabaseLocatorConfig,
   productionJournalStoreLayer,
@@ -226,6 +235,11 @@ export {
   taskRunnerWorkflowInterpreterLayer,
   trackerMutationWorkflowInterpreterLayer
 } from "./workflow-interpreters.js"
+export {
+  recoverExactRunAfterCoordinatorDeath,
+  RecoveryOwnershipIssue,
+  RecoveryReconciliationIssue
+} from "./workflow-recovery.js"
 export {
   recoverImplementationEvidenceSealings,
   recoverImplementationReviews,

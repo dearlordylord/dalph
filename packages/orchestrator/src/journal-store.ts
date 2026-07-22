@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-import type { AttemptId } from "./domain.js"
 import {
   JournalPosition,
   JournalRecordKey,
@@ -11,6 +10,8 @@ import {
 import { PlannedWorktreeReady } from "./git-worktree.js"
 import { ImplementationEvidenceJournalEvent } from "./implementation-evidence-journal.js"
 import { ImplementationReviewJournalEvent } from "./implementation-review-journal.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
+import type { JournalScan } from "./journal-recovery-model.js"
 import {
   TaskExecutionObservationFailure,
   TaskExecutionReport,
@@ -34,7 +35,10 @@ import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow-outcome.js"
 /** Records selection of a read-only tracker-graph observation in workflow history. */
 const TrackerGraphObservationIntentRecorded = Schema.TaggedStruct(
   "TrackerGraphObservationIntentRecorded",
-  { operation: WorkflowOperationSchema.cases.ReadTrackerGraph }
+  {
+    operation: WorkflowOperationSchema.cases.ReadTrackerGraph,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
 )
 
 /** Records one tracker-graph observation without replacing tracker authority. */
@@ -42,12 +46,10 @@ const TrackerGraphOutcomeObservedEvent = Schema.TaggedStruct(
   "TrackerGraphOutcomeObserved",
   {
     operationId: OperationId,
-    outcome: WorkflowOutcomeSchema.cases.TrackerGraphObserved
+    outcome: WorkflowOutcomeSchema.cases.TrackerGraphObserved,
+    version: Schema.Literal(workflowJournalEventVersion)
   }
 )
-
-// Version 2 is the first canonical workflow event vocabulary.
-const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
 
 /** Records immutable claim intent before a task-tracker mutation can cross its boundary. */
 export const TaskClaimAcquisitionIntendedEvent = Schema.TaggedStruct(
@@ -280,12 +282,14 @@ export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
 export const trackerGraphObservationIntent = (
   operation: typeof WorkflowOperationSchema.cases.ReadTrackerGraph.Type
-): typeof TrackerGraphObservationIntentRecorded.Type => TrackerGraphObservationIntentRecorded.make({ operation })
+): typeof TrackerGraphObservationIntentRecorded.Type =>
+  TrackerGraphObservationIntentRecorded.make({ operation, version: workflowJournalEventVersion })
 
 export const trackerGraphOutcomeObserved = (
   operationId: OperationId,
   outcome: typeof WorkflowOutcomeSchema.cases.TrackerGraphObserved.Type
-): typeof TrackerGraphOutcomeObservedEvent.Type => TrackerGraphOutcomeObservedEvent.make({ operationId, outcome })
+): typeof TrackerGraphOutcomeObservedEvent.Type =>
+  TrackerGraphOutcomeObservedEvent.make({ operationId, outcome, version: workflowJournalEventVersion })
 
 export interface JournalRecord {
   readonly runId: RunId
@@ -382,6 +386,7 @@ export interface JournalStoreService {
   readonly read: (
     runId: RunId
   ) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
+  readonly scan: () => Effect.Effect<JournalScan, JournalStoreError>
 }
 
 export class JournalStore extends Context.Service<JournalStore, JournalStoreService>()(
@@ -450,60 +455,16 @@ export const memoryJournalStoreLayer = Layer.effect(
     const read = Effect.fn("JournalStore.Memory.read")(function*(runId: RunId) {
       return (yield* Ref.get(state)).recordsByRun.get(runId) ?? []
     })
+    const scan = Effect.fn("JournalStore.Memory.scan")(function*() {
+      const recordsByRun = (yield* Ref.get(state)).recordsByRun
+      return {
+        issues: [],
+        runs: [...recordsByRun].map(([runId, records]) => ({ records, runId }))
+      }
+    })
 
-    return JournalStore.of({ append, read })
+    return JournalStore.of({ append, read, scan })
   })
 )
 
-export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:intent`)
-
-export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:outcome`)
-
-export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
-  JournalRecordKey.make(`attempt:${attemptId}:plan`)
-
-export const providerObservationRequestRecordKey = (
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
-
-export const taskWorkStartAcknowledgedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-acknowledged:${observationId}`)
-
-export const taskWorkStartFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-failed:${observationId}`)
-
-export const taskWorkSessionReportedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-session-reported:${observationId}`)
-
-export const taskExecutionRequestReturnedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-) => JournalRecordKey.make(`operation:${operationId}:task-execution-request-returned:${observationId}`)
-
-export const taskExecutionRequestAttemptRecordKey = (
-  operationId: OperationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-attempt`)
-
-export const taskExecutionRequestFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-failed:${observationId}`)
-
-export const taskExecutionReportedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-reported:${observationId}`)
-
-export const taskExecutionObservationFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:task-execution-observation-failed:${observationId}`)
+export * from "./journal-record-key.js"

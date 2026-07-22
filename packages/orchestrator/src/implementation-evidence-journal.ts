@@ -1,9 +1,8 @@
 import { Schema } from "effect"
 import { OperationId } from "./domain.js"
 import { SealedImplementationEvidence } from "./implementation-evidence.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-
-const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
 
 /** Records sealing intent before any evidence object can become visible. */
 export const ImplementationEvidenceSealingIntendedEvent = Schema.TaggedStruct(

@@ -511,6 +511,13 @@ One persisted workflow-journal event containing its identity, position, kind,
 version, and payload.
 _Avoid_: Event envelope, serialized coordinator, unvalidated database row
 
+**Journal boundary decode issue**:
+A typed fact that one physical journal row, normalized envelope, or immutable
+versioned payload could not cross its Effect Schema boundary. Discovery retains
+the row ordinal and the run identity when that identity itself decoded; it does
+not discard other rows or convert the issue into an empty history.
+_Avoid_: Invalid managed history, missing run, storage outage
+
 **Git common directory**:
 The canonical Git-owned administrative directory shared by a repository and
 all of its linked worktrees. Dalph uses its canonical path as the key for the
@@ -527,6 +534,20 @@ The process that reads journal events in position order, validates rules between
 events, and returns either a recovery state or typed validation errors. Dalph
 does not persist the derived recovery state.
 _Avoid_: Event decoding, coordinator rehydration, reducer rollup table
+
+**Invalid managed history**:
+A preserved run whose individually decoded journal events contradict canonical
+position, record-key, operation-identity, ownership, or workflow-transition
+rules. Dalph accumulates the independent validation issues and does not resume
+the run or rewrite its history.
+_Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired history
+
+**Startup run recovery**:
+The fail-closed process performed under coordinator ownership that discovers
+every journaled run without an age cutoff, validates each complete managed
+history, and freshly rereads the tracker, Git, executor, evidence, and reviewer
+authorities for the exact recorded attempts before live coordination begins.
+_Avoid_: Process rehydration, recent-run scan, journal replay alone
 
 **Run termination**:
 The final Dalph-recorded disposition of a run: completed, blocked, cancelled, or

@@ -1,6 +1,7 @@
-import { NodeFileSystem } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { ConfigProvider, Effect, Exit, FileSystem, Layer, Ref } from "effect"
+import { ConfigProvider, Effect, Exit, FileSystem, Layer, Ref, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import {
   type TaskWorkSessionCrashScenario,
@@ -49,6 +50,38 @@ import {
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent
 } from "./journal-store.js"
+
+const runGit = Effect.fn("TaskWorkSessionCrashMatrix.runGit")(function*(
+  cwd: string,
+  ...args: ReadonlyArray<string>
+) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  return yield* Effect.scoped(Effect.gen(function*() {
+    const handle = yield* spawner.spawn(ChildProcess.make("git", args, { cwd }))
+    const [exitCode, stderr, stdout] = yield* Effect.all([
+      handle.exitCode,
+      handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+      handle.stdout.pipe(Stream.decodeText(), Stream.mkString)
+    ], { concurrency: "unbounded" })
+    if (exitCode !== 0) return yield* Effect.die(`git ${args.join(" ")} failed: ${stderr}`)
+    return stdout.trim()
+  }))
+})
+
+const makeRepository = Effect.fn("TaskWorkSessionCrashMatrix.makeRepository")(function*(directory: string) {
+  const fileSystem = yield* FileSystem.FileSystem
+  const repository = `${directory}/repository`
+  yield* fileSystem.makeDirectory(repository)
+  yield* runGit(repository, "init", "--initial-branch=master")
+  yield* runGit(repository, "config", "user.email", "dalph@example.invalid")
+  yield* runGit(repository, "config", "user.name", "Dalph Test")
+  yield* runGit(repository, "commit", "--allow-empty", "-m", "base")
+  return {
+    baseSha: GitCommitSha.make(yield* runGit(repository, "rev-parse", "HEAD")),
+    gitDirectory: GitCommonDirectoryTarget.make(`${repository}/.git`),
+    repository
+  }
+})
 
 /** Shared typed metadata for the provider/request crash-boundary acceptance lane. */
 const crashScenarios = [
@@ -192,6 +225,16 @@ for (const scenario of crashScenarios) {
       const directory = yield* fileSystem.makeTempDirectoryScoped({
         prefix: `dalph-crash-${scenario.boundary}-`
       })
+      const repository = yield* makeRepository(directory)
+      yield* runGit(
+        repository.repository,
+        "worktree",
+        "add",
+        "-b",
+        scenario.boundary,
+        `${directory}/task`,
+        repository.baseSha
+      )
       const runId = RunId.make(`crash-${scenario.boundary}`)
       const operationId = OperationId.make(`operation-${scenario.boundary}`)
       const taskId = TaskId.make(`task-${scenario.boundary}`)
@@ -203,7 +246,7 @@ for (const scenario of crashScenarios) {
       }
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make(`attempt-${scenario.boundary}`),
-        baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+        baseSha: repository.baseSha,
         branch: TaskBranchRef.make(`refs/heads/${scenario.boundary}`),
         executor: TaskExecutorLocator.make("executor:crash-matrix"),
         runId,
@@ -315,7 +358,7 @@ for (const scenario of crashScenarios) {
       )
       const applicationLayer = productionWorkflowInterpreterLayer(
         runId,
-        GitCommonDirectoryTarget.make(directory),
+        repository.gitDirectory,
         taskExecutorTestLayer,
         runnerLayer,
         controlledTrackerMutationLayer
@@ -375,17 +418,27 @@ for (const scenario of crashScenarios) {
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       expect(records.map(({ event }) => event._tag)).toEqual(scenario.expectedTags)
       expect(yield* Ref.get(requests)).toBe(scenario.expectedRequests)
-      expect(yield* Ref.get(lookups)).toBe(scenario.expectedLookups)
+      expect(yield* Ref.get(lookups)).toBe(scenario.expectedLookups + 1)
       expect(yield* Ref.get(providerHasSession)).toBe(true)
       const intent = records.find(({ event }) => event._tag === "TaskWorkSessionEstablishmentIntentRecorded")?.event
       expect(intent).toMatchObject({ operation: { predecessorOperationIds, request } })
-    }).pipe(Effect.provide(NodeFileSystem.layer)))
+    }).pipe(Effect.provide(NodeServices.layer)))
 }
 
 it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowledgement}`, () =>
   Effect.gen(function*() {
     const fileSystem = yield* FileSystem.FileSystem
     const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-before-intent-" })
+    const repository = yield* makeRepository(directory)
+    yield* runGit(
+      repository.repository,
+      "worktree",
+      "add",
+      "-b",
+      "before-intent",
+      `${directory}/task`,
+      repository.baseSha
+    )
     const runId = RunId.make("before-intent-run")
     const taskId = TaskId.make("before-intent-task")
     const task = {
@@ -396,7 +449,7 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     }
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("before-intent-attempt"),
-      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      baseSha: repository.baseSha,
       branch: TaskBranchRef.make("refs/heads/before-intent"),
       executor: TaskExecutorLocator.make("executor:before-intent"),
       runId,
@@ -446,7 +499,7 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     )
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
-      GitCommonDirectoryTarget.make(directory),
+      repository.gitDirectory,
       taskExecutorTestLayer,
       runnerLayer,
       controlledTrackerMutationLayer
@@ -507,4 +560,4 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
     }).pipe(Effect.provide(applicationLayer), Effect.provide(configLayer))
     expect(outcome.operationId).toBe(replacement.request.operationId)
     expect(outcome.operationId).not.toBe(discarded.request.operationId)
-  }).pipe(Effect.provide(NodeFileSystem.layer)))
+  }).pipe(Effect.provide(NodeServices.layer)))

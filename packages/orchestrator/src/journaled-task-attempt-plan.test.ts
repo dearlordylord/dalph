@@ -192,7 +192,8 @@ it.effect("rejects multiple durable plans for one attempt before session mutatio
             position: JournalPosition.make(2),
             runId
           }
-        ])
+        ]),
+      scan: () => Effect.succeed({ issues: [], runs: [] })
     })
   )
   const request = TaskWorkStartRequest.make({

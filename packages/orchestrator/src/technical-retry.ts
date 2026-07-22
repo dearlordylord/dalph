@@ -10,6 +10,7 @@ import {
   TechnicalRetryNotBefore,
   TechnicalRetryOrdinal
 } from "./domain.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import type { JournalStoreContradiction, JournalStoreError, JournalStoreService } from "./journal-store.js"
 
 const validDelayRange = Schema.makeFilter<{
@@ -63,8 +64,6 @@ export class TechnicalRetryScheduleOverflow extends Schema.TaggedErrorClass<Tech
     scope: TechnicalRetryScope
   }
 ) {}
-
-const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
 
 /** Captures the positive limit and bounded exponential delays before the active scope is invoked. */
 export const TechnicalRetryPolicyCapturedEvent = Schema.TaggedStruct(

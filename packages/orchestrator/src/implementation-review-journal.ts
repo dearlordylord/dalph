@@ -1,9 +1,8 @@
 import { Schema } from "effect"
 import { ReviewFindingsHandbackAcknowledged, SealedImplementationReview } from "./implementation-review.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { TechnicalRetryJournalEvent } from "./technical-retry.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-
-const workflowJournalEventVersion = 2 as const // eslint-disable-line no-magic-numbers
 
 /** Records the exact fresh reviewer session before invoking the reviewer. */
 export const ImplementationReviewIntendedEvent = Schema.TaggedStruct(

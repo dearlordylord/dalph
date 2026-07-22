@@ -68,13 +68,23 @@ journal. It does not make an in-memory coordinator object durable or persist
 copies of current task-tracker, Git, or task-runner state so that coordination
 can continue from those copies after restart.
 
-After restart, Dalph reads the run's journal events in position order, rereads
-current task state from the task tracker, rereads refs and worktrees from Git,
-and asks the task runner for current task-work sessions, provider work units,
-and worker processes. It derives new in-memory coordination and presentation
-state from those reads. A restarted process must not treat a pre-crash queue
-buffer, capacity reservation, timer instance, frontier, presentation cursor, or
-projection as proof that work occurred.
+After restart and while holding coordinator ownership, Dalph scans every
+physical journal row and discovers every recoverable run without an age cutoff.
+It validates each run's complete event history in position order before it
+rereads current task and claim state from the tracker, refs and exact worktrees
+from Git, current sessions from the task runner, worker processes from the task
+executor, and evidence, review, and handback state from their authorities. It derives new in-memory
+coordination and presentation state from those reads. A restarted process must
+not treat a pre-crash queue buffer, capacity reservation, timer instance,
+frontier, presentation cursor, or projection as proof that work occurred.
+
+Discovery accumulates independent physical-row, envelope, payload, identity,
+ownership, semantic-history, and reconciliation issues. A row that cannot be
+decoded does not hide another row or become an empty history. Any run with a
+boundary issue or invalid managed history remains preserved and is not resumed;
+ambiguous external resources likewise remain untouched for operator repair.
+Startup fails closed after collecting the available issues rather than allowing
+one unreadable authority to hide another authority's reconciliation fact.
 
 | State or record | Where current state is read | Restart treatment |
 | --- | --- | --- |
@@ -132,14 +142,20 @@ task-work session report from the task runner.
 
 SQLite schema migration, journal-event version conversion, and ordered journal
 history validation change independently and require separate implementations.
-Physical SQLite changes use ordered Effect SQL migrations.
-Each journal event record contains its identity, position, kind, version, and
-JSON payload. Effect Schema decodes that record and converts older payload
-versions; stored history is not rewritten merely to adopt a newer in-process
-event shape. Successful row decoding is necessary but
-not sufficient for recovery: journal history validation must read events in
-order, check rules between them, and return either a valid recovery state or
-typed validation errors. Dalph does not persist that derived state. See
+Physical SQLite changes use ordered Effect SQL SQLite migrations before the
+normalized schema is read or written. Each physical record stores normalized
+run identity, canonical position, record key, event kind, event version, and an
+immutable JSON payload; it stores no derived frontier or recovery rollup.
+Effect Schema independently decodes every physical row and versioned payload,
+then an immutable upcaster produces the current event meaning. Idempotent
+reappend compares that upcasted meaning rather than historical JSON bytes.
+
+Successful row decoding is necessary but not sufficient for recovery. The
+total history reducer checks contiguous canonical positions, record-run and
+record-key identity, event-kind and operation identity, attempt ownership,
+legal intent/observation transitions, and duplicate or contradictory facts. It
+returns either valid managed history or all detected typed validation issues;
+it does not throw away the records or persist the derived result. See
 [ADR 0001](adr/0001-versioned-journal-evolution.md).
 
 Journal history validation rejects structurally impossible managed history,

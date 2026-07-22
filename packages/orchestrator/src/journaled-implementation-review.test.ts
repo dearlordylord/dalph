@@ -888,7 +888,8 @@ it.effect("provider create-or-resume contracts prevent duplicate review and hand
             }
             return yield* journal.append(journalRunId, key, event)
           }),
-        read: journal.read
+        read: journal.read,
+        scan: journal.scan
       }
       const reviewProtocol = makeJournaledImplementationReview({
         evidenceStore: store,
@@ -1039,7 +1040,8 @@ it.effect("recovers unresolved review and findings handback intents through thei
 
 const journalView = (records: ReadonlyArray<JournalRecord>): JournalStoreService => ({
   append: () => Effect.die("contradiction must precede append"),
-  read: () => Effect.succeed(records)
+  read: () => Effect.succeed(records),
+  scan: () => Effect.succeed({ issues: [], runs: [{ records, runId }] })
 })
 
 const extraRecord = (

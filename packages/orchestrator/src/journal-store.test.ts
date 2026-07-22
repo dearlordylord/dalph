@@ -1,7 +1,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { Cause, Effect, FileSystem, Layer, Path } from "effect"
+import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
@@ -20,6 +20,7 @@ import {
   RunId,
   sqliteJournalStoreLayer,
   trackerGraphObservationIntent,
+  WorkflowJournalEvent,
   WorkflowOperation
 } from "./index.js"
 import { classifyJournalStorageFailure } from "./sqlite-journal-store.js"
@@ -153,6 +154,17 @@ const journalAppendContract = (
         expect(first.position).toBe(1)
         expect(other.position).toBe(1)
       }).pipe(Effect.provide(makeLayer())))
+
+    it.effect("discovers all journal runs without an age cutoff", () =>
+      Effect.gen(function*() {
+        const journal = yield* JournalStore
+        yield* journal.append(runId, firstKey, intent("one", "task-1"))
+        const otherRunId = RunId.make(`${runId}-older`)
+        yield* journal.append(otherRunId, firstKey, intent("one", "task-1"))
+        expect(new Set((yield* journal.scan()).runs.map(({ runId }) => runId))).toEqual(
+          new Set([runId, otherRunId])
+        )
+      }).pipe(Effect.provide(makeLayer())))
   })
 }
 
@@ -189,8 +201,48 @@ durableJournalStoreContract(
             const journalMode = yield* sql`PRAGMA journal_mode`
             const schemaVersion = yield* sql`PRAGMA user_version`
             expect(journalMode).toEqual([{ journal_mode: "wal" }])
-            expect(schemaVersion).toEqual([{ user_version: 1 }])
+            const migrations = yield* sql`
+              SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+            `
+            expect(schemaVersion).toEqual([{ user_version: 2 }])
+            expect(migrations).toEqual([
+              { migration_id: 1, name: "create_journal_records" },
+              { migration_id: 2, name: "normalize_versioned_journal_envelopes" }
+            ])
           }).pipe(Effect.provide(Reactivity.layer))
+        )
+      ))
+
+    it.effect("adopts immutable version-1 rows and compares re-appends after semantic upcast", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function*() {
+            const runId = RunId.make("legacy-run")
+            const key = JournalRecordKey.make("operation:legacy:intent")
+            const current = intent("legacy", "legacy-task")
+            const encoded = Schema.encodeUnknownSync(WorkflowJournalEvent)(current)
+            const { version: _version, ...legacy } = encoded
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function*() {
+                yield* sql`CREATE TABLE journal_records (
+                run_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 1),
+                record_key TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, position),
+                UNIQUE (run_id, record_key)
+              ) STRICT`
+                yield* sql`PRAGMA user_version = 1`
+                yield* sql`INSERT INTO journal_records (run_id, position, record_key, event_json)
+                VALUES (${runId}, 1, ${key}, ${JSON.stringify(legacy)})`
+              }))
+
+            yield* Effect.gen(function*() {
+              const journal = yield* JournalStore
+              expect((yield* journal.read(runId))[0]?.event).toEqual(current)
+              expect((yield* journal.append(runId, key, current)).position).toBe(1)
+            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+          })
         )
       ))
 
@@ -297,7 +349,15 @@ durableJournalStoreContract(
       Effect.scoped(
         withTemporaryDatabase((filename) =>
           Effect.gen(function*() {
-            yield* withSqliteClient(filename, (sql) => Effect.asVoid(sql`PRAGMA user_version = 2`))
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function*() {
+                yield* sql`CREATE TABLE effect_sql_migrations (
+                migration_id INTEGER PRIMARY KEY NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT current_timestamp,
+                name VARCHAR(255) NOT NULL
+              )`
+                yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (3, 'future')`
+              }))
             const failure = yield* Effect.flip(
               Effect.gen(function*() {
                 yield* JournalStore
@@ -306,8 +366,8 @@ durableJournalStoreContract(
 
             expect(failure).toMatchObject({
               _tag: "JournalSchemaIncompatible",
-              found: 2,
-              supported: 1
+              found: 3,
+              supported: 2
             })
           })
         )
@@ -319,7 +379,7 @@ durableJournalStoreContract(
           Effect.gen(function*() {
             yield* withSqliteClient(
               filename,
-              (sql) => Effect.asVoid(sql`PRAGMA user_version = -1`)
+              (sql) => Effect.asVoid(sql`CREATE TABLE journal_records (wrong TEXT) STRICT`)
             )
             const failure = yield* Effect.flip(
               Effect.gen(function*() {
@@ -348,7 +408,10 @@ durableJournalStoreContract(
                 intent("malformed", "task-malformed")
               )
             }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-            yield* withSqliteClient(filename, (sql) => Effect.asVoid(sql`UPDATE journal_records SET event_json = '{'`))
+            yield* withSqliteClient(
+              filename,
+              (sql) => Effect.asVoid(sql`UPDATE journal_records SET payload_json = '{'`)
+            )
 
             const failure = yield* Effect.flip(
               Effect.gen(function*() {
@@ -360,6 +423,57 @@ durableJournalStoreContract(
               _tag: "JournalDataCorruption",
               operation: "JournalStore.read"
             })
+          })
+        )
+      ))
+
+    it.effect("discovers every run and accumulates independent row and payload decode issues", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function*() {
+            const firstRun = RunId.make("old-run-without-age-cutoff")
+            const secondRun = RunId.make("new-run-without-age-cutoff")
+            const thirdRun = RunId.make("row-schema-failure-run")
+            const fourthRun = RunId.make("run-identity-schema-failure-run")
+            yield* Effect.gen(function*() {
+              const journal = yield* JournalStore
+              yield* journal.append(
+                firstRun,
+                JournalRecordKey.make("operation:first:intent"),
+                intent("first", "task-first")
+              )
+              yield* journal.append(
+                secondRun,
+                JournalRecordKey.make("operation:second:intent"),
+                intent("second", "task-second")
+              )
+              yield* journal.append(
+                thirdRun,
+                JournalRecordKey.make("operation:third:intent"),
+                intent("third", "task-third")
+              )
+              yield* journal.append(
+                fourthRun,
+                JournalRecordKey.make("operation:fourth:intent"),
+                intent("fourth", "task-fourth")
+              )
+            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function*() {
+                yield* sql`UPDATE journal_records SET payload_json = '{' WHERE run_id = ${firstRun}`
+                yield* sql`UPDATE journal_records SET event_kind = 'UnknownEvent' WHERE run_id = ${secondRun}`
+                yield* sql`UPDATE journal_records SET record_key = '' WHERE run_id = ${thirdRun}`
+                yield* sql`UPDATE journal_records SET run_id = '' WHERE run_id = ${fourthRun}`
+              }))
+
+            const scan = yield* Effect.gen(function*() {
+              return yield* (yield* JournalStore).scan()
+            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            expect(scan.issues).toHaveLength(4)
+            expect(new Set(scan.issues.map(({ runId }) => runId))).toEqual(
+              new Set([firstRun, secondRun, thirdRun, null])
+            )
+            expect(scan.runs).toEqual([])
           })
         )
       ))

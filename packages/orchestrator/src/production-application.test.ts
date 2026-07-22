@@ -1,15 +1,22 @@
-import { NodeFileSystem } from "@effect/platform-node"
+import { NodeFileSystem, NodeServices } from "@effect/platform-node"
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Ref } from "effect"
+import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Ref, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { expect } from "vitest"
 import { TaskWorkSessionCrashScenario } from "../test/task-work-session-crash-scenarios.js"
+import { CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import type { WorkflowOutcome } from "./index.js"
 import {
   AttemptId,
   controlledTrackerMutationLayer,
+  FixtureTarget,
   GitCommitSha,
+  GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
+  JournalRecordKey,
   JournalStore,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
@@ -34,7 +41,10 @@ import {
   TaskWorkSessionLocator,
   TaskWorkStartRequest,
   TrackerGraphReader,
+  TrackerReadError,
+  TrackerRevision,
   WorkflowInterpreter,
+  WorkflowOperation,
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
@@ -45,8 +55,24 @@ import {
   TaskAttemptPlannedEvent,
   TaskWorkSessionEstablishmentIntentRecorded,
   TaskWorktreeReadyEvent,
-  TaskWorktreeReconciliationIntendedEvent
+  TaskWorktreeReconciliationIntendedEvent,
+  trackerGraphObservationIntent,
+  trackerGraphOutcomeObserved
 } from "./journal-store.js"
+
+const runGit = Effect.fn("ProductionApplicationTest.runGit")(function*(cwd: string, ...args: ReadonlyArray<string>) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  return yield* Effect.scoped(Effect.gen(function*() {
+    const handle = yield* spawner.spawn(ChildProcess.make("git", args, { cwd }))
+    const [exitCode, stderr, stdout] = yield* Effect.all([
+      handle.exitCode,
+      handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+      handle.stdout.pipe(Stream.decodeText(), Stream.mkString)
+    ], { concurrency: "unbounded" })
+    if (exitCode !== 0) return yield* Effect.die(`git ${args.join(" ")} failed: ${stderr}`)
+    return stdout.trim()
+  }))
+})
 
 it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenario.AfterOutcomeRecorded}`, () =>
   Effect.gen(function*() {
@@ -54,6 +80,14 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const directory = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "dalph-production-"
     })
+    const repository = `${directory}/repository`
+    yield* fileSystem.makeDirectory(repository)
+    yield* runGit(repository, "init", "--initial-branch=master")
+    yield* runGit(repository, "config", "user.email", "dalph@example.invalid")
+    yield* runGit(repository, "config", "user.name", "Dalph Test")
+    yield* runGit(repository, "commit", "--allow-empty", "-m", "base")
+    const baseSha = GitCommitSha.make(yield* runGit(repository, "rev-parse", "HEAD"))
+    yield* runGit(repository, "worktree", "add", "-b", "production-task", `${directory}/task`, baseSha)
     const runId = RunId.make("production-run")
     const taskId = TaskId.make("production-task")
     const task = {
@@ -64,7 +98,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     }
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("production-attempt"),
-      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      baseSha,
       branch: TaskBranchRef.make("refs/heads/production-task"),
       executor: TaskExecutorLocator.make("executor:production-test"),
       runId,
@@ -114,7 +148,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     )
     const applicationLayer = productionWorkflowInterpreterLayer(
       runId,
-      GitCommonDirectoryTarget.make(directory),
+      GitCommonDirectoryTarget.make(`${repository}/.git`),
       taskExecutorTestLayer,
       runnerLayer,
       controlledTrackerMutationLayer
@@ -162,6 +196,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
         TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 2 })
       )
     }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+    yield* runGit(`${directory}/task`, "commit", "--allow-empty", "-m", "implementation progress")
     const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({
       DALPH_JOURNAL_DATABASE: filename
     }))
@@ -192,5 +227,154 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     })
     expect(replayedOutcome).toEqual(firstOutcome)
     expect(yield* Ref.get(requests)).toBe(0)
-    expect(yield* Ref.get(lookups)).toBe(1)
+    expect(yield* Ref.get(lookups)).toBe(3)
+  }).pipe(Effect.provide(NodeServices.layer)))
+
+it.effect("preserves and blocks semantically invalid discovered history before authority refresh", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-invalid-production-" })
+    const runId = RunId.make("invalid-production-run")
+    const operationId = OperationId.make("orphan-tracker-outcome")
+    const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+    yield* Effect.gen(function*() {
+      const journal = yield* JournalStore
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(operationId),
+        trackerGraphOutcomeObserved(operationId, {
+          _tag: "TrackerGraphObserved",
+          revision: TrackerRevision.make("orphan-revision"),
+          taskIds: []
+        })
+      )
+    }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+
+    const unusedRunnerLayer = Layer.succeed(
+      TaskRunner,
+      TaskRunner.of({
+        lookupTaskWorkSession: () => Effect.die("invalid history must block runner lookup"),
+        requestTaskWorkStart: () => Effect.die("invalid history must block runner request")
+      })
+    )
+    const applicationLayer = productionWorkflowInterpreterLayer(
+      runId,
+      GitCommonDirectoryTarget.make(directory),
+      taskExecutorTestLayer,
+      unusedRunnerLayer,
+      controlledTrackerMutationLayer
+    ).pipe(
+      Layer.provide(Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({ read: () => Effect.die("invalid history must block tracker read") })
+      )),
+      Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+    )
+    const failure = yield* Effect.gen(function*() {
+      yield* WorkflowInterpreter
+    }).pipe(
+      Effect.provide(applicationLayer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
+      Effect.flip
+    )
+    expect(failure).toMatchObject({ _tag: "StartupRecoveryBlocked" })
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("does not resume a run containing both valid history and a physical decode issue", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-invalid-row-production-" })
+    const runId = RunId.make("invalid-row-production-run")
+    const secondRunId = RunId.make("valid-history-with-invalid-row-production-run")
+    const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+    const makeIntent = (operationId: string) =>
+      trackerGraphObservationIntent(
+        WorkflowOperation.cases.ReadTrackerGraph.make({
+          operationId: OperationId.make(operationId),
+          predecessorOperationIds: [],
+          target: FixtureTarget.make(`target-${operationId}`)
+        })
+      )
+    yield* Effect.gen(function*() {
+      const journal = yield* JournalStore
+      yield* journal.append(runId, JournalRecordKey.make("operation:valid:outcome"), makeIntent("valid"))
+      yield* journal.append(runId, intentRecordKey(OperationId.make("foreign")), makeIntent("foreign"))
+      yield* journal.append(runId, intentRecordKey(OperationId.make("unreadable")), makeIntent("unreadable"))
+      yield* journal.append(runId, intentRecordKey(OperationId.make("ownership")), makeIntent("ownership"))
+      yield* journal.append(runId, JournalRecordKey.make("operation:corrupt:intent"), makeIntent("corrupt"))
+      yield* journal.append(
+        secondRunId,
+        JournalRecordKey.make("operation:second-valid:intent"),
+        makeIntent("second-valid")
+      )
+      yield* journal.append(
+        secondRunId,
+        JournalRecordKey.make("operation:second-corrupt:intent"),
+        makeIntent("second-corrupt")
+      )
+    }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+    yield* Effect.scoped(
+      Effect.gen(function*() {
+        const sql = yield* SqliteClient.make({ filename })
+        yield* sql`UPDATE journal_records SET payload_json = '{' WHERE record_key = 'operation:corrupt:intent'`
+        yield* sql`UPDATE journal_records SET payload_json = '{' WHERE record_key = 'operation:second-corrupt:intent'`
+      }).pipe(Effect.provide(Reactivity.layer))
+    )
+
+    const unusedRunnerLayer = Layer.succeed(
+      TaskRunner,
+      TaskRunner.of({
+        lookupTaskWorkSession: () => Effect.die("physical issue must skip runner lookup"),
+        requestTaskWorkStart: () => Effect.die("physical issue must skip runner request")
+      })
+    )
+    const applicationLayer = productionWorkflowInterpreterLayer(
+      runId,
+      GitCommonDirectoryTarget.make(directory),
+      taskExecutorTestLayer,
+      unusedRunnerLayer,
+      controlledTrackerMutationLayer
+    ).pipe(
+      Layer.provide(Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: (target) =>
+            typeof target === "string" && target === "target-ownership"
+              ? Effect.fail(
+                new CoordinatorOwnershipLost({
+                  gitCommonDirectory: GitCommonDirectoryLocator.make(`${directory}/ownership-lost`)
+                })
+              ) as never
+              : Effect.fail(
+                new TrackerReadError({
+                  detail: typeof target === "string"
+                    ? `${target.replace("target-", "")} authority observation`
+                    : "unreadable authority observation",
+                  operation: "TrackerGraphReader.decode"
+                })
+              )
+        })
+      )),
+      Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+    )
+    const failure = yield* WorkflowInterpreter.pipe(
+      Effect.provide(applicationLayer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
+      Effect.flip
+    )
+    expect(failure).toMatchObject({ _tag: "StartupRecoveryBlocked" })
+    if (failure._tag === "StartupRecoveryBlocked") {
+      expect(failure.issues.map(({ _tag }) => _tag)).toEqual([
+        "JournalBoundaryDecodeIssue",
+        "JournalBoundaryDecodeIssue",
+        "ManagedHistoryIdentityIssue",
+        "RecoveryReconciliationIssue",
+        "RecoveryReconciliationIssue",
+        "RecoveryReconciliationIssue",
+        "RecoveryOwnershipIssue",
+        "RecoveryReconciliationIssue"
+      ])
+      expect(failure.issues.filter(({ runId: issueRunId }) => issueRunId === runId)).toHaveLength(6)
+      expect(failure.issues.filter(({ runId: issueRunId }) => issueRunId === secondRunId)).toHaveLength(2)
+    }
   }).pipe(Effect.provide(NodeFileSystem.layer)))

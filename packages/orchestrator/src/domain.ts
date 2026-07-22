@@ -210,6 +210,18 @@ export const JournalPosition = Schema.Int.check(
 ).pipe(Schema.brand("JournalPosition"))
 export type JournalPosition = typeof JournalPosition.Type
 
+/** Selects one immutable journal payload decoder; it is independent of the SQLite schema generation. */
+export const JournalEventVersion = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(1)
+).pipe(Schema.brand("JournalEventVersion"))
+export type JournalEventVersion = typeof JournalEventVersion.Type
+
+/** Names the decoded workflow-event variant duplicated in the physical row for boundary checks. */
+export const JournalEventKind = Schema.NonEmptyString.pipe(
+  Schema.brand("JournalEventKind")
+)
+export type JournalEventKind = typeof JournalEventKind.Type
+
 /** Locates Dalph's SQLite workflow journal, not a worktree or fixture. */
 export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
   Schema.brand("JournalDatabaseLocator")

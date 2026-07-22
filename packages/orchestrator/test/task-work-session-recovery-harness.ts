@@ -149,7 +149,8 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         }
         return record
       }),
-    read: (requestedRunId) => Effect.succeed(records.filter((record) => record.runId === requestedRunId))
+    read: (requestedRunId) => Effect.succeed(records.filter((record) => record.runId === requestedRunId)),
+    scan: () => Effect.succeed({ issues: [], runs: [{ records, runId }] })
   })
 
   const runner = TaskRunner.of({

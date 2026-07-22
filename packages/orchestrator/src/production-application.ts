@@ -1,10 +1,14 @@
+/* eslint-disable functional/immutable-data -- Startup collects preserved run issues before failing closed. */
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { CoordinatorOwnership } from "./coordinator-lock.js"
 import { EvidenceStoreLocator, type GitCommonDirectoryTarget, type RunId } from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
 import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
 import type { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
 import { unavailableImplementationReviewLayer } from "./implementation-review.js"
+import { JournalBoundaryDecodeIssue } from "./journal-recovery-model.js"
+import { JournalStore } from "./journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
   coordinatorOwnedEvidenceStoreLayer,
@@ -15,6 +19,7 @@ import {
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
+import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
 import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
@@ -23,15 +28,27 @@ import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
 import { trackerMutationWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
-  recoverImplementationEvidenceSealings,
-  recoverImplementationReviews,
-  recoverReviewFindingsHandbacks,
-  recoverTaskClaimAcquisitions,
-  recoverTaskExecutions,
-  recoverTaskWorkSessionEstablishments,
-  recoverTaskWorktreeReconciliations
+  observeManagedRunAuthorities,
+  recoverExactRunAfterCoordinatorDeath,
+  RecoveryOwnershipIssue,
+  RecoveryReconciliationIssue
 } from "./workflow-recovery.js"
 import { WorkflowInterpreter } from "./workflow.js"
+
+/** Startup found preserved history or resources that cannot be resumed safely. */
+export const StartupRecoveryIssue = Schema.Union([
+  JournalBoundaryDecodeIssue,
+  ManagedHistoryIdentityIssue,
+  ManagedHistorySemanticIssue,
+  RecoveryOwnershipIssue,
+  RecoveryReconciliationIssue
+])
+export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
+
+export class StartupRecoveryBlocked extends Schema.TaggedErrorClass<StartupRecoveryBlocked>()(
+  "StartupRecoveryBlocked",
+  { issues: Schema.Array(StartupRecoveryIssue) }
+) {}
 
 /**
  * Composes one scoped production coordinator: OS ownership, configured SQLite,
@@ -100,31 +117,58 @@ export const productionWorkflowInterpreterLayer = <
     Layer.provide(trackerMutationLayer)
   )
 
-  const interpreterLayer = journaledWorkflowInterpreterLayer(
-    runId,
-    baseInterpreterLayer,
+  const interpreterLayerFor = (journalRunId: RunId) =>
+    journaledWorkflowInterpreterLayer(
+      journalRunId,
+      baseInterpreterLayer,
+      taskExecutorLayer,
+      Layer.merge(evidenceStoreLayer, evidenceSourceLayer),
+      reviewLayer
+    ).pipe(
+      Layer.provide(taskRunnerLayer),
+      Layer.provide(journalLayer)
+    )
+  const interpreterLayer = interpreterLayerFor(runId)
+  const recoveryAuthorityLayer = Layer.mergeAll(
+    taskRunnerLayer,
     taskExecutorLayer,
-    Layer.merge(evidenceStoreLayer, evidenceSourceLayer),
-    reviewLayer
-  ).pipe(
-    Layer.provide(taskRunnerLayer),
-    Layer.provide(journalLayer)
+    trackerMutationLayer,
+    gitWorktreeLayer,
+    evidenceStoreLayer
   )
   return Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
+      yield* CoordinatorOwnership
+      const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
-      yield* recoverTaskClaimAcquisitions(runId)
-      yield* recoverTaskWorktreeReconciliations(runId)
-      yield* recoverTaskWorkSessionEstablishments(runId)
-      yield* recoverTaskExecutions(runId)
-      yield* recoverImplementationEvidenceSealings(runId)
-      yield* recoverImplementationReviews(runId)
-      yield* recoverReviewFindingsHandbacks(runId)
+      const scan = yield* journal.scan()
+      const issues = new Array<StartupRecoveryIssue>(...scan.issues)
+      for (const history of scan.runs) {
+        const reduction = reduceManagedHistory(history.runId, history.records)
+        if (reduction._tag === "InvalidManagedHistory") issues.push(...reduction.issues)
+        const observationIssues = yield* observeManagedRunAuthorities(
+          history.runId,
+          history.records
+        )
+        issues.push(...observationIssues)
+        if (
+          reduction._tag === "InvalidManagedHistory"
+          || scan.issues.some((issue) => issue.runId === history.runId)
+        ) continue
+        const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
+          history.runId,
+          history.records
+        ).pipe(Effect.provide(interpreterLayerFor(history.runId)))
+        issues.push(...runIssues)
+      }
+      if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
       return interpreter
     })
   ).pipe(
     Layer.provide(interpreterLayer),
-    Layer.provide(journalLayer)
+    Layer.provide(recoveryAuthorityLayer),
+    Layer.provide(journalLayer),
+    Layer.provide(ownershipLayer)
   )
 }
