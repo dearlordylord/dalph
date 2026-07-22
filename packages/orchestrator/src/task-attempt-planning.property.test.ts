@@ -17,10 +17,27 @@ import {
   TaskExecutorLocator,
   taskRevisionFor,
   TaskWorkSessionLocator,
+  TrackerTask,
   WorkflowOperation,
   workflowOperationId,
   WorktreeLocator
 } from "./index.js"
+import { samePlannedTaskAttempt } from "./planned-task-attempt.js"
+
+const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
+const plannedTaskAttemptEncodedArbitrary = fc.record({
+  attemptId: nonEmpty,
+  branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
+  executor: nonEmpty,
+  runId: nonEmpty,
+  session: nonEmpty,
+  taskId: nonEmpty,
+  taskRevision: nonEmpty,
+  worktree: nonEmpty
+}).map((fields) => ({
+  ...fields,
+  baseSha: "0123456789abcdef0123456789abcdef01234567"
+}))
 
 it.each([
   "main",
@@ -49,8 +66,8 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     const taskRevision = taskRevisionFor(task)
 
     const planner = yield* PlannedTaskAttemptPlanner
-    const plan = yield* planner.plan(task, taskRevision)
-    const retryPlan = yield* planner.plan(task, taskRevision)
+    const plan = yield* planner.plan(task)
+    const retryPlan = yield* planner.plan(task)
 
     expect(plan).toEqual({
       attemptId: AttemptId.make("attempt:task-44:0"),
@@ -76,23 +93,9 @@ it.effect("binds every exact attempt identity and resource locator", () =>
   }))))
 
 it("roundtrips arbitrary valid attempt plans through the persisted Schema boundary", () => {
-  const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
   fc.assert(fc.property(
-    fc.record({
-      attemptId: nonEmpty,
-      branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
-      executor: nonEmpty,
-      runId: nonEmpty,
-      session: nonEmpty,
-      taskId: nonEmpty,
-      taskRevision: nonEmpty,
-      worktree: nonEmpty
-    }),
-    (fields) => {
-      const encoded = {
-        ...fields,
-        baseSha: "0123456789abcdef0123456789abcdef01234567"
-      }
+    plannedTaskAttemptEncodedArbitrary,
+    (encoded) => {
       expect(
         Schema.encodeUnknownSync(PlannedTaskAttempt)(
           Schema.decodeUnknownSync(PlannedTaskAttempt)(encoded)
@@ -100,6 +103,123 @@ it("roundtrips arbitrary valid attempt plans through the persisted Schema bounda
       ).toEqual(encoded)
     }
   ))
+})
+
+it("satisfies the planned-attempt equivalence laws for arbitrary valid plans", () => {
+  const decode = Schema.decodeUnknownSync(PlannedTaskAttempt)
+  const copy = (plan: PlannedTaskAttempt) => decode(Schema.encodeUnknownSync(PlannedTaskAttempt)(plan))
+
+  fc.assert(fc.property(
+    plannedTaskAttemptEncodedArbitrary,
+    plannedTaskAttemptEncodedArbitrary,
+    (leftEncoded, rightEncoded) => {
+      const left = decode(leftEncoded)
+      const right = decode(rightEncoded)
+      const middle = copy(left)
+      const end = copy(middle)
+
+      expect(samePlannedTaskAttempt(left, left)).toBe(true)
+      expect(samePlannedTaskAttempt(left, right))
+        .toBe(samePlannedTaskAttempt(right, left))
+      expect(
+        samePlannedTaskAttempt(left, middle)
+          && samePlannedTaskAttempt(middle, end)
+      ).toBe(true)
+      expect(samePlannedTaskAttempt(left, end)).toBe(true)
+    }
+  ))
+})
+
+it("derives the task revision inside the planner", () =>
+  Effect.gen(function*() {
+    const task = Schema.decodeUnknownSync(TrackerTask)({
+      id: "task-44",
+      lifecycle: { _tag: "Open" },
+      parentTaskId: null,
+      prerequisiteIds: ["task-41", "task-43"]
+    })
+    const planner = yield* PlannedTaskAttemptPlanner
+
+    expect((yield* planner.plan(task)).taskRevision).toBe(taskRevisionFor(task))
+  }).pipe(Effect.provide(deterministicPlannedTaskAttemptLayer({
+    baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+    executor: TaskExecutorLocator.make("executor:deterministic"),
+    runId: RunId.make("run-44"),
+    sessionRoot: TaskWorkSessionLocator.make("sessions/run-44"),
+    worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
+  }))))
+
+it("changes a task revision when any normalized task field changes", () => {
+  fc.assert(fc.property(
+    fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/),
+    (suffix) => {
+      const task = (input: unknown) => Schema.decodeUnknownSync(TrackerTask)(input)
+      const baseline = {
+        id: `task-${suffix}-left`,
+        lifecycle: { _tag: "Open" },
+        parentTaskId: `parent-${suffix}-left`,
+        prerequisiteIds: [`prerequisite-${suffix}-left`]
+      }
+      const baselineRevision = taskRevisionFor(task(baseline))
+      const variants = [
+        { ...baseline, id: `task-${suffix}-right` },
+        { ...baseline, lifecycle: { _tag: "CompletedSuccessfully" } },
+        { ...baseline, parentTaskId: `parent-${suffix}-right` },
+        { ...baseline, prerequisiteIds: [`prerequisite-${suffix}-right`] }
+      ]
+
+      expect(variants.map((variant) => taskRevisionFor(task(variant))))
+        .not.toContain(baselineRevision)
+    }
+  ))
+})
+
+it("makes task revision independent of prerequisite order", () => {
+  fc.assert(fc.property(
+    fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/), { minLength: 1, maxLength: 8 }),
+    (prerequisiteIds) => {
+      const makeTask = (ids: ReadonlyArray<string>) =>
+        Schema.decodeUnknownSync(TrackerTask)({
+          id: "task-44",
+          lifecycle: { _tag: "Open" },
+          parentTaskId: null,
+          prerequisiteIds: ids
+        })
+      expect(taskRevisionFor(makeTask(prerequisiteIds)))
+        .toBe(taskRevisionFor(makeTask([...prerequisiteIds].reverse())))
+    }
+  ))
+})
+
+it("compares decoded plans structurally and observes every planned field", () => {
+  const baseline = {
+    attemptId: "attempt-1",
+    baseSha: "0123456789abcdef0123456789abcdef01234567",
+    branch: "refs/heads/task-1",
+    executor: "executor-1",
+    runId: "run-1",
+    session: "session-1",
+    taskId: "task-1",
+    taskRevision: "revision-1",
+    worktree: "/worktree-1"
+  }
+  const decode = Schema.decodeUnknownSync(PlannedTaskAttempt)
+  const equalCopy = decode(Schema.encodeUnknownSync(PlannedTaskAttempt)(decode(baseline)))
+  expect(samePlannedTaskAttempt(decode(baseline), equalCopy)).toBe(true)
+
+  const variants = [
+    { ...baseline, attemptId: "attempt-2" },
+    { ...baseline, baseSha: "1123456789abcdef0123456789abcdef01234567" },
+    { ...baseline, branch: "refs/heads/task-2" },
+    { ...baseline, executor: "executor-2" },
+    { ...baseline, runId: "run-2" },
+    { ...baseline, session: "session-2" },
+    { ...baseline, taskId: "task-2" },
+    { ...baseline, taskRevision: "revision-2" },
+    { ...baseline, worktree: "/worktree-2" }
+  ]
+  expect(variants.every((variant) => !samePlannedTaskAttempt(decode(baseline), decode(variant))))
+    .toBe(true)
 })
 
 it("rejects an empty executor or session locator at the plan boundary", () => {

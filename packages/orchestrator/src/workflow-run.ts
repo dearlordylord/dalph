@@ -6,7 +6,6 @@ import { defaultImplementationReviewRoundLimit } from "./implementation-converge
 import { ImplementationReviewRequest } from "./implementation-review.js"
 import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
-import { taskRevisionFor } from "./task-dag.js"
 import {
   TaskExecutionAdmitted,
   TaskExecutionOutcomeObserved,
@@ -16,7 +15,10 @@ import {
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
-import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
+import {
+  TaskWorktreeExecutionModeContradiction,
+  TaskWorktreeReconciliationSimulated
+} from "./task-worktree-reconciliation.js"
 import {
   ImplementationEvidenceSealingSimulatedTrace,
   ImplementationReviewSimulatedTrace,
@@ -126,10 +128,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         taskPredecessorOperationId = admissionObservation.operationId
       }
 
-      const plannedAttempt = yield* planner.plan(
-        taskForAttempt,
-        taskRevisionFor(taskForAttempt)
-      )
+      const plannedAttempt = yield* planner.plan(taskForAttempt)
       const planOperation = makeTaskAttemptPlanOperation({
         operationId: yield* allocator.allocate(),
         plannedAttempt,
@@ -148,9 +147,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         predecessorOperationIds: [planOperation.operationId]
       })
       yield* emit(OperationSelected.make({ operation: worktreeOperation }))
-      const worktreeResult = yield* interpreter.reconcileTaskWorktree(
-        worktreeOperation
-      )
+      const worktreeResult = planResult._tag === "TaskAttemptPlanRecordAcknowledged"
+        ? yield* interpreter.reconcileTaskWorktree(worktreeOperation)
+        : TaskWorktreeReconciliationSimulated.make({ operation: worktreeOperation })
       yield* emit(
         worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
           ? TaskWorktreeReadyTrace.make({

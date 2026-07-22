@@ -1,14 +1,7 @@
 /* eslint-disable functional/immutable-data, max-lines -- The total fold keeps the complete transition algebra together. */
 import { Schema } from "effect"
-import {
-  type AttemptId,
-  JournalPosition,
-  type JournalRecordKey,
-  type OperationId,
-  PlannedTaskAttempt,
-  RunId,
-  type TaskWorkSessionId
-} from "./domain.js"
+import { JournalPosition, RunId } from "./domain.js"
+import type { AttemptId, JournalRecordKey, OperationId, PlannedTaskAttempt, TaskWorkSessionId } from "./domain.js"
 import {
   claimForPlannedAttempt,
   convergenceDispositionPredecessorMatches,
@@ -22,6 +15,7 @@ import {
 import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { type JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
 import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
 import { isExactTaskClaim } from "./tracker-mutation.js"
@@ -127,9 +121,7 @@ const semanticDuplicateDetail = (
     ? `duplicate ${noun} for ${identity}`
     : `contradictory ${noun}s for ${identity}`
 
-const samePlannedAttempt = (left: PlannedTaskAttempt, right: PlannedTaskAttempt): boolean =>
-  JSON.stringify(Schema.encodeUnknownSync(PlannedTaskAttempt)(left))
-    === JSON.stringify(Schema.encodeUnknownSync(PlannedTaskAttempt)(right))
+const samePlannedAttempt = plannedTaskAttemptEquivalence
 
 /**
  * Folds all ordered records without throwing or stopping at the first fault.

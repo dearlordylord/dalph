@@ -1,5 +1,5 @@
 import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
-import type { GitCommitSha, RunId, Task, TaskExecutorLocator, TaskRevision } from "./domain.js"
+import type { GitCommitSha, RunId, Task, TaskExecutorLocator } from "./domain.js"
 import {
   AttemptId,
   OperationId,
@@ -8,6 +8,7 @@ import {
   TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
+import { taskRevisionFor } from "./task-dag.js"
 
 export interface OperationIdAllocatorService {
   readonly allocate: () => Effect.Effect<OperationId>
@@ -55,10 +56,7 @@ export class PlannedTaskAttemptError extends Schema.TaggedErrorClass<PlannedTask
 ) {}
 
 interface PlannedTaskAttemptPlannerService {
-  readonly plan: (
-    task: Task,
-    taskRevision: TaskRevision
-  ) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
+  readonly plan: (task: Task) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 
 /** Selects one exact Base SHA and worktree/branch locator set for a task attempt. */
@@ -83,7 +81,7 @@ export const deterministicPlannedTaskAttemptLayer = (
     Effect.gen(function*() {
       const nextAttemptOrdinal = yield* Ref.make(0)
       return PlannedTaskAttemptPlanner.of({
-        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function*(task, taskRevision) {
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function*(task) {
           const ordinal = yield* Ref.getAndUpdate(nextAttemptOrdinal, (current) => current + 1)
           const attemptId = AttemptId.make(`attempt:${task.id}:${ordinal}`)
           const resourceSegment = `attempt-${encodeURIComponent(task.id)}-${ordinal}`
@@ -95,7 +93,7 @@ export const deterministicPlannedTaskAttemptLayer = (
             runId: options.runId,
             session: TaskWorkSessionLocator.make(`${options.sessionRoot}/${resourceSegment}`),
             taskId: task.id,
-            taskRevision,
+            taskRevision: taskRevisionFor(task),
             worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
           })
         })

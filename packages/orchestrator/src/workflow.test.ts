@@ -26,6 +26,7 @@ import {
   SealedImplementationEvidence,
   SealedImplementationReview,
   TaskAttemptPlanRecordAcknowledged,
+  TaskAttemptPlanRecordingSimulated,
   TaskExecutorLocator,
   TaskRunner,
   TaskWorkCapacity,
@@ -398,6 +399,45 @@ it.effect("rejects acknowledged planning paired with simulated Git reconciliatio
     expect(yield* Ref.get(starts)).toBe(0)
   }))
 
+it.effect("does not invoke authoritative Git reconciliation after simulated plan recording", () =>
+  Effect.gen(function*() {
+    const reconciliations = yield* Ref.make(0)
+    const mixedLayer = Layer.effect(
+      WorkflowInterpreter,
+      Effect.gen(function*() {
+        const delegate = yield* WorkflowInterpreter
+        return WorkflowInterpreter.of({
+          ...delegate,
+          recordTaskAttemptPlan: (operation) =>
+            Effect.succeed(
+              TaskAttemptPlanRecordingSimulated.make({ operation })
+            ),
+          reconcileTaskWorktree: (operation) =>
+            Ref.update(reconciliations, (value) => value + 1).pipe(
+              Effect.as(AuthoritativeTaskWorktreeReady.make({
+                proof: PlannedWorktreeReady.make({
+                  baseSha: operation.plannedAttempt.baseSha,
+                  branch: operation.plannedAttempt.branch,
+                  headSha: operation.plannedAttempt.baseSha,
+                  worktree: operation.plannedAttempt.worktree
+                })
+              }))
+            )
+        })
+      })
+    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+
+    yield* runLayered(
+      runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
+      Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      successfulTaskRunner,
+      planningLayers[1],
+      mixedLayer
+    ).pipe(Effect.ignore)
+
+    expect(yield* Ref.get(reconciliations)).toBe(0)
+  }))
+
 it.effect("reserves no more than the configured concurrent task attempts", () =>
   Effect.gen(function*() {
     const started = yield* Queue.unbounded<string>()
@@ -407,10 +447,10 @@ it.effect("reserves no more than the configured concurrent task attempts", () =>
       Effect.gen(function*() {
         const delegate = yield* PlannedTaskAttemptPlanner
         return PlannedTaskAttemptPlanner.of({
-          plan: (task, revision) =>
+          plan: (task) =>
             Queue.offer(started, task.id).pipe(
               Effect.andThen(Deferred.await(release)),
-              Effect.andThen(delegate.plan(task, revision))
+              Effect.andThen(delegate.plan(task))
             )
         })
       })
