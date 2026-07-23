@@ -75,6 +75,74 @@ task values and encodes normalized task changes as API requests. The GitHub
 adapter is the first implementation.
 _Avoid_: Task tracker, GitHub Issues
 
+**Current authority fact**:
+A value currently maintained by its named external owner, such as task state in
+the task tracker, a worktree registration in Git, or a session in the task-work
+provider. Dalph learns it only from a boundary result whose contract proves that
+fact; earlier journal history does not prove it remains current.
+_Avoid_: Cached authority state, durable graph knowledge, journaled observation
+
+**Normalized task-graph read result**:
+The provider-independent boundary value a task-tracker adapter assembles with
+explicit coverage, completeness, temporal-consistency, and freshness evidence.
+Its normalized shape does not claim that every fact is fully current or came
+from one instant.
+_Avoid_: Current task graph, TaskGraphFactsUpdated event, provider response dump
+
+**Task-graph facts updated**:
+The immutable workflow-journal event recording provider-independent task and
+edge facts returned by either a tracker read or a tracker mutation. The
+graph-knowledge reducer applies both origins through the same coverage,
+completeness, consistency, and replacement rules.
+_Avoid_: Provider response dump, current task graph, read-only observation event
+
+**Best available durable graph knowledge**:
+The reducer's reconstruction of usable journaled task and edge facts, proven
+absences, and unresolved conflicts for each observed graph area. It may lag
+current tracker facts and changes only by folding later journal events.
+_Avoid_: Current task graph, persisted frontier, tracker authority
+
+**Task-graph knowledge conflict**:
+Two successful `TaskGraphFactsUpdated` events report incompatible facts for one
+subject without comparable provider evidence proving which fact is newer. The
+conflict makes only that fact or dependent graph region unavailable pending a
+focused reread.
+_Avoid_: Invalid managed history, whole-run blocker, last-journal-event wins
+
+**Potentially mixed-time task-graph read**:
+A normalized task-graph read result assembled without a provider guarantee that
+all covered facts share one revision or instant; different facts may reflect
+different moments even when coverage is complete and no contradiction is
+detectable.
+_Avoid_: Atomic snapshot, transactionally consistent graph, fully current graph
+
+**Task-graph read contradiction**:
+A typed task-tracker adapter failure proving that provider reads used for one
+requested task-graph result cannot form one valid normalized value. It exposes
+the contradiction to the caller-selected task-graph read policy instead of
+returning a potentially mixed-time result.
+_Avoid_: Potentially mixed-time task-graph read, invalid managed history, provider retry policy
+
+**Task-graph read policy**:
+The caller-selected, bounded policy for retrying one failed provider page and
+for restarting the complete assembly when local page recovery or consistency
+checking cannot finish it. The selected policy determines the operation's
+typed failure surface.
+_Avoid_: Hidden adapter retry, fixed provider retry policy, workflow mode
+
+**Task-graph read shape**:
+A named, usage-earned adapter request defining the exact task subjects and fact
+families to read, such as one task's complete blockers or one target closure.
+Its matching result gives successful empty collections precise meaning without
+creating a general-purpose tracker query language.
+_Avoid_: Arbitrary field bag, provider query, speculative graph API
+
+**Task-graph read retry exhausted**:
+The typed final failure returned when a task-graph read policy consumes
+intermediate page failures or contradictions but cannot assemble a valid
+normalized result within its bound.
+_Avoid_: Task-graph read contradiction, potentially mixed-time task-graph read, infinite retry
+
 **Task**:
 A normalized Dalph value describing one unit of requested repository work read
 through a task tracker. It is not the provider record, work activity, attempt,
@@ -499,6 +567,12 @@ recording a task-runner report. It is neither the whole task nor an individual
 SDK, CLI, or agent tool call.
 _Avoid_: Generic operation, tool call, task
 
+**Workflow operation intent**:
+The immutable journal event recording one selected workflow operation before
+Dalph crosses the boundary named by that operation. It proves neither that a
+request was sent nor that an external application changed.
+_Avoid_: Request acknowledgement, external fact, operation result
+
 **Operation identity**:
 The stable Dalph-assigned identity allocated when one workflow operation is
 selected. Once its intent is committed, the identity links that immutable
@@ -512,11 +586,31 @@ another workflow operation. Direct `OperationId` references record this
 relationship; journal adjacency and tracker task dependencies do not.
 _Avoid_: Previous journal event, task prerequisite, earlier operation
 
+**Workflow responsibility**:
+Dalph's durable obligation to continue, reconcile, preserve, isolate, or
+dispose one exact task-coordination action, workflow operation, or external
+resource. It does not claim ownership of the external authority's facts.
+_Avoid_: Task claim, external resource ownership, whole-attempt responsibility flag
+
+**Workflow responsibility relinquished**:
+The durable disposition ending one exact workflow responsibility after current
+authority facts show that Dalph may no longer act on that subject. Other
+responsibilities for the same task attempt remain until separately discharged
+or relinquished.
+_Avoid_: Attempt abandoned, task completed, external history rewritten
+
 **State-changing request**:
 A request that may change state outside Dalph's journal: for example, claiming
 a task through the task tracker, creating a Git ref, or asking a task runner to
 start task work.
 _Avoid_: Mutation, controlled mutation, effect
+
+**State-changing request acknowledgement**:
+The durable workflow result recording that the named external boundary returned
+from one state-changing request. It updates reconstructed graph knowledge only
+when the same event also carries normalized task-graph facts under an accepted
+adapter contract.
+_Avoid_: Current external fact, fresh result check, duplicate observation event
 
 **Uncertain request outcome**:
 The state after Dalph recorded its intent to send a state-changing request but
@@ -563,6 +657,13 @@ journal event records, and are not persisted as current task, Git, session,
 process, or workflow-journal state.
 _Avoid_: Dalph workflow journal, audit log, dry-run-specific trace
 
+**Runnable frontier**:
+The process-local view of currently selectable workflow transitions derived
+from reconstructed managed-run state, accepted policy, and available capacity.
+It is recomputed after relevant events or fresh reads and never persisted as
+authority.
+_Avoid_: Persisted queue, durable graph knowledge, task-tracker target closure
+
 **Dalph workflow journal**:
 The durable history of workflow-operation intents and observed outcomes that
 Dalph records. It contains only that history; current task, Git, task-work
@@ -598,6 +699,13 @@ The process that reads journal events in position order, validates rules between
 events, and returns either a recovery state or typed validation errors. Dalph
 does not persist the derived recovery state.
 _Avoid_: Event decoding, coordinator rehydration, reducer rollup table
+
+**Reconstructed managed-run state**:
+The validated process-local composition of reduced graph knowledge, workflow
+history, resource responsibility, and pause state through one applied journal
+position. It is derived from decoded journal events and is neither persisted
+authority nor a runnable frontier.
+_Avoid_: Serialized coordinator, reducer cache table, managed-run recovery stage
 
 **Managed-run recovery stage**:
 The non-persisted result of reducing one valid managed history. It assigns every
@@ -652,6 +760,13 @@ allowed continuation until one exact change occurs. The blocked-run record names
 that required change and the person, task tracker, Git repository, or task-work
 provider capable of making it.
 _Avoid_: Paused, temporarily idle, failed
+
+**Branch-local isolation**:
+A recorded disposition preventing Dalph from acting on one exact task, attempt,
+or resource region whose facts are invalid, unreadable, ambiguous, or no longer
+Dalph's responsibility. Other independently valid branches remain available
+for progress.
+_Avoid_: Run blocked, global startup failure, discarded contradiction
 
 **Run cancelled**:
 The run termination recorded after an authorized operator directs Dalph to stop

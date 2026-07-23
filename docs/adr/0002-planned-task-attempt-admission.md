@@ -74,6 +74,10 @@ prerequisite lifecycles. The task revision fingerprint identifies the claimed
 task's normalized content. Neither substitutes for the other, and neither is
 treated as current tracker state during recovery.
 
+`TrackerRevision` fingerprints the normalized content of that observation. It
+does not order two observations by freshness, provide a GitHub-assigned graph
+revision, or resolve conflicting facts from overlapping multi-read results.
+
 ## Causal graph
 
 The accepted direct edges are:

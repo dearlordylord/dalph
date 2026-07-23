@@ -94,11 +94,60 @@ ambiguous external resources likewise remain untouched for operator repair.
 Startup fails closed after collecting the available issues rather than allowing
 one unreadable authority to hide another authority's reconciliation fact.
 
+Journal storage, decoding, and reduction are separate boundaries. The
+reconstruction workflow reads each run's physical rows once in canonical
+position order, decodes and upcasts them, then passes the resulting event values
+through one pure composed reducer. Its graph-knowledge, workflow-history,
+resource-responsibility, and pause reducers neither read the journal nor invoke
+any other effect. They update distinct component states for each event, after
+which the composition validates cross-component invariants and returns one
+`ReconstructedManagedRunState`.
+
+One decoded journal event may update more than one component reducer without
+merging their state models. When a successful tracker mutation response both
+completes its workflow operation and supplies normalized task-graph facts, one
+`TaskGraphFactsUpdated` event updates workflow history and graph knowledge
+atomically. Its tagged origin preserves whether those facts came from an
+explicit read or mutation result. The graph-knowledge reducer applies them
+through the same coverage, completeness, temporal-consistency, and replacement
+algebra.
+
+The live process may retain that derived state together with its last applied
+`JournalPosition` and incrementally apply later decoded events. This is only a
+process-local optimization: it is discarded on process loss, never persisted
+as journal authority, and never substitutes for reading and validating the
+complete history during restart.
+
 For each valid run, reduction derives one non-persisted managed-run recovery
 stage containing an entry for every unfinished pre-attempt task and exactly one
 entry per acknowledged planned task attempt. A pre-attempt entry that cannot
 reconstruct a safe claim or plan fails closed instead of being mistaken for a
 terminal run.
+
+Dalph consumes every independently valid part of the reconstructed run. A
+contradiction, unreadable authority, ambiguous resource, or loss of
+responsibility isolates only the exact task, attempt, or resource region whose
+facts are needed to act there. Unaffected branches continue whenever their next
+actions require none of the isolated facts or resources. A condition stops the
+whole run only when it invalidates shared managed history or a shared capability
+required for every otherwise allowed continuation.
+
+Workflow responsibility is tracked per exact subject rather than as one flag
+for a planned task attempt. Losing permission to change a tracker task may
+relinquish that task-coordination responsibility while Dalph retains separate
+obligations to preserve, stop, reconcile, or dispose the attempt's worktree and
+task-work session. Each responsibility ends only through its own completed
+disposition or a durable relinquishment backed by a fresh authority
+observation.
+
+If a fresh tracker read finds that a task changed during implementation, Dalph
+updates graph knowledge and prevents that branch from crossing another
+state-changing boundary while preserving its outstanding session and resource
+responsibilities. The pause subject and safe boundary belong to W3; W6 decides
+the reconciliation choices and whether any case may continue after an operator
+merely unpauses it. This architecture does not assume that unpause alone
+reconciles changed task intent.
+
 Startup checks the exact current task claim and rereads the task tracker before
 it selects a missing worktree, task-work-session, task-execution, or later
 implementation-convergence operation.
@@ -224,6 +273,70 @@ pagination, repository, or parent contradiction can produce a mixed-time
 observation. Before the Dalph coordinator sends a state-changing request whose
 validity depends on the current task graph, it must reread the task tracker
 instead of treating an earlier `TrackerRevision` as a GitHub transaction token.
+
+The calling workflow selects a bounded task-graph read policy when it asks the
+task-tracker adapter to assemble a graph. The policy may provide a short Effect
+`Schedule` for retrying one failed provider page while retaining the other
+in-memory pages already collected by that assembly. If the page schedule is
+exhausted, a cursor becomes unusable, or consistency checking finds a
+contradiction, a separate bounded assembly schedule may discard those pages and
+restart the complete read. A single-attempt policy instead exposes the first
+typed page failure or `TaskGraphReadContradiction`.
+
+Intermediate failures consumed by the selected policy do not appear in its
+caller-facing failure union, while exhaustion appears as
+`TaskGraphReadRetryExhausted`. The policy therefore determines the complete
+Effect return type, so callers do not match impossible failures with no-op
+branches. No adapter policy may convert a detectable contradiction into a valid
+normalized result, retry without a bound, or read the Dalph workflow journal.
+The workflow recorder journals the selected read intent and its final result;
+individual provider requests, page retries, and adapter-internal assembly
+attempts are not workflow-journal events.
+
+When the selected policy exhausts, workflow history records one explicit failed
+task-graph read operation naming its requested shape, subjects, and final typed
+failure. That outcome does not mark any tracker task failed. It leaves only the
+affected graph knowledge unavailable, and a later manual or automatic
+reconciliation policy may select a new read operation.
+
+The adapter exposes a closed set of named task-graph read shapes earned by
+workflow usage, such as reading one task, one task's complete blocker relation,
+or one task-tracker target closure. Each shape defines the subjects and fact
+families its successful result covers, so an empty complete blocker result can
+remove earlier blocker knowledge while a task-only result says nothing about
+blockers. New workflow requirements may add new shapes; Dalph does not expose
+an arbitrary field bag or speculative general-purpose graph-query language.
+
+A successful complete graph-fact update replaces reconstructed durable graph
+knowledge for the graph area and fact families it covered. If GitHub previously
+reported that task A was blocked by task B and a later comparable complete
+result for A's blockers returns an empty list, reduction removes that edge.
+Results that did not cover A's blockers neither preserve the edge as current
+nor remove it; they simply add no new blocker knowledge.
+
+An explicit read is not the only source of updated graph facts. A tracker
+mutation result may produce `TaskGraphFactsUpdated` when its adapter contract
+returns a normalized result with the same declared coverage and evidence
+required from a named read shape. That single event also records the mutation
+operation's successful outcome; Dalph does not append a duplicate
+request-acknowledgement event. If the mutation response lacks sufficient graph
+facts, its ordinary typed acknowledgement updates workflow history only and a
+later read supplies graph knowledge.
+
+Freshness evidence applies at the narrowest fact family the provider can
+support. GitHub exposes `Issue.updatedAt`, which can help compare two observed
+versions of one issue record, but its dependency and sub-issue connection edges
+carry no corresponding edge revision or update timestamp. Timestamped
+dependency and sub-issue timeline events do not by themselves make a current
+multi-page connection read an as-of snapshot. `TrackerRevision` fingerprints
+the normalized content read and is not a graph-wide freshness order.
+
+When two successful observations conflict, reduction uses a provider comparison
+only within the fact family for which the adapter declares it valid. If neither
+fact is provably newer, reduction retains a `TaskGraphKnowledgeConflict` for
+that exact subject and fact family, continues consuming independent valid
+knowledge, and makes a bounded focused reread eligible. Journal position alone
+never resolves the external-fact conflict.
 
 One V1 GitHub adapter read supports at most 1,000 distinct tasks and at most 10
 pages from any one `subIssues` or `blockedBy` connection. With GitHub's maximum
