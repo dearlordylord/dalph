@@ -248,20 +248,28 @@ rereads the repository label before it can repeat the request.
 
 The coordinator's Git common-directory ownership capability guards label
 creation and deletion. Claim lookup remains read-only. After the adapter proves
-claim ownership, Dalph performs a new complete task-graph read; only an open
-task still present in the target closure can emit `TrackerExecutionAdmitted`.
-Dry-run records claim intent without receiving tracker mutation authority and
-cannot emit that admission.
+claim ownership, Dalph selects a read-only claimed-task eligibility observation.
+The production interpreter rereads the exact claim and complete task graph.
+Only the claimed task being open, still present in the target closure, and free
+of unsatisfied prerequisites can emit `ClaimedTaskEligibilityObserved`. Dry-run
+records the same operation shape without receiving tracker mutation authority
+and produces a distinct simulated outcome that claims no real tracker
+observation.
 
 ## Durable Task-Attempt Planning
 
-Before the coordinator asks Git or a task-work provider to create or discover
-an execution resource, it records one immutable planned task attempt in the
-Dalph workflow journal and waits for the append acknowledgement. The planned
-task attempt binds the run, task revision fingerprint, attempt identity,
-declared Base SHA, branch ref, worktree path, executor locator, and
-task-work-session locator. The subsequent session-establishment operation
-causally depends on that acknowledged planned-task-attempt recording operation.
+Under [ADR 0002](adr/0002-planned-task-attempt-admission.md), the coordinator
+records one immutable planned task attempt only after a fresh durable
+`ClaimedTaskEligibilityObserved` outcome matches the task identity and task
+revision fingerprint. The planned-task-attempt recording operation has that
+eligibility-observation operation as its sole direct predecessor. Before the
+coordinator asks Git or a task-work provider to create or discover an execution
+resource, it records the planned task attempt in the Dalph workflow journal and
+waits for the append acknowledgement. The planned task attempt binds the run,
+task revision fingerprint, attempt identity, declared Base SHA, branch ref,
+worktree path, executor locator, and task-work-session locator. The subsequent
+session-establishment operation causally depends on that acknowledged
+planned-task-attempt recording operation.
 
 All planned-task-attempt identities and locators cross the journal boundary
 through Effect Schema and retain distinct brands. A failed or contradictory
