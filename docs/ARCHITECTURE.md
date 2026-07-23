@@ -95,9 +95,13 @@ Startup fails closed after collecting the available issues rather than allowing
 one unreadable authority to hide another authority's reconciliation fact.
 
 For each valid run, reduction derives one non-persisted managed-run recovery
-stage containing exactly one stage per acknowledged planned task attempt.
+stage containing an entry for every unfinished pre-attempt task and exactly one
+entry per acknowledged planned task attempt. A pre-attempt entry that cannot
+reconstruct a safe claim or plan fails closed instead of being mistaken for a
+terminal run.
 Startup checks the exact current task claim and rereads the task tracker before
-it selects a missing worktree, task-work-session, or task-execution operation.
+it selects a missing worktree, task-work-session, task-execution, or later
+implementation-convergence operation.
 The reread must still contain the task as eligible and must derive the same task
 revision fingerprint. An already-recorded unresolved operation keeps its
 operation identity and uses its existing reconciliation protocol. A recovery

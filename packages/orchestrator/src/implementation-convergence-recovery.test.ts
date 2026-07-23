@@ -68,6 +68,7 @@ import {
   TraceOutputError,
   TrackerGraphReader,
   TrackerMutation,
+  TrackerReadError,
   WorkerProcessId,
   WorkflowInterpreter,
   WorkflowTrace,
@@ -268,6 +269,33 @@ it.effect("records acceptance after a crash following durable review without inv
         event._tag === "ImplementationConvergenceDispositionRecorded"
       )
     ).toBe(false)
+    const reviewRecord = (yield* (yield* JournalStore).read(runId)).find(
+      ({ event }) => event._tag === "ImplementationReviewCompleted"
+    )
+    expect(
+      reviewRecord === undefined
+        ? ["missing completed review"]
+        : yield* observeManagedRunAuthorities(runId, [reviewRecord])
+    ).toEqual([])
+
+    const interpreter = yield* WorkflowInterpreter
+    expect(
+      yield* recoverExactRunAfterCoordinatorDeath(runId).pipe(
+        Effect.provideService(
+          WorkflowInterpreter,
+          WorkflowInterpreter.of({
+            ...interpreter,
+            readTrackerGraph: () =>
+              Effect.fail(
+                new TrackerReadError({
+                  detail: "tracker unavailable during later-stage refresh",
+                  operation: "TrackerGraphReader.decode"
+                })
+              )
+          })
+        )
+      )
+    ).toMatchObject([{ _tag: "RecoveryReconciliationIssue", authority: "Tracker" }])
 
     expect(yield* recoverExactRunAfterCoordinatorDeath(runId)).toEqual([])
     const records = yield* (yield* JournalStore).read(runId)
@@ -667,7 +695,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
     const beforeRecovery = yield* (yield* JournalStore).read(runId)
     const attemptId = `attempt:implementation-convergence-recovery-task:0`
     const collidingOperationId = OperationId.make(
-      `recovery:${runId}:${attemptId}:${beforeRecovery.length + 2}:0`
+      `recovery:${runId}:${attemptId}:${beforeRecovery.length + 4}:0`
     )
     yield* (yield* JournalStore).append(runId, intentRecordKey(collidingOperationId), {
       _tag: "TrackerGraphObservationIntentRecorded",
@@ -694,7 +722,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
       version: 4
     })
     const reworkOperationId = OperationId.make(
-      `recovery:${runId}:${attemptId}:${beforeRecovery.length + 2}:1`
+      `recovery:${runId}:${attemptId}:${beforeRecovery.length + 4}:1`
     )
     yield* executor.setObservations([SuccessfulTaskExecutionReported.make({
       observationId: ProviderObservationId.make("rework-execution-observation"),

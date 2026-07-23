@@ -237,6 +237,204 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
   const reduced = reduceManagedHistory(runId, planned)
   expect(reduced._tag === "ValidManagedHistory" ? reduced.recoveryStage.attempts[0]?._tag : reduced._tag)
     .toBe("TaskWorktreeReconciliationNeeded")
+
+  const duplicateWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("recovery-stage-duplicate-worktree"),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  const duplicate = reduceManagedHistory(
+    runId,
+    records(plan, worktreeIntent, {
+      event: TaskWorktreeReconciliationIntendedEvent.make({
+        operation: duplicateWorktreeOperation,
+        version: 4
+      }),
+      key: intentRecordKey(duplicateWorktreeOperation.operationId)
+    })
+  )
+  expect(duplicate._tag).toBe("InvalidManagedHistory")
+  expect(
+    duplicate._tag === "InvalidManagedHistory"
+      ? duplicate.issues.some(({ detail }) => detail.includes("multiple TaskWorktreeReconciliationIntended"))
+      : false
+  ).toBe(true)
+  const duplicateSessionOperation = makeTaskWorkSessionEstablishmentOperation({
+    predecessorOperationIds: [planOperation.operationId, worktreeOperation.operationId],
+    request: TaskWorkStartRequest.make({
+      operationId: OperationId.make("recovery-stage-duplicate-session"),
+      plannedAttempt,
+      task
+    })
+  })
+  const duplicateSession = reduceManagedHistory(
+    runId,
+    records(plan, worktreeIntent, worktreeReady, sessionIntent, {
+      event: TaskWorkSessionEstablishmentIntentRecorded.make({
+        operation: duplicateSessionOperation,
+        version: 4
+      }),
+      key: intentRecordKey(duplicateSessionOperation.request.operationId)
+    })
+  )
+  expect(
+    duplicateSession._tag === "InvalidManagedHistory"
+      ? duplicateSession.issues.some(({ detail }) =>
+        detail.includes("multiple TaskWorkSessionEstablishmentIntentRecorded")
+      )
+      : false
+  ).toBe(true)
+
+  const boundaryClaimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("recovery-stage-boundary-claim"),
+      owner: ClaimOwner.make("recovery-stage-boundary-owner"),
+      taskId: task.id,
+      token: ClaimToken.make("recovery-stage-boundary-token")
+    },
+    predecessorOperationIds: []
+  })
+  const boundaryClaim = {
+    event: TaskClaimAcquiredEvent.make({
+      claim: ActiveTaskClaim.make(boundaryClaimOperation.acquisition),
+      version: 4
+    }),
+    key: outcomeRecordKey(boundaryClaimOperation.acquisition.operationId)
+  } as const
+  expect(deriveManagedRunRecoveryStage(records(boundaryClaim)).attempts).toEqual([])
+  expect(
+    deriveManagedRunRecoveryStage(records({
+      event: TaskClaimAcquisitionIntendedEvent.make({ operation: boundaryClaimOperation, version: 4 }),
+      key: intentRecordKey(boundaryClaimOperation.acquisition.operationId)
+    }, boundaryClaim)).attempts
+  ).toEqual([])
+
+  const orphanObservationId = OperationId.make("recovery-stage-orphan-observation")
+  const orphanObservation = {
+    event: trackerGraphOutcomeObserved(orphanObservationId, {
+      _tag: "TrackerGraphObserved" as const,
+      revision: validSnapshot({ revision: "orphan-stage", tasks: [task] }).revision,
+      taskIds: [task.id]
+    }),
+    key: outcomeRecordKey(orphanObservationId)
+  } as const
+  expect(deriveManagedRunRecoveryStage(records(orphanObservation)).attempts).toEqual([])
+  const observed = {
+    event: trackerGraphObservationIntent(
+      makeTrackerGraphObservationOperation(orphanObservationId, FixtureTarget.make("orphan-stage"))
+    ),
+    key: intentRecordKey(orphanObservationId)
+  } as const
+  expect(
+    deriveManagedRunRecoveryStage(records(observed, orphanObservation, orphanObservation))
+      .attempts
+  ).toHaveLength(1)
+  expect(
+    deriveManagedRunRecoveryStage(records(plan, observed, orphanObservation)).attempts
+  ).toHaveLength(1)
+})
+
+it.effect("does not treat an observed eligible task without a claim intent as terminal", () => {
+  const preplanRunId = RunId.make("preplan-recovery-stage-run")
+  const observation = makeTrackerGraphObservationOperation(
+    OperationId.make("preplan-recovery-observation"),
+    FixtureTarget.make("preplan-recovery-target")
+  )
+  return Effect.gen(function*() {
+    const journal = yield* JournalStore
+    yield* journal.append(
+      preplanRunId,
+      intentRecordKey(observation.operationId),
+      trackerGraphObservationIntent(observation)
+    )
+    yield* journal.append(
+      preplanRunId,
+      outcomeRecordKey(observation.operationId),
+      trackerGraphOutcomeObserved(observation.operationId, {
+        _tag: "TrackerGraphObserved",
+        revision: validSnapshot({ revision: "preplan-recovery", tasks: [task] }).revision,
+        taskIds: [task.id]
+      })
+    )
+    const unused = () => Effect.die("pre-plan gap must fail closed before selecting an operation")
+    const issues = yield* recoverExactRunAfterCoordinatorDeath(preplanRunId).pipe(
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: unused,
+          establishTaskWorkSession: unused,
+          executeTaskWork: unused,
+          handBackReviewFindings: unused,
+          readTrackerGraph: unused,
+          reconcileTaskWorktree: unused,
+          recordImplementationDisposition: unused,
+          recordTaskAttemptPlan: unused,
+          reviewImplementation: unused,
+          sealImplementationEvidence: unused,
+          simulateTaskExecution: unused,
+          simulateTaskWorkSession: unused
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        TrackerMutation,
+        TrackerMutation.of({
+          acquireTaskClaim: unused,
+          readTaskClaim: unused,
+          releaseTaskClaim: unused
+        })
+      )
+    )
+    expect(issues).toMatchObject([{
+      _tag: "RecoveryProgressIssue",
+      stage: "TaskClaimAcquisitionNeeded"
+    }])
+
+    const claimOperation = makeTaskClaimAcquisitionOperation({
+      acquisition: {
+        operationId: OperationId.make("preplan-recovery-claim"),
+        owner: ClaimOwner.make("preplan-recovery-owner"),
+        taskId: task.id,
+        token: ClaimToken.make("preplan-recovery-token")
+      },
+      predecessorOperationIds: [observation.operationId]
+    })
+    const admission = makeTrackerGraphObservationOperation(
+      OperationId.make("preplan-recovery-admission"),
+      observation.target,
+      [claimOperation.acquisition.operationId]
+    )
+    yield* journal.append(
+      preplanRunId,
+      intentRecordKey(claimOperation.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: 4 })
+    )
+    yield* journal.append(
+      preplanRunId,
+      outcomeRecordKey(claimOperation.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(claimOperation.acquisition),
+        version: 4
+      })
+    )
+    yield* journal.append(
+      preplanRunId,
+      intentRecordKey(admission.operationId),
+      trackerGraphObservationIntent(admission)
+    )
+    yield* journal.append(
+      preplanRunId,
+      outcomeRecordKey(admission.operationId),
+      trackerGraphOutcomeObserved(admission.operationId, {
+        _tag: "TrackerGraphObserved",
+        revision: validSnapshot({ revision: "preplan-admission", tasks: [task] }).revision,
+        taskIds: [task.id]
+      })
+    )
+    const stage = deriveManagedRunRecoveryStage(yield* journal.read(preplanRunId))
+    expect(stage.attempts).toHaveLength(1)
+    expect(stage.attempts[0]?._tag).toBe("TaskAttemptPlanNeeded")
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
 })
 
 it.effect("reports a typed issue when a later durable stage cannot advance", () =>
@@ -353,8 +551,8 @@ it.effect("reports a typed issue when a later durable stage cannot advance", () 
       )
     )
     expect(issues).toMatchObject([{
-      _tag: "RecoveryProgressIssue",
-      stage: "ImplementationConvergencePending"
+      _tag: "RecoveryTaskEligibilityIssue",
+      reason: "MissingEligibilityObservation"
     }])
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 

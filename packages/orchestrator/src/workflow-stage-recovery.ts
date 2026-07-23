@@ -3,12 +3,13 @@ import { AttemptId, OperationId, RunId, type Task, type TaskId, type TaskRevisio
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import type { JournalRecord } from "./journal-store.js"
-import type { PlannedTaskAttemptRecoveryStage } from "./managed-run-recovery-stage.js"
+import type { ManagedRunRecoveryStageEntry } from "./managed-run-recovery-stage.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { isExactTaskClaim, TrackerMutation } from "./tracker-mutation.js"
+import type { WorkflowOperation } from "./workflow-operation.js"
 import {
   makeTaskExecutionOperation,
   makeTaskWorkSessionEstablishmentOperation,
@@ -49,7 +50,7 @@ interface FreshEligibleTask {
 }
 
 export type MissingPlannedTaskAttemptOperationStage = Extract<
-  PlannedTaskAttemptRecoveryStage,
+  ManagedRunRecoveryStageEntry,
   {
     readonly _tag:
       | "TaskExecutionNeeded"
@@ -87,15 +88,16 @@ const recoveryOperationId = (
   }
 }
 
-const freshEligibleTask = Effect.fn("WorkflowRecovery.freshEligibleTask")(function*(
+export const refreshPlannedAttemptEligibility = Effect.fn(
+  "WorkflowRecovery.refreshPlannedAttemptEligibility"
+)(function*(
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
-  stage: MissingPlannedTaskAttemptOperationStage
+  planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
   const tracker = yield* TrackerMutation
-  const planOperation = stage.planOperation
   const plannedAttempt = planOperation.plannedAttempt
   const priorObservation = records.find(({ event }) =>
     event._tag === "TrackerGraphObservationIntentRecorded"
@@ -184,7 +186,7 @@ export const continuePlannedTaskAttemptStage = Effect.fn(
   const trace = yield* WorkflowTrace
   switch (stage._tag) {
     case "TaskWorktreeReconciliationNeeded": {
-      const eligible = yield* freshEligibleTask(runId, records, stage)
+      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
       const operation = makeTaskWorktreeReconciliationOperation({
         operationId: recoveryOperationId(
           runId,
@@ -208,7 +210,7 @@ export const continuePlannedTaskAttemptStage = Effect.fn(
       return true
     }
     case "TaskWorkSessionEstablishmentNeeded": {
-      const eligible = yield* freshEligibleTask(runId, records, stage)
+      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
       const request = TaskWorkStartRequest.make({
         operationId: recoveryOperationId(
           runId,
@@ -234,7 +236,7 @@ export const continuePlannedTaskAttemptStage = Effect.fn(
       return true
     }
     case "TaskExecutionNeeded": {
-      const eligible = yield* freshEligibleTask(runId, records, stage)
+      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
       const plannedAttempt = stage.sessionEstablishmentOperation.request.plannedAttempt
       const operation = makeTaskExecutionOperation({
         predecessorOperationIds: [

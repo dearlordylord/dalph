@@ -8,6 +8,7 @@ import { authorizeImplementationReview, EvidenceStore } from "./implementation-e
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
 import { type JournalRecord, JournalStore } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
+import { NonterminalRecoveryStageTag } from "./managed-run-recovery-stage.js"
 import { TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
@@ -29,7 +30,8 @@ import {
 import {
   continuePlannedTaskAttemptStage,
   type MissingPlannedTaskAttemptOperationStage,
-  RecoveryTaskEligibilityIssue
+  RecoveryTaskEligibilityIssue,
+  refreshPlannedAttemptEligibility
 } from "./workflow-stage-recovery.js"
 
 /** A valid history's fresh authority read could not determine a safe next step. */
@@ -54,7 +56,7 @@ export class RecoveryProgressIssue extends Schema.TaggedErrorClass<RecoveryProgr
   {
     detail: Schema.String,
     runId: RunId,
-    stage: Schema.String
+    stage: NonterminalRecoveryStageTag
   }
 ) {}
 
@@ -78,6 +80,15 @@ export const classifyRecoveryIssue = (
     || failure instanceof CoordinatorLockObservationContradiction
     ? new RecoveryOwnershipIssue({ detail: String(failure), runId })
     : reconciliationIssue(authority, runId, failure)
+
+const classifyStageContinuationFailure = (
+  authority: RecoveryReconciliationIssue["authority"],
+  runId: RunId,
+  failure: unknown
+): RecoveryTaskEligibilityIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue =>
+  failure instanceof RecoveryTaskEligibilityIssue
+    ? failure
+    : classifyRecoveryIssue(authority, runId, failure)
 
 const collectRefreshIssue = (
   authority: RecoveryReconciliationIssue["authority"],
@@ -279,6 +290,15 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
 
   const collect = (authority: RecoveryReconciliationIssue["authority"]) => collectRefreshIssue(authority, runId)
   const before = yield* journal.read(runId)
+  for (const stage of initialReduction.recoveryStage.attempts) {
+    if (stage._tag !== "ImplementationConvergencePending") continue
+    const eligibility = yield* Effect.result(
+      refreshPlannedAttemptEligibility(runId, before, stage.planOperation)
+    )
+    if (Result.isFailure(eligibility)) {
+      return [classifyStageContinuationFailure("Tracker", runId, eligibility.failure)]
+    }
+  }
   const phases = [
     collect("Tracker")(recoverTrackerGraphObservations(runId)),
     collect("Tracker")(recoverTaskClaimAcquisitions(runId)),
@@ -308,15 +328,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
       continuePlannedTaskAttemptStage(runId, afterPhases, stage)
     )
     if (Result.isFailure(result)) {
-      return [
-        result.failure instanceof RecoveryTaskEligibilityIssue
-          ? result.failure
-          : classifyRecoveryIssue(
-            stage.authority,
-            runId,
-            result.failure
-          )
-      ]
+      return [classifyStageContinuationFailure(stage.authority, runId, result.failure)]
     }
   }
   const continuedStage = missingStages[0]

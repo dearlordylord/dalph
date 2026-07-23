@@ -671,6 +671,39 @@ export const reduceManagedHistory = (
     }
   }
 
+  for (
+    const tag of [
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorkSessionEstablishmentIntentRecorded"
+    ] as const
+  ) {
+    const intents = records.flatMap((record) => {
+      if (tag === "TaskWorktreeReconciliationIntended") {
+        return record.event._tag === tag
+          ? [{ attempt: record.event.operation.plannedAttempt, record }]
+          : []
+      }
+      return record.event._tag === tag
+        ? [{ attempt: record.event.operation.request.plannedAttempt, record }]
+        : []
+    })
+    for (const [index, current] of intents.entries()) {
+      if (index === 0) continue
+      const duplicate = intents.slice(0, index).some((candidate) =>
+        plannedTaskAttemptEquivalence(candidate.attempt, current.attempt)
+      )
+      if (duplicate) {
+        issues.push(
+          new ManagedHistorySemanticIssue({
+            detail: `planned attempt ${current.attempt.attemptId} has multiple ${tag} operations`,
+            position: current.record.position,
+            runId
+          })
+        )
+      }
+    }
+  }
+
   return issues.length === 0
     ? {
       _tag: "ValidManagedHistory",

@@ -601,11 +601,13 @@ _Avoid_: Event decoding, coordinator rehydration, reducer rollup table
 
 **Managed-run recovery stage**:
 The non-persisted result of reducing one valid managed history. It assigns every
-acknowledged planned task attempt exactly one explicit next durable boundary,
-unresolved operation, implementation-convergence continuation, or terminal
-disposition. Each recovery activation derives it from the complete current
-history, including every fact recorded by earlier activations. The Dalph
-workflow journal never stores it as current authority.
+unfinished pre-attempt task and acknowledged planned task attempt an explicit
+next durable boundary, unresolved operation, implementation-convergence
+continuation, or terminal disposition. Before later convergence selects more
+work, Dalph again checks the exact claim, current eligibility, and task revision.
+Each recovery activation derives the stage from the complete current history,
+including every fact recorded by earlier activations. The Dalph workflow journal
+never stores it as current authority.
 _Avoid_: Persisted frontier, workflow journal event, resource cache, replacement attempt plan
 
 **Invalid managed history**:
