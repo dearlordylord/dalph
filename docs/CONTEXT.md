@@ -373,6 +373,15 @@ execution admission. Dalph records the exact request attempt immediately before
 the adapter boundary; its return does not prove that a process began or exited.
 _Avoid_: Task-work session establishment, task execution started, task execution outcome
 
+**Task execution interruption request**:
+The coordinator asks the configured executor to stop one exact running worker
+process while preserving its task-work session and planned task attempt for
+later reconciliation or resumption. Dalph may select this action while carrying
+out a user-requested pause, but the action is not itself a pause. The request's
+return does not prove that the process stopped; a fresh task-execution
+observation must report interruption or another terminal outcome.
+_Avoid_: User-requested task pause, task cancellation, task abandonment
+
 **Task execution observation**:
 A fresh task-work-provider read correlating the admission `OperationId`, exact
 task-work session, and worker process. A running or terminal observation proves
@@ -663,6 +672,116 @@ from reconstructed managed-run state, accepted policy, and available capacity.
 It is recomputed after relevant events or fresh reads and never persisted as
 authority.
 _Avoid_: Persisted queue, durable graph knowledge, task-tracker target closure
+
+**Control command identity**:
+The branded `ControlCommandId` assigned to one exact user control command before
+Dalph appends that command to a run's workflow journal. Redelivery of the same
+identity and payload is idempotent; reusing the identity with a different
+command or subject is a typed contradiction. It is distinct from the
+`OperationId` of any workflow action later selected to carry out the command.
+_Avoid_: Operation identity, run identity, provider request identity
+
+**Dalph user**:
+The single human actor who issues pause, resume, interruption, cancellation, and
+other control commands to Dalph. The current domain model does not distinguish
+multiple user identities or transfer command authority between users.
+_Avoid_: Claim owner identity, provider-user identity, multi-user authorization
+
+**User-requested run pause**:
+The durable pause of one exact `RunId` requested by the Dalph user. Dalph
+selects no new forward-progress action for any task in that run after each
+already-started action reaches its specified safe boundary. A run pause does
+not create a user-requested task pause for each task. Resuming the run removes
+only the run pause; independently paused tasks remain paused.
+_Avoid_: Collection of task pauses, run termination, run blocked
+
+**Run pause phase**:
+The reconstructed pause dimension for one run: unpaused, pausing, paused, or
+resuming. Dalph derives it from the run's durable user pause and resume commands
+and the safe-boundary progress of every affected task; it does not write a
+separate phase record. One task or grouping-covered descendant still reaching a
+safe boundary keeps the run pausing and supplies its tagged progress reason.
+_Avoid_: Run termination, collection of task pause phases, persisted run status
+
+**Task pause phase**:
+The reconstructed pause dimension for one task in one run: unpaused, pausing,
+paused, or resuming. Dalph derives it from durable user pause and resume
+commands, ordinary workflow outcomes, current grouping-pause coverage, and
+outstanding responsibilities; it does not write a separate phase record. The
+phase composes with rather than replaces the task tracker's lifecycle and claim
+facts, the task's workflow stage, and its resource responsibilities. For
+example, one task may simultaneously be unclaimed and paused while another is
+claimed and pausing.
+_Avoid_: Task lifecycle, task claim state, combined task status
+
+**User-requested task pause**:
+The durable pause of one exact `(RunId, TaskId)` pair requested by the Dalph
+user. After the request reaches its specified safe boundary, Dalph does not
+select new forward-progress actions for that task in that run. A task-graph
+change does not remove the pause; the Dalph user must request its resume. A
+later run containing the same tracker task does not inherit the pause. The
+task's prerequisites and dependents do not become paused merely because this
+task is paused. Its transitive grouping descendants receive grouping-pause
+coverage without receiving their own pause phase.
+Any existing exact task claim, planned task attempt, worktree, task-work
+session, and unfinished work remain preserved for an ordinary pause such as an
+overnight pause. Only a separate user-requested abandonment, cancellation, or
+handoff may release or transfer the claim.
+_Avoid_: Paused subtree, task-tracker target closure, blocked task
+
+**Grouping-pause coverage**:
+The derived prohibition on forward-progress actions for every transitive
+grouping descendant of a user-requested task pause. Dalph stores only the
+parent's pause phase and recomputes covered descendants from current
+tracker-owned grouping edges. Adding or moving a child changes coverage without
+creating or removing a child pause record. Coverage follows parent-to-descendant
+grouping edges only; it does not create a prerequisite edge, pause a grouping
+ancestor or sibling, or require the parent task to complete.
+_Avoid_: User-requested task pause, dependency-blocked task, persisted pause closure
+
+**Task pausing**:
+The nonterminal state after Dalph records a user-requested task pause and before
+it confirms the task's safe pause boundary. Dalph selects no new
+forward-progress action for the task, but it continues the exact bounded wait,
+fresh result check, worker interruption, or provider observation needed to
+settle work already in flight. The reconstructed state carries a tagged pause
+progress reason naming that action and its exact subject. A paused grouping
+parent remains pausing while any covered descendant has not reached its safe
+boundary, and the reason names that descendant. The phase and reason are
+derived so a later UI can explain the delay without persisting separate UI
+state.
+_Avoid_: Task paused, dependency-blocked task, generic pending state
+
+**Task paused**:
+The confirmed task pause phase after every already-started bounded request has a
+known recorded result, every long-running agent invocation has stopped, no
+shared integration resource or task-work-capacity permit remains held for the
+task or a grouping-covered descendant, and their preserved responsibilities are
+explicit. An unresolved request, unreadable authority, or covered descendant
+still reaching its boundary keeps the selected parent task pausing with a
+concrete progress reason. The paused phase creates no polling loop or periodic
+authority read. Only a user resume request or a separately configured
+observation policy causes new reads for the task.
+_Avoid_: Task pausing, dependency-blocked task, run blocked
+
+**Task resuming**:
+The nonterminal state after the Dalph user requests resume and before Dalph
+allows another forward-progress action for the task. Dalph freshly reads the
+task, claim, applicable task-graph facts, Git resources, and task-work-provider
+state required by the task's preserved responsibilities. Compatible facts
+permit ordinary operation selection; changed or unreadable facts select the
+applicable reconciliation, wait, or isolation rule instead of restarting stale
+work. If resume is requested while pause actions remain in flight, Dalph first
+settles those exact actions and derives a progress reason rather than cancelling
+them or starting a competing worker.
+_Avoid_: Task execution resumed, user-requested task pause removed, crash recovery
+
+**Dependency-blocked task**:
+A task that a fresh task-tracker read reports has at least one unsatisfied
+prerequisite. It is not paused. Dalph automatically considers it for the
+runnable frontier after a later task-tracker read reports no unsatisfied
+prerequisite and every other eligibility rule is satisfied.
+_Avoid_: User-requested task pause, persisted pause closure, grouping descendant
 
 **Dalph workflow journal**:
 The durable history of workflow-operation intents and observed outcomes that

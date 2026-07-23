@@ -148,6 +148,154 @@ the reconciliation choices and whether any case may continue after an operator
 merely unpauses it. This architecture does not assume that unpause alone
 reconciles changed task intent.
 
+## Pause and Resume
+
+A user-requested task pause does not cancel a bounded state-changing request
+that Dalph already sent for that task. The request may be a quick local Git call
+or a slower task-tracker or task-work-provider network call. The pause
+coordinator waits only under that operation's accepted bounded policy, records
+its outcome through the request's existing workflow operation, and selects no
+later forward-progress operation for the paused task. This wait needs no
+separate pause-specific workflow event: the original request intent and outcome
+remain explicit in the Dalph workflow journal. A coordinator interruption,
+timeout, or uncertain request outcome uses the request's ordinary
+fresh-result-check and recovery rules.
+
+An ordinary user-requested task pause preserves the task's exact claim, planned
+task attempt, worktree, task-work session, and unfinished work. The pause does
+not authorize claim release, resource cleanup, abandonment, cancellation, or
+handoff. Those actions require their own accepted user command and disposition
+rules.
+
+A user-requested run pause is one run-level state, not a batch of
+user-requested task pauses. It prevents selection of new forward-progress
+operations across the run while each already-started task action reaches the
+same boundary it would use for a task pause. Resuming the run removes only the
+run-level state; any independently requested task pause remains in force.
+
+The control surface records four distinct durable commands in the run's
+workflow journal before selecting any resulting boundary action: request run
+pause, request run resume, request task pause, and request task resume. They set
+the requested direction for one exact pause subject; they are not reference
+counts. Repeating Pause does not stack another pause or require another Resume.
+Each carries a branded `ControlCommandId`; an exact identity-and-payload
+delivery retry is idempotent, while reusing the identity for a different command
+is a typed contradiction. A later command with a new identity may change the
+requested direction without cancelling an already-started safety action.
+
+The pause reducer maintains run pause and per-task pause phases independently
+from tracker lifecycle, task claims, workflow stages, and resource
+responsibilities. Operation selection composes those facts instead of encoding
+their Cartesian product as one task-status enum. A pause request therefore does
+not acquire a missing claim, release an existing claim, or replace either claim
+fact; an unclaimed task can remain paused.
+
+The journal records user pause and resume commands, not `Pausing` or `Paused`
+status updates. The pure pause reducer derives each phase and its tagged
+progress reason from those commands, ordinary workflow outcomes, current
+grouping coverage, and outstanding responsibilities. A task pause remains
+pausing while any covered grouping descendant is still reaching a safe
+boundary; the derived parent reason identifies each preventing descendant.
+
+Every task pause is scoped to one exact `(RunId, TaskId)` pair. A terminated run
+never reopens, and a later run that observes the same tracker task does not
+inherit the earlier run's pause. Restarting a coordinator for a nonterminal
+paused run reconstructs that same run and pause from its journal, then remains
+passive until resume. A new run and a resumed paused run both read current
+tracker facts; neither restores a saved task graph.
+
+A task pause covers the selected task and every task reached by following
+tracker-owned grouping edges from parent to transitive descendant. Only the
+selected task receives an explicit user pause command. Operation selection
+derives descendant coverage from current graph knowledge; it does not write
+pause state to each child or persist the resolved closure. A newly grouped
+descendant becomes covered, and a task moved outside that grouping closure
+stops being covered. The rule does not synthesize prerequisite edges: grouping
+descendants do not wait for parent completion, and pausing a child does not
+cover its ancestor or siblings.
+
+Prerequisite edges retain their ordinary tracker meaning. Pausing task `B` does
+not pause a prerequisite of `B` or a task that depends on `B`. A prerequisite,
+including one shared with another branch, remains independently runnable. A
+task whose prerequisite path reaches unfinished `B` is simply
+dependency-blocked and becomes eligible automatically after fresh tracker facts
+show its prerequisites satisfied. In the edge direction, the prerequisite
+blocks the dependent; pause never reverses that edge or persists its transitive
+dependent closure.
+
+An active reviewer or findings-handback agent is long-running task work for
+pause purposes. Dalph asks its provider to interrupt that exact invocation,
+preserves the committed workflow operation, reviewer session, every already
+recorded immutable evidence object, and unresolved finding history, and later
+resumes the same invocation. It does not invent a partial review disposition or
+let reviewer work continue merely because the invocation does not change Git or
+the task tracker. The current specification assumes the accepted mandatory
+review loop; [future research](https://github.com/dearlordylord/dalph/issues/127)
+owns whether task-resolution stages become configurable.
+
+If implementation evidence capture has already begun when pause is requested,
+Dalph lets that bounded local Git-and-EvidenceStore operation finish and seal
+its immutable evidence manifest. The manifest preserves the exact worker output
+and worktree diff that later resume and review require. Pause does not select
+evidence capture if it has not begun, and it does not select the subsequent
+review after an in-flight capture finishes.
+
+Pause never selects a not-yet-started cleanup or disposition action. If an exact
+cleanup request already crossed its boundary, the request follows the same
+bounded completion and uncertain-outcome reconciliation rule as every other
+state-changing request; Dalph records the known result and selects no later
+cleanup step for the paused subject. Pause does not reverse cleanup that already
+completed. Concrete cleanup resources and their exact disposition protocols
+remain owned by their implementation specifications rather than being invented
+by pause semantics.
+
+If a task already holds the serialized integration resource when its pause is
+requested, it remains `TaskPausing` while the accepted integration protocol
+finishes or reconciles that already-authorized attempt to a known state where
+the shared resource can be released. Dalph does not interrupt the protocol,
+automatically roll back Git, or hold integration exclusivity for the duration
+of the pause. If the pause request is recorded before integration acquires the
+shared resource, Dalph does not begin that integration attempt. A future
+cancel-integration policy is a separate command and does not change pause
+semantics.
+
+A user resume request moves a task into `TaskResuming`; it does not
+directly start or resume a worker. Dalph freshly rereads the exact task, claim,
+applicable dependency and grouping facts, Git resources, task-work session,
+worker or provider work unit, evidence, review, handback, and integration facts
+needed by the task's preserved responsibilities. Only compatible observations
+allow ordinary operation selection. Edited, completed, closed, newly blocked,
+newly unblocked, foreign-claimed, unreadable, or target-closure-removed tasks
+enter their accepted reconciliation, wait, disposition, or isolation rule
+without stale task work restarting. W6 owns those per-observation choices.
+
+If the user requests resume while a task is still pausing, Dalph records the
+new requested destination but does not cancel an already-sent interruption or
+start another worker. It first observes or reconciles the original worker and
+every other already-started operation to their safe boundaries, then performs
+the ordinary resume reads. The derived progress reason names the operation that
+still prevents resumption.
+
+Pause handling does not select a replacement task or execute a pause-specific
+capacity-release branch. Task execution holds a scoped task-work-capacity permit
+only while the task-work provider reports that the exact worker consumes that
+capacity. A fresh terminal interruption observation closes the permit scope
+through the same resource mechanism used by ordinary execution. Frontier
+scheduling separately derives that capacity is available and may admit another
+task. Preserving a task-work session or worktree does not by itself retain
+task-work capacity. The current provider contract has no suspended outcome; a
+future suspension capability must separately define its resource occupancy,
+fresh observation, and resumption semantics before pause may select it.
+
+A confirmed task or run pause is passive. Pause state by itself schedules no
+polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
+review read. The workflow journal preserves the pause and outstanding
+responsibilities. A user resume request triggers the required fresh reads; a
+separately accepted observation policy may also read paused subjects without
+authorizing forward progress.
+
+See [ADR 0008](adr/0008-derive-run-scoped-pause-state.md).
+
 Startup checks the exact current task claim and rereads the task tracker before
 it selects a missing worktree, task-work-session, task-execution, or later
 implementation-convergence operation.
