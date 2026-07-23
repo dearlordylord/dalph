@@ -60,6 +60,11 @@ const simulateTaskExecution = Effect.fn("WorkflowInterpreter.simulateTaskExecuti
   }
 )
 
+/**
+ * Internal delegate for compositions that independently select controlled
+ * boundary implementations. Its simulated outcomes do not authorize exposing
+ * state-changing adapters without the journal wrappers that record intent.
+ */
 export const makeTaskRunnerWorkflowInterpreterLayer = (
   operationPrefix: "TaskRunner" | "DeterministicTest"
 ) =>

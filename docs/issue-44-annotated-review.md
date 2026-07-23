@@ -11,8 +11,8 @@ repeating concerns that later commits already solved.
 - Isolated worktree: `/workspace/typescript/dalph-issue44-followup`
 - Branch: `issue-44-followup`
 - Branch base: `81fbbc90e` (`master` when the worktree was created)
-- Follow-up commits: `326576a21 fix(orchestrator): harden task attempt planning
-  boundaries` and `69dbff552 fix(orchestrator): apply issue 44 review feedback`
+- Earlier follow-up commits: `326576a21`, `69dbff552`, and `d1dfe8b76`. The
+  current composition correction is committed directly on local `master`.
 - `issue-44-followup` was fast-forward merged into local `master`. It has not
   been pushed.
 - Original annotation call process ID supplied by the reviewer: `1210985`. The
@@ -47,15 +47,24 @@ The workflow always performs these operations in this order:
 1. record the exact planned task attempt;
 2. reconcile its planned worktree.
 
-The workflow no longer branches on a simulated planning result. Injected,
-coherent Effect Layers decide how both operations are interpreted. No exported
-Layer combines simulated planned-task-attempt recording with authoritative Git
-mutation. Production privately assembles its delegate and exports only the
-journaled, coherent production interpreter.
+The workflow no longer branches on a simulated planning result. The
+`WorkflowInterpreter` is the injected Effect service whose methods execute the
+operations selected by the workflow. Effect Layers may choose real or simulated
+implementations independently at each boundary; the interpreter is not an
+environment or runtime mode.
 
-This is now an explicit, deliberately strict review rule in
-`docs/CODE_REVIEW.md`: environment differences belong in interpreters and
-Layers, not branches in the workflow algebra.
+The earlier review incorrectly prohibited exported Layers from combining
+simulated planned-task-attempt recording with real behavior at another
+boundary. That blanket prohibition was removed. Tests may combine controlled
+adapters that exercise production protocol code with simulated planning and
+Git reconciliation. The raw task-runner delegate remains internal because
+exposing arbitrary state-changing adapters without their journal wrappers would
+violate intent-before-effect. Only the production Layer promises durable
+planned-task-attempt recording before authoritative Git reconciliation.
+
+`docs/CODE_REVIEW.md` now states the narrower rule: composition differences
+belong in Layers, not branches in the workflow algebra, and each composition
+must claim only the guarantees supplied by its selected boundaries.
 
 ### Canonical planning vocabulary
 
@@ -87,10 +96,12 @@ reconciliation, task-work-session establishment, and task execution events.
 ### No test-only runtime identity
 
 The `liveFakeWorkflowInterpreterLayer`, tracker-mutation interpreter alias, and
-test-only task-runner alias were removed. Tests use the deterministic test
-Layer; the task-runner factory simulates both planned-task-attempt recording and
-worktree reconciliation. Runtime behavior is selected through ordinary service
-composition, not a production branch or a test-named runtime mode.
+test-only task-runner alias remain removed because those names incorrectly
+treated an interpreter as a runtime identity. Tests may use the deterministic
+test Layer or an internal task-runner Layer composition. The latter simulates
+planned-task-attempt recording and worktree reconciliation while accepting
+independently supplied controlled tracker, task-work-provider, and executor
+services.
 
 ## Verification evidence
 
@@ -115,11 +126,20 @@ and review fixes: build, typecheck, lint, circular and duplicate checks, Quint
 verification, 57 test files with 378 tests, coverage thresholds, and secret
 scanning. `git diff --check` also passed.
 
+The later Layer-composition correction passed the same full gate under Node
+24.18.0. Its focused pass covered 3 files and 8 tests. Fresh Spec and
+Standards/architecture/connascence reviews reported no remaining findings after
+the raw task-runner delegate was kept out of the public package surface.
+
 ## Planned-task-attempt predecessor interview
 
 This is intentionally not decided by the fast follow-up. Resume it with the
 `grill-me` skill and ask one question at a time. The implementation must not
 invent an attempt ordinal while this policy remains unresolved.
+
+The durable interview artifact is
+[`adr/0002-planned-task-attempt-admission.md`](adr/0002-planned-task-attempt-admission.md).
+This temporary handoff retains only the resume pointer and current summary.
 
 Current concrete flow:
 
@@ -164,7 +184,7 @@ Question 4 belongs with issue #112. Do not answer it by assuming an ordinal.
 
 The issue comment linked above preserves these requirements:
 
-- recover the exact planned task attempt, including its task revision (fingerprint)
+- recover the exact planned task attempt, including its task revision
   fingerprint;
 - do not assume an attempt ordinal before the predecessor interview settles how
   a new attempt is authorized;
@@ -215,6 +235,10 @@ prefix testing must cover all legal event shapes, not only example histories.
   `issue-44-followup`.
 - The branch was fast-forward merged into local `master` after the full gate
   and both review axes were clean.
+- The later Layer-composition correction and proposed ADR 0002 were committed
+  directly on local `master` after a second full gate and clean review passes.
+- The predecessor interview has not started; ADR 0002 contains no policy
+  decision.
 - The former untracked master artifact was removed before the merge; this file
   is the canonical replacement, not an appended transcript.
 - No push was performed.

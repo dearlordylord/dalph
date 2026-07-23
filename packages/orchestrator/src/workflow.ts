@@ -276,6 +276,14 @@ type ImplementationReviewWorkflowError =
   | JournalStoreError
   | TechnicalRetryControlFailure
 
+/**
+ * Executes the workflow operations selected by `runWorkflow`.
+ *
+ * An Effect Layer constructs this injected operation handler from whichever
+ * real or simulated boundary capabilities a composition needs. The handler is
+ * not itself a runtime mode, and its operations may use independently selected
+ * boundary implementations.
+ */
 export interface WorkflowInterpreterService {
   readonly recordImplementationDisposition: (
     operation: typeof WorkflowOperation.cases.RecordImplementationDisposition.Type

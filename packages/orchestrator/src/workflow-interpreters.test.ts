@@ -9,6 +9,7 @@ import {
   FailedProcessExitCode,
   FailedTaskExecutionReported,
   GitCommitSha,
+  makeTaskAttemptPlanOperation,
   makeTaskExecutionOperation,
   makeTaskWorktreeReconciliationOperation,
   MatchingTaskWorkSessionReported,
@@ -112,10 +113,18 @@ it.effect("rejects provider execution in a simulated task-runner interpreter", (
     Effect.provide(traceLayer)
   ))
 
-it.effect("keeps task-runner planning and worktree reconciliation simulated", () =>
+it.effect("independently controls simulated planning, Git, and executor boundaries", () =>
   Effect.gen(function*() {
     const interpreter = yield* WorkflowInterpreter
+    const recording = yield* interpreter.recordTaskAttemptPlan(
+      makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("interpreter-plan-operation"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+    )
     const outcome = yield* interpreter.executeTaskWork(establishedOperation)
+    expect(recording._tag).toBe("TaskAttemptPlanRecordingSimulated")
     expect(outcome.outcome).toMatchObject({ _tag: "Failed", exitCode: 31 })
 
     const reconciliation = yield* interpreter.reconcileTaskWorktree(

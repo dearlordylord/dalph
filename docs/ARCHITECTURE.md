@@ -6,6 +6,14 @@ application architecture.
 
 Canonical boundary terminology lives in [CONTEXT.md](CONTEXT.md).
 
+`runWorkflow` selects operations from Dalph's workflow algebra. The
+`WorkflowInterpreter` is the injected Effect service whose methods execute
+those selected operations at their named boundaries. An Effect Layer constructs
+that service from real or simulated tracker, journal, Git, task-work-provider,
+and executor capabilities. “Interpreter” names this operation handler, not an
+environment or runtime mode; one Layer may intentionally combine real behavior
+at one boundary with simulated behavior at another.
+
 ## Historical-Harness Boundary
 
 The Dalph orchestrator is graph-native repository tooling designed independently
@@ -266,12 +274,15 @@ which prior outcome authorizes recording it instead of continuing or
 terminating the existing attempt.
 
 The workflow selects and invokes the same planned-task-attempt recording and
-worktree-reconciliation operations in every mode. Effect Layers select one
-coherent interpretation. Dry-run and deterministic-test compositions simulate
-both operations. The production composition records the planned task attempt,
-then rereads the journal before it may inspect or change Git. No exported Layer
-may combine simulated planned-task-attempt recording with authoritative Git
-reconciliation.
+worktree-reconciliation operations in every composition. Effect Layers select
+the implementation of each boundary independently, so tests may intentionally
+combine controlled adapters that exercise a production protocol at one
+boundary with simulation at another. A composition that exposes an adapter
+which may change external state must also record the required intent for that
+exact boundary. The production Layer guarantees that Dalph records the planned
+task attempt and rereads the journal before it may inspect or change Git. A
+mixed test Layer does not acquire that production durability guarantee merely
+because one of its controlled adapters exercises production protocol code.
 
 Before live session establishment or recovery, the journaled interpreter
 requires exactly one earlier `TaskAttemptPlanned` event with the identical
