@@ -11,17 +11,17 @@ repeating concerns that later commits already solved.
 - Isolated worktree: `/workspace/typescript/dalph-issue44-followup`
 - Branch: `issue-44-followup`
 - Branch base: `81fbbc90e` (`master` when the worktree was created)
-- Existing branch commit: `326576a21 fix(orchestrator): harden task attempt
-  planning boundaries`
-- The branch is not merged or pushed.
+- Follow-up commits: `326576a21 fix(orchestrator): harden task attempt planning
+  boundaries` and `69dbff552 fix(orchestrator): apply issue 44 review feedback`
+- `issue-44-followup` was fast-forward merged into local `master`. It has not
+  been pushed.
 - Original annotation call process ID supplied by the reviewer: `1210985`. The
   process has exited; its feedback was recovered before exit.
 - Issue #112 follow-up comment:
   <https://github.com/dearlordylord/dalph/issues/112#issuecomment-5053604185>
 
-When the current changes pass the full gate and both review passes, commit them
-on `issue-44-followup`, then merge that branch into `master`. The reviewer
-explicitly asked for the merge when confidence is high.
+The full gate and independent Standards and Spec review passes are clean. The
+reviewer's requested high-confidence merge is complete locally.
 
 ## Scope and sources reviewed
 
@@ -209,15 +209,15 @@ issue #112 after the predecessor/admission policy is settled: every legal
 durable history either advances or reaches a typed stopping outcome. Generated
 prefix testing must cover all legal event shapes, not only example histories.
 
-## Final checklist
+## Delivery status
 
-1. Commit the code, documentation, and this replacement handoff on
-   `issue-44-followup`.
-2. Merge `issue-44-followup` into `master`; the gate and both review axes are
-   clean.
-3. Confirm the master worktree's former untracked copy of this artifact is
-   replaced by
-   this canonical version rather than appended to it.
+- The code, documentation, and replacement handoff were committed on
+  `issue-44-followup`.
+- The branch was fast-forward merged into local `master` after the full gate
+  and both review axes were clean.
+- The former untracked master artifact was removed before the merge; this file
+  is the canonical replacement, not an appended transcript.
+- No push was performed.
 
 ## Relevant references
 
