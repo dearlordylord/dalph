@@ -296,6 +296,125 @@ authorizing forward progress.
 
 See [ADR 0008](adr/0008-derive-run-scoped-pause-state.md).
 
+## Frontier Derivation, Scheduling, and Capacity
+
+Dalph first reconstructs usable graph knowledge, workflow history, per-subject
+responsibility, and pause state. A pure derivation then returns the runnable
+frontier: every workflow transition those facts and accepted policy currently
+allow before applying task-work capacity. The derivation does not read the task
+tracker, journal, Git, or task-work provider and does not change when an
+interpreter simulates a boundary.
+
+The default tracker observation assembles the complete bounded task-tracker
+target closure. A smaller named read shape may support a focused decision only
+when its declared coverage completely proves the task's lifecycle, target
+closure membership, complete prerequisite set, and every prerequisite
+lifecycle needed by that decision. Missing, incomplete, or incomparable facts
+never prove that a blocker is absent. They make only transitions that depend on
+those facts unavailable; unrelated transitions derived from usable knowledge
+continue.
+
+Successful normalized facts from either a tracker read or a tracker mutation
+result update graph knowledge through `TaskGraphFactsUpdated`. The same pure
+frontier derivation runs after either origin. Completing task `A` therefore does
+not imperatively enqueue dependents `B` and `C`, advance their execution stages,
+or persist a downstream queue. It updates the relevant graph facts, after which
+the derivation decides whether the previously unstarted downstream region now
+contains runnable transitions.
+
+The scheduler chooses a process-local admission set from the runnable frontier.
+It first admits ready transitions for tasks where Dalph already has workflow
+responsibility. Those tasks are ordered by the earliest journal position that
+began any of the task's still-outstanding responsibilities needed by its ready
+transition, then by normalized `TaskId`. Fresh tasks follow in ascending
+normalized `TaskId` order. The scheduler admits no more capacity-requiring
+transitions than fit the currently available task admission positions. Tracker
+enumeration order, hash-map iteration, ambient randomness, and a persisted
+scheduling cursor never participate.
+
+This ordering is deterministic for the exact reconstructed state presented to
+one scheduling decision. Worker completion order, tracker edits, provider
+response timing, and capacity-release timing remain externally determined and
+may change the state presented to the next decision. Dalph records those
+observations in their actual order and does not delay work or reorder history to
+manufacture the same global execution sequence across runs.
+
+For a fresh task, scheduler choice is uncommitted until Dalph appends the exact
+first ambiguity-crossing operation intent, normally
+`TaskClaimAcquisitionIntended`. Dalph records no standalone durable
+task-selection event. A crash before that append leaves no responsibility and
+recomputes the choice from fresh facts. A crash afterward reconstructs
+responsibility for that exact operation and follows its reconcile-before-retry
+protocol before considering fresh work.
+
+One process-local controller supplies the configured task admission positions
+to ordinary and resumed work. A position is reserved from a fresh task's first
+operation intent through preparation of its initial task-work invocation. It is
+occupied while the task-work provider reports that an implementation,
+technical-review, semantic-review, findings-handback, or resumed task-work
+invocation consumes capacity. An invocation's terminal observation releases
+the position; the task keeps its durable responsibility and receives
+responsibility-first priority when another invocation becomes ready.
+
+Pure derivation, reducer execution, bounded journal appends, tracker/Git/provider
+reconciliation reads, evidence sealing, cleanup, and integration do not consume
+task-work capacity. Cleanup follows its exact disposition protocol, and
+integration uses its separately serialized resource. A paused branch, a branch
+waiting on an external condition after its current bounded action settles, a
+disposed or isolated branch, and a branch whose task-work invocation terminated
+hold no admission position merely because their responsibility or recoverable
+resources remain.
+
+Creating one exact task claim record is the exception for its already-committed
+fresh task: retryable GitHub failures reuse the same operation identity under
+the selected bounded retry policy and retain the reserved admission position
+between attempts. Exhausting retries for a shared GitHub failure, or encountering
+an authentication or invalid repository-configuration problem, stops fresh
+admission and fails the run after already-started work reaches its defined safe
+boundary. A confirmed task-specific conflict, such as a current claim owned by
+another owner, leaves that task alone, releases the position, and permits an
+unrelated task to be selected.
+
+When no position is available, capacity waiting is derived from the runnable
+frontier and controller state. It is exposed with its reason but does not append
+a waiting event, queue entry, capacity reservation, or presentation rollup to
+the workflow journal. Releasing a position or changing relevant reconstructed
+state wakes scheduling. After process loss, Dalph discards the old controller,
+reconstructs responsibility, freshly reads the applicable external boundaries,
+and derives new positions and waits.
+
+One unavailable branch blocks another only when the second branch's next action
+concretely requires its unfinished prerequisite, an integration resource it
+already holds, the whole run is paused, or shared managed history or capability
+is invalid. A paused, capacity-waiting, disposed, isolated, foreign-claimed, or
+responsibility-relinquished task does not create a generic whole-run blocker.
+An empty runnable frontier proves only that no transition is currently allowed;
+run completion still requires a fresh tracker observation proving every task in
+the live target closure completed successfully and all managed work and
+resources settled.
+
+### Acceptance examples
+
+With task-work capacity one and equally runnable fresh tasks `A` and `B`, the
+frontier contains both tasks and the admission set contains only `A`. Dalph
+reserves the position for `A` and appends only `A`'s exact claim intent. If the
+coordinator dies before that append, restart rereads the tracker and recomputes
+both uncommitted choices. If it dies after the append but before learning
+whether GitHub created `A`'s claim record, restart reconstructs responsibility
+only for `A`, checks GitHub for that exact owner and token, and leaves `B`
+unselected. Observing both tasks therefore neither selects both nor creates
+responsibility for both.
+
+If responsible task `A` is paused after its worker stops, it retains its claim
+and recoverable resources but holds no admission position. Fresh task `B` may
+use the sole position. A later resume request triggers `A`'s required fresh
+reads while `B` continues. If `A` becomes ready before `B` finishes, it derives
+capacity waiting without a journal event. When `B` releases the position, `A`
+is admitted before fresh task `C`; if `A` is paused, blocked, or isolated
+instead, `C` may proceed.
+
+See [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
+
 Startup checks the exact current task claim and rereads the task tracker before
 it selects a missing worktree, task-work-session, task-execution, or later
 implementation-convergence operation.

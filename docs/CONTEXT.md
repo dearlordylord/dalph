@@ -667,11 +667,32 @@ process, or workflow-journal state.
 _Avoid_: Dalph workflow journal, audit log, dry-run-specific trace
 
 **Runnable frontier**:
-The process-local view of currently selectable workflow transitions derived
-from reconstructed managed-run state, accepted policy, and available capacity.
+The process-local view of workflow transitions that reconstructed managed-run
+state and accepted policy currently allow before applying task-work capacity.
 It is recomputed after relevant events or fresh reads and never persisted as
 authority.
-_Avoid_: Persisted queue, durable graph knowledge, task-tracker target closure
+_Avoid_: Admission set, persisted queue, durable graph knowledge, task-tracker target closure
+
+**Admission set**:
+The process-local, deterministically ordered subset of the runnable frontier
+chosen for currently available task admission positions. Membership commits no
+workflow responsibility until Dalph records the selected transition's exact
+operation intent.
+_Avoid_: Runnable frontier, persisted queue, task claim, task execution admitted
+
+**Task admission position**:
+One process-local unit of configured task-work capacity, reserved while Dalph
+prepares a freshly committed task or occupied while a task-work invocation
+consumes capacity. It is recreated after process loss from configuration,
+workflow responsibility, and fresh observations rather than restored as
+authority.
+_Avoid_: Task claim, persisted capacity reservation, worker process
+
+**Capacity waiting**:
+The derived condition in which a runnable transition needing task-work capacity
+is excluded from the admission set because every task admission position is
+reserved or occupied.
+_Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
 **Control command identity**:
 The branded `ControlCommandId` assigned to one exact user control command before
