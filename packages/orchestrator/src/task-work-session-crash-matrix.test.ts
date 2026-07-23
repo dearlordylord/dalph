@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { ConfigProvider, Effect, Exit, FileSystem, Layer, Ref, Stream } from "effect"
+import { Cause, ConfigProvider, Effect, Exit, FileSystem, Layer, Ref, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import {
@@ -10,9 +10,11 @@ import {
 import {
   AttemptId,
   controlledTrackerMutationLayer,
+  deterministicTestWorkflowInterpreterLayer,
   GitCommitSha,
   GitCommonDirectoryTarget,
   JournalDatabaseLocator,
+  journaledWorkflowInterpreterLayer,
   JournalStore,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
@@ -373,6 +375,7 @@ for (const scenario of crashScenarios) {
       const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({
         DALPH_JOURNAL_DATABASE: filename
       }))
+      const journalLayer = sqliteJournalStoreLayer({ filename })
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
         yield* journal.append(
@@ -399,18 +402,43 @@ for (const scenario of crashScenarios) {
             version: 4
           })
         )
-      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-      const runCoordinator = Effect.gen(function*() {
+      }).pipe(Effect.provide(journalLayer))
+      const initialInterpreterLayer = journaledWorkflowInterpreterLayer(
+        runId,
+        deterministicTestWorkflowInterpreterLayer,
+        taskExecutorTestLayer
+      ).pipe(
+        Layer.provide(runnerLayer),
+        Layer.provide(journalLayer),
+        Layer.provide(traceLayer),
+        Layer.provide(Layer.succeed(
+          TrackerGraphReader,
+          TrackerGraphReader.of({ read: () => Effect.die("unused initial tracker read") })
+        ))
+      )
+      const runInitialCoordinator = Effect.gen(function*() {
+        const interpreter = yield* WorkflowInterpreter
+        return yield* interpreter.establishTaskWorkSession(operation)
+      }).pipe(
+        Effect.provide(initialInterpreterLayer)
+      )
+
+      const crashedExit = yield* Effect.exit(runInitialCoordinator)
+      expect(Exit.isFailure(crashedExit)).toBe(true)
+      const crashedRecords = yield* Effect.gen(function*() {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(journalLayer))
+      expect(
+        crashedRecords.some(({ event }) => event._tag === "TaskWorkSessionEstablishmentIntentRecorded"),
+        Exit.isFailure(crashedExit) ? String(Cause.squash(crashedExit.cause)) : "unexpected success"
+      ).toBe(true)
+      const outcome = yield* Effect.gen(function*() {
         const interpreter = yield* WorkflowInterpreter
         return yield* interpreter.establishTaskWorkSession(operation)
       }).pipe(
         Effect.provide(applicationLayer),
         Effect.provide(configLayer)
       )
-
-      const crashedExit = yield* Effect.exit(runCoordinator)
-      expect(Exit.isFailure(crashedExit)).toBe(true)
-      const outcome = yield* runCoordinator
       expect(outcome).toMatchObject({ operationId, sessionId: "provider-session" })
 
       const records = yield* Effect.gen(function*() {
@@ -425,7 +453,7 @@ for (const scenario of crashScenarios) {
     }).pipe(Effect.provide(NodeServices.layer)))
 }
 
-it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowledgement}`, () =>
+it.effect(`fails closed after ${CrashScenario.BeforeIntentAcknowledgement} without eligibility lineage`, () =>
   Effect.gen(function*() {
     const fileSystem = yield* FileSystem.FileSystem
     const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-before-intent-" })
@@ -468,17 +496,6 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
       plannedAttempt,
       predecessorOperationIds: [planOperation.operationId]
     })
-    const makeOperation = (operationId: OperationId) =>
-      makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [planOperation.operationId, worktreeOperation.operationId],
-        request: TaskWorkStartRequest.make({
-          operationId,
-          plannedAttempt,
-          task
-        })
-      })
-    const discarded = makeOperation(OperationId.make("discarded-candidate"))
-    const replacement = makeOperation(OperationId.make("replacement-candidate"))
     const runnerLayer = Layer.succeed(
       TaskRunner,
       TaskRunner.of({
@@ -555,9 +572,20 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
         })
       )
     }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-    const outcome = yield* Effect.gen(function*() {
-      return yield* (yield* WorkflowInterpreter).establishTaskWorkSession(replacement)
-    }).pipe(Effect.provide(applicationLayer), Effect.provide(configLayer))
-    expect(outcome.operationId).toBe(replacement.request.operationId)
-    expect(outcome.operationId).not.toBe(discarded.request.operationId)
+    const recoveryExit = yield* Effect.exit(
+      Effect.gen(function*() {
+        yield* WorkflowInterpreter
+      }).pipe(Effect.provide(applicationLayer), Effect.provide(configLayer))
+    )
+    expect(Exit.isFailure(recoveryExit)).toBe(true)
+    expect(Exit.isFailure(recoveryExit) ? Cause.squash(recoveryExit.cause) : undefined)
+      .toMatchObject({
+        _tag: "StartupRecoveryBlocked",
+        issues: [
+          expect.objectContaining({
+            _tag: "RecoveryTaskEligibilityIssue",
+            reason: "MissingEligibilityObservation"
+          })
+        ]
+      })
   }).pipe(Effect.provide(NodeServices.layer)))

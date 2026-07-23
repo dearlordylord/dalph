@@ -128,6 +128,7 @@ export {
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 export * from "./managed-history.js"
+export * from "./managed-run-recovery-stage.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 export { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
@@ -238,6 +239,7 @@ export {
 export {
   recoverExactRunAfterCoordinatorDeath,
   RecoveryOwnershipIssue,
+  RecoveryProgressIssue,
   RecoveryReconciliationIssue
 } from "./workflow-recovery.js"
 export {
@@ -250,6 +252,7 @@ export {
   recoverTaskWorktreeReconciliations
 } from "./workflow-recovery.js"
 export { runWorkflow } from "./workflow-run.js"
+export { RecoveryTaskEligibilityIssue } from "./workflow-stage-recovery.js"
 export { encodeTraceItem, semanticTrace, workflowTraceOutputLayer } from "./workflow-trace-output.js"
 export {
   AuthoritativeTaskClaimAcquired,

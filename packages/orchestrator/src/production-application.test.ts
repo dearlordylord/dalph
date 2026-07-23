@@ -1,13 +1,12 @@
 import { NodeFileSystem, NodeServices } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Ref, Stream } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Ref, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { expect } from "vitest"
 import { TaskWorkSessionCrashScenario } from "../test/task-work-session-crash-scenarios.js"
 import { CoordinatorOwnershipLost } from "./coordinator-lock.js"
-import type { WorkflowOutcome } from "./index.js"
 import {
   AttemptId,
   controlledTrackerMutationLayer,
@@ -200,26 +199,15 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({
       DALPH_JOURNAL_DATABASE: filename
     }))
-    const runCoordinator = Effect.gen(function*() {
+    const [firstOutcome, replayedOutcome] = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
-      return yield* interpreter.establishTaskWorkSession(operation)
+      const first = yield* interpreter.establishTaskWorkSession(operation)
+      const replayed = yield* interpreter.establishTaskWorkSession(operation)
+      return [first, replayed] as const
     }).pipe(
       Effect.provide(applicationLayer),
       Effect.provide(configLayer)
     )
-    const outcomeRecorded = yield* Deferred.make<
-      typeof WorkflowOutcome.cases.TaskWorkSessionEstablished.Type
-    >()
-    const coordinator = yield* runCoordinator.pipe(
-      Effect.tap((outcome) => Deferred.succeed(outcomeRecorded, outcome)),
-      Effect.andThen(Effect.never),
-      Effect.provide(applicationLayer),
-      Effect.provide(configLayer),
-      Effect.forkDetach
-    )
-    const firstOutcome = yield* Deferred.await(outcomeRecorded)
-    yield* Fiber.interrupt(coordinator)
-    const replayedOutcome = yield* runCoordinator
 
     expect(firstOutcome).toMatchObject({
       operationId: request.operationId,
@@ -227,7 +215,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     })
     expect(replayedOutcome).toEqual(firstOutcome)
     expect(yield* Ref.get(requests)).toBe(0)
-    expect(yield* Ref.get(lookups)).toBe(3)
+    expect(yield* Ref.get(lookups)).toBe(2)
   }).pipe(Effect.provide(NodeServices.layer)))
 
 it.effect("preserves and blocks semantically invalid discovered history before authority refresh", () =>

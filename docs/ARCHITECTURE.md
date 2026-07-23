@@ -94,6 +94,17 @@ ambiguous external resources likewise remain untouched for operator repair.
 Startup fails closed after collecting the available issues rather than allowing
 one unreadable authority to hide another authority's reconciliation fact.
 
+For each valid run, reduction derives one non-persisted managed-run recovery
+stage containing exactly one stage per acknowledged planned task attempt.
+Startup checks the exact current task claim and rereads the task tracker before
+it selects a missing worktree, task-work-session, or task-execution operation.
+The reread must still contain the task as eligible and must derive the same task
+revision fingerprint. An already-recorded unresolved operation keeps its
+operation identity and uses its existing reconciliation protocol. A recovery
+activation that returns without either appending a durable next fact, reaching
+an explicit terminal disposition, or returning a typed issue is rejected as
+inert recovery.
+
 | State or record | Where current state is read | Restart treatment |
 | --- | --- | --- |
 | Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the uncertain-request recovery rules to each intent missing a recorded outcome before retrying |

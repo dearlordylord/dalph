@@ -15,6 +15,7 @@ import {
 import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { type JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import { deriveManagedRunRecoveryStage, type ManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
 import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
@@ -47,6 +48,7 @@ export class ManagedHistorySemanticIssue extends Schema.TaggedErrorClass<Managed
 export interface ValidManagedHistory {
   readonly _tag: "ValidManagedHistory"
   readonly records: ReadonlyArray<JournalRecord>
+  readonly recoveryStage: ManagedRunRecoveryStage
   readonly runId: RunId
 }
 
@@ -670,6 +672,11 @@ export const reduceManagedHistory = (
   }
 
   return issues.length === 0
-    ? { _tag: "ValidManagedHistory", records, runId }
+    ? {
+      _tag: "ValidManagedHistory",
+      records,
+      recoveryStage: deriveManagedRunRecoveryStage(records),
+      runId
+    }
     : { _tag: "InvalidManagedHistory", issues, records, runId }
 }

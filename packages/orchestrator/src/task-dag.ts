@@ -77,7 +77,12 @@ const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): Tas
     prerequisiteIds: sorted(projection.prerequisiteIds)
   }))
 
-/** Derives the opaque, diagnostically reversible task revision fingerprint bound to an attempt. */
+/**
+ * Derives the opaque, diagnostically reversible task revision fingerprint bound
+ * to an attempt. The contract covers every normalized task field: identity,
+ * lifecycle, parent grouping edge, and the order-independent prerequisite set.
+ * Adding normalized task meaning requires adding it to this projection.
+ */
 export const taskRevisionFor = (task: Task): TaskRevision =>
   taskProjectionRevision(task.id, {
     lifecycle: task.lifecycle,

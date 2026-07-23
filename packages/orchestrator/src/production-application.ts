@@ -32,8 +32,10 @@ import {
   observeManagedRunAuthorities,
   recoverExactRunAfterCoordinatorDeath,
   RecoveryOwnershipIssue,
+  RecoveryProgressIssue,
   RecoveryReconciliationIssue
 } from "./workflow-recovery.js"
+import { RecoveryTaskEligibilityIssue } from "./workflow-stage-recovery.js"
 import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter } from "./workflow.js"
 
 /** Startup found preserved history or resources that cannot be resumed safely. */
@@ -42,6 +44,8 @@ export const StartupRecoveryIssue = Schema.Union([
   ManagedHistoryIdentityIssue,
   ManagedHistorySemanticIssue,
   RecoveryOwnershipIssue,
+  RecoveryProgressIssue,
+  RecoveryTaskEligibilityIssue,
   RecoveryReconciliationIssue
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type

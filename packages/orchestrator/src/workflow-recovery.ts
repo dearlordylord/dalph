@@ -26,6 +26,11 @@ import {
   recoverTaskWorktreeReconciliations,
   recoverTrackerGraphObservations
 } from "./workflow-operation-recovery.js"
+import {
+  continuePlannedTaskAttemptStage,
+  type MissingPlannedTaskAttemptOperationStage,
+  RecoveryTaskEligibilityIssue
+} from "./workflow-stage-recovery.js"
 
 /** A valid history's fresh authority read could not determine a safe next step. */
 export class RecoveryReconciliationIssue extends Schema.TaggedErrorClass<RecoveryReconciliationIssue>()(
@@ -41,6 +46,16 @@ export class RecoveryReconciliationIssue extends Schema.TaggedErrorClass<Recover
 export class RecoveryOwnershipIssue extends Schema.TaggedErrorClass<RecoveryOwnershipIssue>()(
   "RecoveryOwnershipIssue",
   { detail: Schema.String, runId: RunId }
+) {}
+
+/** A legal nonterminal stage remained inert after its recovery operation returned. */
+export class RecoveryProgressIssue extends Schema.TaggedErrorClass<RecoveryProgressIssue>()(
+  "RecoveryProgressIssue",
+  {
+    detail: Schema.String,
+    runId: RunId,
+    stage: Schema.String
+  }
 ) {}
 
 const reconciliationIssue = (
@@ -256,13 +271,14 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
   "WorkflowRecovery.recoverExactRunAfterCoordinatorDeath"
 )(function*(runId: RunId, discoveredRecords?: ReadonlyArray<JournalRecord>) {
   const journal = yield* JournalStore
-  const reduction = reduceManagedHistory(
+  const initialReduction = reduceManagedHistory(
     runId,
     discoveredRecords ?? (yield* journal.read(runId))
   )
-  if (reduction._tag === "InvalidManagedHistory") return reduction.issues
+  if (initialReduction._tag === "InvalidManagedHistory") return initialReduction.issues
 
   const collect = (authority: RecoveryReconciliationIssue["authority"]) => collectRefreshIssue(authority, runId)
+  const before = yield* journal.read(runId)
   const phases = [
     collect("Tracker")(recoverTrackerGraphObservations(runId)),
     collect("Tracker")(recoverTaskClaimAcquisitions(runId)),
@@ -276,7 +292,55 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
     const issues = yield* phase
     if (issues.length > 0) return issues
   }
-  return []
+
+  const afterPhases = yield* journal.read(runId)
+  if (afterPhases.length > before.length) return []
+  const reduction = reduceManagedHistory(runId, afterPhases)
+  if (reduction._tag === "InvalidManagedHistory") return reduction.issues
+  const missingStages = reduction.recoveryStage.attempts.filter(
+    (stage): stage is MissingPlannedTaskAttemptOperationStage =>
+      stage._tag === "TaskExecutionNeeded"
+      || stage._tag === "TaskWorkSessionEstablishmentNeeded"
+      || stage._tag === "TaskWorktreeReconciliationNeeded"
+  )
+  for (const stage of missingStages) {
+    const result = yield* Effect.result(
+      continuePlannedTaskAttemptStage(runId, afterPhases, stage)
+    )
+    if (Result.isFailure(result)) {
+      return [
+        result.failure instanceof RecoveryTaskEligibilityIssue
+          ? result.failure
+          : classifyRecoveryIssue(
+            stage.authority,
+            runId,
+            result.failure
+          )
+      ]
+    }
+  }
+  const continuedStage = missingStages[0]
+  if (continuedStage !== undefined) {
+    const afterContinuation = yield* journal.read(runId)
+    if (afterContinuation.length > afterPhases.length) return []
+    return [
+      new RecoveryProgressIssue({
+        detail: "the selected next operation returned without recording a durable fact",
+        runId,
+        stage: continuedStage._tag
+      })
+    ]
+  }
+
+  const nonterminal = reduction.recoveryStage.attempts.find((stage) => stage._tag !== "Terminal")
+  if (nonterminal === undefined) return []
+  return [
+    new RecoveryProgressIssue({
+      detail: "recovery returned without advancing this legal nonterminal durable stage",
+      runId,
+      stage: nonterminal._tag
+    })
+  ]
 })
 
 export {

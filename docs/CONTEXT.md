@@ -599,6 +599,15 @@ events, and returns either a recovery state or typed validation errors. Dalph
 does not persist the derived recovery state.
 _Avoid_: Event decoding, coordinator rehydration, reducer rollup table
 
+**Managed-run recovery stage**:
+The non-persisted result of reducing one valid managed history. It assigns every
+acknowledged planned task attempt exactly one explicit next durable boundary,
+unresolved operation, implementation-convergence continuation, or terminal
+disposition. Each recovery activation derives it from the complete current
+history, including every fact recorded by earlier activations. The Dalph
+workflow journal never stores it as current authority.
+_Avoid_: Persisted frontier, workflow journal event, resource cache, replacement attempt plan
+
 **Invalid managed history**:
 A preserved run whose individually decoded journal events contradict canonical
 position, record-key, operation-identity, ownership, or workflow-transition

@@ -9,6 +9,7 @@ import { ImplementationConvergenceDispositionRecordedEvent } from "./implementat
 import { recoverImplementationConvergences } from "./implementation-convergence-recovery.js"
 import { AuthorizedImplementationReviewRequest, ReviewFindingsHandbackRequest } from "./implementation-review.js"
 import {
+  ActiveTaskClaim,
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
   ClaimOwner,
@@ -173,7 +174,15 @@ const authorityPlaceholderLayer = Layer.mergeAll(
     TrackerMutation,
     TrackerMutation.of({
       acquireTaskClaim: () => Effect.die("terminal-only refresh does not acquire claims"),
-      readTaskClaim: () => Effect.die("terminal-only refresh does not read claims"),
+      readTaskClaim: (taskId) =>
+        Effect.succeed(ActiveTaskClaim.make({
+          operationId: OperationId.make(`${operationPrefix}:2`),
+          owner: ClaimOwner.make("implementation-convergence-recovery"),
+          taskId,
+          token: ClaimToken.make(
+            `implementation-convergence-recovery:${taskId}:${operationPrefix}:2`
+          )
+        })),
       releaseTaskClaim: () => Effect.die("terminal-only refresh does not release claims")
     })
   )
@@ -473,6 +482,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     Effect.provide(taskExecutorTestLayer),
     Effect.provide(implementationReviewTestLayer),
     Effect.provide(evidenceLayer),
+    Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
@@ -519,6 +529,7 @@ it.effect("starts the default first review from durable evidence alone", () =>
     Effect.provide(taskExecutorTestLayer),
     Effect.provide(implementationReviewTestLayer),
     Effect.provide(evidenceLayer),
+    Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
@@ -616,6 +627,7 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
     Effect.provide(taskExecutorTestLayer),
     Effect.provide(implementationReviewTestLayer),
     Effect.provide(evidenceLayer),
+    Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
@@ -716,6 +728,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
     Effect.provide(taskExecutorTestLayer),
     Effect.provide(implementationReviewTestLayer),
     Effect.provide(evidenceLayer),
+    Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))

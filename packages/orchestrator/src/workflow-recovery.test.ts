@@ -83,6 +83,12 @@ const interpreter = (
   })
 }
 
+const unclaimedTracker = TrackerMutation.of({
+  acquireTaskClaim: () => Effect.die("tracker claim acquisition is unused"),
+  readTaskClaim: (taskId) => Effect.succeed(UnclaimedTask.make({ taskId })),
+  releaseTaskClaim: () => Effect.die("tracker claim release is unused")
+})
+
 const runRecovery = (
   readTrackerGraph: ReadTrackerGraph
 ) =>
@@ -94,6 +100,7 @@ const runRecovery = (
   }).pipe(
     Effect.provideService(WorkflowInterpreter, interpreter(readTrackerGraph)),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+    Effect.provideService(TrackerMutation, unclaimedTracker),
     Effect.provide(memoryJournalStoreLayer)
   )
 
@@ -121,6 +128,7 @@ it.effect("refreshes every authority for a valid discovered run and emits the tr
     }).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter(() => emptySnapshot)),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Ref.update(emitted, (count) => count + 1) })),
+      Effect.provideService(TrackerMutation, unclaimedTracker),
       Effect.provide(memoryJournalStoreLayer)
     )
     expect(issues).toEqual([])
@@ -162,6 +170,7 @@ it.effect("returns semantic issues before refreshing authorities", () => {
   return recoverExactRunAfterCoordinatorDeath(runId, [orphanOutcome]).pipe(
     Effect.provideService(WorkflowInterpreter, interpreter(() => Effect.die("invalid history must not refresh"))),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+    Effect.provideService(TrackerMutation, unclaimedTracker),
     Effect.provide(memoryJournalStoreLayer),
     Effect.tap((issues) =>
       Effect.sync(() => {
