@@ -49,7 +49,7 @@ const appendPendingDeferral = Effect.fn("TechnicalRetryTest.appendPendingDeferra
     yield* journal.append(
       runId,
       technicalRetryPolicyRecordKey(scope),
-      TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 })
+      TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 })
     )
     yield* journal.append(
       runId,
@@ -59,7 +59,7 @@ const appendPendingDeferral = Effect.fn("TechnicalRetryTest.appendPendingDeferra
         notBefore: TechnicalRetryNotBefore.make(notBefore),
         retryOrdinal,
         scope,
-        version: 3
+        version: 4
       })
     )
   }
@@ -68,7 +68,7 @@ const appendPendingDeferral = Effect.fn("TechnicalRetryTest.appendPendingDeferra
 const changingRetryJournal = Effect.fn("TechnicalRetryTest.changingJournal")(
   function*(secondReadEvents: ReadonlyArray<TechnicalRetryJournalEvent>) {
     const reads = yield* Ref.make(0)
-    const policyEvent = TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 })
+    const policyEvent = TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 })
     const records = (events: ReadonlyArray<TechnicalRetryJournalEvent>): ReadonlyArray<JournalRecord> =>
       events.map((event, index) => ({
         event,
@@ -236,7 +236,7 @@ it.effect("resumes a superseded exact retry without consuming another ordinal or
     yield* journal.append(
       runId,
       technicalRetryDeferralSupersededRecordKey(scope, retryOrdinal),
-      TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 3 })
+      TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 4 })
     )
     yield* TestClock.setTime(1_000)
     const result = yield* retryTechnicalInvocation(Effect.succeed("discovered" as const), {
@@ -299,7 +299,7 @@ it.effect("fails typed when durable retry facts cross semantic review scopes", (
     yield* journal.append(
       runId,
       technicalRetryPolicyRecordKey(foreignScope),
-      TechnicalRetryPolicyCapturedEvent.make({ policy, scope: foreignScope, version: 3 })
+      TechnicalRetryPolicyCapturedEvent.make({ policy, scope: foreignScope, version: 4 })
     )
     const failure = yield* retryTechnicalInvocation(Effect.die("crossed scope reached provider"), {
       isRetryable: (candidate): candidate is "retry" => candidate === "retry",
@@ -341,7 +341,7 @@ it.effect("resumes the exact final retry without admitting another retry ordinal
     yield* journal.append(
       runId,
       technicalRetryPolicyRecordKey(scope),
-      TechnicalRetryPolicyCapturedEvent.make({ policy: finalPolicy, scope, version: 3 })
+      TechnicalRetryPolicyCapturedEvent.make({ policy: finalPolicy, scope, version: 4 })
     )
     yield* journal.append(
       runId,
@@ -351,13 +351,13 @@ it.effect("resumes the exact final retry without admitting another retry ordinal
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal,
         scope,
-        version: 3
+        version: 4
       })
     )
     yield* journal.append(
       runId,
       technicalRetryDeferralSupersededRecordKey(scope, retryOrdinal),
-      TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 3 })
+      TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 4 })
     )
 
     expect(
@@ -384,12 +384,12 @@ it.effect("fails typed when journal facts change between policy capture and retr
       notBefore: TechnicalRetryNotBefore.make(100),
       retryOrdinal: TechnicalRetryOrdinal.make(1),
       scope: foreignScope,
-      version: 3
+      version: 4
     })
     const crossedFailure = yield* retryTechnicalInvocation(Effect.die("changed facts reached provider"), {
       isRetryable: (candidate): candidate is "retry" => candidate === "retry",
       journal: yield* changingRetryJournal([
-        TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+        TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
         crossedScope
       ]),
       policy,
@@ -406,7 +406,7 @@ it.effect("fails typed when journal facts change between policy capture and retr
     const changedFailure = yield* retryTechnicalInvocation(Effect.die("changed policy reached provider"), {
       isRetryable: (candidate): candidate is "retry" => candidate === "retry",
       journal: yield* changingRetryJournal([
-        TechnicalRetryPolicyCapturedEvent.make({ policy: changedPolicy, scope, version: 3 })
+        TechnicalRetryPolicyCapturedEvent.make({ policy: changedPolicy, scope, version: 4 })
       ]),
       policy,
       runId,

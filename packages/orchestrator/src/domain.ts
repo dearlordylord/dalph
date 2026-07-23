@@ -66,13 +66,13 @@ export type RunId = typeof RunId.Type
 export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
 export type AttemptId = typeof AttemptId.Type
 
-/** Identifies the exact tracker-observed task content bound to one attempt. */
+/** Fingerprints the exact tracker-observed task content bound to one attempt; it is not a version counter. */
 export const TaskRevision = Schema.NonEmptyString.pipe(
   Schema.brand("TaskRevision")
 )
 export type TaskRevision = typeof TaskRevision.Type
 
-/** Identifies one exact Git commit used as a planned attempt's base. */
+/** Identifies one exact Git commit used as a planned task attempt's base. */
 export const GitCommitSha = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{40}$/)
 ).pipe(Schema.brand("GitCommitSha"))
@@ -127,7 +127,7 @@ export const ReviewerSessionId = Schema.NonEmptyString.pipe(
 )
 export type ReviewerSessionId = typeof ReviewerSessionId.Type
 
-/** Orders semantic review rounds for one planned attempt, starting at one. */
+/** Orders semantic review rounds for one planned task attempt, starting at one. */
 export const SemanticReviewRound = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1)
 ).pipe(Schema.brand("SemanticReviewRound"))
@@ -315,7 +315,7 @@ export const Task = TrackerTask
 export type Task = typeof Task.Type
 
 /**
- * Binds one attempt to its exact tracker revision and every Git/executor
+ * Binds one attempt to its exact task revision (fingerprint) and every Git/executor
  * resource locator before any execution resource is created or discovered.
  */
 export const PlannedTaskAttempt = Schema.Struct({

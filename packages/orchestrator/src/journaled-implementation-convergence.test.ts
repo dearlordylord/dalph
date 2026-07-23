@@ -160,7 +160,7 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       predecessorOperationIds: [claim.operationId],
       target: FixtureTarget.make("journaled-convergence")
     },
-    version: 3
+    version: 4
   }, 1),
   record({
     _tag: "TaskAttemptPlanned",
@@ -170,9 +170,9 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       plannedAttempt,
       predecessorOperationIds: [OperationId.make("admission")]
     },
-    version: 3
+    version: 4
   }, 2),
-  record({ _tag: "TaskClaimAcquired", claim, version: 3 }, 3),
+  record({ _tag: "TaskClaimAcquired", claim, version: 4 }, 3),
   record({
     _tag: "TaskWorktreeReconciliationIntended",
     operation: {
@@ -181,13 +181,13 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       plannedAttempt,
       predecessorOperationIds: [OperationId.make("plan")]
     },
-    version: 3
+    version: 4
   }, 4),
   record({
     _tag: "TaskWorktreeReady",
     operationId: subject.worktreeOperationId,
     proof: subject.worktreeProof,
-    version: 3
+    version: 4
   }, 5),
   record({
     _tag: "TaskWorkSessionEstablishmentIntentRecorded",
@@ -196,7 +196,7 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       predecessorOperationIds: [],
       request: { operationId: OperationId.make("session-operation"), plannedAttempt, task }
     },
-    version: 3
+    version: 4
   }, 6),
   record({
     _tag: "TaskWorkSessionEstablished",
@@ -205,7 +205,7 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       operationId: OperationId.make("session-operation"),
       sessionId
     },
-    version: 3
+    version: 4
   }, 7),
   record({
     _tag: "TaskExecutionIntentRecorded",
@@ -218,12 +218,12 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
         task
       })
     }),
-    version: 3
+    version: 4
   }, 8),
   record({
     _tag: "TaskExecutionOutcomeObserved",
     outcome: { _tag: "TaskExecutionObserved", outcome: execution },
-    version: 3
+    version: 4
   }, 9),
   record({
     _tag: "ImplementationEvidenceSealingIntended",
@@ -232,23 +232,23 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       operationId: reviewRequest.evidenceSealingOperationId,
       plannedAttempt
     }),
-    version: 3
+    version: 4
   }, 10),
   record({
     _tag: "ImplementationEvidenceSealed",
     operationId: reviewRequest.evidenceSealingOperationId,
     sealed: implementationEvidence,
-    version: 3
+    version: 4
   }, 11),
   record({
     _tag: "ImplementationReviewIntended",
     operation: makeImplementationReviewOperation(reviewRequest),
-    version: 3
+    version: 4
   }, 12),
   record({
     _tag: "ImplementationReviewCompleted",
     review,
-    version: 3
+    version: 4
   }, 13)
 ]
 
@@ -405,7 +405,7 @@ it.effect("records every exact terminal execution class without inventing prior 
         record({
           _tag: "TaskExecutionOutcomeObserved",
           outcome: { _tag: "TaskExecutionObserved", outcome: item.outcome },
-          version: 3
+          version: 4
         }, 9)
       ]
       const fixture = yield* testJournal(records)
@@ -495,12 +495,12 @@ it.effect("requires the exact latest review before a failed rework execution", (
             task
           })
         }),
-        version: 3
+        version: 4
       }, 14),
       record({
         _tag: "TaskExecutionOutcomeObserved",
         outcome: { _tag: "TaskExecutionObserved", outcome: failed },
-        version: 3
+        version: 4
       }, 15)
     ]
     const disposition = ImplementationConvergenceDisposition.cases.ImplementationExecutionFailed.make({
@@ -787,7 +787,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
     const reviewIntent = record({
       _tag: "ImplementationReviewIntended",
       operation: makeImplementationReviewOperation(reviewRequest),
-      version: 3
+      version: 4
     }, 16)
     const contradictoryReviewIntent = record({
       _tag: "ImplementationReviewIntended",
@@ -795,13 +795,13 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
         ...reviewRequest,
         reviewerSessionId: ReviewerSessionId.make("technical-reviewer-contradiction")
       }),
-      version: 3
+      version: 4
     }, 16)
     const evidence = record({
       _tag: "ImplementationEvidenceSealed",
       operationId: reviewRequest.evidenceSealingOperationId,
       sealed,
-      version: 3
+      version: 4
     }, 15)
     const evidenceIntent = record({
       _tag: "ImplementationEvidenceSealingIntended",
@@ -810,7 +810,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
         operationId: reviewRequest.evidenceSealingOperationId,
         plannedAttempt
       }),
-      version: 3
+      version: 4
     }, 14)
     const successfulReview = SealedImplementationReview.make({
       manifest: {
@@ -832,7 +832,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
     const successfulReviewRecord = record({
       _tag: "ImplementationReviewCompleted",
       review: successfulReview,
-      version: 3
+      version: 4
     }, 17)
 
     for (
@@ -878,7 +878,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
     const invalidRoundTwoIntent = record({
       _tag: "ImplementationReviewIntended",
       operation: makeImplementationReviewOperation(invalidRoundTwoRequest),
-      version: 3
+      version: 4
     }, 16)
     const invalidRoundTwoFixture = yield* testJournal([
       ...baseRecords(),
@@ -936,7 +936,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
     const handbackIntent = record({
       _tag: "ReviewFindingsHandbackIntended",
       operation: makeReviewFindingsHandbackOperation(handbackRequest),
-      version: 3
+      version: 4
     }, 14)
     const contradictoryHandbackIntent = record({
       _tag: "ReviewFindingsHandbackIntended",
@@ -944,7 +944,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
         ...handbackRequest,
         implementerInvocationId: OperationId.make("same-handback-operation-different-invocation")
       }),
-      version: 3
+      version: 4
     }, 14)
     const successfulHandback = record({
       _tag: "ReviewFindingsHandbackCompleted",
@@ -952,7 +952,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
         operationId: handbackRequest.operationId,
         reviewEvidenceReference: handbackRequest.review.manifestReference
       }),
-      version: 3
+      version: 4
     }, 15)
     for (
       const [records, reason] of [
@@ -990,7 +990,7 @@ it.effect("rejects technical exhaustion without exact intent, evidence, review, 
     const malformedHandbackIntent = record({
       _tag: "ReviewFindingsHandbackIntended",
       operation: makeReviewFindingsHandbackOperation(malformedHandbackRequest),
-      version: 3
+      version: 4
     }, 14)
     const malformedHandbackFixture = yield* testJournal([...handbackBaseRecords, malformedHandbackIntent])
     expect(

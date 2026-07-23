@@ -70,7 +70,7 @@ export const TaskClaimAcquiredEvent = Schema.TaggedStruct(
   }
 )
 
-/** Acknowledges the immutable attempt plan before any execution resource mutation. */
+/** Acknowledges the immutable planned task attempt before any execution resource mutation. */
 export const TaskAttemptPlannedEvent = Schema.TaggedStruct(
   "TaskAttemptPlanned",
   {

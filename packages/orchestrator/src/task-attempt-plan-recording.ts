@@ -4,7 +4,7 @@ import { WorkflowOperation } from "./workflow-operation.js"
 
 export { samePlannedTaskAttempt } from "./planned-task-attempt.js"
 
-/** The attempt plan belongs to a different durable workflow run. */
+/** The planned task attempt belongs to a different durable workflow run. */
 export class TaskAttemptPlanRunContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanRunContradiction>()(
   "TaskAttemptPlanRunContradiction",
   {
@@ -29,7 +29,7 @@ export class TaskAttemptPlanHistoryContradiction extends Schema.TaggedErrorClass
   }
 ) {}
 
-/** A durable journal append acknowledged one exact task-attempt plan. */
+/** A durable journal append acknowledged one exact planned task attempt. */
 export const TaskAttemptPlanRecordAcknowledged = Schema.TaggedStruct(
   "TaskAttemptPlanRecordAcknowledged",
   { plannedAttempt: PlannedTaskAttempt }
@@ -41,7 +41,7 @@ export const TaskAttemptPlanRecordingSimulated = Schema.TaggedStruct(
   { operation: WorkflowOperation.cases.RecordTaskAttemptPlan }
 )
 
-/** Records acknowledgement that one immutable attempt plan is durable. */
+/** Records acknowledgement that one immutable planned task attempt is durable. */
 export const TaskAttemptPlanAcknowledged = Schema.TaggedStruct(
   "TaskAttemptPlanAcknowledged",
   { operation: WorkflowOperation.cases.RecordTaskAttemptPlan }

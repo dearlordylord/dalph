@@ -326,7 +326,7 @@ it.effect("records acceptance after a crash following durable review without inv
           ...candidate,
           event: ImplementationConvergenceDispositionRecordedEvent.make({
             operation: simulatedOperation,
-            version: 3
+            version: 4
           })
         }
     )
@@ -455,7 +455,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     yield* (yield* JournalStore).append(runId, intentRecordKey(reviewOperationId), {
       _tag: "ImplementationReviewIntended",
       operation: reviewOperation,
-      version: 3
+      version: 4
     })
     expect(yield* recoverExactRunAfterCoordinatorDeath(runId)).toEqual([])
     const records = yield* (yield* JournalStore).read(runId)
@@ -581,13 +581,13 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
           maximumDelayMillis: TechnicalRetryDelayMillis.make(400)
         }),
         scope: handbackRetryScope,
-        version: 3
+        version: 4
       })
     )
     yield* (yield* JournalStore).append(runId, intentRecordKey(handbackOperationId), {
       _tag: "ReviewFindingsHandbackIntended",
       operation: handbackOperation,
-      version: 3
+      version: 4
     })
     const withIntent = yield* (yield* JournalStore).read(runId)
     const attemptId = reviewEvent.review.manifest.plannedAttempt.attemptId
@@ -665,7 +665,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
         predecessorOperationIds: [],
         target: FixtureTarget.make("implementation-convergence-recovery")
       },
-      version: 3
+      version: 4
     })
     yield* (yield* JournalStore).append(runId, outcomeRecordKey(collidingOperationId), {
       _tag: "TrackerGraphOutcomeObserved",
@@ -679,7 +679,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
           prerequisiteIds: []
         }]
       })),
-      version: 3
+      version: 4
     })
     const reworkOperationId = OperationId.make(
       `recovery:${runId}:${attemptId}:${beforeRecovery.length + 2}:1`
@@ -944,7 +944,7 @@ it.effect("records reviewer technical exhaustion only after its captured schedul
     const contradictory = [
       ...records.slice(0, -1),
       {
-        event: { _tag: "ImplementationReviewCompleted" as const, review: successfulReview, version: 3 as const },
+        event: { _tag: "ImplementationReviewCompleted" as const, review: successfulReview, version: 4 as const },
         key: outcomeRecordKey(request.operationId),
         position: JournalPosition.make(records.length),
         runId
@@ -1027,7 +1027,7 @@ it.effect("records handback technical exhaustion separately after its captured s
             operationId: request.operationId,
             reviewEvidenceReference: request.review.manifestReference
           }),
-          version: 3 as const
+          version: 4 as const
         },
         key: outcomeRecordKey(request.operationId),
         position: JournalPosition.make(records.length),

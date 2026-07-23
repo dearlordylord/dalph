@@ -408,7 +408,7 @@ it.effect("classifies direct absence, interruption, and foreign evidence outcome
       .toBeInstanceOf(TaskExecutionEvidenceContradiction)
   }))
 
-it("rejects invalid task revisions and accepts every positive safe-integer process exit", () => {
+it("rejects invalid task revision fingerprints and accepts every positive safe-integer process exit", () => {
   expect(() =>
     TaskExecutionRequest.make({
       ...request,

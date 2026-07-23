@@ -14,6 +14,7 @@ import {
   type ImplementationEvidenceSourceService,
   sealImplementationEvidence
 } from "./implementation-evidence.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { intentRecordKey, type JournalStoreService, outcomeRecordKey } from "./journal-store.js"
 import { samePlannedTaskAttempt } from "./task-attempt-plan-recording.js"
 import { WorkflowOperation } from "./workflow-operation.js"
@@ -142,7 +143,7 @@ export const makeJournaledImplementationEvidence = (
       yield* options.journal.append(
         options.runId,
         intentRecordKey(operation.operationId),
-        ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+        ImplementationEvidenceSealingIntendedEvent.make({ operation, version: workflowJournalEventVersion })
       )
     }
     const sealed = yield* sealImplementationEvidence(
@@ -160,7 +161,7 @@ export const makeJournaledImplementationEvidence = (
       ImplementationEvidenceSealedEvent.make({
         operationId: operation.operationId,
         sealed,
-        version: 3
+        version: workflowJournalEventVersion
       })
     )
     return sealed

@@ -105,7 +105,7 @@ it("roundtrips every generated deferral supersession without changing its semant
             reviewerSessionId: ReviewerSessionId.make(`property-reviewer-${semanticRound}`),
             semanticRound: SemanticReviewRound.make(semanticRound)
           }),
-          version: 3
+          version: 4
         })
         const encoded = Schema.encodeUnknownSync(TechnicalRetryDeferralSupersededEvent)(event)
         expect(Schema.decodeUnknownSync(TechnicalRetryDeferralSupersededEvent)(encoded)).toEqual(event)
@@ -135,29 +135,29 @@ it("accumulates independent scope, policy, ordinal, delay, and supersession cont
     TechnicalRetryDeferralSupersededEvent.make({
       retryOrdinal: TechnicalRetryOrdinal.make(2),
       scope,
-      version: 3
+      version: 4
     }),
     TechnicalRetryScheduledEvent.make({
       delayMillis: TechnicalRetryDelayMillis.make(100),
       notBefore: TechnicalRetryNotBefore.make(100),
       retryOrdinal: TechnicalRetryOrdinal.make(1),
       scope,
-      version: 3
+      version: 4
     }),
-    TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
-    TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
-    TechnicalRetryPolicyCapturedEvent.make({ policy: contradictoryPolicy, scope, version: 3 }),
+    TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
+    TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
+    TechnicalRetryPolicyCapturedEvent.make({ policy: contradictoryPolicy, scope, version: 4 }),
     TechnicalRetryScheduledEvent.make({
       delayMillis: TechnicalRetryDelayMillis.make(1),
       notBefore: TechnicalRetryNotBefore.make(1),
       retryOrdinal: TechnicalRetryOrdinal.make(4),
       scope: foreignScope,
-      version: 3
+      version: 4
     }),
     TechnicalRetryDeferralSupersededEvent.make({
       retryOrdinal: TechnicalRetryOrdinal.make(3),
       scope: foreignScope,
-      version: 3
+      version: 4
     })
   ]
 

@@ -15,10 +15,7 @@ import {
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
-import {
-  TaskWorktreeExecutionModeContradiction,
-  TaskWorktreeReconciliationSimulated
-} from "./task-worktree-reconciliation.js"
+import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import {
   ImplementationEvidenceSealingSimulatedTrace,
   ImplementationReviewSimulatedTrace,
@@ -147,9 +144,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         predecessorOperationIds: [planOperation.operationId]
       })
       yield* emit(OperationSelected.make({ operation: worktreeOperation }))
-      const worktreeResult = planResult._tag === "TaskAttemptPlanRecordAcknowledged"
-        ? yield* interpreter.reconcileTaskWorktree(worktreeOperation)
-        : TaskWorktreeReconciliationSimulated.make({ operation: worktreeOperation })
+      const worktreeResult = yield* interpreter.reconcileTaskWorktree(
+        worktreeOperation
+      )
       yield* emit(
         worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
           ? TaskWorktreeReadyTrace.make({

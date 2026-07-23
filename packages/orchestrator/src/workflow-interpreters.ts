@@ -1,11 +1,5 @@
 import { Effect, Layer } from "effect"
 import {
-  GitWorktree,
-  gitWorktreeTestLayer,
-  PlannedWorktreeAbsent,
-  runGitWorktreeReconciliation
-} from "./git-worktree.js"
-import {
   AuthoritativeImplementationConvergenceDisposition,
   ImplementationConvergenceSimulated
 } from "./implementation-convergence.js"
@@ -19,7 +13,6 @@ import { controlledTrackerMutationLayer, TrackerMutation } from "./tracker-mutat
 import { WorkflowOutcome } from "./workflow-outcome.js"
 import {
   acquireTaskClaimThrough,
-  AuthoritativeTaskWorktreeReady,
   emitTaskWorkSessionNonConvergence,
   runTaskExecutionProtocol,
   runTaskWorkSessionEstablishmentProtocol,
@@ -67,9 +60,8 @@ const simulateTaskExecution = Effect.fn("WorkflowInterpreter.simulateTaskExecuti
   }
 )
 
-const taskRunnerInterpreterLayer = (
-  operationPrefix: "TaskRunner" | "DeterministicTest",
-  worktreeMode: "Authoritative" | "Simulated"
+export const makeTaskRunnerWorkflowInterpreterLayer = (
+  operationPrefix: "TaskRunner" | "DeterministicTest"
 ) =>
   Layer.effect(
     WorkflowInterpreter,
@@ -77,7 +69,6 @@ const taskRunnerInterpreterLayer = (
       const reader = yield* TrackerGraphReader
       const runner = yield* TaskRunner
       const executor = yield* TaskExecutor
-      const gitWorktree = yield* GitWorktree
       const tracker = yield* TrackerMutation
       const trace = yield* WorkflowTrace
       const readTrackerGraph = Effect.fn(
@@ -126,14 +117,7 @@ const taskRunnerInterpreterLayer = (
       const reconcileTaskWorktree = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.reconcileTaskWorktree`
       )(function*(operation) {
-        if (worktreeMode === "Simulated") {
-          return TaskWorktreeReconciliationSimulated.make({ operation })
-        }
-        const proof = yield* runGitWorktreeReconciliation(
-          gitWorktree,
-          operation.plannedAttempt
-        )
-        return AuthoritativeTaskWorktreeReady.make({ proof })
+        return TaskWorktreeReconciliationSimulated.make({ operation })
       })
       const sealImplementationEvidence = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.sealImplementationEvidence`
@@ -171,28 +155,12 @@ const taskRunnerInterpreterLayer = (
     })
   )
 
-export const deterministicTestWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
-  "DeterministicTest",
-  "Simulated"
+export const deterministicTestWorkflowInterpreterLayer = makeTaskRunnerWorkflowInterpreterLayer(
+  "DeterministicTest"
 ).pipe(
   Layer.provide(controlledTrackerMutationLayer),
-  Layer.provide(taskExecutorTestLayer),
-  Layer.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
+  Layer.provide(taskExecutorTestLayer)
 )
-export const trackerMutationWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
-  "TaskRunner",
-  "Authoritative"
-)
-export const taskRunnerWorkflowInterpreterLayer = taskRunnerInterpreterLayer(
-  "TaskRunner",
-  "Simulated"
-).pipe(
-  Layer.provide(controlledTrackerMutationLayer),
-  Layer.provide(taskExecutorTestLayer),
-  Layer.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
-)
-export const liveFakeWorkflowInterpreterLayer = taskRunnerWorkflowInterpreterLayer
-
 export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
   WorkflowInterpreter,
   never,

@@ -6,11 +6,12 @@ import {
   type Task,
   TaskId,
   TaskLifecycle,
-  TaskRevision,
+  type TaskRevision,
   TrackerRevision,
   TrackerSnapshot,
   type TrackerTask
 } from "./domain.js"
+import { encodeTaskRevisionFingerprint } from "./task-revision-fingerprint.js"
 
 export const ProjectionIssue = Schema.TaggedUnion({
   BoundaryDecodeFailed: { detail: Schema.String },
@@ -69,14 +70,14 @@ interface TaskProjection {
 }
 
 const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): TaskRevision =>
-  TaskRevision.make(JSON.stringify({
+  encodeTaskRevisionFingerprint(JSON.stringify({
     id: taskId,
     lifecycle: projection.lifecycle._tag,
     parentTaskId: projection.parentTaskId,
     prerequisiteIds: sorted(projection.prerequisiteIds)
   }))
 
-/** Derives the exact normalized tracker content revision bound to an attempt. */
+/** Derives the opaque, diagnostically reversible task revision fingerprint bound to an attempt. */
 export const taskRevisionFor = (task: Task): TaskRevision =>
   taskProjectionRevision(task.id, {
     lifecycle: task.lifecycle,

@@ -36,7 +36,7 @@ import {
   TaskWorkStartRequest
 } from "../src/task-work-start.js"
 import { TrackerGraphReader } from "../src/tracker-graph-reader.js"
-import { taskRunnerWorkflowInterpreterLayer } from "../src/workflow-interpreters.js"
+import { deterministicTestWorkflowInterpreterLayer } from "../src/workflow-interpreters.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
@@ -202,7 +202,7 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
 
   const interpreterLayer = journaledWorkflowInterpreterLayer(
     runId,
-    taskRunnerWorkflowInterpreterLayer,
+    deterministicTestWorkflowInterpreterLayer,
     taskExecutorTestLayer
   ).pipe(
     Layer.provide(Layer.succeed(TaskRunner, runner)),

@@ -378,12 +378,12 @@ for (const scenario of crashScenarios) {
         yield* journal.append(
           runId,
           attemptPlanRecordKey(plannedAttempt.attemptId),
-          TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 })
+          TaskAttemptPlannedEvent.make({ operation: planOperation, version: 4 })
         )
         yield* journal.append(
           runId,
           intentRecordKey(worktreeOperation.operationId),
-          TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 3 })
+          TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 4 })
         )
         yield* journal.append(
           runId,
@@ -396,7 +396,7 @@ for (const scenario of crashScenarios) {
               headSha: plannedAttempt.baseSha,
               worktree: plannedAttempt.worktree
             }),
-            version: 3
+            version: 4
           })
         )
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
@@ -533,12 +533,12 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
       yield* journal.append(
         runId,
         attemptPlanRecordKey(plannedAttempt.attemptId),
-        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 })
+        TaskAttemptPlannedEvent.make({ operation: planOperation, version: 4 })
       )
       yield* journal.append(
         runId,
         intentRecordKey(worktreeOperation.operationId),
-        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 3 })
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 4 })
       )
       yield* journal.append(
         runId,
@@ -551,7 +551,7 @@ it.effect(`allocates a new candidate after ${CrashScenario.BeforeIntentAcknowled
             headSha: plannedAttempt.baseSha,
             worktree: plannedAttempt.worktree
           }),
-          version: 3
+          version: 4
         })
       )
     }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))

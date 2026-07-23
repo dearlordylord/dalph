@@ -136,7 +136,7 @@ export const reduceManagedHistory = (
   const intents = new Map<OperationId, WorkflowJournalEvent>()
   const outcomes = new Map<OperationId, WorkflowJournalEvent>()
   const observations = new Map<OperationId, ReadonlySet<JournalEventTag>>()
-  const plans = new Map<AttemptId, WorkflowJournalEvent>()
+  const plannedAttempts = new Map<AttemptId, WorkflowJournalEvent>()
   const seenKeys = new Set<JournalRecordKey>()
   const establishedSessionIds = new Set<TaskWorkSessionId>()
   const sessionResults = new Map<TaskWorkSessionId, WorkflowJournalEvent>()
@@ -223,7 +223,7 @@ export const reduceManagedHistory = (
     if (plannedAttempt !== undefined && plannedAttempt.runId !== runId) {
       issues.push(
         new ManagedHistoryIdentityIssue({
-          detail: `event ${record.event._tag} binds planned attempt run ${plannedAttempt.runId}`,
+          detail: `event ${record.event._tag} binds planned task attempt run ${plannedAttempt.runId}`,
           position: record.position,
           runId
         })
@@ -267,7 +267,7 @@ export const reduceManagedHistory = (
         issues.push(
           new ManagedHistoryIdentityIssue({
             detail:
-              `event ${record.event._tag} contradicts the planned attempt for operation ${descriptor.operationId}`,
+              `event ${record.event._tag} contradicts the planned task attempt for operation ${descriptor.operationId}`,
             position: record.position,
             runId
           })
@@ -304,7 +304,7 @@ export const reduceManagedHistory = (
           issues.push(
             new ManagedHistoryIdentityIssue({
               detail:
-                `event ${record.event._tag} planned attempt contradicts predecessor operation ${requiredOperationId}`,
+                `event ${record.event._tag} planned task attempt contradicts predecessor operation ${requiredOperationId}`,
               position: record.position,
               runId
             })
@@ -340,12 +340,12 @@ export const reduceManagedHistory = (
 
     if (record.event._tag === "TaskAttemptPlanned") {
       const attemptId = record.event.operation.plannedAttempt.attemptId
-      const prior = plans.get(attemptId)
-      if (prior === undefined) plans.set(attemptId, record.event)
+      const prior = plannedAttempts.get(attemptId)
+      if (prior === undefined) plannedAttempts.set(attemptId, record.event)
       else {
         issues.push(
           new ManagedHistorySemanticIssue({
-            detail: semanticDuplicateDetail("plan", `attempt ${attemptId}`, prior, record.event),
+            detail: semanticDuplicateDetail("planned task attempt", `attempt ${attemptId}`, prior, record.event),
             position: record.position,
             runId
           })
@@ -571,7 +571,7 @@ export const reduceManagedHistory = (
       ) {
         issues.push(
           new ManagedHistoryIdentityIssue({
-            detail: `outcome TaskWorktreeReady contradicts the planned attempt for operation ${operationId}`,
+            detail: `outcome TaskWorktreeReady contradicts the planned task attempt for operation ${operationId}`,
             position: record.position,
             runId
           })
@@ -588,7 +588,8 @@ export const reduceManagedHistory = (
       ) {
         issues.push(
           new ManagedHistoryIdentityIssue({
-            detail: `outcome ImplementationEvidenceSealed contradicts the planned attempt for operation ${operationId}`,
+            detail:
+              `outcome ImplementationEvidenceSealed contradicts the planned task attempt for operation ${operationId}`,
             position: record.position,
             runId
           })

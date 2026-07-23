@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import type { RunId } from "./domain.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import {
   intentRecordKey,
   type JournalRecord,
@@ -242,7 +243,7 @@ export const makeJournaledTaskExecution = (
     yield* journal.append(
       runId,
       key,
-      TaskExecutionIntentRecorded.make({ operation, version: 3 })
+      TaskExecutionIntentRecorded.make({ operation, version: workflowJournalEventVersion })
     )
     const durableReports = yield* durableExecutionReports(records, operation.request.operationId)
     const traceObserver = taskExecutionTraceObserver(operation, trace)
@@ -252,7 +253,7 @@ export const makeJournaledTaskExecution = (
           yield* journal.append(
             runId,
             taskExecutionRequestAttemptRecordKey(request.operationId),
-            TaskExecutionRequestAttemptRecorded.make({ request, version: 3 })
+            TaskExecutionRequestAttemptRecorded.make({ request, version: workflowJournalEventVersion })
           )
         }
       ),
@@ -264,7 +265,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionObservationFailed.make({
               failure,
               operationId: lookup.operationId,
-              version: 3
+              version: workflowJournalEventVersion
             })
           )
           yield* traceObserver.observationFailed(lookup, failure)
@@ -299,7 +300,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionReported.make({
               operationId: lookup.operationId,
               report,
-              version: 3
+              version: workflowJournalEventVersion
             })
           )
           yield* traceObserver.outcomeReported(lookup, report)
@@ -310,7 +311,7 @@ export const makeJournaledTaskExecution = (
           yield* journal.append(
             runId,
             taskExecutionRequestFailedRecordKey(request.operationId, failure.observationId),
-            TaskExecutionRequestFailed.make({ failure, request, version: 3 })
+            TaskExecutionRequestFailed.make({ failure, request, version: workflowJournalEventVersion })
           )
           yield* traceObserver.requestFailed(request, failure)
         }
@@ -323,7 +324,7 @@ export const makeJournaledTaskExecution = (
             TaskExecutionRequestReturned.make({
               acknowledgement,
               operationId: request.operationId,
-              version: 3
+              version: workflowJournalEventVersion
             })
           )
           yield* traceObserver.requestReturned(request, acknowledgement)
@@ -342,7 +343,7 @@ export const makeJournaledTaskExecution = (
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.request.operationId),
-      TaskExecutionOutcomeObservedEvent.make({ outcome, version: 3 })
+      TaskExecutionOutcomeObservedEvent.make({ outcome, version: workflowJournalEventVersion })
     )
     return outcome
   })

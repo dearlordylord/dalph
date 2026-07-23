@@ -111,7 +111,7 @@ effectIt.effect("rejects an unsupported immutable event version", () =>
     const failure = yield* Effect.flip(
       decodeAndUpcastJournalEvent({
         ...encoded,
-        version: JournalEventVersion.make(4)
+        version: JournalEventVersion.make(5)
       })
     )
     expect(failure._tag).toBe("JournalEventDecodeIssue")
@@ -224,7 +224,7 @@ it("reports duplicate and contradictory intents and outcomes without short-circu
   }
 })
 
-it("reports duplicate, contradictory, and foreign-run attempt plans", () => {
+it("reports duplicate, contradictory, and foreign-run planned task attempts", () => {
   const plan = PlannedTaskAttempt.make({
     attemptId: AttemptId.make("planned-attempt"),
     baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
@@ -249,8 +249,8 @@ it("reports duplicate, contradictory, and foreign-run attempt plans", () => {
       runId: RunId.make("foreign-plan-run")
     })
   })
-  const event = TaskAttemptPlannedEvent.make({ operation, version: 3 })
-  const replacementEvent = TaskAttemptPlannedEvent.make({ operation: replacement, version: 3 })
+  const event = TaskAttemptPlannedEvent.make({ operation, version: 4 })
+  const replacementEvent = TaskAttemptPlannedEvent.make({ operation: replacement, version: 4 })
   const reduction = reduceManagedHistory(runId, [
     { event, key: attemptPlanRecordKey(plan.attemptId), position: JournalPosition.make(1), runId },
     {
@@ -269,8 +269,8 @@ it("reports duplicate, contradictory, and foreign-run attempt plans", () => {
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag === "InvalidManagedHistory") {
     expect(reduction.issues.map(({ detail }) => detail)).toEqual(expect.arrayContaining([
-      "duplicate plan for attempt planned-attempt",
-      "contradictory plans for attempt planned-attempt"
+      "duplicate planned task attempt for attempt planned-attempt",
+      "contradictory planned task attempts for attempt planned-attempt"
     ]))
   }
 })
@@ -290,7 +290,7 @@ it("rejects a technical retry scope that changes the durable semantic review rou
       maximumDelayMillis: TechnicalRetryDelayMillis.make(200)
     }),
     scope,
-    version: 3
+    version: 4
   })
   const intent = event({
     _tag: "ImplementationReviewIntended",
@@ -334,18 +334,18 @@ it("rejects a later technical retry schedule before the exact prior deferral is 
     notBefore: TechnicalRetryNotBefore.make(100),
     retryOrdinal: TechnicalRetryOrdinal.make(1),
     scope,
-    version: 3
+    version: 4
   })
   const retryTwo = TechnicalRetryScheduledEvent.make({
     delayMillis: TechnicalRetryDelayMillis.make(200),
     notBefore: TechnicalRetryNotBefore.make(300),
     retryOrdinal: TechnicalRetryOrdinal.make(2),
     scope,
-    version: 3
+    version: 4
   })
   const reduction = reduceManagedHistory(runId, [
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
       key: technicalRetryPolicyRecordKey(scope),
       position: JournalPosition.make(1),
       runId
@@ -388,7 +388,7 @@ it("rejects a retry schedule that physically precedes its exact review intent", 
     notBefore: TechnicalRetryNotBefore.make(100),
     retryOrdinal: TechnicalRetryOrdinal.make(1),
     scope,
-    version: 3
+    version: 4
   })
   const intent = event({
     _tag: "ImplementationReviewIntended",
@@ -401,11 +401,11 @@ it("rejects a retry schedule that physically precedes its exact review intent", 
         round: scope.semanticRound
       }
     },
-    version: 3
+    version: 4
   })
   const records: ReadonlyArray<JournalRecord> = [
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
       key: technicalRetryPolicyRecordKey(scope),
       position: JournalPosition.make(1),
       runId
@@ -454,7 +454,7 @@ it("rejects a retry schedule that physically follows its durable review outcome"
     notBefore: TechnicalRetryNotBefore.make(100),
     retryOrdinal: TechnicalRetryOrdinal.make(1),
     scope,
-    version: 3
+    version: 4
   })
   const intent = event({
     _tag: "ImplementationReviewIntended",
@@ -467,16 +467,16 @@ it("rejects a retry schedule that physically follows its durable review outcome"
         round: scope.semanticRound
       }
     },
-    version: 3
+    version: 4
   })
   const outcome = event({
     _tag: "ImplementationReviewCompleted",
     review: { manifest: { operationId } },
-    version: 3
+    version: 4
   })
   const records: ReadonlyArray<JournalRecord> = [
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 }),
       key: technicalRetryPolicyRecordKey(scope),
       position: JournalPosition.make(1),
       runId
@@ -541,7 +541,7 @@ it("classifies orphan and crossed-scope retry facts while accepting exact review
   })
   const records = [
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: reviewScope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: reviewScope, version: 4 }),
       key: technicalRetryPolicyRecordKey(reviewScope)
     },
     {
@@ -561,7 +561,7 @@ it("classifies orphan and crossed-scope retry facts while accepting exact review
       key: intentRecordKey(reviewOperationId)
     },
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: handbackScope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: handbackScope, version: 4 }),
       key: technicalRetryPolicyRecordKey(handbackScope)
     },
     {
@@ -585,12 +585,12 @@ it("classifies orphan and crossed-scope retry facts while accepting exact review
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal: TechnicalRetryOrdinal.make(1),
         scope: orphanScope,
-        version: 3
+        version: 4
       }),
       key: technicalRetryScheduledRecordKey(orphanScope, TechnicalRetryOrdinal.make(1))
     },
     {
-      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: orphanScope, version: 3 }),
+      event: TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope: orphanScope, version: 4 }),
       key: technicalRetryPolicyRecordKey(orphanScope)
     },
     {
@@ -599,7 +599,7 @@ it("classifies orphan and crossed-scope retry facts while accepting exact review
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal: TechnicalRetryOrdinal.make(2),
         scope: foreignOrphanScope,
-        version: 3
+        version: 4
       }),
       key: technicalRetryScheduledRecordKey(foreignOrphanScope, TechnicalRetryOrdinal.make(2))
     },
@@ -609,7 +609,7 @@ it("classifies orphan and crossed-scope retry facts while accepting exact review
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal: TechnicalRetryOrdinal.make(1),
         scope: policylessScope,
-        version: 3
+        version: 4
       }),
       key: technicalRetryScheduledRecordKey(policylessScope, TechnicalRetryOrdinal.make(1))
     }
@@ -644,14 +644,14 @@ it("reports provider observations and provider outcomes without their required p
       operationId
     }),
     operationId,
-    version: 3
+    version: 4
   })
   const outcome = TaskWorkSessionEstablishedEvent.make({
     outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished.make({
       operationId: outcomeOperationId,
       sessionId: TaskWorkSessionId.make("orphan-session")
     }),
-    version: 3
+    version: 4
   })
   const reduction = reduceManagedHistory(runId, [
     {
@@ -756,7 +756,7 @@ it("rejects contradictory outer and provider-reported operation identities", () 
   }
 })
 
-it("rejects a causal predecessor belonging to a different planned attempt", () => {
+it("rejects a causal predecessor belonging to a different planned task attempt", () => {
   const first = PlannedTaskAttempt.make({
     attemptId: AttemptId.make("causal-attempt-a"),
     baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
@@ -786,13 +786,13 @@ it("rejects a causal predecessor belonging to a different planned attempt", () =
   })
   const reduction = reduceManagedHistory(runId, [
     {
-      event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: 3 }),
+      event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: 4 }),
       key: attemptPlanRecordKey(first.attemptId),
       position: JournalPosition.make(1),
       runId
     },
     {
-      event: TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 3 }),
+      event: TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: 4 }),
       key: intentRecordKey(worktreeOperation.operationId),
       position: JournalPosition.make(2),
       runId
@@ -806,7 +806,7 @@ it("rejects a causal predecessor belonging to a different planned attempt", () =
           headSha: second.baseSha,
           worktree: second.worktree
         }),
-        version: 3
+        version: 4
       }),
       key: outcomeRecordKey(worktreeOperation.operationId),
       position: JournalPosition.make(3),
@@ -816,15 +816,15 @@ it("rejects a causal predecessor belonging to a different planned attempt", () =
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag === "InvalidManagedHistory") {
     expect(reduction.issues.map(({ detail }) => detail)).toContain(
-      "event TaskWorktreeReconciliationIntended planned attempt contradicts predecessor operation causal-plan-a"
+      "event TaskWorktreeReconciliationIntended planned task attempt contradicts predecessor operation causal-plan-a"
     )
     expect(reduction.issues.map(({ detail }) => detail)).toContain(
-      "outcome TaskWorktreeReady contradicts the planned attempt for operation causal-worktree-b"
+      "outcome TaskWorktreeReady contradicts the planned task attempt for operation causal-worktree-b"
     )
   }
 })
 
-it("rejects sealed evidence whose manifest contradicts its planned attempt", () => {
+it("rejects sealed evidence whose manifest contradicts its planned task attempt", () => {
   const operationId = OperationId.make("contradictory-evidence-operation")
   const plannedAttempt = {
     baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
@@ -861,7 +861,7 @@ it("rejects sealed evidence whose manifest contradicts its planned attempt", () 
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag === "InvalidManagedHistory") {
     expect(reduction.issues.map(({ detail }) => detail)).toContain(
-      "outcome ImplementationEvidenceSealed contradicts the planned attempt for operation contradictory-evidence-operation"
+      "outcome ImplementationEvidenceSealed contradicts the planned task attempt for operation contradictory-evidence-operation"
     )
   }
 })
@@ -995,7 +995,7 @@ it("rejects contradictory terminal reports for one established session", () => {
         result: { _tag: "Completed", evidence: "done" },
         sessionId
       },
-      version: 3
+      version: 4
     }),
     event({
       _tag: "TaskWorkSessionResultReported",
@@ -1005,7 +1005,7 @@ it("rejects contradictory terminal reports for one established session", () => {
         result: { _tag: "Failed", evidence: "failed" },
         sessionId
       },
-      version: 3
+      version: 4
     })
   ].map((journalEvent, index): JournalRecord => ({
     event: journalEvent,
@@ -1061,7 +1061,7 @@ it("validates attempt-plan causal predecessors for order and full-attempt identi
   const reduction = reduceManagedHistory(
     runId,
     operations.map((operation, index) => ({
-      event: TaskAttemptPlannedEvent.make({ operation, version: 3 }),
+      event: TaskAttemptPlannedEvent.make({ operation, version: 4 }),
       key: attemptPlanRecordKey(operation.plannedAttempt.attemptId),
       position: JournalPosition.make(index + 1),
       runId
@@ -1070,7 +1070,7 @@ it("validates attempt-plan causal predecessors for order and full-attempt identi
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag === "InvalidManagedHistory") {
     expect(reduction.issues.map(({ detail }) => detail)).toEqual(expect.arrayContaining([
-      "event TaskAttemptPlanned planned attempt contradicts predecessor operation plan-causal-prior",
+      "event TaskAttemptPlanned planned task attempt contradicts predecessor operation plan-causal-prior",
       "event TaskAttemptPlanned has no prior predecessor operation plan-causal-later"
     ]))
   }

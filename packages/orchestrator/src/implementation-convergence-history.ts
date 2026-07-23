@@ -48,7 +48,7 @@ export const convergenceSubjectWorktreeMatches = (
 
 type DispositionOperation = typeof WorkflowOperation.cases.RecordImplementationDisposition.Type
 
-/** Proves one terminal execution outcome came from the exact retained planned attempt and session binding. */
+/** Proves one terminal execution outcome came from the exact retained planned task attempt and session binding. */
 export const executionOutcomeCausalChainMatches = (
   records: ReadonlyArray<JournalRecord>,
   outcome: TaskExecutionOutcome,
@@ -307,7 +307,7 @@ export const implementationReviewCausalChainMatches = (
   return true
 }
 
-/** Resolves the exact claim that causally admitted one planned attempt. */
+/** Resolves the exact claim that causally admitted one planned task attempt. */
 export const claimForPlannedAttempt = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt

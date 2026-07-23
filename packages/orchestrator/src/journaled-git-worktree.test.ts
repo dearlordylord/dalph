@@ -129,7 +129,7 @@ it.effect("reconciles an acknowledged worktree intent after a crash", () =>
       intentRecordKey(worktreeOperation.operationId),
       TaskWorktreeReconciliationIntendedEvent.make({
         operation: worktreeOperation,
-        version: 3
+        version: 4
       })
     )
 
@@ -176,7 +176,7 @@ it.effect("does not fabricate a ready proof from a simulated recovery result", (
       intentRecordKey(worktreeOperation.operationId),
       TaskWorktreeReconciliationIntendedEvent.make({
         operation: worktreeOperation,
-        version: 3
+        version: 4
       })
     )
     yield* recoverTaskWorktreeReconciliations(runId)

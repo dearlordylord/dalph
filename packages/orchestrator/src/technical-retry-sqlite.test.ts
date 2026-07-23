@@ -52,14 +52,14 @@ const persistPendingDeferral = Effect.fn("TechnicalRetrySqliteTest.persistPendin
     const policyEvent = TechnicalRetryPolicyCapturedEvent.make({
       policy: fixture.policy,
       scope: fixture.scope,
-      version: 3
+      version: 4
     })
     const scheduledEvent = TechnicalRetryScheduledEvent.make({
       delayMillis: TechnicalRetryDelayMillis.make(100),
       notBefore: TechnicalRetryNotBefore.make(notBefore),
       retryOrdinal: fixture.retryOrdinal,
       scope: fixture.scope,
-      version: 3
+      version: 4
     })
     yield* Effect.gen(function*() {
       const journal = yield* JournalStore
@@ -91,15 +91,15 @@ it.effect("reopens durable technical policy and notBefore facts from SQLite", ()
       maximumDelayMillis: TechnicalRetryDelayMillis.make(500)
     })
     const retryOrdinal = TechnicalRetryOrdinal.make(1)
-    const policyEvent = TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 3 })
+    const policyEvent = TechnicalRetryPolicyCapturedEvent.make({ policy, scope, version: 4 })
     const scheduledEvent = TechnicalRetryScheduledEvent.make({
       delayMillis: TechnicalRetryDelayMillis.make(100),
       notBefore: TechnicalRetryNotBefore.make(1_100),
       retryOrdinal,
       scope,
-      version: 3
+      version: 4
     })
-    const supersededEvent = TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 3 })
+    const supersededEvent = TechnicalRetryDeferralSupersededEvent.make({ retryOrdinal, scope, version: 4 })
 
     yield* Effect.gen(function*() {
       const journal = yield* JournalStore

@@ -48,7 +48,7 @@ const digestBytes = Effect.fn("EvidenceStore.digestBytes")(function*(
   return EvidenceDigest.make(Buffer.from(digest).toString("hex"))
 })
 
-/** Deterministic in-memory implementation used by tests and live-fake execution. */
+/** Deterministic in-memory implementation used by tests and simulated execution. */
 export const memoryEvidenceStoreLayer = Layer.effectContext(Effect.gen(function*() {
   const crypto = yield* Crypto.Crypto
   const objects = yield* Ref.make<ReadonlyMap<EvidenceDigest, Uint8Array>>(new Map())
@@ -284,7 +284,7 @@ export const authorizeImplementationReview = Effect.fn(
   })
 })
 
-/** Dry-run/live-fake project the same stage without fabricating durable review authority. */
+/** Dry-run and simulated interpreters project the stage without fabricating durable review authority. */
 export const ImplementationEvidenceSealingSimulated = Schema.TaggedStruct(
   "ImplementationEvidenceSealingSimulated",
   { operationId: OperationId, predecessorOperationId: OperationId, stage: Schema.Literal("Implementation") }

@@ -160,14 +160,14 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
   yield* journal.append(
     runId,
     intentRecordKey(executionOperationId),
-    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 3 })
+    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 4 })
   )
   yield* journal.append(
     runId,
     outcomeRecordKey(executionOperationId),
     TaskExecutionOutcomeObservedEvent.make({
       outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({ outcome }),
-      version: 3
+      version: 4
     })
   )
   const evidenceOperation = makeImplementationEvidenceSealingOperation({
@@ -178,7 +178,7 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
   yield* journal.append(
     runId,
     intentRecordKey(evidenceOperation.operationId),
-    ImplementationEvidenceSealingIntendedEvent.make({ operation: evidenceOperation, version: 3 })
+    ImplementationEvidenceSealingIntendedEvent.make({ operation: evidenceOperation, version: 4 })
   )
   const sealed = yield* sealImplementationEvidence(
     evidenceOperation.operationId,
@@ -197,7 +197,7 @@ const appendExecutionAndEvidence = Effect.fn("ReviewTest.appendExecutionAndEvide
     ImplementationEvidenceSealedEvent.make({
       operationId: evidenceOperation.operationId,
       sealed,
-      version: 3
+      version: 4
     })
   )
   return { evidenceOperation, executionOperationId, sealed }
@@ -217,12 +217,12 @@ const appendCompletedHandback = Effect.fn("ReviewTest.appendCompletedHandback")(
         predecessorOperationIds: [],
         request: { operationId: sessionOperationId, plannedAttempt: plan, task }
       },
-      version: 3
+      version: 4
     })
     yield* journal.append(runId, outcomeRecordKey(sessionOperationId), {
       _tag: "TaskWorkSessionEstablished",
       outcome: { _tag: "TaskWorkSessionEstablished", operationId: sessionOperationId, sessionId },
-      version: 3
+      version: 4
     })
   }
   const request = ReviewFindingsHandbackRequest.make({
@@ -237,7 +237,7 @@ const appendCompletedHandback = Effect.fn("ReviewTest.appendCompletedHandback")(
   yield* journal.append(
     runId,
     intentRecordKey(request.operationId),
-    ReviewFindingsHandbackIntendedEvent.make({ operation, version: 3 })
+    ReviewFindingsHandbackIntendedEvent.make({ operation, version: 4 })
   )
   yield* journal.append(
     runId,
@@ -247,7 +247,7 @@ const appendCompletedHandback = Effect.fn("ReviewTest.appendCompletedHandback")(
         operationId: request.operationId,
         reviewEvidenceReference: review.manifestReference
       }),
-      version: 3
+      version: 4
     })
   )
   return { handbackOperationId: request.operationId, sessionOperationId }
@@ -485,7 +485,7 @@ it.effect("refuses to append a missing review intent after durable retry invocat
     yield* journal.append(
       runId,
       technicalRetryPolicyRecordKey(scope),
-      TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope, version: 3 })
+      TechnicalRetryPolicyCapturedEvent.make({ policy: retryPolicy, scope, version: 4 })
     )
     yield* journal.append(
       runId,
@@ -495,7 +495,7 @@ it.effect("refuses to append a missing review intent after durable retry invocat
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal,
         scope,
-        version: 3
+        version: 4
       })
     )
     const invocations = yield* Ref.make(0)
@@ -527,7 +527,7 @@ it.effect("refuses to append a missing review intent after durable retry invocat
     yield* journal.append(
       runId,
       intentRecordKey(operation.request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation, version: 3 })
+      ImplementationReviewIntendedEvent.make({ operation, version: 4 })
     )
     const expectedBeforeIntent = analyzeTechnicalRetryTemporalFacts(
       yield* journal.read(runId),
@@ -580,7 +580,7 @@ it.effect("rejects retry invocation facts appended after a durable review outcom
         notBefore: TechnicalRetryNotBefore.make(100),
         retryOrdinal,
         scope,
-        version: 3
+        version: 4
       })
     )
 
@@ -657,7 +657,7 @@ it.effect("authorizes implementation bytes and reserves reviewer sessions before
     yield* journal.append(
       runId,
       intentRecordKey(foreignIntentOperation.request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation: foreignIntentOperation, version: 3 })
+      ImplementationReviewIntendedEvent.make({ operation: foreignIntentOperation, version: 4 })
     )
     const reused = yield* makeJournaledImplementationReview({
       evidenceStore: store,
@@ -1003,7 +1003,7 @@ it.effect("extends the immutable chain with complete findings history and a fres
             },
             manifestReference: findingsReview.manifestReference
           }),
-          version: 3 as const
+          version: 4 as const
         }
       }
     ]
@@ -1217,7 +1217,7 @@ it.effect("classifies invalid recursive review-chain edges before findings deliv
     const source = records[0]
     if (source === undefined) return yield* Effect.die("missing history")
     const reviewRecord = (review: typeof firstReview, ordinal: number) =>
-      extraRecord(source, ordinal, ImplementationReviewCompletedEvent.make({ review, version: 3 }))
+      extraRecord(source, ordinal, ImplementationReviewCompletedEvent.make({ review, version: 4 }))
     const runHandback = (review: typeof firstReview, recordsForChain: ReadonlyArray<JournalRecord>) => {
       const request = ReviewFindingsHandbackRequest.make({
         implementerInvocationId: review.manifest.implementerInvocationId,
@@ -1308,7 +1308,7 @@ it.effect("classifies invalid recursive review-chain edges before findings deliv
               ...item,
               event: ImplementationReviewCompletedEvent.make({
                 review: crossAttemptPredecessor,
-                version: 3
+                version: 4
               })
             }
             : item
@@ -1525,17 +1525,17 @@ it.effect("recovers unresolved review and findings handback intents through thei
     const source = (yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId))))[0]
     if (source === undefined) return yield* Effect.die("missing fixture history")
     const records = [
-      extraRecord(source, 20, ImplementationReviewIntendedEvent.make({ operation, version: 3 })),
-      extraRecord(source, 21, ImplementationReviewIntendedEvent.make({ operation: simulatedOperation, version: 3 })),
-      extraRecord(source, 22, ImplementationReviewIntendedEvent.make({ operation: completedOperation, version: 3 })),
-      extraRecord(source, 23, ImplementationReviewCompletedEvent.make({ review: completedReview, version: 3 })),
-      extraRecord(source, 24, ReviewFindingsHandbackIntendedEvent.make({ operation: handbackOperation, version: 3 })),
+      extraRecord(source, 20, ImplementationReviewIntendedEvent.make({ operation, version: 4 })),
+      extraRecord(source, 21, ImplementationReviewIntendedEvent.make({ operation: simulatedOperation, version: 4 })),
+      extraRecord(source, 22, ImplementationReviewIntendedEvent.make({ operation: completedOperation, version: 4 })),
+      extraRecord(source, 23, ImplementationReviewCompletedEvent.make({ review: completedReview, version: 4 })),
+      extraRecord(source, 24, ReviewFindingsHandbackIntendedEvent.make({ operation: handbackOperation, version: 4 })),
       extraRecord(
         source,
         25,
         ReviewFindingsHandbackIntendedEvent.make({
           operation: completedHandbackOperation,
-          version: 3
+          version: 4
         })
       ),
       extraRecord(
@@ -1546,7 +1546,7 @@ it.effect("recovers unresolved review and findings handback intents through thei
             operationId: completedHandbackOperation.request.operationId,
             reviewEvidenceReference: review.manifestReference
           }),
-          version: 3
+          version: 4
         })
       )
     ]
@@ -1768,7 +1768,7 @@ it.effect("classifies malformed review and handback histories without provider c
             reviewerSessionId: ReviewerSessionId.make("mismatched-outcome-reviewer")
           }
         },
-        version: 3
+        version: 4
       })
     )
     yield* expectReason(
@@ -1857,7 +1857,7 @@ it.effect("classifies malformed review and handback histories without provider c
     const roundHandbackIntent = extraRecord(
       outcomeRecord,
       20,
-      ReviewFindingsHandbackIntendedEvent.make({ operation: roundHandbackOperation, version: 3 })
+      ReviewFindingsHandbackIntendedEvent.make({ operation: roundHandbackOperation, version: 4 })
     )
     yield* expectReason(
       runReview([...roundRecords, roundHandbackIntent], roundTwoWith()),
@@ -1871,7 +1871,7 @@ it.effect("classifies malformed review and handback histories without provider c
           operationId: roundHandbackRequest.operationId,
           reviewEvidenceReference: review.manifestReference
         }),
-        version: 3
+        version: 4
       })
     )
     yield* expectReason(
@@ -1977,7 +1977,7 @@ it.effect("classifies malformed review and handback histories without provider c
     const acceptedReviewEvent = extraRecord(outcomeRecord, 7, {
       _tag: "ImplementationReviewCompleted" as const,
       review: acceptedReview,
-      version: 3 as const
+      version: 4 as const
     })
     yield* expectReason(
       runHandback(
@@ -2010,7 +2010,7 @@ it.effect("classifies malformed review and handback histories without provider c
       3,
       ReviewFindingsHandbackIntendedEvent.make({
         operation: handbackOperation,
-        version: 3
+        version: 4
       })
     )
     const handbackOutcome = extraRecord(
@@ -2018,7 +2018,7 @@ it.effect("classifies malformed review and handback histories without provider c
       4,
       ReviewFindingsHandbackCompletedEvent.make({
         acknowledgement: handbackAcknowledgement,
-        version: 3
+        version: 4
       })
     )
     yield* expectReason(
@@ -2044,7 +2044,7 @@ it.effect("classifies malformed review and handback histories without provider c
           operationId: handbackRequest.operationId,
           reviewEvidenceReference: changedReference
         }),
-        version: 3
+        version: 4
       })
     )
     yield* expectReason(

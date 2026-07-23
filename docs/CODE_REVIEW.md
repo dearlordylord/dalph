@@ -16,6 +16,12 @@ accepted tooling requirements, and these implementation constraints.
   defects or unavoidable bootstrap failures only.
 - Effect `Context.Service` tags, Layers, configuration, schedules, streams,
   time, and concurrency follow the repository's Effect V4 architecture.
+- The workflow algebra invokes the same operations in dry-run, deterministic
+  test, and production modes. Coherent Effect Layers interpret those operations
+  differently. Reject workflow branches that select different operations only
+  because a prior result was simulated, and reject exported Layer compositions
+  that combine a simulated intent/recording operation with a live
+  ambiguity-crossing effect.
 - Tests substitute services through Layers. They do not patch modules, depend
   on real sleeps, or merely restate compile-time guarantees.
 - Dalph domain types do not admit impossible field combinations. Tagged variants

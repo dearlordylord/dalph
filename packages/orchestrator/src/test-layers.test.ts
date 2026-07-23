@@ -190,7 +190,7 @@ it("rejects self-causal execution and projects its operation identity", () => {
   }))).toBe(executionRequest.operationId)
 })
 
-it("rejects a start request whose planned attempt belongs to another task", () => {
+it("rejects a start request whose planned task attempt belongs to another task", () => {
   expect(() =>
     Schema.decodeUnknownSync(TaskWorkStartRequest)({
       ...request,
@@ -199,7 +199,7 @@ it("rejects a start request whose planned attempt belongs to another task", () =
         taskId: TaskId.make("another-task")
       }
     })
-  ).toThrow("planned attempt task identity must match the requested task")
+  ).toThrow("planned task attempt task identity must match the requested task")
 })
 
 it("rejects a start request after the task lifecycle changes", () => {
@@ -208,7 +208,7 @@ it("rejects a start request after the task lifecycle changes", () => {
       ...request,
       task: { ...task, lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}) }
     })
-  ).toThrow("planned attempt task revision must match the requested task")
+  ).toThrow("planned task attempt task revision (fingerprint) must match the requested task")
 })
 
 it("rejects a start request after task dependencies change", () => {
@@ -217,5 +217,5 @@ it("rejects a start request after task dependencies change", () => {
       ...request,
       task: { ...task, prerequisiteIds: [TaskId.make("new-prerequisite")] }
     })
-  ).toThrow("planned attempt task revision must match the requested task")
+  ).toThrow("planned task attempt task revision (fingerprint) must match the requested task")
 })

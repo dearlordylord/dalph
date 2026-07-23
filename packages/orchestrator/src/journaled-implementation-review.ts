@@ -24,6 +24,7 @@ import {
   type SealedImplementationReview,
   sealImplementationReview
 } from "./implementation-review.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { intentRecordKey, type JournalRecord, type JournalStoreService, outcomeRecordKey } from "./journal-store.js"
 import { samePlannedTaskAttempt } from "./task-attempt-plan-recording.js"
 import { firstTechnicalRetryAdmissionContradiction } from "./technical-retry-temporal.js"
@@ -431,7 +432,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation, version: 3 })
+      ImplementationReviewIntendedEvent.make({ operation, version: workflowJournalEventVersion })
     )
     const disposition = yield* capturedTechnicalRetry.run(options.reviewer.createOrResume(request))
     const review = yield* sealImplementationReview(request, disposition).pipe(
@@ -440,7 +441,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     yield* options.journal.append(
       options.runId,
       outcomeRecordKey(request.operationId),
-      ImplementationReviewCompletedEvent.make({ review, version: 3 })
+      ImplementationReviewCompletedEvent.make({ review, version: workflowJournalEventVersion })
     )
     return review
   })
@@ -528,7 +529,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     yield* options.journal.append(
       options.runId,
       intentRecordKey(request.operationId),
-      ReviewFindingsHandbackIntendedEvent.make({ operation, version: 3 })
+      ReviewFindingsHandbackIntendedEvent.make({ operation, version: workflowJournalEventVersion })
     )
     const acknowledgement = yield* capturedTechnicalRetry.run(options.handback.deliverOrResume(request))
     if (!handbackAcknowledgesRequest(acknowledgement, request)) {
@@ -537,7 +538,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     yield* options.journal.append(
       options.runId,
       outcomeRecordKey(request.operationId),
-      ReviewFindingsHandbackCompletedEvent.make({ acknowledgement, version: 3 })
+      ReviewFindingsHandbackCompletedEvent.make({ acknowledgement, version: workflowJournalEventVersion })
     )
     return acknowledgement
   })

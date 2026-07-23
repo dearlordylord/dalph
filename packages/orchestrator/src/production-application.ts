@@ -4,6 +4,7 @@ import { Effect, Layer, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
 import { EvidenceStoreLocator, type GitCommonDirectoryTarget, type RunId } from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
+import { GitWorktree, runGitWorktreeReconciliation } from "./git-worktree.js"
 import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
 import type { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
 import { unavailableImplementationReviewLayer } from "./implementation-review.js"
@@ -26,14 +27,14 @@ import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
 import type { TaskExecutor } from "./task-execution.js"
 import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
-import { trackerMutationWorkflowInterpreterLayer } from "./workflow-interpreters.js"
+import { makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
   observeManagedRunAuthorities,
   recoverExactRunAfterCoordinatorDeath,
   RecoveryOwnershipIssue,
   RecoveryReconciliationIssue
 } from "./workflow-recovery.js"
-import { WorkflowInterpreter } from "./workflow.js"
+import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter } from "./workflow.js"
 
 /** Startup found preserved history or resources that cannot be resumed safely. */
 export const StartupRecoveryIssue = Schema.Union([
@@ -110,11 +111,35 @@ export const productionWorkflowInterpreterLayer = <
   const reviewLayer = coordinatorOwnedImplementationReviewLayer(
     reviewAdapterLayer ?? unavailableImplementationReviewLayer
   ).pipe(Layer.provide(ownershipLayer))
-  const baseInterpreterLayer = trackerMutationWorkflowInterpreterLayer.pipe(
+  const taskRunnerInterpreterLayer = makeTaskRunnerWorkflowInterpreterLayer(
+    "TaskRunner"
+  ).pipe(
     Layer.provide(taskRunnerLayer),
     Layer.provide(taskExecutorLayer),
-    Layer.provide(gitWorktreeLayer),
     Layer.provide(trackerMutationLayer)
+  )
+  const baseInterpreterLayer = Layer.effect(
+    WorkflowInterpreter,
+    Effect.gen(function*() {
+      const interpreter = yield* WorkflowInterpreter
+      const gitWorktree = yield* GitWorktree
+      const reconcileTaskWorktree = Effect.fn(
+        "WorkflowInterpreter.ProductionBase.reconcileTaskWorktree"
+      )(function*(operation) {
+        const proof = yield* runGitWorktreeReconciliation(
+          gitWorktree,
+          operation.plannedAttempt
+        )
+        return AuthoritativeTaskWorktreeReady.make({ proof })
+      })
+      return WorkflowInterpreter.of({
+        ...interpreter,
+        reconcileTaskWorktree
+      })
+    })
+  ).pipe(
+    Layer.provide(taskRunnerInterpreterLayer),
+    Layer.provide(gitWorktreeLayer)
   )
 
   const interpreterLayerFor = (journalRunId: RunId) =>

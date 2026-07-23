@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { PlannedWorktreeReady } from "../src/git-worktree.js"
+import { workflowJournalEventVersion } from "../src/journal-event-version.js"
 import {
   intentRecordKey,
   JournalStore,
@@ -17,7 +18,7 @@ export const recordReadyWorktreeEvidence = (
     yield* journal.append(
       operation.plannedAttempt.runId,
       intentRecordKey(operation.operationId),
-      TaskWorktreeReconciliationIntendedEvent.make({ operation, version: 3 })
+      TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion })
     )
     yield* journal.append(
       operation.plannedAttempt.runId,
@@ -30,7 +31,7 @@ export const recordReadyWorktreeEvidence = (
           headSha: operation.plannedAttempt.baseSha,
           worktree: operation.plannedAttempt.worktree
         }),
-        version: 3
+        version: workflowJournalEventVersion
       })
     )
   })

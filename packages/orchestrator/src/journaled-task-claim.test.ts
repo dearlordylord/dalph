@@ -197,7 +197,7 @@ it.effect("reconciles a crashed claim with its original durable acquisition", ()
     yield* journal.append(
       runId,
       intentRecordKey(acquisition.operationId),
-      TaskClaimAcquisitionIntendedEvent.make({ operation, version: 3 })
+      TaskClaimAcquisitionIntendedEvent.make({ operation, version: 4 })
     )
     yield* recoverTaskClaimAcquisitions(runId)
     yield* recoverTaskClaimAcquisitions(runId)

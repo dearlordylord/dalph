@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Encoding, Result, Schema } from "effect"
 import * as fc from "fast-check"
 import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
@@ -92,7 +92,7 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
   }))))
 
-it("roundtrips arbitrary valid attempt plans through the persisted Schema boundary", () => {
+it("roundtrips arbitrary valid planned task attempts through the persisted Schema boundary", () => {
   fc.assert(fc.property(
     plannedTaskAttemptEncodedArbitrary,
     (encoded) => {
@@ -130,7 +130,7 @@ it("satisfies the planned-attempt equivalence laws for arbitrary valid plans", (
   ))
 })
 
-it("derives the task revision inside the planner", () =>
+it("derives the task revision (fingerprint) inside the planner", () =>
   Effect.gen(function*() {
     const task = Schema.decodeUnknownSync(TrackerTask)({
       id: "task-44",
@@ -149,7 +149,27 @@ it("derives the task revision inside the planner", () =>
     worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
   }))))
 
-it("changes a task revision when any normalized task field changes", () => {
+it("keeps the task revision fingerprint opaque and diagnostically reversible", () => {
+  const task = Schema.decodeUnknownSync(TrackerTask)({
+    id: "task-44",
+    lifecycle: { _tag: "Open" },
+    parentTaskId: null,
+    prerequisiteIds: ["task-43"]
+  })
+  const fingerprint = taskRevisionFor(task)
+
+  expect(fingerprint.startsWith("tr1.")).toBe(true)
+  expect(JSON.parse(Result.getOrThrow(
+    Encoding.decodeBase64UrlString(fingerprint.slice("tr1.".length))
+  ))).toEqual({
+    id: "task-44",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: ["task-43"]
+  })
+})
+
+it("changes a task revision (fingerprint) when any normalized task field changes", () => {
   fc.assert(fc.property(
     fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/),
     (suffix) => {
@@ -174,7 +194,7 @@ it("changes a task revision when any normalized task field changes", () => {
   ))
 })
 
-it("makes task revision independent of prerequisite order", () => {
+it("makes task revision (fingerprint) independent of prerequisite order", () => {
   fc.assert(fc.property(
     fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/), { minLength: 1, maxLength: 8 }),
     (prerequisiteIds) => {

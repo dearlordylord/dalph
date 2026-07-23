@@ -138,14 +138,14 @@ const appendSuccessfulPredecessor = Effect.gen(function*() {
   yield* journal.append(
     runId,
     intentRecordKey(executionId),
-    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 3 })
+    TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 4 })
   )
   yield* journal.append(
     runId,
     outcomeRecordKey(executionId),
     TaskExecutionOutcomeObservedEvent.make({
       outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({ outcome: successfulOutcome }),
-      version: 3
+      version: 4
     })
   )
 })
@@ -198,7 +198,7 @@ it.effect("rejects missing, mismatched, and simulated execution predecessors", (
       JournalRecordKey.make("duplicate-successful-predecessor"),
       TaskExecutionOutcomeObservedEvent.make({
         outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({ outcome: successfulOutcome }),
-        version: 3
+        version: 4
       })
     )
     const multipleFailure = yield* interpreter.sealImplementationEvidence(operation).pipe(Effect.flip)
@@ -237,14 +237,14 @@ it.effect("rejects a sealing attempt not bound to the exact execution intent bef
     yield* journal.append(
       runId,
       intentRecordKey(executionId),
-      TaskExecutionIntentRecorded.make({ operation: changedExecution, version: 3 })
+      TaskExecutionIntentRecorded.make({ operation: changedExecution, version: 4 })
     )
     yield* journal.append(
       runId,
       outcomeRecordKey(executionId),
       TaskExecutionOutcomeObservedEvent.make({
         outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({ outcome: successfulOutcome }),
-        version: 3
+        version: 4
       })
     )
     const countingEvidence = Layer.merge(
@@ -282,7 +282,7 @@ it.effect("recovers an interrupted sealing intent idempotently after execution r
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     yield* recoverImplementationEvidenceSealings(runId)
     yield* recoverImplementationEvidenceSealings(runId)
@@ -351,7 +351,7 @@ it.effect("rejects a schema-valid sealed replay whose manifest contradicts the c
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     const absent = EvidenceReference.make({
       byteLength: 1,
@@ -375,7 +375,7 @@ it.effect("rejects a schema-valid sealed replay whose manifest contradicts the c
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.operationId),
-      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 3 })
+      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 4 })
     )
     const replayLayer = journaledWorkflowInterpreterLayer(
       runId,
@@ -405,7 +405,7 @@ it.effect("rejects a relationally valid replay when its persisted manifest is un
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     const absent = EvidenceReference.make({
       byteLength: 1,
@@ -429,7 +429,7 @@ it.effect("rejects a relationally valid replay when its persisted manifest is un
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.operationId),
-      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 3 })
+      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 4 })
     )
     const replayLayer = journaledWorkflowInterpreterLayer(
       runId,
@@ -475,12 +475,12 @@ it.effect("rejects replay when its persisted implementation output is unavailabl
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.operationId),
-      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed, version: 3 })
+      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed, version: 4 })
     )
     const failure = yield* (yield* WorkflowInterpreter).sealImplementationEvidence(operation).pipe(Effect.flip)
     expect(failure).toMatchObject({ reason: "ExistingEvidenceMismatch" })
@@ -503,7 +503,7 @@ it.effect("rejects run, duplicate execution-intent, and mismatched sealing-inten
     yield* journal.append(
       runId,
       intentRecordKey(executionId),
-      TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 3 })
+      TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 4 })
     )
     const missingPredecessor = yield* interpreter.sealImplementationEvidence(operation).pipe(Effect.flip)
     expect(missingPredecessor).toMatchObject({ reason: "MissingPredecessor" })
@@ -512,7 +512,7 @@ it.effect("rejects run, duplicate execution-intent, and mismatched sealing-inten
     yield* journal.append(
       runId,
       JournalRecordKey.make("duplicate-execution-intent"),
-      TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 3 })
+      TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 4 })
     )
     const duplicateFailure = yield* interpreter.sealImplementationEvidence(operation).pipe(Effect.flip)
     expect(duplicateFailure).toMatchObject({ reason: "MultipleExecutionIntents" })
@@ -537,7 +537,7 @@ it.effect("rejects mismatched and duplicate sealing intents before evidence effe
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation: changedIntent, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation: changedIntent, version: 4 })
     )
     const mismatch = yield* (yield* WorkflowInterpreter)
       .sealImplementationEvidence(operation).pipe(Effect.flip)
@@ -545,7 +545,7 @@ it.effect("rejects mismatched and duplicate sealing intents before evidence effe
     yield* journal.append(
       runId,
       JournalRecordKey.make("duplicate-sealing-intent"),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation: changedIntent, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation: changedIntent, version: 4 })
     )
     const duplicate = yield* (yield* WorkflowInterpreter)
       .sealImplementationEvidence(operation).pipe(Effect.flip)
@@ -578,7 +578,7 @@ it.effect("rejects sealed outcomes without one exact intent and duplicate sealed
     yield* journal.append(
       runId,
       outcomeRecordKey(operation.operationId),
-      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 3 })
+      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 4 })
     )
     const withoutIntent = yield* (yield* WorkflowInterpreter)
       .sealImplementationEvidence(operation).pipe(Effect.flip)
@@ -586,12 +586,12 @@ it.effect("rejects sealed outcomes without one exact intent and duplicate sealed
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     yield* journal.append(
       runId,
       JournalRecordKey.make("duplicate-sealed-outcome"),
-      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 3 })
+      ImplementationEvidenceSealedEvent.make({ operationId: operation.operationId, sealed: forged, version: 4 })
     )
     const duplicate = yield* (yield* WorkflowInterpreter)
       .sealImplementationEvidence(operation).pipe(Effect.flip)
@@ -623,7 +623,7 @@ it.effect("reverifies the exact persisted execution output during sealed replay"
     yield* journal.append(
       runId,
       intentRecordKey(operation.operationId),
-      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 3 })
+      ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 })
     )
     yield* journal.append(
       runId,
@@ -631,7 +631,7 @@ it.effect("reverifies the exact persisted execution output during sealed replay"
       ImplementationEvidenceSealedEvent.make({
         operationId: operation.operationId,
         sealed: SealedImplementationEvidence.make({ manifest, manifestReference }),
-        version: 3
+        version: 4
       })
     )
     const failure = yield* (yield* WorkflowInterpreter).sealImplementationEvidence(operation).pipe(Effect.flip)

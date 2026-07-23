@@ -134,12 +134,19 @@ confirms completion.
 _Avoid_: Task claim, task completed successfully, Git branch
 
 **Planned task attempt**:
-One immutable Dalph decision to try one exact task revision in one run from one
-exact Base SHA. It binds its attempt identity, branch ref, worktree path,
-executor locator, and task-work-session locator before Dalph creates or
-discovers any of those execution resources. Planning it does not prove that an
-external resource exists or that task work started.
-_Avoid_: Task, task work, task-work session, retry counter
+One immutable Dalph decision to try one exact task revision fingerprint in one
+run from one exact Base SHA. It binds its attempt identity, branch ref,
+worktree path, executor locator, and task-work-session locator before Dalph
+creates or discovers any of those execution resources. Planning it does not
+prove that an external resource exists or that task work started.
+_Avoid_: Plan, attempt plan, task, task work, task-work session, retry counter
+
+**Planned-task-attempt recording predecessor**:
+An earlier workflow operation named by a planned-task-attempt recording
+operation as the observed reason Dalph may record that immutable decision. Its
+`OperationId` expresses causal lineage; it is not an attempt identity, task
+version, or journal position.
+_Avoid_: Plan predecessor, dependency, prior task version
 
 **Planned worktree ready**:
 A fresh Git observation proving that one planned task attempt's exact worktree
@@ -158,11 +165,13 @@ current `HEAD`. Dalph preserves the resource and fact for operator repair; it
 does not repair, move, reset, clean, or delete the resource.
 _Avoid_: Git error, worktree cleanup candidate, recoverable mismatch
 
-**Task revision**:
-The canonical revision of one normalized task's tracker-observed content bound
-to a planned task attempt. It is distinct from the revision of the complete
-task graph snapshot.
-_Avoid_: Tracker revision, Git commit, journal position
+**Task revision fingerprint**:
+The opaque fingerprint of one normalized task's exact tracker-observed content
+bound to a planned task attempt. It compares observed content; it is not a
+version counter, release version, edit sequence, or historical revision chain.
+It is distinct from the fingerprint of the complete task-graph snapshot.
+_Avoid_: Task version, version number, tracker revision, Git commit, journal
+position
 
 **Task executor locator**:
 The branded locator selecting the configured executor for one planned task
@@ -290,7 +299,7 @@ _Avoid_: Tracker execution admitted, task execution admitted, task-work start re
 **Task execution request**:
 The coordinator asks the configured executor to start or resume one worker
 process in the exact provider-assigned task-work session established for a
-planned attempt. The request retains the `OperationId` allocated at task
+planned task attempt. The request retains the `OperationId` allocated at task
 execution admission. Dalph records the exact request attempt immediately before
 the adapter boundary; its return does not prove that a process began or exited.
 _Avoid_: Task-work session establishment, task execution started, task execution outcome
@@ -332,7 +341,7 @@ _Avoid_: Partial evidence, mutable report, task completion
 
 **Implementation review authorization**:
 A value decoded from one complete sealed implementation evidence manifest.
-Unsealed bytes, partial manifests, dry-run projections, and live-fake
+Unsealed bytes, partial manifests, dry-run projections, and deterministic-test
 projections cannot establish it.
 _Avoid_: Review request, successful process exit, simulated evidence
 
@@ -343,7 +352,7 @@ retry and convergence policy owns whether another round may begin.
 _Avoid_: Reviewer process, technical retry, task attempt
 
 **Implementation review round limit**:
-The positive bound captured on every review request for one planned attempt.
+The positive bound captured on every review request for one planned task attempt.
 It limits successful semantic reviewer dispositions, not retries of a failed
 reviewer or handback invocation. Findings at the limit select implementation
 non-convergence and cannot select another unchanged handback/rework round.
@@ -351,7 +360,7 @@ _Avoid_: Technical retry limit, time limit, implicit progress
 
 **Implementation acceptance**:
 The terminal implementation disposition selected by an accepted sealed review.
-It retains the exact active claim, planned attempt, provider session, complete
+It retains the exact active claim, planned task attempt, provider session, complete
 review finding history, authoritative ready-worktree proof, and immutable
 evidence chain that authorized it.
 _Avoid_: Successful process exit, review invocation, tracker task completion
@@ -416,7 +425,7 @@ _Avoid_: Task-work session, reviewer identity, semantic review round
 
 **Implementation review evidence**:
 An immutable content-addressed manifest that references its immediate evidence
-predecessor, binds the planned attempt, exact worktree, latest implementer
+predecessor, binds the planned task attempt, exact worktree, latest implementer
 invocation and session, reviewer session, and semantic round, and retains the
 complete finding history together with the reviewer disposition.
 The current review contract has no partial-resolution state: every finding in
@@ -429,7 +438,7 @@ _Avoid_: Implementation evidence, mutable review report, workflow trace
 The request that sends one findings-bearing implementation review evidence
 object to the exact task-work session and latest implementer invocation that
 produced the reviewed implementation. A stale invocation, foreign session, or
-different planned attempt cannot receive it.
+different planned task attempt cannot receive it.
 _Avoid_: Technical retry, new task attempt, reviewer response
 
 **Task-work start requested**:

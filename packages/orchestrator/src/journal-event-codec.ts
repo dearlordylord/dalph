@@ -2,11 +2,39 @@ import { Effect, Schema } from "effect"
 import { JournalEventKind, JournalEventVersion } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { WorkflowJournalEvent } from "./journal-store.js"
+import { upcastLegacyTaskRevisionFingerprint } from "./task-revision-fingerprint.js"
 import { technicalRetryEventKinds } from "./technical-retry-event-kind.js"
 
 const CurrentPayload = Schema.Record(Schema.String, Schema.Unknown)
 const normalizedJournalEventVersion = 2
+const taskRevisionFingerprintJournalEventVersion = 4
+const technicalRetryJournalEventVersion = 3
 const technicalRetryKinds = new Set<string>(technicalRetryEventKinds)
+
+const upcastTaskRevisionFingerprints = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(upcastTaskRevisionFingerprints)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [
+      key,
+      key === "taskRevision"
+        ? upcastLegacyTaskRevisionFingerprint(nested)
+        : upcastTaskRevisionFingerprints(nested)
+    ])
+  )
+}
+
+const upcastPayloadTaskRevisionFingerprints = (
+  payload: Record<string, unknown>
+): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(payload).map(([key, nested]) => [
+      key,
+      key === "taskRevision"
+        ? upcastLegacyTaskRevisionFingerprint(nested)
+        : upcastTaskRevisionFingerprints(nested)
+    ])
+  )
 
 /** One normalized journal envelope prepared for immutable persistence. */
 export const EncodedJournalEvent = Schema.Struct({
@@ -52,14 +80,18 @@ export const decodeAndUpcastJournalEvent = Effect.fn("WorkflowJournal.decodeAndU
   function*(encoded: EncodedJournalEvent) {
     const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
     const unsupportedTechnicalRetryVersion = technicalRetryKinds.has(encoded.kind)
-      && encoded.version !== workflowJournalEventVersion
+      && encoded.version < technicalRetryJournalEventVersion
+    const upcastPayload = encoded.version < taskRevisionFingerprintJournalEventVersion
+      ? upcastPayloadTaskRevisionFingerprints(payload)
+      : payload
     const candidate: unknown = unsupportedTechnicalRetryVersion
       ? undefined
       : encoded.version === 1
-      ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
+      ? { ...upcastPayload, _tag: encoded.kind, version: workflowJournalEventVersion }
       : encoded.version === normalizedJournalEventVersion
+          || encoded.version === technicalRetryJournalEventVersion
           || encoded.version === workflowJournalEventVersion
-      ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
+      ? { ...upcastPayload, _tag: encoded.kind, version: workflowJournalEventVersion }
       : undefined
     if (candidate === undefined) {
       return yield* new JournalEventDecodeIssue({

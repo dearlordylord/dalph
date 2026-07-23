@@ -5,16 +5,15 @@ import { validSnapshot } from "../test/task-dag.js"
 import {
   AttemptId,
   controlledTrackerMutationLayer,
+  deterministicTestWorkflowInterpreterLayer,
   FailedProcessExitCode,
   FailedTaskExecutionReported,
   GitCommitSha,
-  gitWorktreeTestLayer,
   makeTaskExecutionOperation,
   makeTaskWorktreeReconciliationOperation,
   MatchingTaskWorkSessionReported,
   OperationId,
   PlannedTaskAttempt,
-  PlannedWorktreeReady,
   ProviderObservationId,
   ProviderRequestId,
   RunId,
@@ -28,17 +27,15 @@ import {
   TaskLifecycle,
   taskRevisionFor,
   TaskRunner,
-  taskRunnerWorkflowInterpreterLayer,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   trackerGraphReaderTestLayer,
-  trackerMutationWorkflowInterpreterLayer,
   WorkerProcessId,
   WorkflowInterpreter,
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
-import { makeDryRunWorkflowInterpreterLayer } from "./workflow-interpreters.js"
+import { makeDryRunWorkflowInterpreterLayer, makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 
 const runId = RunId.make("interpreter-coverage-run")
 const sessionId = TaskWorkSessionId.make("interpreter-coverage-session")
@@ -109,13 +106,13 @@ it.effect("rejects provider execution in a simulated task-runner interpreter", (
     expect((yield* Effect.exit(interpreter.handBackReviewFindings(undefined as never)))._tag)
       .toBe("Failure")
   }).pipe(
-    Effect.provide(taskRunnerWorkflowInterpreterLayer),
+    Effect.provide(deterministicTestWorkflowInterpreterLayer),
     Effect.provide(Layer.succeed(TaskRunner, runner)),
     Effect.provide(readerLayer),
     Effect.provide(traceLayer)
   ))
 
-it.effect("executes exact provider work and authoritative worktree reconciliation", () =>
+it.effect("keeps task-runner planning and worktree reconciliation simulated", () =>
   Effect.gen(function*() {
     const interpreter = yield* WorkflowInterpreter
     const outcome = yield* interpreter.executeTaskWork(establishedOperation)
@@ -128,9 +125,9 @@ it.effect("executes exact provider work and authoritative worktree reconciliatio
         predecessorOperationIds: []
       })
     )
-    expect(reconciliation._tag).toBe("AuthoritativeTaskWorktreeReady")
+    expect(reconciliation._tag).toBe("TaskWorktreeReconciliationSimulated")
   }).pipe(
-    Effect.provide(trackerMutationWorkflowInterpreterLayer),
+    Effect.provide(makeTaskRunnerWorkflowInterpreterLayer("TaskRunner")),
     Effect.provide(controlledTrackerMutationLayer),
     Effect.provide(Layer.succeed(
       TaskExecutor,
@@ -152,12 +149,6 @@ it.effect("executes exact provider work and authoritative worktree reconciliatio
           }))
       })
     )),
-    Effect.provide(gitWorktreeTestLayer(PlannedWorktreeReady.make({
-      baseSha: plannedAttempt.baseSha,
-      branch: plannedAttempt.branch,
-      headSha: plannedAttempt.baseSha,
-      worktree: plannedAttempt.worktree
-    }))),
     Effect.provide(Layer.succeed(TaskRunner, runner)),
     Effect.provide(readerLayer),
     Effect.provide(traceLayer)

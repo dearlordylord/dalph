@@ -9,10 +9,10 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  deterministicTestWorkflowInterpreterLayer,
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
   GitCommitSha,
-  liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
   OperationId,
   ProviderObservationId,
@@ -74,7 +74,7 @@ const taskRunnerLayer = Layer.succeed(
 )
 
 const collectTrace = (
-  interpreterLayer: typeof liveFakeWorkflowInterpreterLayer
+  interpreterLayer: typeof deterministicTestWorkflowInterpreterLayer
 ) =>
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
@@ -98,7 +98,7 @@ const collectTrace = (
 
 it.effect("admits tracker execution only after an authoritative post-claim read", () =>
   Effect.gen(function*() {
-    const items = yield* collectTrace(liveFakeWorkflowInterpreterLayer)
+    const items = yield* collectTrace(deterministicTestWorkflowInterpreterLayer)
     const tags = items.map((item) => item._tag)
     const claimIndex = tags.indexOf("TaskClaimAcquired")
     const postClaimReadIndex = tags.lastIndexOf("TrackerGraphOutcomeObserved")
@@ -173,7 +173,7 @@ it.effect("does not admit a claimed task missing from the post-claim tracker rea
       FixtureTarget.make("out-of-scope-target"),
       TaskWorkCapacity.make(1)
     ).pipe(
-      Effect.provide(liveFakeWorkflowInterpreterLayer),
+      Effect.provide(deterministicTestWorkflowInterpreterLayer),
       Effect.provide(readerLayer),
       Effect.provide(runnerLayer),
       Effect.provide(claimPlanningLayer),

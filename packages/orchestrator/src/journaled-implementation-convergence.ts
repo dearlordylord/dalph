@@ -20,6 +20,7 @@ import {
   type ImplementationConvergenceSubject
 } from "./implementation-convergence.js"
 import type { SealedImplementationReview } from "./implementation-review.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { implementationDispositionRecordKey, type JournalRecord, type JournalStoreService } from "./journal-store.js"
 import { samePlannedTaskAttempt } from "./task-attempt-plan-recording.js"
 import { analyzeTechnicalRetryFacts } from "./technical-retry.js"
@@ -236,7 +237,10 @@ export const makeJournaledImplementationDisposition = (
     }
     const key = implementationDispositionRecordKey(subject.plannedAttempt.attemptId)
     const existing = records.find((record) => record.key === key)
-    const event = ImplementationConvergenceDispositionRecordedEvent.make({ operation, version: 3 })
+    const event = ImplementationConvergenceDispositionRecordedEvent.make({
+      operation,
+      version: workflowJournalEventVersion
+    })
     if (existing !== undefined && !sameEncoded(existing.event, event)) {
       return yield* fail(request.operationId, "DispositionAlreadyRecorded")
     }

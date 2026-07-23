@@ -24,7 +24,7 @@ export const TaskExecutionSessionBinding = Schema.TaggedUnion({
 })
 export type TaskExecutionSessionBinding = typeof TaskExecutionSessionBinding.Type
 
-/** Requests one worker process or simulates that request for a planned attempt. */
+/** Requests one worker process or simulates that request for a planned task attempt. */
 export const TaskExecutionRequest = Schema.Struct({
   operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt,
@@ -34,14 +34,17 @@ export const TaskExecutionRequest = Schema.Struct({
   Schema.makeFilter((request) =>
     request.task.id === request.plannedAttempt.taskId
       ? undefined
-      : { path: ["plannedAttempt", "taskId"], issue: "planned attempt task identity must match the requested task" }
+      : {
+        path: ["plannedAttempt", "taskId"],
+        issue: "planned task attempt task identity must match the requested task"
+      }
   ),
   Schema.makeFilter((request) =>
     taskRevisionFor(request.task) === request.plannedAttempt.taskRevision
       ? undefined
       : {
         path: ["plannedAttempt", "taskRevision"],
-        issue: "planned attempt task revision must match the requested task"
+        issue: "planned task attempt task revision (fingerprint) must match the requested task"
       }
   )
 )
@@ -174,7 +177,7 @@ export class TaskExecutionObservationFailure extends Schema.TaggedErrorClass<Tas
   { detail: Schema.String, observationId: ProviderObservationId, operationId: OperationId }
 ) {}
 
-/** Provider evidence names a session that cannot advance the exact planned attempt. */
+/** Provider evidence names a session that cannot advance the exact planned task attempt. */
 export class TaskExecutionSessionConflict extends Schema.TaggedErrorClass<TaskExecutionSessionConflict>()(
   "TaskExecutionSessionConflict",
   { report: TaskExecutionSessionConflictReported }

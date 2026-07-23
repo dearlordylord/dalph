@@ -124,7 +124,7 @@ A task-work session correlation conflict leaves the session-establishment
 operation unresolved under its existing `OperationId`. Dalph may only perform
 a fresh lookup after provider-owned correlation data is repaired or follow a
 separate run-disposition decision. Repair does not authorize selecting one
-conflicting session, changing the planned attempt, or issuing another session
+conflicting session, changing the planned task attempt, or issuing another session
 creation request.
 
 A journal event record is durable after Dalph receives successful
@@ -249,32 +249,35 @@ cannot emit that admission.
 
 Before the coordinator asks Git or a task-work provider to create or discover
 an execution resource, it records one immutable planned task attempt in the
-Dalph workflow journal and waits for the append acknowledgement. The plan binds
-the run, task, normalized task revision, attempt, declared Base SHA, branch ref,
-worktree path, executor locator, and task-work-session locator. The subsequent
-session-establishment operation causally depends on that acknowledged planning
-operation.
+Dalph workflow journal and waits for the append acknowledgement. The planned
+task attempt binds the run, task revision fingerprint, attempt identity,
+declared Base SHA, branch ref, worktree path, executor locator, and
+task-work-session locator. The subsequent session-establishment operation
+causally depends on that acknowledged planned-task-attempt recording operation.
 
-All plan identities and locators cross the journal boundary through Effect
-Schema and retain distinct brands. A failed or contradictory plan append
-therefore leaves Git and the task-work provider untouched. Repeating the same
-planning operation is idempotent; attempting to replace its journal key with a
-different plan is a journal contradiction. The key is scoped by `RunId` and
-`AttemptId`, so changing a planning-operation identity cannot replace an
-attempt. Genuine retry planning allocates a new attempt identity and new branch,
-worktree, and task-work-session locators.
+All planned-task-attempt identities and locators cross the journal boundary
+through Effect Schema and retain distinct brands. A failed or contradictory
+append therefore leaves Git and the task-work provider untouched. Repeating the
+same recording operation is idempotent; attempting to replace its journal key
+with a different planned task attempt is a journal contradiction. The key is
+scoped by `RunId` and `AttemptId`, so changing the recording-operation identity
+cannot replace an attempt. A later decision to make another attempt must state
+which prior outcome authorizes recording it instead of continuing or
+terminating the existing attempt.
 
-Only the journal-backed interpreter constructs durable plan acknowledgement.
-Dry-run and live-fake interpreters return a distinct simulated result, and the
-workflow routes that result only to a pure task-work simulation method. That
-method emits `TaskWorkSessionEstablishmentSimulated` with the plan's session
-locator; it neither fabricates a provider session ID nor claims authoritative
-establishment. It has no task-runner lookup or start capability. Before live
-session establishment or recovery, the journaled interpreter requires exactly
-one earlier `TaskAttemptPlanned` event with the identical plan whose planning
-operation is a direct causal predecessor. Missing, duplicate, non-causal, and
-mismatched plan evidence fail with a typed contradiction before provider
-mutation.
+The workflow selects and invokes the same planned-task-attempt recording and
+worktree-reconciliation operations in every mode. Effect Layers select one
+coherent interpretation. Dry-run and deterministic-test compositions simulate
+both operations. The production composition records the planned task attempt,
+then rereads the journal before it may inspect or change Git. No exported Layer
+may combine simulated planned-task-attempt recording with authoritative Git
+reconciliation.
+
+Before live session establishment or recovery, the journaled interpreter
+requires exactly one earlier `TaskAttemptPlanned` event with the identical
+planned task attempt whose recording operation is a direct causal predecessor.
+Missing, duplicate, non-causal, and mismatched evidence fail with a typed
+contradiction before provider mutation.
 
 ## Exact Git Worktree Reconciliation
 
@@ -305,8 +308,8 @@ clean, move, reset, prune, or deletion.
 
 After Dalph establishes the exact provider-assigned task-work session, it
 selects a distinct task-execution operation and admits that operation to bounded
-task-work capacity. The operation binds the immutable planned attempt, exact
-session identity, normalized task revision, and a new `OperationId`. Session
+task-work capacity. The operation binds the immutable planned task attempt, exact
+session identity, normalized task revision (fingerprint), and a new `OperationId`. Session
 establishment is a causal predecessor; it is not evidence that worker-process
 execution began.
 
@@ -366,18 +369,18 @@ Recovery repeats the same content-addressed writes and returns an already
 journaled sealed outcome when present. A journaled live interpreter requires
 the exact successful execution outcome before it records sealing intent.
 
-Dry-run and live-fake select the same sealing operation after their execution
-projection, but emit only `ImplementationEvidenceSealingSimulated`. That value
-contains stage and predecessor ordering without a manifest or evidence
-reference and therefore cannot pass the implementation-review authorization
-boundary.
+Dry-run and deterministic-test interpreters select the same sealing operation
+after their execution projection, but emit only
+`ImplementationEvidenceSealingSimulated`. That value contains stage and
+predecessor ordering without a manifest or evidence reference and therefore
+cannot pass the implementation-review authorization boundary.
 
 ## Fresh Implementation Review And Exact Handback
 
 One semantic review round begins only from a complete implementation-review
 authorization. Before invoking a reviewer, Dalph records the exact review
 operation, semantic round, and fresh reviewer-session identity. The request
-binds the same planned attempt and worktree, the latest successful implementer
+binds the same planned task attempt and worktree, the latest successful implementer
 invocation, and its exact provider session. Journal validation rejects a stale
 invocation, reused reviewer session, foreign provider session, or cross-attempt
 continuation before either provider boundary is called.
@@ -393,7 +396,7 @@ handback and a newer successful implementer invocation in the same established
 session; that invocation's newly sealed evidence alone can admit the review.
 
 Findings select a separate handback operation. The handback request carries the
-immutable review evidence and repeats the exact planned attempt, worktree,
+immutable review evidence and repeats the exact planned task attempt, worktree,
 implementer invocation, and provider session binding. The journal records
 intent before provider delivery and records acknowledgement afterward.
 Recovery reuses the journaled review or handback operation and session; it does
@@ -477,7 +480,7 @@ dispositions. A resource emergency requires explicit provider evidence for
 memory, process-capacity, or storage exhaustion and forbids automatic retry of
 the unchanged execution; Dalph never infers it from an exit code.
 
-Every terminal disposition retains the exact active claim, planned attempt,
+Every terminal disposition retains the exact active claim, planned task attempt,
 authoritative ready-worktree operation and proof, provider session, applicable
 findings/evidence chain, and selecting failure or outcome. Its direct
 predecessor must contain exactly the embedded review, request, or execution

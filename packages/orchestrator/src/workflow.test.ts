@@ -8,13 +8,13 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  deterministicTestWorkflowInterpreterLayer,
   EvidenceDigest,
   EvidenceReference,
   FixtureTarget,
   GitCommitSha,
   ImplementationReviewDisposition,
   ImplementationReviewSimulated,
-  liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
   PlannedTaskAttemptPlanner,
   PlannedWorktreeReady,
@@ -82,7 +82,7 @@ const runLayered = <A, E, R>(
   traceLayer: Layer.Layer<WorkflowTrace>,
   runner = successfulTaskRunner,
   attemptPlannerLayer = planningLayers[1],
-  interpreterLayer = liveFakeWorkflowInterpreterLayer
+  interpreterLayer = deterministicTestWorkflowInterpreterLayer
 ) =>
   effect.pipe(
     Effect.provide(interpreterLayer),
@@ -148,7 +148,7 @@ it.effect("rejects authoritative implementation artifacts in simulated execution
           sealImplementationEvidence: () => Effect.succeed({ _tag: "SealedImplementationEvidence" } as never)
         })
       })
-    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    ).pipe(Layer.provide(deterministicTestWorkflowInterpreterLayer))
     const authoritativeReviewLayer = Layer.effect(
       WorkflowInterpreter,
       Effect.gen(function*() {
@@ -158,7 +158,7 @@ it.effect("rejects authoritative implementation artifacts in simulated execution
           reviewImplementation: () => Effect.succeed({ _tag: "SealedImplementationReview" } as never)
         })
       })
-    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    ).pipe(Layer.provide(deterministicTestWorkflowInterpreterLayer))
     const program = runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1))
     const traceLayer = Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 
@@ -294,7 +294,7 @@ it.effect("establishes task work only after an authoritative worktree proof", ()
           })
         })
       })
-    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    ).pipe(Layer.provide(deterministicTestWorkflowInterpreterLayer))
     const liveProgram = runWorkflow(
       FixtureTarget.make(fixture("singleton")),
       TaskWorkCapacity.make(1)
@@ -386,7 +386,7 @@ it.effect("rejects acknowledged planning paired with simulated Git reconciliatio
             )
         })
       })
-    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    ).pipe(Layer.provide(deterministicTestWorkflowInterpreterLayer))
     const failure = yield* runLayered(
       runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
       Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -399,7 +399,7 @@ it.effect("rejects acknowledged planning paired with simulated Git reconciliatio
     expect(yield* Ref.get(starts)).toBe(0)
   }))
 
-it.effect("does not invoke authoritative Git reconciliation after simulated plan recording", () =>
+it.effect("delegates worktree reconciliation after simulated plan recording", () =>
   Effect.gen(function*() {
     const reconciliations = yield* Ref.make(0)
     const mixedLayer = Layer.effect(
@@ -425,7 +425,7 @@ it.effect("does not invoke authoritative Git reconciliation after simulated plan
             )
         })
       })
-    ).pipe(Layer.provide(liveFakeWorkflowInterpreterLayer))
+    ).pipe(Layer.provide(deterministicTestWorkflowInterpreterLayer))
 
     yield* runLayered(
       runWorkflow(FixtureTarget.make(fixture("singleton")), TaskWorkCapacity.make(1)),
@@ -435,7 +435,7 @@ it.effect("does not invoke authoritative Git reconciliation after simulated plan
       mixedLayer
     ).pipe(Effect.ignore)
 
-    expect(yield* Ref.get(reconciliations)).toBe(0)
+    expect(yield* Ref.get(reconciliations)).toBe(1)
   }))
 
 it.effect("reserves no more than the configured concurrent task attempts", () =>
@@ -545,7 +545,7 @@ it.effect("revalidates tracker eligibility immediately before task-work start", 
       FixtureTarget.make("revalidation-target"),
       TaskWorkCapacity.make(1)
     ).pipe(
-      Effect.provide(liveFakeWorkflowInterpreterLayer),
+      Effect.provide(deterministicTestWorkflowInterpreterLayer),
       Effect.provide(readerLayer),
       Effect.provide(runnerLayer),
       Effect.provide(Layer.succeed(

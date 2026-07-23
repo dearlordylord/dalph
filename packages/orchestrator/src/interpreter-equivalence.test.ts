@@ -11,7 +11,6 @@ import {
   dryRunWorkflowInterpreterLayer,
   FixtureTarget,
   GitCommitSha,
-  liveFakeWorkflowInterpreterLayer,
   MatchingTaskWorkSessionReported,
   ProviderObservationId,
   ProviderRequestId,
@@ -112,9 +111,6 @@ it.effect("dry-run and deterministic-test emit one exact semantic projection", (
     const deterministic = yield* traceUnder(
       deterministicTestWorkflowInterpreterLayer
     )
-    const liveFake = yield* traceUnder(liveFakeWorkflowInterpreterLayer)
-
-    expect(liveFake).toEqual(deterministic)
     expect(dry.result).toBe(deterministic.result)
     expect(dry.trace.map((item) => item._tag)).not.toContain(
       "TrackerExecutionAdmitted"
@@ -137,7 +133,7 @@ it.effect("never calls an injected task runner for a simulated attempt", () =>
         )
     })
 
-    const simulated = yield* traceUnder(liveFakeWorkflowInterpreterLayer, defectingRunner)
+    const simulated = yield* traceUnder(deterministicTestWorkflowInterpreterLayer, defectingRunner)
     const simulation = simulated.trace.find(
       ({ _tag }) => _tag === "TaskWorkSessionEstablishmentSimulated"
     )

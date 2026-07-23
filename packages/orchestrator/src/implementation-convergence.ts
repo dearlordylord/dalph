@@ -29,13 +29,13 @@ export const ImplementationConvergenceSubject = Schema.Struct({
 }).check(
   Schema.makeFilter((subject) => {
     if (subject.claim.taskId !== subject.plannedAttempt.taskId) {
-      return { path: ["claim", "taskId"], issue: "retained claim must own the planned attempt task" }
+      return { path: ["claim", "taskId"], issue: "retained claim must own the planned task attempt task" }
     }
     return subject.worktreeProof.baseSha === subject.plannedAttempt.baseSha
         && subject.worktreeProof.branch === subject.plannedAttempt.branch
         && subject.worktreeProof.worktree === subject.plannedAttempt.worktree
       ? undefined
-      : { path: ["worktreeProof"], issue: "retained worktree proof must bind the planned attempt resources" }
+      : { path: ["worktreeProof"], issue: "retained worktree proof must bind the planned task attempt resources" }
   })
 )
 export type ImplementationConvergenceSubject = typeof ImplementationConvergenceSubject.Type

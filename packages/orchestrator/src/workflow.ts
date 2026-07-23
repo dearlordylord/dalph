@@ -121,7 +121,7 @@ export class TaskWorkSessionEvidenceContradiction
   )
 {}
 
-/** The planned attempt belongs to a different recoverable workflow run. */
+/** The planned task attempt belongs to a different recoverable workflow run. */
 export class TaskWorkSessionRunContradiction extends Schema.TaggedErrorClass<TaskWorkSessionRunContradiction>()(
   "TaskWorkSessionRunContradiction",
   {

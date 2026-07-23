@@ -129,7 +129,7 @@ export const isExactTaskClaim = (
   && left.taskId === right.taskId
   && left.token === right.token
 
-/** In-memory atomic adapter used by shared contracts and live-fake workflows. */
+/** In-memory atomic adapter used by shared contracts and deterministic tests. */
 export const controlledTrackerMutationLayer = Layer.effect(
   TrackerMutation,
   Effect.gen(function*() {

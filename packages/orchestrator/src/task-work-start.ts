@@ -23,7 +23,7 @@ export const TaskWorkStartRequest = Schema.Struct({
       ? undefined
       : {
         path: ["plannedAttempt", "taskId"],
-        issue: "planned attempt task identity must match the requested task"
+        issue: "planned task attempt task identity must match the requested task"
       }
   ),
   Schema.makeFilter((request) =>
@@ -31,7 +31,7 @@ export const TaskWorkStartRequest = Schema.Struct({
       ? undefined
       : {
         path: ["plannedAttempt", "taskRevision"],
-        issue: "planned attempt task revision must match the requested task"
+        issue: "planned task attempt task revision (fingerprint) must match the requested task"
       }
   )
 )
@@ -98,7 +98,7 @@ export const NoMatchingTaskWorkSessionReported = Schema.TaggedStruct(
   { observationId: ProviderObservationId }
 )
 
-/** Exactly one provider session matches the operation and planned attempt. */
+/** Exactly one provider session matches the operation and planned task attempt. */
 export const MatchingTaskWorkSessionReported = Schema.TaggedStruct(
   "MatchingTaskWorkSessionReported",
   {
@@ -113,7 +113,7 @@ const TaskWorkSessionConflictEvidence = Schema.Struct({
   sessionId: TaskWorkSessionId
 })
 
-/** Provider records contradict the requested operation or planned attempt. */
+/** Provider records contradict the requested operation or planned task attempt. */
 export const TaskWorkSessionCorrelationConflict = Schema.TaggedStruct(
   "TaskWorkSessionCorrelationConflict",
   {

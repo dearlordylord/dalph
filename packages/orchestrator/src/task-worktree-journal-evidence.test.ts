@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
+  deterministicTestWorkflowInterpreterLayer,
   GitCommitSha,
   journaledWorkflowInterpreterLayer,
   JournalStore,
@@ -21,7 +22,6 @@ import {
   TaskLifecycle,
   taskRevisionFor,
   TaskRunner,
-  taskRunnerWorkflowInterpreterLayer,
   TaskWorkSessionLocator,
   TaskWorkStartRequest,
   TaskWorktreeHistoryContradiction,
@@ -81,11 +81,11 @@ const readyEvent = TaskWorktreeReadyEvent.make({
     headSha: plannedAttempt.baseSha,
     worktree: plannedAttempt.worktree
   }),
-  version: 3
+  version: 4
 })
 const interpreterLayer = journaledWorkflowInterpreterLayer(
   runId,
-  taskRunnerWorkflowInterpreterLayer,
+  deterministicTestWorkflowInterpreterLayer,
   taskExecutorTestLayer
 ).pipe(
   Layer.provide(Layer.succeed(
@@ -108,7 +108,7 @@ const intentEvent = (attempt = plannedAttempt) =>
       ...worktreeOperation,
       plannedAttempt: attempt
     }),
-    version: 3
+    version: 4
   })
 
 const append = (key: ReturnType<typeof intentRecordKey>, event: Parameters<typeof JournalStore.Service["append"]>[2]) =>

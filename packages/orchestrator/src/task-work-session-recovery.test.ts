@@ -5,6 +5,7 @@ import { validSnapshot } from "../test/task-dag.js"
 import {
   AttemptId,
   CoordinatorOwnershipLost,
+  deterministicTestWorkflowInterpreterLayer,
   FixtureTarget,
   GitCommitSha,
   GitCommonDirectoryLocator,
@@ -33,7 +34,6 @@ import {
   TaskLifecycle,
   taskRevisionFor,
   TaskRunner,
-  taskRunnerWorkflowInterpreterLayer,
   TaskWorkSessionCorrelationConflict,
   TaskWorkSessionEstablishmentDidNotConverge,
   TaskWorkSessionEvidenceContradiction,
@@ -115,7 +115,7 @@ const recordPlannedAttempt = Effect.gen(function*() {
     intentRecordKey(worktreeOperationId),
     TaskWorktreeReconciliationIntendedEvent.make({
       operation: worktreeOperation,
-      version: 3
+      version: 4
     })
   )
   yield* journal.append(
@@ -124,7 +124,7 @@ const recordPlannedAttempt = Effect.gen(function*() {
     TaskWorktreeReadyEvent.make({
       operationId: worktreeOperationId,
       proof: worktreeProof,
-      version: 3
+      version: 4
     })
   )
 })
@@ -157,7 +157,7 @@ it.effect("repeats one exact start request only after fresh authoritative absenc
     })
     const interpreterLayer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
@@ -224,7 +224,7 @@ it.effect("fails closed when a provider reuses one observation identity for anot
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
@@ -371,7 +371,7 @@ it.effect("reconstructs an unresolved operation from journal history and replays
     )
     const interpreterLayer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
@@ -388,7 +388,7 @@ it.effect("reconstructs an unresolved operation from journal history and replays
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 4 })
       )
       const recovered = yield* recoverTaskWorkSessionEstablishments(runId)
       const directReplay = yield* (yield* WorkflowInterpreter)
@@ -607,7 +607,7 @@ it.effect("journals uncertain start and unreadable lookup evidence before non-co
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
@@ -668,7 +668,7 @@ it.effect("blocks a repeat when fresh absence contradicts a recorded matching re
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(TaskRunner, runner)),
@@ -688,12 +688,12 @@ it.effect("blocks a repeat when fresh absence contradicts a recorded matching re
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 4 })
       )
       yield* journal.append(
         runId,
         taskWorkSessionReportedRecordKey(operationId, previousReport.observationId),
-        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 3 })
+        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 4 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(operation)
@@ -719,7 +719,7 @@ it.effect("rejects a fresh matching report for a different provider session", ()
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
@@ -745,12 +745,12 @@ it.effect("rejects a fresh matching report for a different provider session", ()
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 4 })
       )
       yield* journal.append(
         runId,
         taskWorkSessionReportedRecordKey(operationId, previousReport.observationId),
-        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 3 })
+        TaskWorkSessionReported.make({ operationId, report: previousReport, version: 4 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(operation)
@@ -770,7 +770,7 @@ it.effect("emits distinct typed non-convergence comparison events", () =>
           const interpreter = yield* WorkflowInterpreter
           return yield* interpreter.establishTaskWorkSession(operation).pipe(Effect.flip)
         }).pipe(
-          Effect.provide(taskRunnerWorkflowInterpreterLayer),
+          Effect.provide(deterministicTestWorkflowInterpreterLayer),
           Effect.provide(Layer.succeed(TaskRunner, runner)),
           Effect.provide(Layer.succeed(
             TrackerGraphReader,
@@ -830,7 +830,7 @@ it.effect("rejects a changed payload under an already committed operation identi
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
@@ -855,7 +855,7 @@ it.effect("rejects a changed payload under an already committed operation identi
       yield* journal.append(
         runId,
         intentRecordKey(operationId),
-        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 3 })
+        TaskWorkSessionEstablishmentIntentRecorded.make({ operation, version: 4 })
       )
       return yield* (yield* WorkflowInterpreter)
         .establishTaskWorkSession(changedOperation)
@@ -870,7 +870,7 @@ it.effect("rejects session establishment without exact ready-worktree journal ev
   Effect.gen(function*() {
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(
@@ -899,7 +899,7 @@ it.effect("rejects session establishment without exact ready-worktree journal ev
     expect(failure).toMatchObject({ reason: "MissingIntent" })
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
-it.effect("rejects a planned attempt from another journal run", () =>
+it.effect("rejects a planned task attempt from another journal run", () =>
   Effect.gen(function*() {
     const foreignOperation = makeTaskWorkSessionEstablishmentOperation({
       predecessorOperationIds: [],
@@ -913,7 +913,7 @@ it.effect("rejects a planned attempt from another journal run", () =>
     })
     const layer = journaledWorkflowInterpreterLayer(
       runId,
-      taskRunnerWorkflowInterpreterLayer,
+      deterministicTestWorkflowInterpreterLayer,
       taskExecutorTestLayer
     ).pipe(
       Layer.provide(Layer.succeed(

@@ -3,7 +3,7 @@ import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import type { PlannedTaskAttempt } from "./domain.js"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "./domain.js"
 
-/** Proves Git's current HEAD descends from the exact Base SHA declared by the attempt plan. */
+/** Proves Git's current HEAD descends from the exact Base SHA declared by the planned task attempt. */
 export const PlannedWorktreeReady = Schema.TaggedStruct("PlannedWorktreeReady", {
   baseSha: GitCommitSha,
   branch: TaskBranchRef,
