@@ -31,6 +31,7 @@ import { makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.
 import {
   observeManagedRunAuthorities,
   recoverExactRunAfterCoordinatorDeath,
+  RecoveryAuthorityContradictionIssue,
   RecoveryOwnershipIssue,
   RecoveryProgressIssue,
   RecoveryReconciliationIssue
@@ -43,6 +44,7 @@ export const StartupRecoveryIssue = Schema.Union([
   JournalBoundaryDecodeIssue,
   ManagedHistoryIdentityIssue,
   ManagedHistorySemanticIssue,
+  RecoveryAuthorityContradictionIssue,
   RecoveryOwnershipIssue,
   RecoveryProgressIssue,
   RecoveryTaskEligibilityIssue,

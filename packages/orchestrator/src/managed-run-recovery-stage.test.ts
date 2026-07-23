@@ -230,12 +230,12 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
     ]
   ] as const
   for (const [prefix, expectedStage] of prefixes) {
-    expect(deriveManagedRunRecoveryStage(prefix).attempts).toHaveLength(1)
-    expect(deriveManagedRunRecoveryStage(prefix).attempts[0]?._tag).toBe(expectedStage)
+    expect(deriveManagedRunRecoveryStage(prefix).entries).toHaveLength(1)
+    expect(deriveManagedRunRecoveryStage(prefix).entries[0]?._tag).toBe(expectedStage)
   }
   const planned = records(plan)
   const reduced = reduceManagedHistory(runId, planned)
-  expect(reduced._tag === "ValidManagedHistory" ? reduced.recoveryStage.attempts[0]?._tag : reduced._tag)
+  expect(reduced._tag === "ValidManagedHistory" ? reduced.recoveryStage.entries[0]?._tag : reduced._tag)
     .toBe("TaskWorktreeReconciliationNeeded")
 
   const duplicateWorktreeOperation = makeTaskWorktreeReconciliationOperation({
@@ -301,12 +301,12 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
     }),
     key: outcomeRecordKey(boundaryClaimOperation.acquisition.operationId)
   } as const
-  expect(deriveManagedRunRecoveryStage(records(boundaryClaim)).attempts).toEqual([])
+  expect(deriveManagedRunRecoveryStage(records(boundaryClaim)).entries).toEqual([])
   expect(
     deriveManagedRunRecoveryStage(records({
       event: TaskClaimAcquisitionIntendedEvent.make({ operation: boundaryClaimOperation, version: 4 }),
       key: intentRecordKey(boundaryClaimOperation.acquisition.operationId)
-    }, boundaryClaim)).attempts
+    }, boundaryClaim)).entries
   ).toEqual([])
 
   const orphanObservationId = OperationId.make("recovery-stage-orphan-observation")
@@ -318,7 +318,7 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
     }),
     key: outcomeRecordKey(orphanObservationId)
   } as const
-  expect(deriveManagedRunRecoveryStage(records(orphanObservation)).attempts).toEqual([])
+  expect(deriveManagedRunRecoveryStage(records(orphanObservation)).entries).toEqual([])
   const observed = {
     event: trackerGraphObservationIntent(
       makeTrackerGraphObservationOperation(orphanObservationId, FixtureTarget.make("orphan-stage"))
@@ -327,10 +327,10 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
   } as const
   expect(
     deriveManagedRunRecoveryStage(records(observed, orphanObservation, orphanObservation))
-      .attempts
+      .entries
   ).toHaveLength(1)
   expect(
-    deriveManagedRunRecoveryStage(records(plan, observed, orphanObservation)).attempts
+    deriveManagedRunRecoveryStage(records(plan, observed, orphanObservation)).entries
   ).toHaveLength(1)
 })
 
@@ -409,6 +409,9 @@ it.effect("does not treat an observed eligible task without a claim intent as te
       intentRecordKey(claimOperation.acquisition.operationId),
       TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: 4 })
     )
+    expect(
+      deriveManagedRunRecoveryStage(yield* journal.read(preplanRunId)).entries[0]?._tag
+    ).toBe("TaskClaimAcquisitionUnresolved")
     yield* journal.append(
       preplanRunId,
       outcomeRecordKey(claimOperation.acquisition.operationId),
@@ -417,11 +420,17 @@ it.effect("does not treat an observed eligible task without a claim intent as te
         version: 4
       })
     )
+    expect(
+      deriveManagedRunRecoveryStage(yield* journal.read(preplanRunId)).entries[0]?._tag
+    ).toBe("TaskEligibilityRefreshNeeded")
     yield* journal.append(
       preplanRunId,
       intentRecordKey(admission.operationId),
       trackerGraphObservationIntent(admission)
     )
+    expect(
+      deriveManagedRunRecoveryStage(yield* journal.read(preplanRunId)).entries[0]?._tag
+    ).toBe("TaskEligibilityRefreshUnresolved")
     yield* journal.append(
       preplanRunId,
       outcomeRecordKey(admission.operationId),
@@ -432,8 +441,8 @@ it.effect("does not treat an observed eligible task without a claim intent as te
       })
     )
     const stage = deriveManagedRunRecoveryStage(yield* journal.read(preplanRunId))
-    expect(stage.attempts).toHaveLength(1)
-    expect(stage.attempts[0]?._tag).toBe("TaskAttemptPlanNeeded")
+    expect(stage.entries).toHaveLength(1)
+    expect(stage.entries[0]?._tag).toBe("TaskAttemptPlanNeeded")
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 })
 
@@ -612,7 +621,7 @@ it.effect("checks the exact claim and current task revision before selecting mis
         key: attemptPlanRecordKey(plannedAttempt.attemptId)
       }
     )
-    const stage = deriveManagedRunRecoveryStage(history).attempts[0]
+    const stage = deriveManagedRunRecoveryStage(history).entries[0]
     if (stage?._tag !== "TaskWorktreeReconciliationNeeded") {
       return yield* Effect.die("expected missing worktree operation")
     }
@@ -830,7 +839,7 @@ it.effect("checks the exact claim and current task revision before selecting mis
         key: outcomeRecordKey(recoveredWorktreeOperation.operationId)
       }
     )
-    const sessionStage = deriveManagedRunRecoveryStage(worktreeHistory).attempts[0]
+    const sessionStage = deriveManagedRunRecoveryStage(worktreeHistory).entries[0]
     if (sessionStage?._tag !== "TaskWorkSessionEstablishmentNeeded") {
       return yield* Effect.die("expected missing session operation")
     }
@@ -903,7 +912,7 @@ it.effect("checks the exact claim and current task revision before selecting mis
         )
       }
     )
-    const executionStage = deriveManagedRunRecoveryStage(executionHistory).attempts[0]
+    const executionStage = deriveManagedRunRecoveryStage(executionHistory).entries[0]
     if (executionStage?._tag !== "TaskExecutionNeeded") {
       return yield* Effect.die("expected missing execution operation")
     }
@@ -1108,7 +1117,7 @@ it.effect("advances an exact planned attempt once and rejects a silent continuat
       Effect.provideService(TrackerMutation, tracker)
     )
     expect(issues).toEqual([])
-    expect(deriveManagedRunRecoveryStage(yield* journal.read(runId)).attempts[0]?._tag)
+    expect(deriveManagedRunRecoveryStage(yield* journal.read(runId)).entries[0]?._tag)
       .toBe("TaskWorkSessionEstablishmentNeeded")
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 

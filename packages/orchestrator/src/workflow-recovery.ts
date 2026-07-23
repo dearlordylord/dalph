@@ -50,6 +50,16 @@ export class RecoveryOwnershipIssue extends Schema.TaggedErrorClass<RecoveryOwne
   { detail: Schema.String, runId: RunId }
 ) {}
 
+/** A fresh authority fact contradicts the durable completed workflow fact. */
+export class RecoveryAuthorityContradictionIssue extends Schema.TaggedErrorClass<RecoveryAuthorityContradictionIssue>()(
+  "RecoveryAuthorityContradictionIssue",
+  {
+    authority: RecoveryReconciliationIssue.fields.authority,
+    detail: Schema.String,
+    runId: RunId
+  }
+) {}
+
 /** A legal nonterminal stage remained inert after its recovery operation returned. */
 export class RecoveryProgressIssue extends Schema.TaggedErrorClass<RecoveryProgressIssue>()(
   "RecoveryProgressIssue",
@@ -75,17 +85,23 @@ export const classifyRecoveryIssue = (
   authority: RecoveryReconciliationIssue["authority"],
   runId: RunId,
   failure: unknown
-): RecoveryOwnershipIssue | RecoveryReconciliationIssue =>
+): RecoveryAuthorityContradictionIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue =>
   failure instanceof CoordinatorOwnershipLost
     || failure instanceof CoordinatorLockObservationContradiction
     ? new RecoveryOwnershipIssue({ detail: String(failure), runId })
+    : failure instanceof AuthorityObservationContradiction
+    ? new RecoveryAuthorityContradictionIssue({ authority, detail: failure.detail, runId })
     : reconciliationIssue(authority, runId, failure)
 
 const classifyStageContinuationFailure = (
   authority: RecoveryReconciliationIssue["authority"],
   runId: RunId,
   failure: unknown
-): RecoveryTaskEligibilityIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue =>
+):
+  | RecoveryAuthorityContradictionIssue
+  | RecoveryTaskEligibilityIssue
+  | RecoveryOwnershipIssue
+  | RecoveryReconciliationIssue =>
   failure instanceof RecoveryTaskEligibilityIssue
     ? failure
     : classifyRecoveryIssue(authority, runId, failure)
@@ -96,12 +112,18 @@ const collectRefreshIssue = (
 ) =>
 <A, E, R>(refresh: Effect.Effect<A, E, R>) =>
   Effect.result(refresh).pipe(
-    Effect.map((result): ReadonlyArray<RecoveryOwnershipIssue | RecoveryReconciliationIssue> =>
-      Result.isFailure(result) ? [classifyRecoveryIssue(authority, runId, result.failure)] : []
-    )
+    Effect.map((result): ReadonlyArray<
+      RecoveryAuthorityContradictionIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue
+    > => Result.isFailure(result) ? [classifyRecoveryIssue(authority, runId, result.failure)] : [])
   )
 
-const contradict = (detail: string): Effect.Effect<never, Error> => Effect.fail(new Error(detail))
+class AuthorityObservationContradiction {
+  readonly _tag = "AuthorityObservationContradiction"
+  constructor(readonly detail: string) {}
+}
+
+const contradict = (detail: string): Effect.Effect<never, AuthorityObservationContradiction> =>
+  Effect.fail(new AuthorityObservationContradiction(detail))
 
 /**
  * Refreshes every authority represented by decoded history using read-only
@@ -118,7 +140,13 @@ export const observeManagedRunAuthorities = Effect.fn(
   const executor = yield* TaskExecutor
   const evidence = yield* EvidenceStore
   const collect = (authority: RecoveryReconciliationIssue["authority"]) => collectRefreshIssue(authority, runId)
-  const checks = new Array<Effect.Effect<ReadonlyArray<RecoveryOwnershipIssue | RecoveryReconciliationIssue>>>()
+  const checks = new Array<
+    Effect.Effect<
+      ReadonlyArray<
+        RecoveryAuthorityContradictionIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue
+      >
+    >
+  >()
 
   for (const { event } of records) {
     // Only authority-bearing events require a refresh; all protocol trace events intentionally share the default.
@@ -290,7 +318,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
 
   const collect = (authority: RecoveryReconciliationIssue["authority"]) => collectRefreshIssue(authority, runId)
   const before = yield* journal.read(runId)
-  for (const stage of initialReduction.recoveryStage.attempts) {
+  for (const stage of initialReduction.recoveryStage.entries) {
     if (stage._tag !== "ImplementationConvergencePending") continue
     const eligibility = yield* Effect.result(
       refreshPlannedAttemptEligibility(runId, before, stage.planOperation)
@@ -317,7 +345,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
   if (afterPhases.length > before.length) return []
   const reduction = reduceManagedHistory(runId, afterPhases)
   if (reduction._tag === "InvalidManagedHistory") return reduction.issues
-  const missingStages = reduction.recoveryStage.attempts.filter(
+  const missingStages = reduction.recoveryStage.entries.filter(
     (stage): stage is MissingPlannedTaskAttemptOperationStage =>
       stage._tag === "TaskExecutionNeeded"
       || stage._tag === "TaskWorkSessionEstablishmentNeeded"
@@ -344,7 +372,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
     ]
   }
 
-  const nonterminal = reduction.recoveryStage.attempts.find((stage) => stage._tag !== "Terminal")
+  const nonterminal = reduction.recoveryStage.entries.find((stage) => stage._tag !== "Terminal")
   if (nonterminal === undefined) return []
   return [
     new RecoveryProgressIssue({

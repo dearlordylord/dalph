@@ -13,6 +13,17 @@ export const ManagedRunRecoveryStageEntry = Schema.TaggedUnion({
     observationOperation: WorkflowOperation.cases.ReadTrackerGraph,
     taskId: TaskId
   },
+  TaskClaimAcquisitionUnresolved: {
+    operation: WorkflowOperation.cases.AcquireTaskClaim
+  },
+  TaskEligibilityRefreshNeeded: {
+    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
+    observationOperation: WorkflowOperation.cases.ReadTrackerGraph
+  },
+  TaskEligibilityRefreshUnresolved: {
+    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
+    operation: WorkflowOperation.cases.ReadTrackerGraph
+  },
   TaskAttemptPlanNeeded: {
     claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
     observationOperation: WorkflowOperation.cases.ReadTrackerGraph
@@ -52,6 +63,9 @@ export type ManagedRunRecoveryStageEntry = typeof ManagedRunRecoveryStageEntry.T
 
 export const NonterminalRecoveryStageTag = Schema.Literals([
   "TaskClaimAcquisitionNeeded",
+  "TaskClaimAcquisitionUnresolved",
+  "TaskEligibilityRefreshNeeded",
+  "TaskEligibilityRefreshUnresolved",
   "TaskAttemptPlanNeeded",
   "TaskWorktreeReconciliationNeeded",
   "TaskWorktreeReconciliationUnresolved",
@@ -67,7 +81,7 @@ export const NonterminalRecoveryStageTag = Schema.Literals([
  * Every acknowledged planned task attempt or unfinished pre-attempt task contributes one entry.
  */
 export const ManagedRunRecoveryStage = Schema.Struct({
-  attempts: Schema.Array(ManagedRunRecoveryStageEntry)
+  entries: Schema.Array(ManagedRunRecoveryStageEntry)
 })
 export type ManagedRunRecoveryStage = typeof ManagedRunRecoveryStage.Type
 
@@ -165,26 +179,54 @@ export const deriveManagedRunRecoveryStage = (
   const plannedTaskIds = new Set(
     records.flatMap(({ event }) => event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt.taskId] : [])
   )
-  const unplannedClaims = records.flatMap(({ event }) => {
-    if (event._tag !== "TaskClaimAcquired" || plannedTaskIds.has(event.claim.taskId)) return []
-    const claimIntent = records.find(({ event: candidate }) =>
-      candidate._tag === "TaskClaimAcquisitionIntended"
-      && candidate.operation.acquisition.operationId === event.claim.operationId
-    )?.event
-    if (claimIntent?._tag !== "TaskClaimAcquisitionIntended") return []
+  const unplannedClaims = records.flatMap<ManagedRunRecoveryStageEntry>(({ event }) => {
+    if (
+      event._tag !== "TaskClaimAcquisitionIntended"
+      || plannedTaskIds.has(event.operation.acquisition.taskId)
+    ) return []
+    const acquired = records.some(({ event: candidate }) =>
+      candidate._tag === "TaskClaimAcquired"
+      && candidate.claim.operationId === event.operation.acquisition.operationId
+    )
+    if (!acquired) {
+      return [ManagedRunRecoveryStageEntry.cases.TaskClaimAcquisitionUnresolved.make({
+        operation: event.operation
+      })]
+    }
     const admission = records.findLast(({ event: candidate }) =>
       candidate._tag === "TrackerGraphObservationIntentRecorded"
-      && candidate.operation.predecessorOperationIds.includes(event.claim.operationId)
+      && candidate.operation.predecessorOperationIds.includes(event.operation.acquisition.operationId)
     )?.event
-    return admission?._tag === "TrackerGraphObservationIntentRecorded"
+    if (admission?._tag !== "TrackerGraphObservationIntentRecorded") {
+      const priorObservation = records.findLast(({ event: candidate }) =>
+        candidate._tag === "TrackerGraphObservationIntentRecorded"
+        && event.operation.predecessorOperationIds.includes(candidate.operation.operationId)
+      )?.event
+      return priorObservation?._tag === "TrackerGraphObservationIntentRecorded"
+        ? [ManagedRunRecoveryStageEntry.cases.TaskEligibilityRefreshNeeded.make({
+          claimOperation: event.operation,
+          observationOperation: priorObservation.operation
+        })]
+        : []
+    }
+    const observed = records.some(({ event: candidate }) =>
+      candidate._tag === "TrackerGraphOutcomeObserved"
+      && candidate.operationId === admission.operation.operationId
+    )
+    return observed
       ? [ManagedRunRecoveryStageEntry.cases.TaskAttemptPlanNeeded.make({
-        claimOperation: claimIntent.operation,
+        claimOperation: event.operation,
         observationOperation: admission.operation
       })]
-      : []
+      : [ManagedRunRecoveryStageEntry.cases.TaskEligibilityRefreshUnresolved.make({
+        claimOperation: event.operation,
+        operation: admission.operation
+      })]
   })
   const claimedTaskIds = new Set(
-    records.flatMap(({ event }) => event._tag === "TaskClaimAcquired" ? [event.claim.taskId] : [])
+    records.flatMap(({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" ? [event.operation.acquisition.taskId] : []
+    )
   )
   const unclaimedTasks = records.flatMap(({ event }) => {
     if (event._tag !== "TrackerGraphOutcomeObserved") return []
@@ -205,6 +247,6 @@ export const deriveManagedRunRecoveryStage = (
     entries.findLastIndex((candidate) => candidate.taskId === entry.taskId) === index
   )
   return ManagedRunRecoveryStage.make({
-    attempts: [...plannedStages, ...unplannedClaims, ...unclaimedTasks]
+    entries: [...plannedStages, ...unplannedClaims, ...unclaimedTasks]
   })
 }

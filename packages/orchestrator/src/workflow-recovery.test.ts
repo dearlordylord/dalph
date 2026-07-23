@@ -415,7 +415,7 @@ it.effect("collects completed stale, foreign, and unreadable authority facts wit
         })
       )
     )
-    expect(issues.map((issue) => issue._tag === "RecoveryReconciliationIssue" ? issue.authority : "Ownership")).toEqual(
+    expect(issues.map((issue) => issue._tag === "RecoveryOwnershipIssue" ? "Ownership" : issue.authority)).toEqual(
       [
         "Tracker",
         "Git",
