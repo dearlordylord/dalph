@@ -196,9 +196,9 @@ _Avoid_: Claim request acknowledged, claimed task eligibility observed
 **Completion claim**:
 The temporary task-tracker record that replaces one exact active task claim
 immediately before Dalph asks the task tracker to mark the task complete. It
-records the exact Git commit accepted for the task and references the files and
-reports used to justify completion. Dalph deletes it only after the task tracker
-confirms completion.
+binds the exact confirmed integration result, current task revision, and any
+supporting artifacts required by the selected resolution protocol. Dalph
+deletes it only after the task tracker confirms completion.
 _Avoid_: Task claim, task completed successfully, Git branch
 
 **Planned task attempt**:
@@ -437,24 +437,24 @@ non-convergence and cannot select another unchanged handback/rework round.
 _Avoid_: Technical retry limit, time limit, implicit progress
 
 **Implementation acceptance**:
-The terminal implementation disposition selected by an accepted sealed review.
-It retains the exact active claim, planned task attempt, provider session, complete
-review finding history, authoritative ready-worktree proof, and immutable
-evidence chain that authorized it.
-_Avoid_: Successful process exit, review invocation, tracker task completion
+The final successful outcome of the current implementation-and-review protocol.
+It may select later integration work but does not complete the tracker task,
+settle every task responsibility, or terminate the run.
+_Avoid_: Successful process exit, tracker task completion, task terminal state
 
 **Implementation non-convergence**:
-The terminal implementation disposition selected when a findings-bearing
+The final unsuccessful outcome of the current implementation-and-review
+protocol selected when a findings-bearing
 sealed review consumes the captured implementation review round limit. It is a
 semantic result and remains distinct from exhausted technical transport retry.
-_Avoid_: Reviewer failure, handback failure, task execution failure
+_Avoid_: Reviewer failure, handback failure, task execution failure, run termination
 
 **Implementation technical retry exhaustion**:
-The terminal implementation disposition selected only after the exact reviewer
-or findings-handback invocation consumes its captured technical retry schedule.
-It retains that failed invocation and its latest complete evidence without
-advancing the semantic round.
-_Avoid_: Implementation non-convergence, finding, coordinator interruption
+The final unsuccessful outcome of the current implementation-and-review
+protocol selected only after the exact reviewer or findings-handback invocation
+consumes its captured technical retry schedule. It does not advance the
+semantic round or by itself terminate the task or run.
+_Avoid_: Implementation non-convergence, finding, coordinator interruption, run termination
 
 **Demonstrated resource emergency**:
 Fresh execution-provider evidence that memory, process capacity, or storage was
@@ -505,12 +505,15 @@ _Avoid_: Task-work session, reviewer identity, semantic review round
 An immutable content-addressed manifest that references its immediate evidence
 predecessor, binds the planned task attempt, exact worktree, latest implementer
 invocation and session, reviewer session, and semantic round, and retains the
-complete finding history together with the reviewer disposition.
+complete finding history together with the reviewer disposition in the current
+review-capable executor protocol.
 The current review contract has no partial-resolution state: every finding in
 that history remains unresolved and is supplied to the next fresh reviewer
 until one accepted disposition resolves the complete set. The accepted manifest
 retains the history as immutable audit evidence rather than current findings.
-_Avoid_: Implementation evidence, mutable review report, workflow trace
+It is not a universal requirement of every future executor or resolution
+protocol.
+_Avoid_: Implementation evidence, mutable review report, workflow trace, task completion evidence
 
 **Review findings handback**:
 The request that sends one findings-bearing implementation review evidence
@@ -667,11 +670,12 @@ process, or workflow-journal state.
 _Avoid_: Dalph workflow journal, audit log, dry-run-specific trace
 
 **Runnable frontier**:
-The process-local view of workflow transitions that reconstructed managed-run
-state and accepted policy currently allow before applying task-work capacity.
-It is recomputed after relevant events or fresh reads and never persisted as
-authority.
-_Avoid_: Admission set, persisted queue, durable graph knowledge, task-tracker target closure
+The process-local set of exact per-responsibility workflow transitions that
+reconstructed managed-run state and accepted policy currently allow before
+applying task-work capacity. Its derivation also returns a typed wait, pause,
+isolation, relinquishment, or settled reason for each responsibility with no
+legal transition; neither result is persisted as authority.
+_Avoid_: Admission set, managed-run recovery stage, persisted queue, durable graph knowledge, task-tracker target closure
 
 **Admission set**:
 The process-local, deterministically ordered subset of the runnable frontier
@@ -845,18 +849,13 @@ The validated process-local composition of reduced graph knowledge, workflow
 history, resource responsibility, and pause state through one applied journal
 position. It is derived from decoded journal events and is neither persisted
 authority nor a runnable frontier.
-_Avoid_: Serialized coordinator, reducer cache table, managed-run recovery stage
+_Avoid_: Serialized coordinator, reducer cache table, runnable frontier
 
-**Managed-run recovery stage**:
-The non-persisted result of reducing one valid managed history. It assigns every
-unfinished pre-attempt task and acknowledged planned task attempt an explicit
-next durable boundary, unresolved operation, implementation-convergence
-continuation, or terminal disposition. Before later convergence selects more
-work, Dalph again checks the exact claim, current eligibility, and task revision.
-Each recovery activation derives the stage from the complete current history,
-including every fact recorded by earlier activations. The Dalph workflow journal
-never stores it as current authority.
-_Avoid_: Persisted frontier, workflow journal event, resource cache, replacement attempt plan
+**Named workflow wait**:
+A derived reason that one exact responsibility has no immediately legal
+transition, paired with the time, capacity release, graph update, authority
+observation, or executor-declared signal that can make it actionable.
+_Avoid_: Generic waiting status, unresolved request, task paused, branch-local isolation
 
 **Invalid managed history**:
 A preserved run whose individually decoded journal events contradict canonical
@@ -903,10 +902,10 @@ _Avoid_: Paused, temporarily idle, failed
 
 **Branch-local isolation**:
 A recorded disposition preventing Dalph from acting on one exact task, attempt,
-or resource region whose facts are invalid, unreadable, ambiguous, or no longer
-Dalph's responsibility. Other independently valid branches remain available
-for progress.
-_Avoid_: Run blocked, global startup failure, discarded contradiction
+or resource region whose facts are invalid, unreadable, ambiguous, or unsafe.
+It retains every still-owned responsibility until named repair or fresh
+authority evidence permits action or authorizes exact relinquishment.
+_Avoid_: Run blocked, global startup failure, discarded contradiction, workflow responsibility relinquished
 
 **Run cancelled**:
 The run termination recorded after an authorized operator directs Dalph to stop

@@ -118,11 +118,14 @@ process-local optimization: it is discarded on process loss, never persisted
 as journal authority, and never substitutes for reading and validating the
 complete history during restart.
 
-For each valid run, reduction derives one non-persisted managed-run recovery
-stage containing an entry for every unfinished pre-attempt task and exactly one
-entry per acknowledged planned task attempt. A pre-attempt entry that cannot
-reconstruct a safe claim or plan fails closed instead of being mistaken for a
-terminal run.
+For each valid run, reduction preserves graph knowledge, workflow history,
+pause state, and every exact outstanding responsibility. A pure selector derives
+one non-persisted runnable frontier from those facts. The
+frontier may contain multiple independently legal transitions for one task
+attempt and carries a typed wait, pause, isolation, relinquishment, or settled
+reason for each responsibility with no legal transition. A pre-attempt subject
+that cannot reconstruct a safe claim or plan fails closed instead of being
+mistaken for settled work.
 
 Dalph consumes every independently valid part of the reconstructed run. A
 contradiction, unreadable authority, ambiguous resource, or loss of
@@ -223,15 +226,17 @@ show its prerequisites satisfied. In the edge direction, the prerequisite
 blocks the dependent; pause never reverses that edge or persists its transitive
 dependent closure.
 
-An active reviewer or findings-handback agent is long-running task work for
-pause purposes. Dalph asks its provider to interrupt that exact invocation,
+Under the current review-capable executor protocol, an active reviewer or
+findings-handback agent is long-running task work for pause purposes. Dalph
+asks its provider to interrupt that exact invocation,
 preserves the committed workflow operation, reviewer session, every already
 recorded immutable evidence object, and unresolved finding history, and later
 resumes the same invocation. It does not invent a partial review disposition or
 let reviewer work continue merely because the invocation does not change Git or
-the task tracker. The current specification assumes the accepted mandatory
-review loop; [future research](https://github.com/dearlordylord/dalph/issues/127)
-owns whether task-resolution stages become configurable.
+the task tracker. These are concrete stages of the current protocol, not
+permanent Dalph core stages. [Future research](https://github.com/dearlordylord/dalph/issues/127)
+must permit an executor to govern its own optional review and restoration
+protocol without making review evidence a universal completion requirement.
 
 If implementation evidence capture has already begun when pause is requested,
 Dalph lets that bounded local Git-and-EvidenceStore operation finish and seal
@@ -383,6 +388,22 @@ state wakes scheduling. After process loss, Dalph discards the old controller,
 reconstructs responsibility, freshly reads the applicable external boundaries,
 and derives new positions and waits.
 
+Every workflow wait names both the exact condition preventing the next
+transition and the event or observation that can make that transition legal.
+Current reasons include task-work capacity, an unfinished dependency, a
+recorded technical-retry deadline, and an occupied integration resource; the
+list remains extensible by executor-declared protocols. A request that Dalph can
+reconcile immediately is unresolved rather than waiting. Pause and
+branch-local isolation also remain separate from waiting.
+
+Branch-local isolation is a reversible safety boundary: Dalph forbids action on
+the exact affected region while retaining every still-owned responsibility and
+names the repair or fresh authority evidence that can permit progress.
+Responsibility relinquishment instead durably ends one exact obligation after
+fresh authority evidence or an authorized handoff proves Dalph may no longer
+act. Relinquishment has no wake condition; other responsibilities for the same
+attempt may continue or remain isolated.
+
 One unavailable branch blocks another only when the second branch's next action
 concretely requires its unfinished prerequisite, an integration resource it
 already holds, the whole run is paused, or shared managed history or capability
@@ -415,19 +436,25 @@ instead, `C` may proceed.
 
 See [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
 
-Startup checks the exact current task claim and rereads the task tracker before
-it selects a missing worktree, task-work-session, task-execution, or later
-implementation-convergence operation.
-The reread must still contain the task as eligible and must derive the same task
-revision fingerprint. An already-recorded unresolved operation keeps its
-operation identity and uses its existing reconciliation protocol. A recovery
-activation that returns without either appending a durable next fact, reaching
-an explicit terminal disposition, or returning a typed issue is rejected as
-inert recovery.
+Before each new long-running executor invocation, including same-session
+rework, the workflow requests sufficiently fresh graph knowledge for the
+control facts that may forbid starting it. This continuation check is not a new
+planned-attempt eligibility decision and does not silently replan the attempt;
+W6 owns how each changed authority fact is classified. The graph boundary may
+satisfy the declared area and freshness from retained knowledge or update that
+knowledge through the provider.
+
+Ordinary coordination and startup recovery invoke the same pure transition
+selector after every recorded result. An already-recorded unresolved operation
+keeps its operation identity and uses its existing reconciliation protocol.
+The activation continues every immediately legal independent transition until
+only named waits, pauses, isolations, relinquished or settled
+responsibilities, subject-specific final outcomes, or typed issues remain. A
+journal append alone is not a reason to return.
 
 | State or record | Where current state is read | Restart treatment |
 | --- | --- | --- |
-| Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the uncertain-request recovery rules to each intent missing a recorded outcome before retrying |
+| Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the unresolved-request reconciliation rules to each intent missing a recorded outcome before retrying |
 | Task identity, lifecycle, dependencies, grouping, and claims | Read through the configured task tracker | Reread every task in the task-tracker target closure and derive current eligibility instead of restoring a stored frontier |
 | Git lineage, refs, commits, worktrees, and integration state | Read from Git | Reread the exact resource locators recorded in the planned task attempt and compare them with journaled intents before continuing |
 | Task-work sessions, provider work units, and worker processes | Read through the configured task runner; its adapter queries the configured task-work provider | Ask the task runner for a fresh report, then classify the task-work session and its provider work units or worker processes before retry, cleanup, or failure |
@@ -895,12 +922,12 @@ finding history. Findings at the captured limit record
 Semantic non-convergence is distinct from technical retry exhaustion. Exhausted
 reviewer transport records `ReviewTechnicalRetryExhausted`; exhausted findings
 delivery records `HandbackTechnicalRetryExhausted`. Nonzero execution exit,
-interruption, and demonstrated resource emergency also have distinct terminal
-dispositions. A resource emergency requires explicit provider evidence for
+interruption, and demonstrated resource emergency also have distinct final
+current-protocol outcomes. A resource emergency requires explicit provider evidence for
 memory, process-capacity, or storage exhaustion and forbids automatic retry of
 the unchanged execution; Dalph never infers it from an exit code.
 
-Every terminal disposition retains the exact active claim, planned task attempt,
+Every current-protocol final outcome retains the exact active claim, planned task attempt,
 authoritative ready-worktree operation and proof, provider session, applicable
 findings/evidence chain, and selecting failure or outcome. Its direct
 predecessor must contain exactly the embedded review, request, or execution
@@ -914,6 +941,68 @@ reviewer session merely because the coordinator restarted.
 Dry-run selects the same bounded workflow shape but records only an
 `ImplementationConvergenceSimulated` projection. It cannot fabricate a claim,
 provider session, sealed review, findings, acceptance, or failure disposition.
+
+## Resolution, Integration, And Tracker Completion
+
+A final executor-protocol outcome is not a terminal task or run. The selected
+resolution protocol determines whether the attempt proceeds to integration,
+preservation, operator handling, or another explicitly declared disposition.
+The present successful protocol selects integration after implementation
+acceptance; a future executor may omit review or govern review internally
+without changing Dalph's outer operation-identity, responsibility, and
+reconcile-before-retry rules.
+
+The executor may edit, stage, commit any number of times, amend history, or
+leave uncommitted bytes inside its exact worktree. Dalph never equates one
+executor invocation with one commit and does not infer whether the executor or
+an operator authored a Git change. This freedom does not guarantee integration:
+later boundaries still validate every invariant required by the selected
+protocol. Evidence capture, when the selected protocol requires it, snapshots
+the complete worktree result relative to the planned Base. The integration
+protocol records the exact result placed on the target branch; that result may
+be a fast-forward tip, squash commit, merge commit, or another typed protocol
+outcome. W6 owns classification of concurrent or manual Git changes.
+
+Successful integration reaches a known result and releases the separately
+serialized Git integration resource before tracker completion begins. Dalph
+keeps the planned attempt's worktree, task-work session, and other resources
+required by the resolution protocol until the tracker-completion request has a
+known result. If task pause arrives while integration already holds the shared
+resource, Dalph finishes or reconciles that exact Git protocol and releases the
+resource but does not begin tracker completion. If tracker completion already
+crossed its boundary, pause reconciles that exact request.
+
+The current tracker-completion protocol has four distinct durable regions:
+
+1. compare-and-set the exact active claim to a completion claim that binds the
+   current task revision, confirmed integration result, and any supporting
+   artifacts required by the selected resolution protocol;
+2. request successful task completion using that exact completion claim;
+3. confirm from the task tracker that the task completed successfully; and
+4. compare-and-set delete the exact completion claim.
+
+An unresolved request in any region retains its original operation identity
+and is reconciled before retry. Tracker confirmation in step 3 may release
+dependent tasks; failure of the later completion-claim deletion never reopens
+the task. The completion claim is a tracker-owned semantic state. Each adapter
+may use its own durable representation, but it must enforce the same narrowing:
+ordinary abandonment cannot release a completion already in progress, only the
+matching completion claim can authorize completion, and only confirmed
+completion can authorize deletion.
+
+There is no generic cleanup stage. A resolution protocol may select only the
+exact cleanup, preservation, disposal, or handoff operations it declares. Each
+such operation owns a separate workflow responsibility and explicit causal
+preconditions; Dalph neither infers “clean everything” nor deletes evidence or
+executor-owned resources without the applicable protocol. A task's Dalph work
+is settled only when its selected resolution protocol has a final outcome and
+every remaining responsibility is completed or durably relinquished.
+
+Finality always names its subject. Executor-protocol outcome, planned-attempt
+resolution, tracker task completion, Dalph task-responsibility settlement, and
+run termination are distinct facts. Run termination remains governed by the
+run-completion, blocked, cancelled, and failed definitions rather than by any
+single executor, review, integration, or tracker event.
 
 ## Documentation Responsibilities
 

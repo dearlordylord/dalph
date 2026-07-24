@@ -512,16 +512,24 @@ post-attempt gaps explicitly, including:
 - session establishment needed and unresolved;
 - execution needed and unresolved;
 - evidence sealing needed and unresolved;
-- technical review needed and unresolved;
-- semantic review needed and unresolved;
+- reviewer invocation or technical retry needed, unresolved, or waiting;
+- semantic review result needed or unresolved;
 - findings handback needed and unresolved;
 - same-session rework needed and unresolved;
-- final disposition needed and unresolved;
+- current executor-protocol outcome needed and unresolved;
+- integration needed and unresolved;
+- completion-claim transition, tracker completion, confirmation, and exact
+  completion-claim deletion needed or unresolved;
+- protocol-declared resource disposition needed or unresolved;
 - terminal, waiting, paused, isolated, and responsibility-relinquished states.
 
 Resolve choices-audit items 1, 2, 3, and 4 according to the decisions in this
 document. A recovery activation continues through immediately actionable stages
-instead of returning after its first append.
+instead of returning after its first append. Represent recovery as the same
+non-persisted per-responsibility transition frontier used by ordinary
+coordination, not as one mutually exclusive stage per attempt. Current
+evidence, review, handback, and rework operations remain concrete
+executor-protocol stages rather than universal Dalph core stages.
 
 ### W6 — Specify reconciliation when the world changes
 
@@ -581,13 +589,16 @@ than only one attempt. Include:
 - compatible external changes, lost ownership, unreadability, ambiguity, and
   isolation;
 - independent progress of unaffected branches;
-- explicit terminal and nonterminal dispositions.
+- explicit subject-specific final outcomes and non-actionable reasons.
 
 Required properties include bounded execution, no action without the required
 durable intent, no duplicate ambiguity-crossing effect, no use of stale
 authority evidence as current truth, no global deadlock from a branch-local
 pause or lost resource, and progress from every legal prefix when a next action
-or wait transition exists.
+or wait transition exists. State the finite actors, resources, retry bounds,
+and trace depth under which exploration is exhaustive. Use `quint verify` to
+check the bounded reachable state space; sampled `quint run` witnesses remain
+useful for model construction but do not count as exhaustive verification.
 
 ### W9 — Define model-based and crash/pause-prefix test coverage
 
@@ -597,6 +608,13 @@ This schedules choices-audit item 7. Generate the accepted event/operation
 chains, truncate after every durable fact and intent, and exercise both
 in-memory recovery and SQLite production reopening. Include pause/resume and
 external-change matrices, not only coordinator death.
+
+Connect the Quint actions to Dalph's public deterministic test controls through
+`quint-connect` and compare modeled state with the real core reducers after
+every action. State separately which bounded model properties were exhaustively
+verified and which implementation traces were sampled. The current
+task-work-session recovery MBT's fixed trace sample is prior art, not evidence
+that every bounded implementation interleaving was replayed.
 
 Choices-audit item 8 is conditional and lower priority: add a general arbitrary
 for complete legal attempt histories only if the Quint model and coverage audit
@@ -611,6 +629,12 @@ Use `to-spec` only after W1 and W3–W9 are resolved. Update canonical domain
 language and architecture references instead of duplicating them in a new
 parallel vocabulary. The resulting specification must preserve every declared
 acceptance scenario and state the remaining fog explicitly.
+
+The published specification must name Quint modeling and bounded verification
+as a blocking specification deliverable before core-reducer implementation
+tickets. It must then name code-connected model-based conformance against those
+reducers as an implementation gate. Quint cannot be reduced to an optional
+testing note added after implementation.
 
 This closes the Wayfinder destination only if there is no unresolved policy or
 domain question required before implementation planning.
