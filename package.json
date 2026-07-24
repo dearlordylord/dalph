@@ -18,6 +18,8 @@
     "format": "pnpm lint:code --fix",
     "check:format": "pnpm lint:code",
     "check:circular": "node scripts/check-circular.mjs",
+    "check:complexity": "eslint . --config eslint.complexity.config.mjs --suppressions-location eslint-complexity-suppressions.json",
+    "check:complexity:prune": "eslint . --config eslint.complexity.config.mjs --suppressions-location eslint-complexity-suppressions.json --prune-suppressions",
     "check:duplicates": "jscpd .",
     "check:quint": "pnpm quint typecheck specs/taskWorkSessionRecovery.qnt && pnpm quint test specs/taskWorkSessionRecovery_test.qnt --main taskWorkSessionRecoveryTest && pnpm quint run specs/taskWorkSessionRecovery.qnt --invariants requestRequiresIntent everyRequestUsesStableIdentity everyRequestUsesStablePayload causalPredecessorsAreStable absenceAloneAuthorizesRepeat unreadableAndConflictNeverAuthorize establishmentRequiresMatchingReport lookupBoundIsRespected terminalOutcomeIsStable --witnesses intentReached requestReached absenceAuthorizedRepeatReached matchingReached outcomeReached unreadableBoundReached absenceBoundReached conflictReached crashRestartReached --max-steps 40 --max-samples 10000 --verbosity 1",
     "check:secrets": "gitleaks git --redact --no-banner",
