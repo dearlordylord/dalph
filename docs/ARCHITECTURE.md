@@ -702,10 +702,16 @@ the planned branch. Only a fresh observation that both resources are absent may
 authorize `git worktree add`; an existing planned branch may authorize adding
 that branch only after Git proves the declared Base is its ancestor.
 
-Every create request is followed by a fresh Git read, including when the Git
-command returns an uncertain failure. Dalph proceeds only with a
-`PlannedWorktreeReady` proof containing the declared Base, current `HEAD`, exact
-branch ref, and exact worktree path after `merge-base --is-ancestor` succeeds.
+Normal execution and recovery use the same read-after-request protocol. Every
+create request is followed by a Git read because that read supplies the current
+branch, worktree-registration, `HEAD`, and ancestry facts from which Dalph
+constructs `PlannedWorktreeReady`; it is not an additional safety read taken
+because the create command might be unreliable. If the coordinator restarts
+without a durable result for a recorded worktree-reconciliation intent, it
+enters that same Git-read step before issuing another create request. Dalph
+proceeds only with a `PlannedWorktreeReady` proof containing the declared Base,
+current `HEAD`, exact branch ref, and exact worktree path after
+`merge-base --is-ancestor` succeeds.
 The task-work-session operation causally depends on both the acknowledged plan
 and this worktree-reconciliation operation. Dry-run projects the same operation
 without reading or changing Git and cannot fabricate a Base/HEAD proof.
