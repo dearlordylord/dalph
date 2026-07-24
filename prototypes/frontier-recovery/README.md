@@ -55,3 +55,7 @@ recorded in `VERIFICATION.md`.
 
 `SPECIFICATION-PROBLEM-LOG.md` retains confirmed specification defects, if
 any, separately from model mistakes and verifier limitations.
+
+`MODEL-PORTFOLIO-HANDOFF.md` records the gate for deciding the later canonical
+model portfolio and connecting every selected model to Quint-connect/MBT before
+implementation tickets become actionable.
