@@ -1,7 +1,6 @@
 import { it } from "@effect/vitest"
 import { Effect, Match } from "effect"
 import { expect } from "vitest"
-import { decodeAmbiguityBoundaryV1, encodeAmbiguityBoundaryV1, ModelAmbiguityBoundaryV1 } from "./ambiguity-boundary.js"
 import {
   OperationId,
   ProviderObservationId,
@@ -9,12 +8,17 @@ import {
   TaskId,
   TaskRevision,
   TaskWorkSessionId
-} from "./domain.js"
+} from "../../src/domain.js"
+import type { WorkflowJournalEvent } from "../../src/journal-store.js"
+import { decodeAmbiguityBoundaryV1, encodeAmbiguityBoundaryV1, ModelAmbiguityBoundaryV1 } from "./ambiguity-boundary.js"
 import {
   mapTaskWorkSessionRecoveryControls,
   runTaskWorkSessionRecoveryAction,
-  taskWorkSessionRecoveryActions
+  taskWorkSessionRecoveryActions,
+  taskWorkSessionRecoveryConformanceCutPointFor
 } from "./task-work-session-recovery-conformance.js"
+
+const event = (input: unknown): WorkflowJournalEvent => input as WorkflowJournalEvent
 
 const mappings = [
   { _tag: "Subject", modelIdentity: 1n, value: TaskId.make("task-41") },
@@ -54,6 +58,65 @@ const mappings = [
     value: ProviderRequestId.make("provider-request-2")
   }
 ]
+
+it("classifies only durable session events into conformance-test cut points", () => {
+  const operationId = "conformance-operation"
+  const observationId = "conformance-observation"
+  const runId = "conformance-run"
+  const cases: ReadonlyArray<
+    readonly [WorkflowJournalEvent, ReturnType<typeof taskWorkSessionRecoveryConformanceCutPointFor>]
+  > = [
+    [event({ _tag: "TrackerGraphObservationIntentRecorded", operation: { operationId } }), undefined],
+    [
+      event({
+        _tag: "TaskWorkSessionEstablishmentIntentRecorded",
+        operation: { request: { operationId, plannedAttempt: { runId } } }
+      }),
+      "P1"
+    ],
+    [
+      event({
+        _tag: "TaskWorkStartRequested",
+        observationId,
+        request: { operationId, plannedAttempt: { runId } }
+      }),
+      "P2"
+    ],
+    [
+      event({ _tag: "TaskWorkStartRequestAcknowledged", acknowledgement: { observationId }, operationId }),
+      "P3"
+    ],
+    [
+      event({
+        _tag: "TaskWorkStartRequestFailed",
+        failure: { observationId },
+        request: { operationId, plannedAttempt: { runId } }
+      }),
+      "P3"
+    ],
+    [
+      event({
+        _tag: "TaskWorkSessionLookupRequested",
+        lookup: { operationId, plannedAttempt: { runId } },
+        observationId
+      }),
+      "P4"
+    ],
+    [event({ _tag: "TaskWorkSessionLookupFailed", failure: { observationId }, operationId }), "P5"],
+    [event({ _tag: "TaskWorkSessionReported", operationId, report: { observationId } }), "P5"],
+    [
+      event({
+        _tag: "TaskWorkSessionEstablished",
+        outcome: { operationId, sessionId: "conformance-session" }
+      }),
+      "P6"
+    ]
+  ]
+
+  for (const [journalEvent, cutPoint] of cases) {
+    expect(taskWorkSessionRecoveryConformanceCutPointFor(journalEvent)).toBe(cutPoint)
+  }
+})
 
 const modelBoundary = ModelAmbiguityBoundaryV1.make({
   activation: 0n,
@@ -119,7 +182,7 @@ it.effect("rejects an unknown M1 action before a control is invoked", () =>
     expect(invoked).toBe(false)
   }))
 
-it.effect("maps every closed M1 action to exactly one public control", () =>
+it.effect("maps every closed M1 action to exactly one driver-facing test control", () =>
   Effect.gen(function*() {
     const invoked = new Array<string>()
     const control = (action: string) => () => Effect.sync(() => invoked.push(action))

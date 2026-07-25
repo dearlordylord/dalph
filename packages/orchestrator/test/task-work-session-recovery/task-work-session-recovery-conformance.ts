@@ -1,13 +1,11 @@
 import { Effect, Match, Schema } from "effect"
-import { describeJournalEvent } from "./journal-event-descriptor.js"
-import type { WorkflowJournalEvent } from "./journal-store.js"
-import type { TaskWorkSessionRecoveryPrefix as TaskWorkSessionRecoveryPrefixValue } from "./recovery-prefix.js"
-
-export { TaskWorkSessionRecoveryPrefix } from "./recovery-prefix.js"
+import type { WorkflowJournalEvent } from "../../src/journal-store.js"
+import type { TaskWorkSessionRecoveryConformanceCutPoint } from "./recovery-conformance-cut-point.js"
 
 /**
- * The closed set of M1 model actions. Each action names one public control;
- * the model driver does not choose workflow state or implement scheduling.
+ * The closed set of M1 model actions. Each action names one driver-facing test
+ * control; the model driver does not choose workflow state or implement
+ * scheduling.
  */
 export const taskWorkSessionRecoveryActions = [
   "init",
@@ -63,7 +61,7 @@ export class TaskWorkSessionRecoveryConformanceIssue
   )
 {}
 
-/** Decodes one model action before invoking its matching production-facing control. */
+/** Decodes one model action before invoking its matching deterministic test control. */
 export const runTaskWorkSessionRecoveryAction = Effect.fn(
   "TaskWorkSessionRecoveryConformance.runAction"
 )(function*<A, E, R>(
@@ -98,8 +96,9 @@ export const runTaskWorkSessionRecoveryAction = Effect.fn(
 })
 
 /**
- * Driver controls generated from the closed action inventory. All calls pass
- * through the same boundary decoder before reaching the public controls.
+ * Driver-facing test controls generated from the closed action inventory. All
+ * calls pass through the same boundary decoder before the control invokes the
+ * production workflow seam.
  */
 export const mapTaskWorkSessionRecoveryControls = <A, E, R>(
   controls: TaskWorkSessionRecoveryControls<A, E, R>
@@ -120,11 +119,49 @@ export const mapTaskWorkSessionRecoveryControls = <A, E, R>(
   selectIdentity: () => runTaskWorkSessionRecoveryAction("selectIdentity", controls)
 })
 
-/** Resolves one event through the canonical descriptor's exhaustive prefix fact. */
-export const taskWorkSessionRecoveryPrefixFor = (
+/**
+ * Resolves one event to a conformance-test cut-point label.
+ *
+ * @internal P0–P6 are test vocabulary. They are not production workflow
+ * stages, states, events, priorities, or runtime terminology.
+ */
+export const taskWorkSessionRecoveryConformanceCutPointFor = (
   event: WorkflowJournalEvent
-): TaskWorkSessionRecoveryPrefixValue | undefined =>
-  Match.valueTags(describeJournalEvent(event).recoveryPrefix, {
-    DurableRecoveryPrefix: ({ prefix }) => prefix,
-    NoDurableRecoveryPrefix: () => undefined
+): TaskWorkSessionRecoveryConformanceCutPoint | undefined => {
+  const noConformanceCutPoint = (): undefined => undefined
+  return Match.valueTags(event, {
+    ImplementationConvergenceDispositionRecorded: noConformanceCutPoint,
+    ImplementationEvidenceSealed: noConformanceCutPoint,
+    ImplementationEvidenceSealingIntended: noConformanceCutPoint,
+    ImplementationReviewCompleted: noConformanceCutPoint,
+    ImplementationReviewIntended: noConformanceCutPoint,
+    ReviewFindingsHandbackCompleted: noConformanceCutPoint,
+    ReviewFindingsHandbackIntended: noConformanceCutPoint,
+    TaskAttemptPlanned: noConformanceCutPoint,
+    TaskClaimAcquired: noConformanceCutPoint,
+    TaskClaimAcquisitionIntended: noConformanceCutPoint,
+    TaskExecutionIntentRecorded: noConformanceCutPoint,
+    TaskExecutionObservationFailed: noConformanceCutPoint,
+    TaskExecutionOutcomeObserved: noConformanceCutPoint,
+    TaskExecutionReported: noConformanceCutPoint,
+    TaskExecutionRequestAttemptRecorded: noConformanceCutPoint,
+    TaskExecutionRequestFailed: noConformanceCutPoint,
+    TaskExecutionRequestReturned: noConformanceCutPoint,
+    TaskWorkSessionEstablished: (): TaskWorkSessionRecoveryConformanceCutPoint => "P6",
+    TaskWorkSessionEstablishmentIntentRecorded: (): TaskWorkSessionRecoveryConformanceCutPoint => "P1",
+    TaskWorkSessionLookupFailed: (): TaskWorkSessionRecoveryConformanceCutPoint => "P5",
+    TaskWorkSessionLookupRequested: (): TaskWorkSessionRecoveryConformanceCutPoint => "P4",
+    TaskWorkSessionReported: (): TaskWorkSessionRecoveryConformanceCutPoint => "P5",
+    TaskWorkSessionResultReported: noConformanceCutPoint,
+    TaskWorkStartRequestAcknowledged: (): TaskWorkSessionRecoveryConformanceCutPoint => "P3",
+    TaskWorkStartRequestFailed: (): TaskWorkSessionRecoveryConformanceCutPoint => "P3",
+    TaskWorkStartRequested: (): TaskWorkSessionRecoveryConformanceCutPoint => "P2",
+    TaskWorktreeReady: noConformanceCutPoint,
+    TaskWorktreeReconciliationIntended: noConformanceCutPoint,
+    TechnicalRetryDeferralSuperseded: noConformanceCutPoint,
+    TechnicalRetryPolicyCaptured: noConformanceCutPoint,
+    TechnicalRetryScheduled: noConformanceCutPoint,
+    TrackerGraphObservationIntentRecorded: noConformanceCutPoint,
+    TrackerGraphOutcomeObserved: noConformanceCutPoint
   })
+}

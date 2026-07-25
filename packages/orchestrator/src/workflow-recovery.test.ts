@@ -39,6 +39,7 @@ import { TrackerMutation, UnclaimedTask } from "./tracker-mutation.js"
 import { makeTrackerGraphObservationOperation } from "./workflow-operation.js"
 import {
   classifyRecoveryIssue,
+  continueMissingPlannedTaskAttemptStages,
   observeManagedRunAuthorities,
   recoverExactRunAfterCoordinatorDeath
 } from "./workflow-recovery.js"
@@ -167,16 +168,16 @@ it.effect("returns semantic issues before refreshing authorities", () => {
     position: JournalPosition.make(1),
     runId
   }
-  return recoverExactRunAfterCoordinatorDeath(runId, [orphanOutcome]).pipe(
+  return Effect.gen(function*() {
+    const continuationIssues = yield* continueMissingPlannedTaskAttemptStages(runId, [orphanOutcome])
+    const recoveryIssues = yield* recoverExactRunAfterCoordinatorDeath(runId, [orphanOutcome])
+    expect(continuationIssues.map(({ _tag }) => _tag)).toEqual(["ManagedHistorySemanticIssue"])
+    expect(recoveryIssues.map(({ _tag }) => _tag)).toEqual(["ManagedHistorySemanticIssue"])
+  }).pipe(
     Effect.provideService(WorkflowInterpreter, interpreter(() => Effect.die("invalid history must not refresh"))),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provideService(TrackerMutation, unclaimedTracker),
-    Effect.provide(memoryJournalStoreLayer),
-    Effect.tap((issues) =>
-      Effect.sync(() => {
-        expect(issues.map(({ _tag }) => _tag)).toEqual(["ManagedHistorySemanticIssue"])
-      })
-    )
+    Effect.provide(memoryJournalStoreLayer)
   )
 })
 

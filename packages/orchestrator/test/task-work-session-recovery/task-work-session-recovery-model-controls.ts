@@ -15,12 +15,11 @@ import {
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   WorktreeLocator
-} from "./domain.js"
-import { type JournalRecord, JournalStore, type WorkflowJournalEvent } from "./journal-store.js"
-import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
-import { taskRevisionFor } from "./task-dag.js"
-import { taskExecutorTestLayer } from "./task-execution.js"
-import { makeTaskWorkSessionRecoveryModelJournal } from "./task-work-session-recovery-model-journal.js"
+} from "../../src/domain.js"
+import { type JournalRecord, JournalStore, type WorkflowJournalEvent } from "../../src/journal-store.js"
+import { journaledWorkflowInterpreterLayer } from "../../src/journaled-workflow-interpreter.js"
+import { taskRevisionFor } from "../../src/task-dag.js"
+import { taskExecutorTestLayer } from "../../src/task-execution.js"
 import {
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -28,10 +27,10 @@ import {
   TaskWorkSessionCorrelationConflict,
   TaskWorkSessionLookupFailure,
   TaskWorkStartRequest
-} from "./task-work-start.js"
-import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
-import { TrackerGraphReader } from "./tracker-graph-reader.js"
-import { deterministicTestWorkflowInterpreterLayer } from "./workflow-interpreters.js"
+} from "../../src/task-work-start.js"
+import { recordReadyWorktreeEvidence } from "../../src/task-worktree-evidence.js"
+import { TrackerGraphReader } from "../../src/tracker-graph-reader.js"
+import { deterministicTestWorkflowInterpreterLayer } from "../../src/workflow-interpreters.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
@@ -39,7 +38,8 @@ import {
   WorkflowInterpreter,
   type WorkflowInterpreterService,
   WorkflowTrace
-} from "./workflow.js"
+} from "../../src/workflow.js"
+import { makeTaskWorkSessionRecoveryModelJournal } from "./task-work-session-recovery-model-journal.js"
 
 type Evidence = "Absent" | "Conflict" | "Matching" | "Unreadable"
 type PendingEvidence = Evidence | "NoEvidence"
@@ -57,9 +57,9 @@ const worktreeOperationId = OperationId.make("mbt-worktree")
 
 /**
  * @experimental Executable Quint conformance infrastructure, not a supported
- * production reducer, scheduler, or package API. Its placement and shape remain
- * under consideration. Do not derive runtime architecture from its queues,
- * projections, or deterministic authority scripts.
+ * production reducer, scheduler, or package API. Do not derive runtime
+ * architecture from its queues, projections, or deterministic authority
+ * scripts.
  *
  * The controls invoke the real journaled WorkflowInterpreter protocol.
  * Local fields only project test observations; all requests, retries, durable

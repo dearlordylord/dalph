@@ -1,5 +1,13 @@
 import { Effect, Match, Schema } from "effect"
 import {
+  OperationId,
+  ProviderObservationId,
+  ProviderRequestId,
+  TaskId,
+  TaskRevision,
+  TaskWorkSessionId
+} from "../../src/domain.js"
+import {
   AmbiguityBoundaryDispositionV1,
   AmbiguityBoundaryV1,
   FreshCheck,
@@ -11,14 +19,6 @@ import {
   RecoveryActivationOrdinal,
   RequestAttempt
 } from "./ambiguity-boundary-schema.js"
-import {
-  OperationId,
-  ProviderObservationId,
-  ProviderRequestId,
-  TaskId,
-  TaskRevision,
-  TaskWorkSessionId
-} from "./domain.js"
 import { TaskWorkSessionRecoveryConformanceIssue } from "./task-work-session-recovery-conformance.js"
 
 export * from "./ambiguity-boundary-schema.js"

@@ -1122,20 +1122,24 @@ or nonterminal disposition, and revision/freshness evidence. The focused model,
 broad model, and implementation adapters must project the same session trace to
 equal values.
 
-Each model exports a closed action schema. A Quint-connect driver maps every
-action to a public deterministic control in the production workflow algebra or
-one of its pure reducers. Drivers may control named external authorities but
+Each model exports a closed action schema. A test-only Quint-connect driver maps
+every action to a deterministic test control that invokes the production
+workflow algebra or one of its pure reducers. The driver and its controls are
+not production package APIs. Drivers may control named external authorities but
 must not implement another scheduler, set private reducer state, or decide the
 expected next action. After every action they compare reconstructed state,
 derived frontier/admission, external-authority projections, and ordered
 semantic workflow traces.
 
-Every applicable durable prefix runs through two fresh scopes: in-memory
-recovery over retained journal events and production SQLite reopening over the
-same database file. The prefix set comes from the canonical journal-event
-descriptor and includes choices before intent, intents, request attempts,
-acknowledgements or failures, fresh-read intents, observations, and exact
-outcomes or dispositions. A new durable event cannot remain unmapped.
+The conformance suite runs every applicable test cut point through two fresh
+scopes: in-memory recovery over retained journal events and production SQLite
+reopening over the same database file. The test-only cut-point inventory
+includes choices before intent, intents, request attempts, acknowledgements or
+failures, fresh-read intents, observations, and exact outcomes or dispositions.
+It is owned by conformance support, not the production journal-event descriptor.
+Conformance schemas, cut-point maps, model controls, and fake authorities live
+under test support and are neither exported nor emitted by the production
+package. P0–P6 are never production workflow stages, states, or events.
 
 Formal exhaustive checking, sampled model-to-code conformance, and physical
 SQLite reopening remain distinct evidence claims. A behavior change updates
@@ -1150,7 +1154,7 @@ reopening seams together. See
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | [Dalph tooling context](CONTEXT.md)                                                | Canonical Dalph terminology and the tooling/main-application distinction          |
 | This document                                                                      | Stable Dalph structure and rules for rereading task-tracker and Git state, obtaining task-runner reports, and reading journal history |
-| [Bounded resumable graph-frontier specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md) | Accepted behavior, model portfolio, executable seams, recovery-prefix matrix, and acceptance scenarios |
+| [Bounded resumable graph-frontier specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md) | Accepted behavior, model portfolio, executable seams, conformance-test cut-point matrix, and acceptance scenarios |
 | Configured task tracker                                                            | Task identity, description, lifecycle, dependency/grouping relationships, and claims |
 | [`research/`](../research/)                                                        | Historical investigation and decision evidence; accepted requirements and decisions are recorded in their named specification or decision document |
 | Historical `ralph-run.sh` sources in their origin repository                      | Historical harness behavior only                                                 |

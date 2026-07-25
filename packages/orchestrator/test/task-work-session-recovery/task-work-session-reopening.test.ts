@@ -4,7 +4,6 @@ import { it } from "@effect/vitest"
 import { Effect, FileSystem, Layer, Match, Ref, Result, Schema } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { expect } from "vitest"
-import { validSnapshot } from "../test/task-dag.js"
 import {
   AttemptId,
   ClaimOwner,
@@ -25,9 +24,9 @@ import {
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   WorktreeLocator
-} from "./domain.js"
-import { PlannedWorktreeReady } from "./git-worktree.js"
-import { describeJournalEvent } from "./journal-event-descriptor.js"
+} from "../../src/domain.js"
+import { PlannedWorktreeReady } from "../../src/git-worktree.js"
+import { describeJournalEvent } from "../../src/journal-event-descriptor.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -55,15 +54,11 @@ import {
   TaskWorktreeReconciliationIntendedEvent,
   trackerGraphObservationIntent,
   WorkflowJournalEvent
-} from "./journal-store.js"
-import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
-import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
-import { taskRevisionFor } from "./task-dag.js"
-import { taskExecutorTestLayer } from "./task-execution.js"
-import {
-  type TaskWorkSessionRecoveryPrefix,
-  taskWorkSessionRecoveryPrefixFor
-} from "./task-work-session-recovery-conformance.js"
+} from "../../src/journal-store.js"
+import { journaledWorkflowInterpreterLayer } from "../../src/journaled-workflow-interpreter.js"
+import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
+import { taskRevisionFor } from "../../src/task-dag.js"
+import { taskExecutorTestLayer } from "../../src/task-execution.js"
 import {
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -74,13 +69,13 @@ import {
   TaskWorkStartRequest,
   TaskWorkStartRequestAcknowledgement,
   TaskWorkStartRequestFailure
-} from "./task-work-start.js"
-import { TrackerGraphReader } from "./tracker-graph-reader.js"
-import { ActiveTaskClaim, TrackerMutation } from "./tracker-mutation.js"
-import { deterministicTestWorkflowInterpreterLayer } from "./workflow-interpreters.js"
-import { recoverTaskWorkSessionEstablishments } from "./workflow-operation-recovery.js"
-import { WorkflowOutcome } from "./workflow-outcome.js"
-import { continueMissingPlannedTaskAttemptStages } from "./workflow-recovery.js"
+} from "../../src/task-work-start.js"
+import { TrackerGraphReader } from "../../src/tracker-graph-reader.js"
+import { ActiveTaskClaim, TrackerMutation } from "../../src/tracker-mutation.js"
+import { deterministicTestWorkflowInterpreterLayer } from "../../src/workflow-interpreters.js"
+import { recoverTaskWorkSessionEstablishments } from "../../src/workflow-operation-recovery.js"
+import { WorkflowOutcome } from "../../src/workflow-outcome.js"
+import { continueMissingPlannedTaskAttemptStages } from "../../src/workflow-recovery.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -88,7 +83,10 @@ import {
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   WorkflowTrace
-} from "./workflow.js"
+} from "../../src/workflow.js"
+import { validSnapshot } from "../task-dag.js"
+import type { TaskWorkSessionRecoveryConformanceCutPoint } from "./recovery-conformance-cut-point.js"
+import { taskWorkSessionRecoveryConformanceCutPointFor } from "./task-work-session-recovery-conformance.js"
 
 const runId = RunId.make("m1-prefix-run")
 const taskId = TaskId.make("m1-prefix-task")
@@ -284,49 +282,49 @@ const lookupFailureSeed: SeedRecord = {
   key: taskWorkSessionReportedRecordKey(operationId, lookupObservationId)
 }
 
-const prefixes = [
-  { name: "P0", prefix: "P0", records: baseline },
-  { name: "P1", prefix: "P1", records: [...baseline, sessionIntentSeed] },
-  { name: "P2", prefix: "P2", records: [...baseline, sessionIntentSeed, requestSeed] },
+const cutPoints = [
+  { cutPoint: "P0", name: "P0", records: baseline },
+  { cutPoint: "P1", name: "P1", records: [...baseline, sessionIntentSeed] },
+  { cutPoint: "P2", name: "P2", records: [...baseline, sessionIntentSeed, requestSeed] },
   {
+    cutPoint: "P3",
     name: "P3-acknowledgement",
-    prefix: "P3",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed]
   },
   {
+    cutPoint: "P3",
     name: "P3-request-failure",
-    prefix: "P3",
     records: [...baseline, sessionIntentSeed, requestSeed, requestFailureSeed]
   },
   {
+    cutPoint: "P4",
     name: "P4",
-    prefix: "P4",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed, lookupSeed]
   },
   {
+    cutPoint: "P5",
     name: "P5-matching",
-    prefix: "P5",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed, lookupSeed, matchingSeed]
   },
   {
+    cutPoint: "P5",
     name: "P5-absence",
-    prefix: "P5",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed, lookupSeed, absentSeed]
   },
   {
+    cutPoint: "P5",
     name: "P5-unreadable",
-    prefix: "P5",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed, lookupSeed, lookupFailureSeed]
   },
   {
+    cutPoint: "P5",
     name: "P5-conflict",
-    prefix: "P5",
     records: [...baseline, sessionIntentSeed, requestSeed, acknowledgementSeed, lookupSeed, conflictSeed]
   },
-  { name: "P6", prefix: "P6", records: [...baseline, ...sessionPrefixEvents] }
+  { cutPoint: "P6", name: "P6", records: [...baseline, ...sessionPrefixEvents] }
 ] as const satisfies ReadonlyArray<{
+  readonly cutPoint: TaskWorkSessionRecoveryConformanceCutPoint
   readonly name: string
-  readonly prefix: TaskWorkSessionRecoveryPrefix
   readonly records: ReadonlyArray<SeedRecord>
 }>
 
@@ -531,34 +529,34 @@ const runSqliteNonterminalLane = Effect.fn(
   )
 })
 
-it.effect("replays every applicable M1 P0-P6 prefix through equal fresh memory and reopened SQLite scopes", () =>
+it.effect("replays every applicable M1 P0-P6 conformance cut point through fresh scopes", () =>
   Effect.scoped(Effect.gen(function*() {
     const fs = yield* FileSystem.FileSystem
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-m1-prefixes-" })
 
-    for (const { name, prefix, records } of prefixes) {
+    for (const { cutPoint, name, records } of cutPoints) {
       const endpoint = records.at(-1)?.event
-      if (prefix !== "P0" && endpoint !== undefined) {
-        expect(taskWorkSessionRecoveryPrefixFor(endpoint)).toBe(prefix)
+      if (cutPoint !== "P0" && endpoint !== undefined) {
+        expect(taskWorkSessionRecoveryConformanceCutPointFor(endpoint)).toBe(cutPoint)
         expect(describeJournalEvent(endpoint).expectedKey).toBe(records.at(-1)?.key)
       }
 
-      const memory = yield* runMemoryLane(records, prefix === "P0")
+      const memory = yield* runMemoryLane(records, cutPoint === "P0")
       const sqlite = yield* runSqliteLane(
         JournalDatabaseLocator.make(`${directory}/${name}.sqlite`),
         records,
-        prefix === "P0"
+        cutPoint === "P0"
       )
 
       expect(sqlite).toEqual(memory)
-      expect(memory.authority.requestCount).toBe(prefix === "P0" ? 1 : 0)
-      expect(memory.authority.lookupCount).toBe(prefix === "P6" ? 0 : 1)
+      expect(memory.authority.requestCount).toBe(cutPoint === "P0" ? 1 : 0)
+      expect(memory.authority.lookupCount).toBe(cutPoint === "P6" ? 0 : 1)
       const sessionIntents = memory.semantic.filter(
         ({ event }) => event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
       )
       expect(sessionIntents).toHaveLength(1)
       expect(sessionIntents[0]?.event).toMatchObject({
-        operation: prefix === "P0"
+        operation: cutPoint === "P0"
           ? {
             predecessorOperationIds: [
               planOperation.operationId,
@@ -627,7 +625,7 @@ it.effect("reopens absence, unreadability, and conflict with equal bounded nonte
     }
   })).pipe(Effect.provide(NodeServices.layer)))
 
-it.effect("migrates and upcasts an M1 P1 prefix before replaying it idempotently in canonical order", () =>
+it.effect("migrates and upcasts an M1 P1 conformance cut point before idempotent replay", () =>
   Effect.scoped(Effect.gen(function*() {
     const fs = yield* FileSystem.FileSystem
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-m1-legacy-prefix-" })

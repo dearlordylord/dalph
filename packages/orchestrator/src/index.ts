@@ -1,4 +1,3 @@
-export * from "./ambiguity-boundary.js"
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
   ControlledCoordinatorLock,
@@ -182,7 +181,6 @@ export {
   PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "./task-work-planning.js"
-export * from "./task-work-session-recovery-conformance.js"
 export {
   AvailableProviderWorkUnit,
   MatchingTaskWorkSessionReported,

@@ -235,8 +235,8 @@ two canonical models.
 | M2 — Graph-frontier recovery composition | Can the orchestrator traverse a bounded graph across all accepted boundaries while crash, pause, capacity, and external constraints compose without duplicate effects or branch-global blockage? | [`frontierRecovery.qnt`](../specs/frontierRecovery.qnt), [`frontierRecovery_test.qnt`](../specs/frontierRecovery_test.qnt), [`frontierRecovery_counterexamples.qnt`](../specs/frontierRecovery_counterexamples.qnt) | Tasks A–D; A prerequisite of B; D grouping child of A; independent C; checked capacity two with a required capacity-one profile; request/read bound two; bounded revisions and one crash/pause cycle. Maintained with the orchestrator control plane. |
 
 M2 keeps frontier, pause, and reconciliation together because they share one
-authority projection, workflow adapter, prefix-reopening seam, checking
-strategy, lifecycle, and maintainer. M1 remains separate because its detailed
+authority projection, workflow adapter, conformance-test reopening seam,
+checking strategy, lifecycle, and maintainer. M1 remains separate because its detailed
 provider correlation and three-lookup protocol would make the broad model less
 tractable and obscure the focused question.
 
@@ -278,11 +278,13 @@ version requires an explicit migration of both models and adapters.
 
 ### Executable model seam
 
-Each model exports a closed action schema. One TypeScript Quint-connect driver
-maps each action to a public deterministic control that invokes the production
-workflow algebra or a production reducer. The driver cannot implement a second
-scheduler, assign an expected state directly, edit private module state, or
-infer effects from trace strings.
+Each model exports a closed action schema. One test-only TypeScript
+Quint-connect driver maps each action to a deterministic test control that
+invokes the production workflow algebra or a production reducer. The driver,
+its identity projection, and its controls are test support: they are not
+production package APIs and are not emitted in the production package. The
+driver cannot implement a second scheduler, assign an expected state directly,
+edit private module state, or infer effects from trace strings.
 
 After every action, the driver compares the model's ambiguity-boundary and
 frontier projection, reconstructed graph knowledge, responsibility, pause
@@ -292,7 +294,7 @@ round-trips bounded model identities to branded Dalph identities. Unknown
 actions, missing mappings, duplicate branded identities, and lossy projections
 fail before crossing a boundary.
 
-The M2 action families map to these public seams:
+The M2 action families map to these callable production seams:
 
 | Model action family | Production-facing seam |
 | --- | --- |
@@ -319,20 +321,26 @@ The M1 closed action map is:
 | Crash | Interrupt the complete coordinator scope without mutating journal or provider projections. |
 | Restart | Create a fresh application scope over the selected store and invoke startup recovery for the exact run. |
 
-Missing production reducers or public controls are implementation blockers.
-Tests must not bypass those missing seams to make a model appear connected.
+Missing production reducers or callable production seams are implementation
+blockers. Tests must not bypass those missing seams to make a model appear
+connected.
 
 ## Testing Decisions
 
 Formal exhaustive checking, sampled model-to-code conformance, and physical
 production reopening are distinct evidence claims.
 
-### Durable recovery prefixes
+### Conformance-test recovery cut points
 
-For every modeled boundary, a descriptor-driven enumerator truncates legal
-chains after every durable journal event:
+> **P0–P6 are test vocabulary only.** They name conformance-test cut points
+> where a test truncates retained journal history and restarts the application.
+> They are not production workflow stages, priorities, states, events, or
+> terminology for runtime behavior.
 
-| Prefix | Durable endpoint | Restart assertion |
+For every modeled boundary, the conformance harness truncates legal chains
+after every durable journal event:
+
+| Test cut point | Durable endpoint | Restart assertion |
 | --- | --- | --- |
 | P0 | Previous outcome; next choice existed only in memory | Recompute from fresh facts; do not preserve a lost uncommitted identity. |
 | P1 | Exact operation intent | Reconstruct identity and responsibility; fresh-check before a possibly duplicate request. |
@@ -342,18 +350,19 @@ chains after every durable journal event:
 | P5 | Fresh observation, report, lookup failure, or constraint | Apply the production decision from that evidence. |
 | P6 | Boundary outcome or exact nonterminal disposition | Select only causally later work; replay remains idempotent. |
 
-Every applicable prefix runs through a fresh in-memory application scope over
-retained journal records and through a closed/reopened SQLite Layer over the
-same database file. Neither lane may retain pre-reduced test state. Both compare
-the same semantic trace and authority projection; SQLite additionally proves
-migration, decode/upcast, canonical order, idempotent append, corruption
-handling, and exclusive writer behavior.
+Every applicable conformance-test cut point runs through a fresh in-memory
+application scope over retained journal records and through a closed/reopened
+SQLite Layer over the same database file. Neither lane may retain pre-reduced
+test state. Both compare the same semantic trace and authority projection;
+SQLite additionally proves migration, decode/upcast, canonical order,
+idempotent append, corruption handling, and exclusive writer behavior.
 
 ### Coverage lanes
 
 `E` is a named exhaustive finite profile, `S` sampled Quint-connect
-conformance, `P` every applicable P0–P6 prefix through both stores, and `R` a
-selected readable scenario with reviewed user-perspective evaluation.
+conformance, `P` every applicable P0–P6 conformance-test cut point through both
+stores, and `R` a selected readable scenario with reviewed user-perspective
+evaluation.
 
 | Accepted behavior | Owner | Required lanes |
 | --- | --- | --- |
@@ -420,14 +429,15 @@ policy, misleading presentation, or an assumption outside Dalph's role.
 A behavior change updates its canonical specification, owning model, executable
 adapter, selected traces and readable scenarios, and both reopening seams
 together. A new workflow operation or durable event updates the closed action
-map and descriptor-driven prefix manifest. A changed authority result, retry
+map and conformance-test cut-point inventory. A changed authority result, retry
 bound, capacity rule, or disposition updates its model property and negative
-profile. A journal migration reruns affected SQLite prefixes from the oldest
-supported event version.
+profile. A journal migration reruns affected SQLite conformance-test cut points
+from the oldest supported event version.
 
 The broader arbitrary generator for complete legal attempt histories remains
-deferred until both adapters and the required prefix matrix pass and a recorded
-gap proves a reducer/history shape those lanes cannot reach.
+deferred until both adapters and the required conformance-test cut-point matrix
+pass and a recorded gap proves a reducer/history shape those lanes cannot
+reach.
 
 ## Acceptance Scenarios
 
@@ -471,12 +481,13 @@ gap proves a reducer/history shape those lanes cannot reach.
     C continues whenever it needs none of A's facts or shared resources.
 17. An empty frontier does not terminate a run while a task is paused, waiting,
     isolated, or retains unsettled responsibility.
-18. Both model adapters replay every applicable P0–P6 prefix through fresh
-    in-memory and SQLite scopes and compare the same semantic projection.
+18. Both model adapters replay every applicable P0–P6 conformance-test cut
+    point through fresh in-memory and SQLite scopes and compare the same
+    semantic projection.
 
 ## Out of Scope
 
-- Implementing the reducers, adapters, public control surface, scenario
+- Implementing the reducers, test adapters, callable production seams, scenario
   converter, evaluator runner, or implementation ticket graph.
 - Compatibility with or migration from the historical Ralph harness.
 - Persisting a derived frontier, capacity state, reconciliation rollup, or UI
@@ -498,4 +509,4 @@ The accepted decisions are owned by:
 - [Specify reconciliation when the world changes](https://github.com/dearlordylord/dalph/issues/120)
 - [Verify duplicate intents and retry identity](https://github.com/dearlordylord/dalph/issues/121)
 - [Build and check the Quint model](https://github.com/dearlordylord/dalph/issues/122)
-- [Define model-based and crash/pause-prefix test coverage](https://github.com/dearlordylord/dalph/issues/123)
+- [Define model-based and crash/pause cut-point test coverage](https://github.com/dearlordylord/dalph/issues/123)

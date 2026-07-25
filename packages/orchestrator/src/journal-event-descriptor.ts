@@ -18,7 +18,6 @@ import {
   taskWorkStartFailedRecordKey
 } from "./journal-record-key.js"
 import type { WorkflowJournalEvent } from "./journal-store.js"
-import type { DurableRecoveryPrefix } from "./recovery-prefix.js"
 import {
   technicalRetryDeferralSupersededRecordKey,
   technicalRetryPolicyRecordKey,
@@ -34,22 +33,14 @@ interface OperationEventDescriptor {
   readonly requiredOperationIds: ReadonlyArray<OperationId>
   readonly requiredPredecessorKinds: ReadonlyArray<WorkflowJournalEvent["_tag"]>
   readonly recordPredecessor: RecordPredecessorFact
-  readonly recoveryPrefix: RecoveryPrefixFact
   readonly session: SessionFact
 }
 interface SessionResultEventDescriptor {
   readonly _tag: "SessionResultEventDescriptor"
   readonly expectedKey: JournalRecordKey
-  readonly recoveryPrefix: RecoveryPrefixFact
   readonly requiredSessionId: TaskWorkSessionId
 }
 type JournalEventDescriptor = OperationEventDescriptor | SessionResultEventDescriptor
-type RecoveryPrefixFact = {
-  readonly _tag: "DurableRecoveryPrefix"
-  readonly prefix: DurableRecoveryPrefix
-} | {
-  readonly _tag: "NoDurableRecoveryPrefix"
-}
 type PlannedAttemptFact = {
   readonly _tag: "NoPlannedAttempt"
 } | {
@@ -94,7 +85,6 @@ const operationEvent = (input: OperationEventInput): OperationEventDescriptor =>
   relatedOperationIds: input.relatedOperationIds ?? [],
   requiredOperationIds: input.requiredOperationIds ?? [],
   requiredPredecessorKinds: input.requiredPredecessorKinds ?? [],
-  recoveryPrefix: { _tag: "NoDurableRecoveryPrefix" },
   session: input.producedSessionId === undefined
     ? { _tag: "NoSessionFact" }
     : { _tag: "ProducedSession", sessionId: input.producedSessionId }
@@ -105,7 +95,6 @@ const sessionResultEvent = (
 ): SessionResultEventDescriptor => ({
   _tag: "SessionResultEventDescriptor",
   expectedKey,
-  recoveryPrefix: { _tag: "NoDurableRecoveryPrefix" },
   requiredSessionId
 })
 const intentEvent = (
@@ -372,54 +361,4 @@ const describeJournalEventShape = (event: WorkflowJournalEvent): JournalEventDes
     }
   })
 }
-const noDurableRecoveryPrefix = (): RecoveryPrefixFact => ({ _tag: "NoDurableRecoveryPrefix" })
-const durableRecoveryPrefix = (prefix: DurableRecoveryPrefix): RecoveryPrefixFact => ({
-  _tag: "DurableRecoveryPrefix",
-  prefix
-})
-/**
- * Classifies every journal event at the session-recovery boundary. Adding a new
- * event is a compile error until its durable-prefix meaning is declared here.
- */
-const recoveryPrefixForEvent = Match.type<WorkflowJournalEvent>().pipe(
-  Match.tags({
-    ImplementationConvergenceDispositionRecorded: noDurableRecoveryPrefix,
-    ImplementationEvidenceSealed: noDurableRecoveryPrefix,
-    ImplementationEvidenceSealingIntended: noDurableRecoveryPrefix,
-    ImplementationReviewCompleted: noDurableRecoveryPrefix,
-    ImplementationReviewIntended: noDurableRecoveryPrefix,
-    ReviewFindingsHandbackCompleted: noDurableRecoveryPrefix,
-    ReviewFindingsHandbackIntended: noDurableRecoveryPrefix,
-    TaskAttemptPlanned: noDurableRecoveryPrefix,
-    TaskClaimAcquired: noDurableRecoveryPrefix,
-    TaskClaimAcquisitionIntended: noDurableRecoveryPrefix,
-    TaskExecutionIntentRecorded: noDurableRecoveryPrefix,
-    TaskExecutionObservationFailed: noDurableRecoveryPrefix,
-    TaskExecutionOutcomeObserved: noDurableRecoveryPrefix,
-    TaskExecutionReported: noDurableRecoveryPrefix,
-    TaskExecutionRequestAttemptRecorded: noDurableRecoveryPrefix,
-    TaskExecutionRequestFailed: noDurableRecoveryPrefix,
-    TaskExecutionRequestReturned: noDurableRecoveryPrefix,
-    TaskWorkSessionEstablished: () => durableRecoveryPrefix("P6"),
-    TaskWorkSessionEstablishmentIntentRecorded: () => durableRecoveryPrefix("P1"),
-    TaskWorkSessionLookupFailed: () => durableRecoveryPrefix("P5"),
-    TaskWorkSessionLookupRequested: () => durableRecoveryPrefix("P4"),
-    TaskWorkSessionReported: () => durableRecoveryPrefix("P5"),
-    TaskWorkSessionResultReported: noDurableRecoveryPrefix,
-    TaskWorkStartRequestAcknowledged: () => durableRecoveryPrefix("P3"),
-    TaskWorkStartRequestFailed: () => durableRecoveryPrefix("P3"),
-    TaskWorkStartRequested: () => durableRecoveryPrefix("P2"),
-    TaskWorktreeReady: noDurableRecoveryPrefix,
-    TaskWorktreeReconciliationIntended: noDurableRecoveryPrefix,
-    TechnicalRetryDeferralSuperseded: noDurableRecoveryPrefix,
-    TechnicalRetryPolicyCaptured: noDurableRecoveryPrefix,
-    TechnicalRetryScheduled: noDurableRecoveryPrefix,
-    TrackerGraphObservationIntentRecorded: noDurableRecoveryPrefix,
-    TrackerGraphOutcomeObserved: noDurableRecoveryPrefix
-  }),
-  Match.exhaustive
-)
-export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventDescriptor => ({
-  ...describeJournalEventShape(event),
-  recoveryPrefix: recoveryPrefixForEvent(event)
-})
+export const describeJournalEvent = describeJournalEventShape

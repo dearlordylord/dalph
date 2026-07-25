@@ -6,7 +6,7 @@ import {
   TaskId,
   TaskRevision,
   TaskWorkSessionId
-} from "./domain.js"
+} from "../../src/domain.js"
 
 const firstModelIdentity = 0n
 const ModelIdentity = Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(firstModelIdentity))

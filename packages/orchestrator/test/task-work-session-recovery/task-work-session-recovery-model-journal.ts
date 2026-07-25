@@ -1,17 +1,17 @@
 /* eslint-disable functional/immutable-data */
 import { Effect } from "effect"
-import { JournalPosition, type RunId } from "./domain.js"
+import { JournalPosition, type RunId } from "../../src/domain.js"
 import {
   type JournalRecord,
   JournalStore,
   JournalStoreContradiction,
   type WorkflowJournalEvent
-} from "./journal-store.js"
+} from "../../src/journal-store.js"
 
 const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent) =>
   JSON.stringify(left) === JSON.stringify(right)
 
-/** In-memory journal boundary used by the executable M1 production-control adapter. */
+/** In-memory journal boundary used by the executable M1 test adapter. */
 export const makeTaskWorkSessionRecoveryModelJournal = (
   records: Array<JournalRecord>,
   runId: RunId,

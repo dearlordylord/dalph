@@ -1,12 +1,12 @@
 import { it } from "@effect/vitest"
 import { Effect, Exit, Fiber } from "effect"
 import { expect } from "vitest"
-import { FixtureTarget, OperationId, RunId } from "./domain.js"
-import { intentRecordKey } from "./journal-record-key.js"
-import { type JournalRecord, trackerGraphObservationIntent } from "./journal-store.js"
+import { FixtureTarget, OperationId, RunId } from "../../src/domain.js"
+import { intentRecordKey } from "../../src/journal-record-key.js"
+import { type JournalRecord, trackerGraphObservationIntent } from "../../src/journal-store.js"
+import { makeTrackerGraphObservationOperation } from "../../src/workflow.js"
 import { makeTaskWorkSessionRecoveryModelControls } from "./task-work-session-recovery-model-controls.js"
 import { makeTaskWorkSessionRecoveryModelJournal } from "./task-work-session-recovery-model-journal.js"
-import { makeTrackerGraphObservationOperation } from "./workflow.js"
 
 it.effect("projects a production correlation-conflict return through the M1 controls", () =>
   Effect.gen(function*() {

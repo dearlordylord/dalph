@@ -48,7 +48,7 @@ const variantTag = (value: unknown): string => {
 const setsEqual = <A>(left: ReadonlySet<A>, right: ReadonlySet<A>): boolean =>
   left.size === right.size && [...left].every((value) => right.has(value))
 
-/** Every generated Quint action calls one public deterministic test control. */
+/** Every generated Quint action calls one deterministic driver-facing test control. */
 const recoveryConformanceDriver = defineDriver(
   actionSchema,
   () => {

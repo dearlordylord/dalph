@@ -16,9 +16,12 @@ several models.
 
 ## Consequences
 
-Every model exports a closed action and state projection at the public workflow
-algebra. Modeled behavior changes must update the owning model, executable
-adapter, selected readable scenarios, in-memory recovery prefixes, and SQLite
-reopening prefixes together. A third model is justified only by a materially
+Every model exports a closed action and state projection. A test-only executable
+adapter maps those actions to deterministic controls that invoke callable
+production workflow seams. Modeled behavior changes must update the owning
+model, executable adapter, selected readable scenarios, and in-memory and SQLite
+conformance-test cut points together. The adapter, projections, controls, and
+cut-point labels remain test support; they are not production package APIs,
+workflow stages, or states. A third model is justified only by a materially
 different authority boundary, abstraction, checking profile, executable
 adapter, lifecycle, or implementation consumer.
