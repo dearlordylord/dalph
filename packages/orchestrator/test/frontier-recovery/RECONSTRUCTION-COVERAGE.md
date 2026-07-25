@@ -11,18 +11,22 @@ points.
 | Cross-component invariant | Canonical M2 property or action | Executable lane |
 | --- | --- | --- |
 | The driver decodes one generated action and maps its bounded task and operation identities before it appends a journal event. | Closed reconstruction action map; `commitFirstIntent` | `frontier-recovery-conformance.test.ts` |
-| A normalized target-closure membership read records explicit coverage, completeness, potentially mixed-time consistency, boundary freshness, and proven absence; a predecessor identity alone does not add coverage. | Fresh knowledge is required before `commitFirstIntent` | `reconstructed-managed-run.test.ts`; `frontier-recovery-reconstruction.mbt.test.ts` |
-| The workflow journal retains the exact ordered graph-read intent/outcome and claim intent while the graph-knowledge, responsibility, and pause reducers return distinct projections. | `requestRequiresIntent`; `responsibilityHasActionOrReason` | `frontier-recovery-reconstruction.mbt.test.ts` (`S`) |
+| A normalized target-closure membership read records explicit coverage, completeness, potentially mixed-time consistency, boundary freshness, and proven absence; a predecessor identity alone does not add coverage. | Fresh knowledge is required before `commitFirstIntent` | `frontier-recovery-reconstruction.test.ts` through the versioned `observeTargetClosure` control |
+| The workflow journal retains the exact ordered graph-read intent/outcome and claim intent while the graph-knowledge, responsibility, and pause reducers return distinct projections. | `requestRequiresIntent`; `responsibilityHasActionOrReason` | `frontier-recovery-reconstruction.test.ts` exact production projections; `frontier-recovery-reconstruction.mbt.test.ts` (`S`) model projection |
 | Observing target-closure membership does not create task responsibility. Recording task A's exact claim intent creates responsibility only for A. | `deterministicFirstAdmissionTest`; `commitFirstIntent(A)` | `frontier-recovery-reconstruction.test.ts` (`P0`, `P1`) |
 | Closing the coordinator after the graph read or after task A's claim intent discards process-local state. A fresh control scope rereads the selected journal store and invokes the production managed-history reducer. | `crash`; `restart`; `crashAfterIntentRequiresFreshReadTest` | in-memory and closed/reopened SQLite `P0`/`P1` in `frontier-recovery-reconstruction.test.ts` |
 | The sampled driver never assigns expected production state or derives another scheduler. It appends normalized controls, rereads the journal, invokes `reduceManagedHistory`, and compares the returned projection. | `reconstructionStep` | `frontier-recovery-reconstruction.mbt.test.ts` (`S`) |
 
 ## Intentional omissions
 
-- `TrackerMutationService` currently returns task-claim observations only.
+- The tracker-mutation graph-fact lane is not applicable to the current
+  production boundary: `TrackerMutationService` returns task-claim
+  observations only.
   It has no normalized task or dependency/grouping-edge result carrying
   coverage, completeness, consistency, freshness, or replacement evidence.
-  Therefore this slice does not manufacture mutation-origin graph facts.
+  Treating claim-label mutation results as graph membership or edge facts
+  would duplicate tracker authority, so this adapter intentionally does not
+  manufacture them merely to create a positive lane.
   The first tracker mutation that returns normalized task or edge facts must
   add its production `TaskGraphFactsUpdated` event, reducer case, closed action
   mapping, negative conflict profile, and applicable `P0`–`P6` lanes in the

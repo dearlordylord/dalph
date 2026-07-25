@@ -1,8 +1,9 @@
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { ClaimOwner, ClaimToken, FixtureTarget, OperationId, RunId, TaskId, TrackerRevision } from "../../src/domain.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
+  type JournalRecord,
   type JournalStoreService,
   outcomeRecordKey,
   TaskClaimAcquisitionIntendedEvent,
@@ -10,6 +11,11 @@ import {
   trackerGraphOutcomeObserved
 } from "../../src/journal-store.js"
 import { reduceManagedHistory } from "../../src/managed-history.js"
+import type {
+  BestAvailableDurableGraphKnowledge,
+  ReconstructedPauseState,
+  WorkflowResponsibilityState
+} from "../../src/reconstructed-managed-run-state.js"
 import { TaskClaimAcquisition } from "../../src/tracker-mutation.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -18,14 +24,19 @@ import {
 import {
   FrontierRecoveryConformanceIssue,
   makeFrontierRecoveryIdentityMapping,
-  runFrontierRecoveryReconstructionAction
+  runFrontierRecoveryReconstructionAction,
+  type TargetClosureObservationInput
 } from "./frontier-recovery-conformance.js"
 
 const runId = RunId.make("frontier-recovery-reconstruction-run")
 const target = FixtureTarget.make("frontier-recovery-reconstruction-target")
 const modelTaskA = 0n
 const initialGraphOperationIdentity = 0n
+const minimumRevisionIdentity = 0n
 const firstClaimOperationIdentity = 1n
+const provenAbsenceOperationIdentity = 2n
+const conflictOperationIdentity = 3n
+const replacementOperationIdentity = 4n
 const taskEntries = [
   { branded: TaskId.make("frontier-recovery-task-A"), model: modelTaskA },
   { branded: TaskId.make("frontier-recovery-task-B"), model: 1n },
@@ -34,14 +45,42 @@ const taskEntries = [
 ] as const
 const graphOperationId = OperationId.make("frontier-recovery-graph-observation-0")
 const claimOperationId = OperationId.make("frontier-recovery-claim-operation-1")
+const graphObservationEntries = [
+  initialGraphOperationIdentity,
+  provenAbsenceOperationIdentity,
+  conflictOperationIdentity,
+  replacementOperationIdentity
+].map((model) => ({
+  branded: OperationId.make(`frontier-recovery-graph-observation-${model}`),
+  model
+}))
 
 interface MakeFrontierRecoveryReconstructionControlsOptions {
   readonly coordinatorRunning: boolean
   readonly journal: JournalStoreService
 }
 
-const invalidHistory = (detail: string) =>
-  Effect.die(new Error(`M2 reconstruction controls produced invalid managed history: ${detail}`))
+/** The conformance harness cannot safely continue from this reconstructed prefix. */
+export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass<FrontierRecoveryReconstructionIssue>()(
+  "FrontierRecoveryReconstructionIssue",
+  {
+    detail: Schema.String,
+    reason: Schema.Literals(["CoordinatorStopped", "InvalidManagedHistory"])
+  }
+) {}
+
+export interface FrontierRecoveryReconstructionProjection {
+  readonly coordinatorRunning: boolean
+  readonly graphKnowledge: BestAvailableDurableGraphKnowledge
+  readonly pause: ReconstructedPauseState
+  readonly responsibility: WorkflowResponsibilityState
+  readonly workflowHistory: ReadonlyArray<JournalRecord>
+}
+
+const reconstructionIssue = (
+  reason: FrontierRecoveryReconstructionIssue["reason"],
+  detail: string
+) => new FrontierRecoveryReconstructionIssue({ detail, reason })
 
 /**
  * Deterministic public controls for the M2 slice before runnable-frontier
@@ -53,7 +92,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
 )(function*(options: MakeFrontierRecoveryReconstructionControlsOptions) {
   const identityMapping = yield* makeFrontierRecoveryIdentityMapping({
     operations: [
-      { branded: graphOperationId, model: initialGraphOperationIdentity },
+      ...graphObservationEntries,
       { branded: claimOperationId, model: firstClaimOperationIdentity }
     ],
     tasks: taskEntries
@@ -62,20 +101,41 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
 
   const appendTargetClosureObservation = Effect.fn(
     "FrontierRecoveryReconstruction.appendTargetClosureObservation"
-  )(function*() {
-    const records = yield* options.journal.read(runId)
-    const observationOrdinal = records.filter(
-      ({ event }) => event._tag === "TrackerGraphOutcomeObserved"
-    ).length
-    const operationId = observationOrdinal === 0
-      ? yield* identityMapping.operationFromModel(initialGraphOperationIdentity)
-      : OperationId.make(`frontier-recovery-graph-observation-${observationOrdinal}`)
-    const nextObservationOrdinal = observationOrdinal + 1
+  )(function*(input: TargetClosureObservationInput) {
+    if (!coordinatorRunning) {
+      return yield* reconstructionIssue(
+        "CoordinatorStopped",
+        "a stopped coordinator cannot record a tracker graph observation"
+      )
+    }
+    if (
+      new Set(input.tasks).size !== input.tasks.length
+      || new Set(input.explicitlyCoveredTasks).size
+        !== input.explicitlyCoveredTasks.length
+      || new Set(input.predecessorOperations).size
+        !== input.predecessorOperations.length
+      || input.revision < minimumRevisionIdentity
+    ) {
+      return yield* new FrontierRecoveryConformanceIssue({
+        detail: "M2 target-closure observations require unique identities and a non-negative revision",
+        reason: "LossyProjection"
+      })
+    }
+    const operationId = yield* identityMapping.operationFromModel(input.operation)
+    const predecessorOperationIds = yield* Effect.forEach(
+      input.predecessorOperations,
+      identityMapping.operationFromModel
+    )
+    const explicitlyCoveredTaskIds = yield* Effect.forEach(
+      input.explicitlyCoveredTasks,
+      identityMapping.taskFromModel
+    )
+    const taskIds = yield* Effect.forEach(input.tasks, identityMapping.taskFromModel)
     const operation = makeTrackerGraphObservationOperation(
       operationId,
       target,
-      [],
-      taskEntries.map(({ branded }) => branded)
+      predecessorOperationIds,
+      explicitlyCoveredTaskIds
     )
     yield* options.journal.append(
       runId,
@@ -87,8 +147,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       outcomeRecordKey(operation.operationId),
       trackerGraphOutcomeObserved(operation.operationId, {
         _tag: "TrackerGraphObserved",
-        revision: TrackerRevision.make(`frontier-recovery-revision-${nextObservationOrdinal}`),
-        taskIds: taskEntries.map(({ branded }) => branded)
+        revision: TrackerRevision.make(`frontier-recovery-revision-${input.revision}`),
+        taskIds
       })
     )
   })
@@ -97,7 +157,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     commitFirstIntent: (modelTaskId: bigint) =>
       Effect.gen(function*() {
         if (!coordinatorRunning) {
-          return yield* invalidHistory("a stopped coordinator cannot record claim intent")
+          return yield* reconstructionIssue(
+            "CoordinatorStopped",
+            "a stopped coordinator cannot record claim intent"
+          )
         }
         if (modelTaskId !== modelTaskA) {
           return yield* new FrontierRecoveryConformanceIssue({
@@ -132,11 +195,30 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       Effect.sync(() => {
         coordinatorRunning = false
       }),
-    init: () => appendTargetClosureObservation(),
+    init: () =>
+      appendTargetClosureObservation({
+        explicitlyCoveredTasks: [],
+        operation: initialGraphOperationIdentity,
+        predecessorOperations: [],
+        revision: 0n,
+        tasks: taskEntries.map(({ model }) => model)
+      }),
+    observeTargetClosure: appendTargetClosureObservation,
     observeTask: (modelTaskId: bigint) =>
-      identityMapping.taskFromModel(modelTaskId).pipe(
-        Effect.andThen(appendTargetClosureObservation)
-      ),
+      Effect.gen(function*() {
+        yield* identityMapping.taskFromModel(modelTaskId)
+        const records = yield* options.journal.read(runId)
+        const observationCount = records.filter(
+          ({ event }) => event._tag === "TrackerGraphOutcomeObserved"
+        ).length
+        yield* appendTargetClosureObservation({
+          explicitlyCoveredTasks: [],
+          operation: BigInt(observationCount + 1),
+          predecessorOperations: [],
+          revision: BigInt(observationCount),
+          tasks: taskEntries.map(({ model }) => model)
+        })
+      }),
     reconstructionStep: () =>
       Effect.gen(function*() {
         yield* rawControls.commitFirstIntent(modelTaskA)
@@ -152,7 +234,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       const records = yield* options.journal.read(runId)
       const reduced = reduceManagedHistory(runId, records)
       if (reduced._tag === "InvalidManagedHistory") {
-        return yield* invalidHistory(
+        return yield* reconstructionIssue(
+          "InvalidManagedHistory",
           reduced.issues.map(({ detail }) => detail).join("; ")
         )
       }
@@ -178,9 +261,12 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       )
       return {
         coordinatorRunning,
+        graphKnowledge: reduced.managedRun.graphKnowledge,
         knownModelTaskIds,
         pause: reduced.managedRun.pause,
+        responsibility: reduced.managedRun.responsibility,
         responsibleModelTaskIds,
+        workflowHistory: reduced.managedRun.workflowHistory.records,
         workflowEventTags: reduced.managedRun.workflowHistory.records.map(
           ({ event }) => event._tag
         )
@@ -197,6 +283,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     crash: () => runFrontierRecoveryReconstructionAction({ _tag: "crash" }, rawControls),
     getState,
     init: () => runFrontierRecoveryReconstructionAction({ _tag: "init" }, rawControls),
+    observeTargetClosure: (input: TargetClosureObservationInput) =>
+      runFrontierRecoveryReconstructionAction(
+        { _tag: "observeTargetClosure", ...input },
+        rawControls
+      ),
     observeTask: (task: bigint) =>
       runFrontierRecoveryReconstructionAction(
         { _tag: "observeTask", task },

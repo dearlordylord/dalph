@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, ITFList, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Schema } from "effect"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
@@ -9,6 +9,13 @@ const actionSchema = {
   commitFirstIntent: { task: ITFBigInt },
   crash: {},
   init: {},
+  observeTargetClosure: {
+    explicitlyCoveredTasks: ITFList(ITFBigInt),
+    operation: ITFBigInt,
+    predecessorOperations: ITFList(ITFBigInt),
+    revision: ITFBigInt,
+    tasks: ITFList(ITFBigInt)
+  },
   observeTask: { task: ITFBigInt },
   reconstructionStep: {},
   restart: {}
@@ -61,6 +68,7 @@ const reconstructionDriver = defineDriver(
       crash: () => controls.crash(),
       getState: controls.getState,
       init: () => controls.init(),
+      observeTargetClosure: (input) => controls.observeTargetClosure(input),
       observeTask: ({ task }) => controls.observeTask(task),
       reconstructionStep: () => controls.reconstructionStep(),
       restart: () => controls.restart()
