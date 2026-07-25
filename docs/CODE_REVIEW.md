@@ -40,6 +40,11 @@ accepted tooling requirements, and these implementation constraints.
   shared type.
 - Every export and abstraction has a current consumer. No speculative code is
   added for possible future use.
+- Dalph is greenfield. Do not add or preserve compatibility wrappers, adapters,
+  upcasts, or fallback semantics for historical shapes unless the current
+  ticket names released data that must remain readable. Git history, unreleased
+  schemas, fixtures, and the historical Ralph experiment are not compatibility
+  targets.
 - Casts and non-null assertions are absent from production code. An unavoidable
   cast while decoding data from a named external application, command, config,
   or store requires concrete evidence and a narrowly scoped suppression.
