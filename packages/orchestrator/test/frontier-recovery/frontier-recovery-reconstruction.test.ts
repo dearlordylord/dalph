@@ -2,7 +2,7 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, FileSystem } from "effect"
 import { expect } from "vitest"
-import { JournalDatabaseLocator } from "../../src/domain.js"
+import { JournalDatabaseLocator, RunId } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
@@ -10,8 +10,16 @@ import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-
 const assertReconstructedPrefix = (
   state: {
     readonly coordinatorRunning: boolean
+    readonly graphKnowledge: {
+      readonly targetClosures: ReadonlyArray<{ readonly _tag: string }>
+    }
     readonly knownModelTaskIds: ReadonlyArray<bigint>
+    readonly pause: unknown
+    readonly responsibility: { readonly entries: ReadonlyArray<unknown> }
     readonly responsibleModelTaskIds: ReadonlyArray<bigint>
+    readonly workflowHistory: ReadonlyArray<{
+      readonly event: { readonly _tag: string }
+    }>
     readonly workflowEventTags: ReadonlyArray<string>
   },
   responsibleModelTaskIds: ReadonlyArray<bigint>
@@ -33,6 +41,20 @@ const assertReconstructedPrefix = (
         "TaskClaimAcquisitionIntended"
       ]
   )
+  expect(state.workflowHistory.map(({ event }) => event._tag)).toEqual(
+    state.workflowEventTags
+  )
+  expect(state.graphKnowledge.targetClosures).toHaveLength(1)
+  expect(state.graphKnowledge.targetClosures[0]?._tag).toBe(
+    "TaskTrackerTargetClosureObserved"
+  )
+  expect(state.responsibility.entries).toHaveLength(
+    responsibleModelTaskIds.length
+  )
+  expect(state.pause).toEqual({
+    run: { _tag: "RunUnpaused" },
+    tasks: { _tag: "NoTaskPauses" }
+  })
 }
 
 it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
@@ -45,8 +67,13 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
           journal
         })
         yield* beforeCrash.init()
+        assertReconstructedPrefix(yield* beforeCrash.getState(), [])
         if (afterClaimIntent) yield* beforeCrash.commitFirstIntent(0n)
+        if (afterClaimIntent) {
+          assertReconstructedPrefix(yield* beforeCrash.getState(), [0n])
+        }
         yield* beforeCrash.crash()
+        expect((yield* beforeCrash.getState()).coordinatorRunning).toBe(false)
 
         const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
           coordinatorRunning: false,
@@ -92,6 +119,148 @@ it.effect("records a fresh target-closure observation after restart", () =>
         reason: "MissingMapping"
       })
     }
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("replays coverage evidence through the production graph-knowledge reducer", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      coordinatorRunning: true,
+      journal
+    })
+    yield* controls.init()
+    yield* controls.observeTargetClosure({
+      explicitlyCoveredTasks: [1n],
+      operation: 2n,
+      predecessorOperations: [],
+      revision: 1n,
+      tasks: [0n, 2n, 3n]
+    })
+
+    const state = yield* controls.getState()
+    expect(state.graphKnowledge.targetClosures).toEqual([
+      expect.objectContaining({
+        _tag: "TaskTrackerTargetClosureObserved",
+        completeness: "Complete",
+        consistency: "PotentiallyMixedTime",
+        explicitlyCoveredTaskIds: ["frontier-recovery-task-B"],
+        factFamilies: ["TargetMembership"],
+        freshness: "FreshAtReadBoundary",
+        operationId: "frontier-recovery-graph-observation-2",
+        provenAbsentTaskIds: ["frontier-recovery-task-B"],
+        revision: "frontier-recovery-revision-1",
+        taskIds: [
+          "frontier-recovery-task-A",
+          "frontier-recovery-task-C",
+          "frontier-recovery-task-D"
+        ]
+      })
+    ])
+    expect(state.workflowHistory.map(({ event }) => event._tag)).toEqual([
+      "TrackerGraphObservationIntentRecorded",
+      "TrackerGraphOutcomeObserved",
+      "TrackerGraphObservationIntentRecorded",
+      "TrackerGraphOutcomeObserved"
+    ])
+    expect(state.responsibility.entries).toEqual([])
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("does not treat a causal predecessor as read coverage", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      coordinatorRunning: true,
+      journal
+    })
+    yield* controls.init()
+    yield* controls.observeTargetClosure({
+      explicitlyCoveredTasks: [],
+      operation: 2n,
+      predecessorOperations: [0n],
+      revision: 1n,
+      tasks: [0n, 2n, 3n]
+    })
+
+    const state = yield* controls.getState()
+    expect(state.graphKnowledge.targetClosures[0]).toMatchObject({
+      _tag: "TaskTrackerTargetClosureKnowledgeConflict",
+      observations: [
+        {
+          explicitlyCoveredTaskIds: [],
+          operationId: "frontier-recovery-graph-observation-0",
+          taskIds: [
+            "frontier-recovery-task-A",
+            "frontier-recovery-task-B",
+            "frontier-recovery-task-C",
+            "frontier-recovery-task-D"
+          ]
+        },
+        {
+          explicitlyCoveredTaskIds: [],
+          operationId: "frontier-recovery-graph-observation-2",
+          provenAbsentTaskIds: [],
+          taskIds: [
+            "frontier-recovery-task-A",
+            "frontier-recovery-task-C",
+            "frontier-recovery-task-D"
+          ]
+        }
+      ]
+    })
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("replaces compatible membership knowledge with the fresh observation", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      coordinatorRunning: true,
+      journal
+    })
+    yield* controls.init()
+    yield* controls.observeTargetClosure({
+      explicitlyCoveredTasks: [],
+      operation: 2n,
+      predecessorOperations: [],
+      revision: 1n,
+      tasks: [0n, 1n, 2n, 3n]
+    })
+
+    expect((yield* controls.getState()).graphKnowledge.targetClosures).toEqual([
+      expect.objectContaining({
+        _tag: "TaskTrackerTargetClosureObserved",
+        operationId: "frontier-recovery-graph-observation-2",
+        revision: "frontier-recovery-revision-1"
+      })
+    ])
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("rejects lossy target-closure inputs before appending production records", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      coordinatorRunning: true,
+      journal
+    })
+    const exit = yield* controls.observeTargetClosure({
+      explicitlyCoveredTasks: [],
+      operation: 2n,
+      predecessorOperations: [],
+      revision: 0n,
+      tasks: [0n, 0n]
+    }).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.squash(exit.cause)).toMatchObject({
+        _tag: "FrontierRecoveryConformanceIssue",
+        reason: "LossyProjection"
+      })
+    }
+    expect(
+      yield* journal.read(
+        RunId.make("frontier-recovery-reconstruction-run")
+      )
+    ).toEqual([])
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>

@@ -1,35 +1,54 @@
 import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
-export const frontierRecoveryReconstructionConformanceVersion = 1 as const
+// A manifest change is an explicit compatibility-boundary revision.
+// eslint-disable-next-line no-magic-numbers
+export const frontierRecoveryReconstructionConformanceVersion = 2 as const
 const minimumModelIdentity = 0n
 
 /**
  * Closed M2 action inventory for the reconstructed-run slice that precedes
  * runnable-frontier derivation.
  */
-export const frontierRecoveryReconstructionActions = [
-  "init",
-  "reconstructionStep",
-  "commitFirstIntent",
-  "observeTask",
-  "crash",
-  "restart"
-] as const
-
-const FrontierRecoveryReconstructionAction = Schema.TaggedUnion({
-  commitFirstIntent: { task: Schema.BigInt },
-  crash: {},
+const frontierRecoveryReconstructionActionFields = {
   init: {},
-  observeTask: { task: Schema.BigInt },
   reconstructionStep: {},
+  commitFirstIntent: { task: Schema.BigInt },
+  observeTargetClosure: {
+    explicitlyCoveredTasks: Schema.Array(Schema.BigInt),
+    operation: Schema.BigInt,
+    predecessorOperations: Schema.Array(Schema.BigInt),
+    revision: Schema.BigInt,
+    tasks: Schema.Array(Schema.BigInt)
+  },
+  observeTask: { task: Schema.BigInt },
+  crash: {},
   restart: {}
-})
+} as const
+
+export const frontierRecoveryReconstructionActions = Object.keys(
+  frontierRecoveryReconstructionActionFields
+)
+
+const FrontierRecoveryReconstructionAction = Schema.TaggedUnion(
+  frontierRecoveryReconstructionActionFields
+)
+
+export interface TargetClosureObservationInput {
+  readonly explicitlyCoveredTasks: ReadonlyArray<bigint>
+  readonly operation: bigint
+  readonly predecessorOperations: ReadonlyArray<bigint>
+  readonly revision: bigint
+  readonly tasks: ReadonlyArray<bigint>
+}
 
 export interface FrontierRecoveryReconstructionControls<A, E, R> {
   readonly commitFirstIntent: (task: bigint) => Effect.Effect<A, E, R>
   readonly crash: () => Effect.Effect<A, E, R>
   readonly init: () => Effect.Effect<A, E, R>
+  readonly observeTargetClosure: (
+    input: TargetClosureObservationInput
+  ) => Effect.Effect<A, E, R>
   readonly observeTask: (task: bigint) => Effect.Effect<A, E, R>
   readonly reconstructionStep: () => Effect.Effect<A, E, R>
   readonly restart: () => Effect.Effect<A, E, R>
@@ -72,6 +91,7 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       commitFirstIntent: ({ task }) => controls.commitFirstIntent(task),
       crash: controls.crash,
       init: controls.init,
+      observeTargetClosure: controls.observeTargetClosure,
       observeTask: ({ task }) => controls.observeTask(task),
       reconstructionStep: controls.reconstructionStep,
       restart: controls.restart
