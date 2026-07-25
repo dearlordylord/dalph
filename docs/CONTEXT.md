@@ -20,6 +20,12 @@ the retained identity of the original research record and historical harness,
 not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
+**Dalph executor**:
+The Dalph component that owns one selected task-implementation algorithm,
+including its coding-agent invocations, review strategy, internal restoration,
+and internal implementation or review artifacts.
+_Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
+
 **Historical Ralph harness**:
 The one-off `scripts/ralph-run.sh` experiment and its execution formats.
 _Avoid_: Ralph architecture, compatibility baseline, legacy runtime
@@ -149,6 +155,12 @@ through a task tracker. It is not the provider record, work activity, attempt,
 session, or process.
 _Avoid_: GitHub issue, task work, process, session, attempt, workflow operation
 
+**Task-work specification**:
+The normalized tracker-authored title and body supplied to a Dalph executor for
+one planned task attempt. It excludes lifecycle, graph relationships, claims,
+and provider-only metadata.
+_Avoid_: Task revision, task-graph facts, executor prompt
+
 **GitHub issue task record**:
 The GitHub Issues representation that the GitHub task-tracker adapter decodes
 into a normalized task. Provider-only fields remain outside the normalized task
@@ -240,6 +252,12 @@ version counter, release version, edit sequence, or historical revision chain.
 It is distinct from the fingerprint of the complete task-graph snapshot.
 _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
+
+**Active-task continuation read**:
+A task-tracker read covering the authored task-work specification, lifecycle,
+exact claim, target-closure membership, and complete blockers needed before
+Dalph starts another long-running action for an existing attempt.
+_Avoid_: Initial attempt eligibility, coding-agent progress poll, global refresh
 
 **Task executor locator**:
 The branded locator selecting the configured executor for one planned task
@@ -610,6 +628,55 @@ authority facts show that Dalph may no longer act on that subject. Other
 responsibilities for the same task attempt remain until separately discharged
 or relinquished.
 _Avoid_: Attempt abandoned, task completed, external history rewritten
+
+**Continuation constraint**:
+One independently derived fact that prevents a named forward-progress action
+until its owning authority changes or the Dalph user records an accepted
+disposition. It composes with pause and other constraints instead of becoming a
+combined task status.
+_Avoid_: Generic blocker, whole-run failure, persisted workflow stage
+
+**Task-specification change hold**:
+The continuation constraint activated when a fresh task-tracker read reports a
+task-work specification fingerprint different from the one bound to the
+planned task attempt.
+_Avoid_: Task pause, automatic replan, executor incorporated changes
+
+**Task-lifecycle hold**:
+The reversible continuation constraint activated when the task tracker reports
+a terminal task lifecycle that does not mean successful completion. It
+preserves the attempt and resources while unrelated work continues.
+_Avoid_: Task completed successfully, attempt abandonment, task pause
+
+**Target-membership constraint**:
+The reversible continuation constraint activated when a complete task-tracker
+read proves that an active task no longer belongs to its run's task-tracker
+target closure.
+_Avoid_: Incomplete graph read, task deletion, task pause
+
+**Claim-authority hold**:
+The continuation constraint activated after bounded task-tracker reads cannot
+determine the current exact claim. Unreadability does not prove that the claim
+was lost or authorize reacquisition.
+_Avoid_: Foreign claim, unclaimed task, automatic claim reacquisition
+
+**Git-lineage constraint**:
+The reversible continuation constraint activated when a fresh Git read proves
+that the planned Base is no longer an ancestor of the configured integration
+target.
+_Avoid_: Compatible target advance, dirty worktree, automatic rebase
+
+**Attempt worktree lost**:
+The terminal planned-attempt outcome recorded when Git proves that the exact
+planned worktree path is missing or no longer registered as planned. It does
+not authorize repair, replacement discovery, or resource cleanup.
+_Avoid_: Worktree unreadable, Git worktree reconciliation fact, attempt abandoned
+
+**Native task-work session unavailable**:
+The provider observation that a successful complete read no longer returns one
+historically correlated provider-native task-work session. It records no cause
+and does not authorize replacement without a separate user action.
+_Avoid_: Session unreadable, session purged by user, no matching session reported
 
 **State-changing request**:
 A request that may change state outside Dalph's journal: for example, claiming

@@ -11,7 +11,7 @@ retained, refactored, replaced, or deleted.
 - Wayfinder destination:
   [Specify bounded resumable and pausable graph-frontier orchestration](https://github.com/dearlordylord/dalph/issues/114).
 - Bootstrap source:
-  [`docs/RESUMABLE-FRONTIER-PLANNING-MAP.md`](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md)
+  [`docs/RESUMABLE-FRONTIER-PLANNING-MAP.md`](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md)
   at `5dc8f38c29d267b1aeabc88faa071c294e49818b`.
 - Originating implementation specification:
   [Resume every legal durable workflow stage after coordinator death](https://github.com/dearlordylord/dalph/issues/112).

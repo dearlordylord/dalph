@@ -10,9 +10,9 @@ It does not change the protocol, implementation, or tracker.
 ## Audit boundary
 
 - Bootstrap source:
-  [`docs/RESUMABLE-FRONTIER-PLANNING-MAP.md`](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md)
+  [`docs/RESUMABLE-FRONTIER-PLANNING-MAP.md`](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md)
   at `5dc8f38c29d267b1aeabc88faa071c294e49818b`, especially the W7 question
-  at [lines 550-565](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L550-L565).
+  at [lines 550-565](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L550-L565).
 - Current audited source: `master` at
   `a857e87f4e2391817c35435b71cc19331043fea9`. The only committed change after
   the bootstrap commit is the issue-116 research note; the implementation and
@@ -277,15 +277,15 @@ This is replay, not a new intent or provider retry.
 
 The bootstrap map accepts that normal execution and restart share one operation
 algebra and that crashes and pauses share reconstruction and reconciliation
-([`RESUMABLE-FRONTIER-PLANNING-MAP.md` lines 121-132](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L121-L132)).
+([`RESUMABLE-FRONTIER-PLANNING-MAP.md` lines 121-132](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L121-L132)).
 Its later reconciliation work may choose to accept changed knowledge, retry or
 wait, reconcile an existing intent, relinquish responsibility, isolate a
 resource, or fail history
-([lines 526-548](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L526-L548)).
+([lines 526-548](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L526-L548)).
 None of those choices currently authorizes a second worktree or session intent.
 
 The map schedules same-session rework explicitly
-([lines 501-520](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L501-L520)).
+([lines 501-520](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L501-L520)).
 Accepted architecture likewise requires later implementer work to use the same
 established session
 ([`docs/ARCHITECTURE.md` lines 414-430](../docs/ARCHITECTURE.md#L414-L430)).
@@ -363,7 +363,7 @@ map's existing strict sequence:
    appropriately scoped implementation and regression-test work.
 
 This is the W10 → W11 → W12 ordering already required by the map
-([`RESUMABLE-FRONTIER-PLANNING-MAP.md` lines 606-654](../docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L606-L654)).
+([`RESUMABLE-FRONTIER-PLANNING-MAP.md` lines 606-654](https://github.com/dearlordylord/dalph/blob/5dc8f38c29d267b1aeabc88faa071c294e49818b/docs/RESUMABLE-FRONTIER-PLANNING-MAP.md#L606-L654)).
 
 ## Decision
 
