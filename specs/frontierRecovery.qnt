@@ -37,6 +37,18 @@ module frontierRecovery {
 
   type AttemptOutcome = AttemptPending | AttemptAccepted | AttemptWorktreeLost | AttemptAbandoned
   type TaskSettlement = TaskUnsettled | TrackerCompleted | ResponsibilityRelinquished
+  type ReconstructionKnowledgeDisposition =
+    | NoReconstructionKnowledge
+    | CompatibleReplacementKnowledge
+    | IncomparableMembershipKnowledge
+    | ProvenAbsenceKnowledge
+
+  type ReconstructionGraphEvidence = {
+    disposition: ReconstructionKnowledgeDisposition,
+    explicitlyCoveredTaskIds: Set[TaskId],
+    predecessorOperationIds: Set[int],
+    returnedTaskIds: Set[TaskId],
+  }
 
   // Facts currently owned by the task tracker, Git, or executor provider.
   type Authority = {
@@ -107,6 +119,7 @@ module frontierRecovery {
     nextKnowledgeRevision: int,
     requestFreshnessViolations: int,
     duplicateEffectViolations: int,
+    reconstructionGraphEvidence: ReconstructionGraphEvidence,
   }
 
   pure val A: TaskId = 0
@@ -197,6 +210,12 @@ module frontierRecovery {
     nextKnowledgeRevision: 1,
     requestFreshnessViolations: 0,
     duplicateEffectViolations: 0,
+    reconstructionGraphEvidence: {
+      disposition: NoReconstructionKnowledge,
+      explicitlyCoveredTaskIds: Set(),
+      predecessorOperationIds: Set(),
+      returnedTaskIds: Set(),
+    },
   }
 
   pure def isGroupingPaused(s: State, task: TaskId): bool =
@@ -1496,13 +1515,46 @@ module frontierRecovery {
   // conformance adapter. Each observes a distinct model subject so the sampled
   // state identifies which production evidence profile must be compared.
   action observeProvenAbsence: bool =
-    observeTask(B)
+    all {
+      canObserveTask(state, B),
+      state' = {
+        ...applyObserveTask(state, B),
+        reconstructionGraphEvidence: {
+          disposition: ProvenAbsenceKnowledge,
+          explicitlyCoveredTaskIds: Set(B),
+          predecessorOperationIds: Set(),
+          returnedTaskIds: Set(A, C, D),
+        },
+      },
+    }
 
   action observeIncomparableMembership: bool =
-    observeTask(C)
+    all {
+      canObserveTask(state, C),
+      state' = {
+        ...applyObserveTask(state, C),
+        reconstructionGraphEvidence: {
+          disposition: IncomparableMembershipKnowledge,
+          explicitlyCoveredTaskIds: Set(),
+          predecessorOperationIds: Set(0),
+          returnedTaskIds: Set(A, C, D),
+        },
+      },
+    }
 
   action observeCompatibleReplacement: bool =
-    observeTask(D)
+    all {
+      canObserveTask(state, D),
+      state' = {
+        ...applyObserveTask(state, D),
+        reconstructionGraphEvidence: {
+          disposition: CompatibleReplacementKnowledge,
+          explicitlyCoveredTaskIds: Set(),
+          predecessorOperationIds: Set(),
+          returnedTaskIds: TASKS,
+        },
+      },
+    }
 
   action step: bool = {
     nondet task = TASKS.oneOf()

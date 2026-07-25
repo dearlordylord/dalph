@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, ITFMap, ITFSet, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
@@ -32,6 +32,12 @@ const ModelProjection = Schema.Struct({
       ITFBigInt,
       Schema.Struct({ observation: Schema.Unknown })
     ),
+    reconstructionGraphEvidence: Schema.Struct({
+      disposition: Schema.Unknown,
+      explicitlyCoveredTaskIds: ITFSet(ITFBigInt),
+      predecessorOperationIds: ITFSet(ITFBigInt),
+      returnedTaskIds: ITFSet(ITFBigInt)
+    }),
     workflow: ITFMap(
       ITFBigInt,
       Schema.Struct({ responsibility: Schema.Unknown })
@@ -59,6 +65,7 @@ type ReconstructionComparable =
   & Pick<
     FrontierRecoveryReconstructionProjection,
     | "coordinatorRunning"
+    | "graphEvidence"
     | "graphProfile"
     | "knownModelTaskIds"
     | "responsibleModelTaskIds"
@@ -77,21 +84,34 @@ type ReconstructionComparable =
     >
   >
 
-const graphProfileFrom = (
-  knowledge: ReadonlyMap<bigint, { readonly observation: unknown }>
-): GraphProfile | undefined => {
-  const observed = [...knowledge].find(([, value]) => variantTag(value.observation) === "UsableObservation")?.[0]
-  return observed === 1n
+const graphProfileFrom = (disposition: unknown): GraphProfile | undefined => {
+  const tag = variantTag(disposition)
+  return tag === "ProvenAbsenceKnowledge"
     ? "ProvenAbsence"
-    : observed === 2n
+    : tag === "IncomparableMembershipKnowledge"
     ? "IncomparableMembership"
-    : observed === 3n
+    : tag === "CompatibleReplacementKnowledge"
     ? "CompatibleReplacement"
     : undefined
 }
 
+const graphEvidenceMatches = (
+  left: FrontierRecoveryReconstructionProjection["graphEvidence"],
+  right: FrontierRecoveryReconstructionProjection["graphEvidence"]
+): boolean =>
+  left === undefined || right === undefined
+    ? left === right
+    : left.disposition === right.disposition
+      && left.explicitlyCoveredModelTaskIds.join(",")
+        === right.explicitlyCoveredModelTaskIds.join(",")
+      && left.predecessorModelOperationIds.join(",")
+        === right.predecessorModelOperationIds.join(",")
+      && left.returnedModelTaskIds.join(",")
+        === right.returnedModelTaskIds.join(",")
+
 const exactGraphProfileMatches = (
   profile: GraphProfile | undefined,
+  graphEvidence: FrontierRecoveryReconstructionProjection["graphEvidence"],
   responsibleModelTaskIds: ReadonlyArray<bigint>,
   implementation: {
     readonly graphKnowledge?: {
@@ -111,25 +131,20 @@ const exactGraphProfileMatches = (
     || implementation.responsibility === undefined
     || implementation.workflowHistory === undefined
   ) return false
+  if (profile !== undefined && graphEvidence === undefined) return false
   const allTasks = [
     "frontier-recovery-task-A",
     "frontier-recovery-task-B",
     "frontier-recovery-task-C",
     "frontier-recovery-task-D"
   ]
-  const tasks = profile === "CompatibleReplacement"
-    ? allTasks
-    : [
-      "frontier-recovery-task-A",
-      "frontier-recovery-task-C",
-      "frontier-recovery-task-D"
-    ]
-  const explicitlyCoveredTaskIds = profile === "ProvenAbsence"
-    ? ["frontier-recovery-task-B"]
-    : []
-  const predecessorOperationIds = profile === "IncomparableMembership"
-    ? ["frontier-recovery-graph-observation-0"]
-    : []
+  const modelTaskName = (task: bigint): string => `frontier-recovery-task-${["A", "B", "C", "D"][Number(task)]}`
+  const tasks = graphEvidence?.returnedModelTaskIds.map(modelTaskName)
+    ?? allTasks
+  const explicitlyCoveredTaskIds = graphEvidence
+    ?.explicitlyCoveredModelTaskIds.map(modelTaskName) ?? []
+  const predecessorOperationIds = graphEvidence
+    ?.predecessorModelOperationIds.map((operation) => `frontier-recovery-graph-observation-${operation}`) ?? []
   const target = "frontier-recovery-reconstruction-target"
   const runId = "frontier-recovery-reconstruction-run"
   const operationZero = {
@@ -369,9 +384,26 @@ const decodeReconstructionModelState = (raw: unknown) =>
           .filter(([, workflow]) => variantTag(workflow.responsibility) === "Outstanding")
           .map(([task]) => task)
       )
-      const graphProfile = graphProfileFrom(state.knowledge)
+      const graphProfile = graphProfileFrom(
+        state.reconstructionGraphEvidence.disposition
+      )
+      const graphEvidence = graphProfile === undefined
+        ? undefined
+        : {
+          disposition: graphProfile,
+          explicitlyCoveredModelTaskIds: sortedBigInts(
+            state.reconstructionGraphEvidence.explicitlyCoveredTaskIds
+          ),
+          predecessorModelOperationIds: sortedBigInts(
+            state.reconstructionGraphEvidence.predecessorOperationIds
+          ),
+          returnedModelTaskIds: sortedBigInts(
+            state.reconstructionGraphEvidence.returnedTaskIds
+          )
+        } as const
       return {
         coordinatorRunning: state.coordinator.running,
+        graphEvidence,
         graphProfile,
         knownModelTaskIds: sortedBigInts(state.knowledge.keys()),
         pause: {
@@ -421,11 +453,13 @@ const compareReconstructionState = (
     === implementation.knownModelTaskIds.join(",")
   && model.responsibleModelTaskIds.join(",")
     === implementation.responsibleModelTaskIds.join(",")
+  && graphEvidenceMatches(model.graphEvidence, implementation.graphEvidence)
   && JSON.stringify(model.pause) === JSON.stringify(implementation.pause)
   && model.workflowEventTags.join(",")
     === implementation.workflowEventTags.join(",")
   && exactGraphProfileMatches(
     model.graphProfile,
+    model.graphEvidence,
     model.responsibleModelTaskIds,
     implementation
   )

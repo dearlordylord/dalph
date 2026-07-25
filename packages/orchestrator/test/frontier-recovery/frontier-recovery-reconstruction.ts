@@ -72,8 +72,21 @@ export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass
   }
 ) {}
 
+export interface FrontierRecoveryReconstructionGraphEvidence {
+  readonly disposition:
+    | "CompatibleReplacement"
+    | "IncomparableMembership"
+    | "ProvenAbsence"
+  readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
+  readonly predecessorModelOperationIds: ReadonlyArray<bigint>
+  readonly returnedModelTaskIds: ReadonlyArray<bigint>
+}
+
 export interface FrontierRecoveryReconstructionProjection {
   readonly coordinatorRunning: boolean
+  readonly graphEvidence:
+    | FrontierRecoveryReconstructionGraphEvidence
+    | undefined
   readonly graphProfile:
     | "CompatibleReplacement"
     | "IncomparableMembership"
@@ -294,7 +307,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         identityMapping.taskToModel
       )
       const targetClosure = reduced.managedRun.graphKnowledge.targetClosures[0]
-      const graphProfile = targetClosure
+      const graphDisposition = targetClosure
         ? targetClosure._tag === "TaskTrackerTargetClosureKnowledgeConflict"
           ? "IncomparableMembership" as const
           : targetClosure.operationId
@@ -304,10 +317,44 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             : "CompatibleReplacement" as const
           : undefined
         : undefined
+      const graphObservationIntents = records.filter(
+        ({ event }) => event._tag === "TrackerGraphObservationIntentRecorded"
+      )
+      // Negative one is the standard Array.at locator for the latest intent.
+      // eslint-disable-next-line no-magic-numbers
+      const latestGraphIntent = graphObservationIntents.at(-1)?.event
+      const latestGraphOutcome = latestGraphIntent?._tag
+          === "TrackerGraphObservationIntentRecorded"
+        ? records.findLast(({ event }) =>
+          event._tag === "TrackerGraphOutcomeObserved"
+          && event.operationId === latestGraphIntent.operation.operationId
+        )?.event
+        : undefined
+      const graphEvidence = graphDisposition !== undefined
+          && latestGraphIntent?._tag
+            === "TrackerGraphObservationIntentRecorded"
+          && latestGraphOutcome?._tag === "TrackerGraphOutcomeObserved"
+        ? {
+          disposition: graphDisposition,
+          explicitlyCoveredModelTaskIds: yield* Effect.forEach(
+            latestGraphIntent.operation.readShape.explicitlyCoveredTaskIds,
+            identityMapping.taskToModel
+          ),
+          predecessorModelOperationIds: yield* Effect.forEach(
+            latestGraphIntent.operation.predecessorOperationIds,
+            identityMapping.operationToModel
+          ),
+          returnedModelTaskIds: yield* Effect.forEach(
+            latestGraphOutcome.outcome.taskIds,
+            identityMapping.taskToModel
+          )
+        } satisfies FrontierRecoveryReconstructionGraphEvidence
+        : undefined
       return {
         coordinatorRunning,
+        graphEvidence,
         graphKnowledge: reduced.managedRun.graphKnowledge,
-        graphProfile,
+        graphProfile: graphEvidence?.disposition,
         knownModelTaskIds,
         pause: reduced.managedRun.pause,
         responsibility: reduced.managedRun.responsibility,
