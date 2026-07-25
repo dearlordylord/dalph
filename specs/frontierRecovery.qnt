@@ -1492,6 +1492,18 @@ module frontierRecovery {
   action reconstructionStep: bool =
     commitFirstIntent(A)
 
+  // Named bounded tracker-read profiles used by the M2 reconstruction
+  // conformance adapter. Each observes a distinct model subject so the sampled
+  // state identifies which production evidence profile must be compared.
+  action observeProvenAbsence: bool =
+    observeTask(B)
+
+  action observeIncomparableMembership: bool =
+    observeTask(C)
+
+  action observeCompatibleReplacement: bool =
+    observeTask(D)
+
   action step: bool = {
     nondet task = TASKS.oneOf()
     any {

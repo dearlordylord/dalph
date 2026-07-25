@@ -14,13 +14,9 @@ const frontierRecoveryReconstructionActionFields = {
   init: {},
   reconstructionStep: {},
   commitFirstIntent: { task: Schema.BigInt },
-  observeTargetClosure: {
-    explicitlyCoveredTasks: Schema.Array(Schema.BigInt),
-    operation: Schema.BigInt,
-    predecessorOperations: Schema.Array(Schema.BigInt),
-    revision: Schema.BigInt,
-    tasks: Schema.Array(Schema.BigInt)
-  },
+  observeProvenAbsence: {},
+  observeIncomparableMembership: {},
+  observeCompatibleReplacement: {},
   observeTask: { task: Schema.BigInt },
   crash: {},
   restart: {}
@@ -33,6 +29,12 @@ export const frontierRecoveryReconstructionActions = Object.keys(
 const FrontierRecoveryReconstructionAction = Schema.TaggedUnion(
   frontierRecoveryReconstructionActionFields
 )
+export type FrontierRecoveryReconstructionAction = typeof FrontierRecoveryReconstructionAction.Type
+export type FrontierRecoveryReconstructionActionFields = {
+  readonly [Action in FrontierRecoveryReconstructionAction as Action["_tag"]]: {
+    readonly [Field in Exclude<keyof Action, "_tag">]: unknown
+  }
+}
 
 export interface TargetClosureObservationInput {
   readonly explicitlyCoveredTasks: ReadonlyArray<bigint>
@@ -46,9 +48,9 @@ export interface FrontierRecoveryReconstructionControls<A, E, R> {
   readonly commitFirstIntent: (task: bigint) => Effect.Effect<A, E, R>
   readonly crash: () => Effect.Effect<A, E, R>
   readonly init: () => Effect.Effect<A, E, R>
-  readonly observeTargetClosure: (
-    input: TargetClosureObservationInput
-  ) => Effect.Effect<A, E, R>
+  readonly observeCompatibleReplacement: () => Effect.Effect<A, E, R>
+  readonly observeIncomparableMembership: () => Effect.Effect<A, E, R>
+  readonly observeProvenAbsence: () => Effect.Effect<A, E, R>
   readonly observeTask: (task: bigint) => Effect.Effect<A, E, R>
   readonly reconstructionStep: () => Effect.Effect<A, E, R>
   readonly restart: () => Effect.Effect<A, E, R>
@@ -91,7 +93,9 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       commitFirstIntent: ({ task }) => controls.commitFirstIntent(task),
       crash: controls.crash,
       init: controls.init,
-      observeTargetClosure: controls.observeTargetClosure,
+      observeCompatibleReplacement: controls.observeCompatibleReplacement,
+      observeIncomparableMembership: controls.observeIncomparableMembership,
+      observeProvenAbsence: controls.observeProvenAbsence,
       observeTask: ({ task }) => controls.observeTask(task),
       reconstructionStep: controls.reconstructionStep,
       restart: controls.restart

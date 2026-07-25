@@ -31,6 +31,9 @@ import {
 const runId = RunId.make("frontier-recovery-reconstruction-run")
 const target = FixtureTarget.make("frontier-recovery-reconstruction-target")
 const modelTaskA = 0n
+const modelTaskB = 1n
+const modelTaskC = 2n
+const modelTaskD = 3n
 const initialGraphOperationIdentity = 0n
 const minimumRevisionIdentity = 0n
 const firstClaimOperationIdentity = 1n
@@ -39,9 +42,9 @@ const conflictOperationIdentity = 3n
 const replacementOperationIdentity = 4n
 const taskEntries = [
   { branded: TaskId.make("frontier-recovery-task-A"), model: modelTaskA },
-  { branded: TaskId.make("frontier-recovery-task-B"), model: 1n },
-  { branded: TaskId.make("frontier-recovery-task-C"), model: 2n },
-  { branded: TaskId.make("frontier-recovery-task-D"), model: 3n }
+  { branded: TaskId.make("frontier-recovery-task-B"), model: modelTaskB },
+  { branded: TaskId.make("frontier-recovery-task-C"), model: modelTaskC },
+  { branded: TaskId.make("frontier-recovery-task-D"), model: modelTaskD }
 ] as const
 const graphOperationId = OperationId.make("frontier-recovery-graph-observation-0")
 const claimOperationId = OperationId.make("frontier-recovery-claim-operation-1")
@@ -71,10 +74,18 @@ export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass
 
 export interface FrontierRecoveryReconstructionProjection {
   readonly coordinatorRunning: boolean
+  readonly graphProfile:
+    | "CompatibleReplacement"
+    | "IncomparableMembership"
+    | "ProvenAbsence"
+    | undefined
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
+  readonly knownModelTaskIds: ReadonlyArray<bigint>
   readonly pause: ReconstructedPauseState
   readonly responsibility: WorkflowResponsibilityState
+  readonly responsibleModelTaskIds: ReadonlyArray<bigint>
   readonly workflowHistory: ReadonlyArray<JournalRecord>
+  readonly workflowEventTags: ReadonlyArray<string>
 }
 
 const reconstructionIssue = (
@@ -203,7 +214,30 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         revision: 0n,
         tasks: taskEntries.map(({ model }) => model)
       }),
-    observeTargetClosure: appendTargetClosureObservation,
+    observeCompatibleReplacement: () =>
+      appendTargetClosureObservation({
+        explicitlyCoveredTasks: [],
+        operation: provenAbsenceOperationIdentity,
+        predecessorOperations: [],
+        revision: firstClaimOperationIdentity,
+        tasks: taskEntries.map(({ model }) => model)
+      }),
+    observeIncomparableMembership: () =>
+      appendTargetClosureObservation({
+        explicitlyCoveredTasks: [],
+        operation: provenAbsenceOperationIdentity,
+        predecessorOperations: [initialGraphOperationIdentity],
+        revision: firstClaimOperationIdentity,
+        tasks: [modelTaskA, modelTaskC, modelTaskD]
+      }),
+    observeProvenAbsence: () =>
+      appendTargetClosureObservation({
+        explicitlyCoveredTasks: [modelTaskB],
+        operation: provenAbsenceOperationIdentity,
+        predecessorOperations: [],
+        revision: firstClaimOperationIdentity,
+        tasks: [modelTaskA, modelTaskC, modelTaskD]
+      }),
     observeTask: (modelTaskId: bigint) =>
       Effect.gen(function*() {
         yield* identityMapping.taskFromModel(modelTaskId)
@@ -259,9 +293,21 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         [...new Set(responsibleTaskIds)].sort(),
         identityMapping.taskToModel
       )
+      const targetClosure = reduced.managedRun.graphKnowledge.targetClosures[0]
+      const graphProfile = targetClosure
+        ? targetClosure._tag === "TaskTrackerTargetClosureKnowledgeConflict"
+          ? "IncomparableMembership" as const
+          : targetClosure.operationId
+              === OperationId.make("frontier-recovery-graph-observation-2")
+          ? targetClosure.provenAbsentTaskIds.length > 0
+            ? "ProvenAbsence" as const
+            : "CompatibleReplacement" as const
+          : undefined
+        : undefined
       return {
         coordinatorRunning,
         graphKnowledge: reduced.managedRun.graphKnowledge,
+        graphProfile,
         knownModelTaskIds,
         pause: reduced.managedRun.pause,
         responsibility: reduced.managedRun.responsibility,
@@ -270,7 +316,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         workflowEventTags: reduced.managedRun.workflowHistory.records.map(
           ({ event }) => event._tag
         )
-      }
+      } satisfies FrontierRecoveryReconstructionProjection
     }
   )
 
@@ -283,9 +329,19 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     crash: () => runFrontierRecoveryReconstructionAction({ _tag: "crash" }, rawControls),
     getState,
     init: () => runFrontierRecoveryReconstructionAction({ _tag: "init" }, rawControls),
-    observeTargetClosure: (input: TargetClosureObservationInput) =>
+    observeCompatibleReplacement: () =>
       runFrontierRecoveryReconstructionAction(
-        { _tag: "observeTargetClosure", ...input },
+        { _tag: "observeCompatibleReplacement" },
+        rawControls
+      ),
+    observeIncomparableMembership: () =>
+      runFrontierRecoveryReconstructionAction(
+        { _tag: "observeIncomparableMembership" },
+        rawControls
+      ),
+    observeProvenAbsence: () =>
+      runFrontierRecoveryReconstructionAction(
+        { _tag: "observeProvenAbsence" },
         rawControls
       ),
     observeTask: (task: bigint) =>
