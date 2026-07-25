@@ -72,26 +72,29 @@ export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass
   }
 ) {}
 
-export interface FrontierRecoveryReconstructionGraphEvidence {
-  readonly disposition:
-    | "CompatibleReplacement"
-    | "IncomparableMembership"
-    | "ProvenAbsence"
-  readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
-  readonly predecessorModelOperationIds: ReadonlyArray<bigint>
-  readonly returnedModelTaskIds: ReadonlyArray<bigint>
-}
+export type FrontierRecoveryReconstructionGraphEvidence =
+  | {
+    readonly disposition: "InitialObservation"
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "CompatibleReplacement"
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "IncomparableMembership"
+    readonly predecessorModelOperationIds: ReadonlyArray<bigint>
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "ProvenAbsence"
+    readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
 
 export interface FrontierRecoveryReconstructionProjection {
   readonly coordinatorRunning: boolean
-  readonly graphEvidence:
-    | FrontierRecoveryReconstructionGraphEvidence
-    | undefined
-  readonly graphProfile:
-    | "CompatibleReplacement"
-    | "IncomparableMembership"
-    | "ProvenAbsence"
-    | undefined
+  readonly graphEvidence: FrontierRecoveryReconstructionGraphEvidence
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly knownModelTaskIds: ReadonlyArray<bigint>
   readonly pause: ReconstructedPauseState
@@ -315,8 +318,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ? targetClosure.provenAbsentTaskIds.length > 0
             ? "ProvenAbsence" as const
             : "CompatibleReplacement" as const
-          : undefined
-        : undefined
+          : "InitialObservation" as const
+        : "InitialObservation" as const
       const graphObservationIntents = records.filter(
         ({ event }) => event._tag === "TrackerGraphObservationIntentRecorded"
       )
@@ -330,31 +333,46 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           && event.operationId === latestGraphIntent.operation.operationId
         )?.event
         : undefined
-      const graphEvidence = graphDisposition !== undefined
-          && latestGraphIntent?._tag
+      const returnedModelTaskIds = latestGraphOutcome?._tag
+          === "TrackerGraphOutcomeObserved"
+        ? yield* Effect.forEach(
+          latestGraphOutcome.outcome.taskIds,
+          identityMapping.taskToModel
+        )
+        : []
+      const graphEvidence = latestGraphIntent?._tag
             === "TrackerGraphObservationIntentRecorded"
           && latestGraphOutcome?._tag === "TrackerGraphOutcomeObserved"
-        ? {
-          disposition: graphDisposition,
-          explicitlyCoveredModelTaskIds: yield* Effect.forEach(
-            latestGraphIntent.operation.readShape.explicitlyCoveredTaskIds,
-            identityMapping.taskToModel
-          ),
-          predecessorModelOperationIds: yield* Effect.forEach(
-            latestGraphIntent.operation.predecessorOperationIds,
-            identityMapping.operationToModel
-          ),
-          returnedModelTaskIds: yield* Effect.forEach(
-            latestGraphOutcome.outcome.taskIds,
-            identityMapping.taskToModel
-          )
-        } satisfies FrontierRecoveryReconstructionGraphEvidence
-        : undefined
+        ? graphDisposition === "ProvenAbsence"
+          ? {
+            disposition: graphDisposition,
+            explicitlyCoveredModelTaskIds: yield* Effect.forEach(
+              latestGraphIntent.operation.readShape.explicitlyCoveredTaskIds,
+              identityMapping.taskToModel
+            ),
+            returnedModelTaskIds
+          } as const
+          : graphDisposition === "IncomparableMembership"
+          ? {
+            disposition: graphDisposition,
+            predecessorModelOperationIds: yield* Effect.forEach(
+              latestGraphIntent.operation.predecessorOperationIds,
+              identityMapping.operationToModel
+            ),
+            returnedModelTaskIds
+          } as const
+          : {
+            disposition: graphDisposition,
+            returnedModelTaskIds
+          } as const
+        : {
+          disposition: "InitialObservation",
+          returnedModelTaskIds: taskEntries.map(({ model }) => model)
+        } as const
       return {
         coordinatorRunning,
         graphEvidence,
         graphKnowledge: reduced.managedRun.graphKnowledge,
-        graphProfile: graphEvidence?.disposition,
         knownModelTaskIds,
         pause: reduced.managedRun.pause,
         responsibility: reduced.managedRun.responsibility,
