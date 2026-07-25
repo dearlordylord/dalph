@@ -37,18 +37,24 @@ module frontierRecovery {
 
   type AttemptOutcome = AttemptPending | AttemptAccepted | AttemptWorktreeLost | AttemptAbandoned
   type TaskSettlement = TaskUnsettled | TrackerCompleted | ResponsibilityRelinquished
-  type ReconstructionKnowledgeDisposition =
-    | NoReconstructionKnowledge
-    | CompatibleReplacementKnowledge
-    | IncomparableMembershipKnowledge
-    | ProvenAbsenceKnowledge
-
-  type ReconstructionGraphEvidence = {
-    disposition: ReconstructionKnowledgeDisposition,
-    explicitlyCoveredTaskIds: Set[TaskId],
-    predecessorOperationIds: Set[int],
-    returnedTaskIds: Set[TaskId],
-  }
+  // The last bounded target-closure observation emitted to the conformance
+  // adapter. This historical read evidence is distinct from per-task authority
+  // knowledge and each variant carries only evidence valid for that read.
+  type ReconstructionGraphEvidence =
+    | InitialReconstructionGraphObservation({
+        returnedTaskIds: Set[TaskId],
+      })
+    | CompatibleReplacementGraphObservation({
+        returnedTaskIds: Set[TaskId],
+      })
+    | IncomparableMembershipGraphObservation({
+        predecessorOperationIds: Set[int],
+        returnedTaskIds: Set[TaskId],
+      })
+    | ProvenAbsenceGraphObservation({
+        explicitlyCoveredTaskIds: Set[TaskId],
+        returnedTaskIds: Set[TaskId],
+      })
 
   // Facts currently owned by the task tracker, Git, or executor provider.
   type Authority = {
@@ -210,12 +216,10 @@ module frontierRecovery {
     nextKnowledgeRevision: 1,
     requestFreshnessViolations: 0,
     duplicateEffectViolations: 0,
-    reconstructionGraphEvidence: {
-      disposition: NoReconstructionKnowledge,
-      explicitlyCoveredTaskIds: Set(),
-      predecessorOperationIds: Set(),
-      returnedTaskIds: Set(),
-    },
+    reconstructionGraphEvidence:
+      InitialReconstructionGraphObservation({
+        returnedTaskIds: TASKS,
+      }),
   }
 
   pure def isGroupingPaused(s: State, task: TaskId): bool =
@@ -1519,12 +1523,11 @@ module frontierRecovery {
       canObserveTask(state, B),
       state' = {
         ...applyObserveTask(state, B),
-        reconstructionGraphEvidence: {
-          disposition: ProvenAbsenceKnowledge,
+        reconstructionGraphEvidence:
+          ProvenAbsenceGraphObservation({
           explicitlyCoveredTaskIds: Set(B),
-          predecessorOperationIds: Set(),
           returnedTaskIds: Set(A, C, D),
-        },
+        }),
       },
     }
 
@@ -1533,12 +1536,11 @@ module frontierRecovery {
       canObserveTask(state, C),
       state' = {
         ...applyObserveTask(state, C),
-        reconstructionGraphEvidence: {
-          disposition: IncomparableMembershipKnowledge,
-          explicitlyCoveredTaskIds: Set(),
+        reconstructionGraphEvidence:
+          IncomparableMembershipGraphObservation({
           predecessorOperationIds: Set(0),
           returnedTaskIds: Set(A, C, D),
-        },
+        }),
       },
     }
 
@@ -1547,12 +1549,10 @@ module frontierRecovery {
       canObserveTask(state, D),
       state' = {
         ...applyObserveTask(state, D),
-        reconstructionGraphEvidence: {
-          disposition: CompatibleReplacementKnowledge,
-          explicitlyCoveredTaskIds: Set(),
-          predecessorOperationIds: Set(),
+        reconstructionGraphEvidence:
+          CompatibleReplacementGraphObservation({
           returnedTaskIds: TASKS,
-        },
+        }),
       },
     }
 
