@@ -95,6 +95,17 @@ Its normalized shape does not claim that every fact is fully current or came
 from one instant.
 _Avoid_: Current task graph, TaskGraphFactsUpdated event, provider response dump
 
+**Task-tracker target-closure membership observation**:
+The normalized result saying one successful task-tracker read completely
+covered membership in one task-tracker target closure and returned the named
+task identities. It carries the read boundary's freshness evidence, the
+provider-independent content fingerprint, and potentially mixed-time
+consistency. It does not claim lifecycle, dependency, grouping, or claim facts.
+An absent identity is proven only when the named read shape explicitly covered
+that identity; journal order does not make incompatible membership observations
+comparable.
+_Avoid_: Current target closure, complete task graph, atomic tracker snapshot
+
 **Task-graph facts updated**:
 The immutable workflow-journal event recording provider-independent task and
 edge facts returned by either a tracker read or a tracker mutation. The

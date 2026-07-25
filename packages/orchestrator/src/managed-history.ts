@@ -15,8 +15,11 @@ import {
 import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { type JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
 import { deriveManagedRunRecoveryStage, type ManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
+import type { ReconstructedManagedRunState } from "./reconstructed-managed-run-state.js"
+import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
 import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
 import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
 import { isExactTaskClaim } from "./tracker-mutation.js"
@@ -47,6 +50,7 @@ export class ManagedHistorySemanticIssue extends Schema.TaggedErrorClass<Managed
 /** Derived recovery input. It is rebuilt from immutable records and is never persisted. */
 export interface ValidManagedHistory {
   readonly _tag: "ValidManagedHistory"
+  readonly managedRun: ReconstructedManagedRunState
   readonly records: ReadonlyArray<JournalRecord>
   readonly recoveryStage: ManagedRunRecoveryStage
   readonly runId: RunId
@@ -60,55 +64,6 @@ export interface InvalidManagedHistory {
 }
 
 type JournalEventTag = WorkflowJournalEvent["_tag"]
-type TransitionRule =
-  | { readonly _tag: "Intent" }
-  | { readonly _tag: "Observation"; readonly requiredIntent: JournalEventTag }
-  | { readonly _tag: "Outcome"; readonly requiredIntent: JournalEventTag }
-  | {
-    readonly _tag: "ProviderOutcome"
-    readonly requiredIntent: JournalEventTag
-    readonly requiredProof: JournalEventTag
-  }
-
-const intent = { _tag: "Intent" } as const
-const observation = (requiredIntent: JournalEventTag): TransitionRule => ({ _tag: "Observation", requiredIntent })
-const outcome = (
-  requiredIntent: JournalEventTag,
-  requiredProof?: JournalEventTag
-): TransitionRule =>
-  requiredProof === undefined
-    ? { _tag: "Outcome", requiredIntent }
-    : { _tag: "ProviderOutcome", requiredIntent, requiredProof }
-
-const TransitionRuleByEventKind: Partial<Record<JournalEventTag, TransitionRule>> = {
-  ImplementationEvidenceSealed: outcome("ImplementationEvidenceSealingIntended"),
-  ImplementationEvidenceSealingIntended: intent,
-  ImplementationReviewCompleted: outcome("ImplementationReviewIntended"),
-  ImplementationReviewIntended: intent,
-  ReviewFindingsHandbackCompleted: outcome("ReviewFindingsHandbackIntended"),
-  ReviewFindingsHandbackIntended: intent,
-  TaskClaimAcquired: outcome("TaskClaimAcquisitionIntended"),
-  TaskClaimAcquisitionIntended: intent,
-  TaskExecutionIntentRecorded: intent,
-  TaskExecutionObservationFailed: observation("TaskExecutionIntentRecorded"),
-  TaskExecutionOutcomeObserved: outcome("TaskExecutionIntentRecorded", "TaskExecutionReported"),
-  TaskExecutionReported: observation("TaskExecutionIntentRecorded"),
-  TaskExecutionRequestAttemptRecorded: observation("TaskExecutionIntentRecorded"),
-  TaskExecutionRequestFailed: observation("TaskExecutionIntentRecorded"),
-  TaskExecutionRequestReturned: observation("TaskExecutionIntentRecorded"),
-  TaskWorkSessionEstablished: outcome("TaskWorkSessionEstablishmentIntentRecorded", "TaskWorkSessionReported"),
-  TaskWorkSessionEstablishmentIntentRecorded: intent,
-  TaskWorkSessionLookupFailed: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorkSessionLookupRequested: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorkSessionReported: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorkStartRequestAcknowledged: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorkStartRequestFailed: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorkStartRequested: observation("TaskWorkSessionEstablishmentIntentRecorded"),
-  TaskWorktreeReady: outcome("TaskWorktreeReconciliationIntended"),
-  TaskWorktreeReconciliationIntended: intent,
-  TrackerGraphObservationIntentRecorded: intent,
-  TrackerGraphOutcomeObserved: outcome("TrackerGraphObservationIntentRecorded")
-}
 
 const semanticEventJson = (event: WorkflowJournalEvent): string =>
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(event))
@@ -460,7 +415,7 @@ export const reduceManagedHistory = (
       )
     }
     if (descriptor.session._tag === "ProducedSession") establishedSessionIds.add(descriptor.session.sessionId)
-    const transition = TransitionRuleByEventKind[record.event._tag]
+    const transition = managedHistoryTransitionRuleFor(record.event._tag)
     if (transition?._tag === "Intent") {
       const prior = intents.get(operationId)
       if (prior === undefined) intents.set(operationId, record.event)
@@ -704,12 +659,31 @@ export const reduceManagedHistory = (
     }
   }
 
-  return issues.length === 0
-    ? {
-      _tag: "ValidManagedHistory",
+  if (issues.length > 0) {
+    return { _tag: "InvalidManagedHistory", issues, records, runId }
+  }
+  const reconstruction = reconstructManagedRunState(runId, records)
+  if (reconstruction._tag === "InvalidReconstructedManagedRun") {
+    return {
+      _tag: "InvalidManagedHistory",
+      issues: reconstruction.issues.map((issue) =>
+        new ManagedHistorySemanticIssue({
+          detail: issue._tag === "GraphKnowledgeHistoryMismatch"
+            ? `graph knowledge for operation ${issue.operationId} has no matching workflow-history outcome`
+            : `responsibility for operation ${issue.operationId} has no matching workflow-history intent`,
+          position: issue.position,
+          runId
+        })
+      ),
       records,
-      recoveryStage: deriveManagedRunRecoveryStage(records),
       runId
     }
-    : { _tag: "InvalidManagedHistory", issues, records, runId }
+  }
+  return {
+    _tag: "ValidManagedHistory",
+    managedRun: reconstruction.state,
+    records,
+    recoveryStage: deriveManagedRunRecoveryStage(records),
+    runId
+  }
 }
