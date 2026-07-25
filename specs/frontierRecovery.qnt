@@ -1485,6 +1485,13 @@ module frontierRecovery {
     }
   }
 
+  // Executable adapter slice before runnable-frontier derivation exists in
+  // production. The deterministic first admission is the only state-changing
+  // choice in this slice; crash prefixes are exercised through both journal
+  // stores by the matching P0/P1 conformance lanes.
+  action reconstructionStep: bool =
+    commitFirstIntent(A)
+
   action step: bool = {
     nondet task = TASKS.oneOf()
     any {
