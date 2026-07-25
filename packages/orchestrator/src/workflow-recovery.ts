@@ -106,6 +106,41 @@ const classifyStageContinuationFailure = (
     ? failure
     : classifyRecoveryIssue(authority, runId, failure)
 
+const missingPlannedTaskAttemptStages = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+) => {
+  const reduction = reduceManagedHistory(runId, records)
+  return reduction._tag === "InvalidManagedHistory"
+    ? reduction
+    : reduction.recoveryStage.entries.filter(
+      (stage): stage is MissingPlannedTaskAttemptOperationStage =>
+        stage._tag === "TaskExecutionNeeded"
+        || stage._tag === "TaskWorkSessionEstablishmentNeeded"
+        || stage._tag === "TaskWorktreeReconciliationNeeded"
+    )
+}
+
+/**
+ * Selects and continues missing task-attempt work through the same production
+ * recovery-stage reducer used after coordinator restart.
+ */
+export const continueMissingPlannedTaskAttemptStages = Effect.fn(
+  "WorkflowRecovery.continueMissingPlannedTaskAttemptStages"
+)(function*(runId: RunId, records: ReadonlyArray<JournalRecord>) {
+  const selected = missingPlannedTaskAttemptStages(runId, records)
+  if (!Array.isArray(selected)) return selected.issues
+  for (const stage of selected) {
+    const result = yield* Effect.result(
+      continuePlannedTaskAttemptStage(runId, records, stage)
+    )
+    if (Result.isFailure(result)) {
+      return [classifyStageContinuationFailure(stage.authority, runId, result.failure)]
+    }
+  }
+  return []
+})
+
 const collectRefreshIssue = (
   authority: RecoveryReconciliationIssue["authority"],
   runId: RunId
@@ -343,23 +378,11 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
 
   const afterPhases = yield* journal.read(runId)
   if (afterPhases.length > before.length) return []
-  const reduction = reduceManagedHistory(runId, afterPhases)
-  if (reduction._tag === "InvalidManagedHistory") return reduction.issues
-  const missingStages = reduction.recoveryStage.entries.filter(
-    (stage): stage is MissingPlannedTaskAttemptOperationStage =>
-      stage._tag === "TaskExecutionNeeded"
-      || stage._tag === "TaskWorkSessionEstablishmentNeeded"
-      || stage._tag === "TaskWorktreeReconciliationNeeded"
-  )
-  for (const stage of missingStages) {
-    const result = yield* Effect.result(
-      continuePlannedTaskAttemptStage(runId, afterPhases, stage)
-    )
-    if (Result.isFailure(result)) {
-      return [classifyStageContinuationFailure(stage.authority, runId, result.failure)]
-    }
-  }
-  const continuedStage = missingStages[0]
+  const selected = missingPlannedTaskAttemptStages(runId, afterPhases)
+  if (!Array.isArray(selected)) return selected.issues
+  const continuationIssues = yield* continueMissingPlannedTaskAttemptStages(runId, afterPhases)
+  if (continuationIssues.length > 0) return continuationIssues
+  const continuedStage = selected[0]
   if (continuedStage !== undefined) {
     const afterContinuation = yield* journal.read(runId)
     if (afterContinuation.length > afterPhases.length) return []
@@ -372,6 +395,8 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn(
     ]
   }
 
+  const reduction = reduceManagedHistory(runId, afterPhases)
+  if (reduction._tag === "InvalidManagedHistory") return reduction.issues
   const nonterminal = reduction.recoveryStage.entries.find((stage) => stage._tag !== "Terminal")
   if (nonterminal === undefined) return []
   return [

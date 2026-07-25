@@ -2,24 +2,15 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFSet, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Effect, Schema } from "effect"
-import { makeTaskWorkSessionRecoveryHarness } from "../test/task-work-session-recovery-harness.js"
+import {
+  mapTaskWorkSessionRecoveryControls,
+  taskWorkSessionRecoveryActions
+} from "./task-work-session-recovery-conformance.js"
+import { makeTaskWorkSessionRecoveryModelControls } from "./task-work-session-recovery-model-controls.js"
 
-const actionSchema = {
-  commitIntent: {},
-  crash: {},
-  init: {},
-  lookupAbsent: {},
-  lookupConflict: {},
-  lookupContradictoryAbsence: {},
-  lookupMatching: {},
-  lookupUnreadable: {},
-  recordLookup: {},
-  recordOutcome: {},
-  requestCreatesNothing: {},
-  requestCreatesSession: {},
-  restart: {},
-  selectIdentity: {}
-}
+const actionSchema = Object.fromEntries(
+  taskWorkSessionRecoveryActions.map((action) => [action, {}])
+)
 
 // Coverage instrumentation can push this real-service MBT beyond quintIt's
 // 30-second default while the bounded trace count and step count stay fixed.
@@ -60,7 +51,13 @@ const setsEqual = <A>(left: ReadonlySet<A>, right: ReadonlySet<A>): boolean =>
 /** Every generated Quint action calls one public deterministic test control. */
 const recoveryConformanceDriver = defineDriver(
   actionSchema,
-  makeTaskWorkSessionRecoveryHarness
+  () => {
+    const harness = makeTaskWorkSessionRecoveryModelControls()
+    return {
+      ...mapTaskWorkSessionRecoveryControls(harness),
+      getState: harness.getState
+    }
+  }
 )
 
 quintIt(it.effect, "replays the recovery model through the TypeScript boundary", {

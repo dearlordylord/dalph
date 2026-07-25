@@ -1,11 +1,19 @@
 import { expect, it } from "vitest"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import type { WorkflowJournalEvent } from "./journal-store.js"
+import { taskWorkSessionRecoveryPrefixFor } from "./task-work-session-recovery-conformance.js"
 
 const runId = "descriptor-run"
 const operationId = "descriptor-operation"
 const observationId = "descriptor-observation"
 const event = (input: unknown): WorkflowJournalEvent => input as WorkflowJournalEvent
+
+it("returns no durable recovery prefix for an unrelated workflow event", () => {
+  expect(taskWorkSessionRecoveryPrefixFor(event({
+    _tag: "TrackerGraphObservationIntentRecorded",
+    operation: { operationId }
+  }))).toBeUndefined()
+})
 
 it("defines canonical keys and predecessors for every journal event variant", () => {
   const cases: ReadonlyArray<readonly [WorkflowJournalEvent, string, string?]> = [
@@ -224,4 +232,66 @@ it("defines the exact predecessor kind for every convergence terminal", () => {
     expectedKey: "attempt:simulated-attempt:implementation-disposition",
     requiredPredecessorKinds: []
   })
+})
+
+it("classifies every durable session-establishment event into its reopening prefix", () => {
+  const cases: ReadonlyArray<readonly [WorkflowJournalEvent, string]> = [
+    [
+      event({
+        _tag: "TaskWorkSessionEstablishmentIntentRecorded",
+        operation: { request: { operationId, plannedAttempt: { runId } } }
+      }),
+      "P1"
+    ],
+    [
+      event({
+        _tag: "TaskWorkStartRequested",
+        observationId,
+        request: { operationId, plannedAttempt: { runId } }
+      }),
+      "P2"
+    ],
+    [
+      event({ _tag: "TaskWorkStartRequestAcknowledged", acknowledgement: { observationId }, operationId }),
+      "P3"
+    ],
+    [
+      event({
+        _tag: "TaskWorkStartRequestFailed",
+        failure: { observationId },
+        request: { operationId, plannedAttempt: { runId } }
+      }),
+      "P3"
+    ],
+    [
+      event({
+        _tag: "TaskWorkSessionLookupRequested",
+        lookup: { operationId, plannedAttempt: { runId } },
+        observationId
+      }),
+      "P4"
+    ],
+    [
+      event({ _tag: "TaskWorkSessionLookupFailed", failure: { observationId }, operationId }),
+      "P5"
+    ],
+    [
+      event({ _tag: "TaskWorkSessionReported", operationId, report: { observationId } }),
+      "P5"
+    ],
+    [
+      event({
+        _tag: "TaskWorkSessionEstablished",
+        outcome: { operationId, sessionId: "descriptor-session" }
+      }),
+      "P6"
+    ]
+  ]
+
+  for (const [journalEvent, prefix] of cases) {
+    expect(describeJournalEvent(journalEvent).recoveryPrefix).toEqual({
+      _tag: "DurableRecoveryPrefix",
+      prefix
+    })
+  }
 })
