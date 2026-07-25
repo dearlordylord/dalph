@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data, no-magic-numbers */
-import { Cause, Effect, Exit, Fiber, Layer, Match, Queue } from "effect"
+import { Effect, Fiber, Layer, Match, Queue, Result } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -37,11 +37,18 @@ import {
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   WorkflowInterpreter,
+  type WorkflowInterpreterService,
   WorkflowTrace
 } from "./workflow.js"
 
 type Evidence = "Absent" | "Conflict" | "Matching" | "Unreadable"
 type PendingEvidence = Evidence | "NoEvidence"
+type TaskWorkSessionWorkflow = ReturnType<WorkflowInterpreterService["establishTaskWorkSession"]>
+type TaskWorkSessionWorkflowFailure = Effect.Error<TaskWorkSessionWorkflow>
+type TaskWorkSessionWorkflowResult = Result.Result<
+  Effect.Success<TaskWorkSessionWorkflow>,
+  TaskWorkSessionWorkflowFailure
+>
 const lookupBound = 3n
 const taskId = TaskId.make("mbt-task")
 const runId = RunId.make("mbt-run")
@@ -90,7 +97,6 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
   let releaseLookupRecord: Queue.Queue<void>
   let outcomePendingSignal: Queue.Queue<void>
   let releaseOutcome: Queue.Queue<void>
-  let workflowExitSignal: Queue.Queue<Exit.Exit<unknown, unknown>>
 
   const requireOperation = () => {
     if (operation === undefined) return Effect.die(new Error("identity must be selected"))
@@ -192,17 +198,17 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
     Layer.provide(Layer.succeed(
       TrackerGraphReader,
       TrackerGraphReader.of({
-        /* v8 ignore start -- prerequisite tracker evidence makes this defensive provider unreachable -- @preserve */
         read: () => Effect.die("unused tracker read")
-        /* v8 ignore stop -- @preserve */
       })
     )),
     Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
   )
 
+  let workflowResultSignal: Queue.Queue<TaskWorkSessionWorkflowResult>
+
   const startWorkflow = Effect.gen(function*() {
     const selected = yield* requireOperation()
-    const fiber = yield* Effect.gen(function*() {
+    const workflow = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
       yield* interpreter.recordTaskAttemptPlan(makeTaskAttemptPlanOperation({
         operationId: planOperationId,
@@ -215,15 +221,14 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
         predecessorOperationIds: [planOperationId]
       })
       yield* recordReadyWorktreeEvidence(worktreeOperation)
-      return yield* interpreter.establishTaskWorkSession(selected)
+      return interpreter.establishTaskWorkSession(selected)
     }).pipe(
-      Effect.onExit((exit) =>
-        Exit.isFailure(exit) && exit.cause.reasons.every(Cause.isInterruptReason)
-          ? Effect.void
-          : Queue.offer(workflowExitSignal, exit)
-      ),
       Effect.provide(interpreterLayer),
-      Effect.provide(Layer.succeed(JournalStore, journal)),
+      Effect.provide(Layer.succeed(JournalStore, journal))
+    )
+    const fiber = yield* workflow.pipe(
+      Effect.result,
+      Effect.flatMap((result) => Queue.offer(workflowResultSignal, result)),
       Effect.forkDetach
     )
     interruptWorkflow = Fiber.interrupt(fiber).pipe(Effect.asVoid)
@@ -235,31 +240,37 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
       pendingEvidence = yield* Queue.take(lookupRecordedSignal)
     })
 
-  const applyWorkflowExit = (exit: Exit.Exit<unknown, unknown>) => {
-    if (Exit.isSuccess(exit)) {
+  const applyWorkflowResult = (result: TaskWorkSessionWorkflowResult) => {
+    if (Result.isSuccess(result)) {
       return Effect.sync(() => {
         status = "Established"
       })
     }
-    const failure = Cause.squash(exit.cause)
-    /* v8 ignore start -- WorkflowInterpreter failures are typed tagged errors -- @preserve */
-    if (typeof failure !== "object" || failure === null || !("_tag" in failure)) {
-      return Effect.die(failure)
-    }
-    /* v8 ignore stop -- @preserve */
     const recordStatus = (next: string) =>
       Effect.sync(() => {
         status = next
       })
-    return Match.value(failure._tag).pipe(
-      Match.when("TaskWorkSessionLookupDidNotConverge", () => recordStatus("LookupDidNotConverge")),
-      Match.when("TaskWorkSessionEstablishmentDidNotConverge", () => recordStatus("EstablishmentDidNotConverge")),
-      Match.when("TaskWorkSessionCorrelationConflict", () => recordStatus("CorrelationConflict")),
-      /* v8 ignore start -- M1 authority actions cannot construct contradictory durable evidence -- @preserve */
-      Match.when("TaskWorkSessionEvidenceContradiction", () => recordStatus("CorrelationConflict")),
-      Match.orElse(() => Effect.die(failure))
-      /* v8 ignore stop -- @preserve */
-    )
+    const recordCorrelationConflict = () => recordStatus("CorrelationConflict")
+    const dieUnexpectedFailure: typeof Effect.die = Effect.die
+    return Match.valueTags(result.failure, {
+      CoordinatorLockObservationContradiction: dieUnexpectedFailure,
+      CoordinatorOwnershipLost: dieUnexpectedFailure,
+      JournalDataCorruption: dieUnexpectedFailure,
+      JournalSchemaIncompatible: dieUnexpectedFailure,
+      JournalStorageAccessDenied: dieUnexpectedFailure,
+      JournalStorageCapacityExhausted: dieUnexpectedFailure,
+      JournalStorageLocked: dieUnexpectedFailure,
+      JournalStorageUnavailable: dieUnexpectedFailure,
+      JournalStoreContradiction: dieUnexpectedFailure,
+      TaskAttemptPlanHistoryContradiction: dieUnexpectedFailure,
+      TaskWorkSessionCorrelationConflict: recordCorrelationConflict,
+      TaskWorkSessionEstablishmentDidNotConverge: () => recordStatus("EstablishmentDidNotConverge"),
+      TaskWorkSessionEvidenceContradiction: recordCorrelationConflict,
+      TaskWorkSessionLookupDidNotConverge: () => recordStatus("LookupDidNotConverge"),
+      TaskWorkSessionRunContradiction: dieUnexpectedFailure,
+      TaskWorktreeHistoryContradiction: dieUnexpectedFailure,
+      "TraceOutput.TraceOutputError": dieUnexpectedFailure
+    })
   }
 
   const recordLookup = (evidence: Evidence) =>
@@ -274,14 +285,14 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
           }).pipe(Effect.andThen(Queue.take(outcomePendingSignal)))),
         Match.when("Absent", () =>
           matchingReportRecorded || lookupAttempts === lookupBound
-            ? Queue.take(workflowExitSignal).pipe(Effect.flatMap(applyWorkflowExit))
+            ? Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))
             : Effect.sync(() => {
               authorization = "FreshAbsence"
             })),
-        Match.when("Conflict", () => Queue.take(workflowExitSignal).pipe(Effect.flatMap(applyWorkflowExit))),
+        Match.when("Conflict", () => Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))),
         Match.when("Unreadable", () =>
           lookupAttempts === lookupBound
-            ? Queue.take(workflowExitSignal).pipe(Effect.flatMap(applyWorkflowExit))
+            ? Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))
             : Effect.void),
         Match.exhaustive
       )
@@ -329,7 +340,7 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
         releaseLookupRecord = yield* Queue.unbounded<void>()
         outcomePendingSignal = yield* Queue.unbounded<void>()
         releaseOutcome = yield* Queue.unbounded<void>()
-        workflowExitSignal = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>()
+        workflowResultSignal = yield* Queue.unbounded<TaskWorkSessionWorkflowResult>()
       }),
     selectIdentity: () =>
       Effect.sync(() => {
@@ -395,8 +406,8 @@ export const makeTaskWorkSessionRecoveryModelControls = () => {
     recordLookup: () => recordPendingLookup(pendingEvidence),
     recordOutcome: () =>
       Queue.offer(releaseOutcome, undefined).pipe(
-        Effect.andThen(Queue.take(workflowExitSignal)),
-        Effect.flatMap(applyWorkflowExit),
+        Effect.andThen(Queue.take(workflowResultSignal)),
+        Effect.flatMap(applyWorkflowResult),
         Effect.asVoid
       ),
     crash: () =>
