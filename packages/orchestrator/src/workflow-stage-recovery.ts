@@ -139,7 +139,8 @@ export const refreshPlannedAttemptEligibility = Effect.fn(
   const observationOperation = makeTrackerGraphObservationOperation(
     observationOperationId,
     priorObservation.operation.target,
-    [planOperation.operationId]
+    [planOperation.operationId],
+    [plannedAttempt.taskId]
   )
   yield* trace.emit(OperationSelected.make({ operation: observationOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(observationOperation)

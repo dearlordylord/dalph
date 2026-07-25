@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Schema } from "effect"
 import { expect } from "vitest"
 import {
   ClaimOwner,
@@ -25,6 +25,11 @@ import {
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
+import {
+  TaskTrackerTargetClosureKnowledgeConflict,
+  TaskTrackerTargetClosureObservation
+} from "./reconstructed-managed-run-state.js"
+import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
 import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import { makeTaskClaimAcquisitionOperation, makeTrackerGraphObservationOperation } from "./workflow-operation.js"
@@ -61,6 +66,21 @@ const observedGraph = [
     key: outcomeRecordKey(graphObservation.operationId)
   }
 ] as const
+
+const validTargetClosureObservation = {
+  _tag: "TaskTrackerTargetClosureObserved" as const,
+  completeness: "Complete" as const,
+  consistency: "PotentiallyMixedTime" as const,
+  explicitlyCoveredTaskIds: [taskA],
+  factFamilies: ["TargetMembership"] as const,
+  freshness: "FreshAtReadBoundary" as const,
+  observedAt: JournalPosition.make(1),
+  operationId: graphObservation.operationId,
+  provenAbsentTaskIds: [],
+  revision: TrackerRevision.make("schema-validation-revision"),
+  target,
+  taskIds: [taskA]
+}
 
 const claimA = makeTaskClaimAcquisitionOperation({
   acquisition: {
@@ -112,6 +132,98 @@ const readScenarioOnePrefix = Effect.fn("ReconstructedManagedRunTest.readScenari
     return yield* journal.read(runId)
   }
 )
+
+it("rejects contradictory target-closure coverage and malformed local conflicts", () => {
+  const decodeObservation = Schema.decodeUnknownSync(TaskTrackerTargetClosureObservation)
+  expect(() =>
+    decodeObservation({
+      ...validTargetClosureObservation,
+      provenAbsentTaskIds: [taskA]
+    })
+  ).toThrow("one task cannot be both observed and proven absent")
+  expect(() =>
+    decodeObservation({
+      ...validTargetClosureObservation,
+      explicitlyCoveredTaskIds: [],
+      provenAbsentTaskIds: [taskB]
+    })
+  ).toThrow("every proven-absent task must be explicitly covered")
+  expect(() =>
+    decodeObservation({
+      ...validTargetClosureObservation,
+      explicitlyCoveredTaskIds: [taskA, taskB]
+    })
+  ).toThrow("every explicitly covered task must be observed or proven absent")
+
+  const decodeConflict = Schema.decodeUnknownSync(TaskTrackerTargetClosureKnowledgeConflict)
+  expect(() =>
+    decodeConflict({
+      _tag: "TaskTrackerTargetClosureKnowledgeConflict",
+      observations: [
+        validTargetClosureObservation,
+        {
+          ...validTargetClosureObservation,
+          explicitlyCoveredTaskIds: [],
+          target: FixtureTarget.make("another-target"),
+          taskIds: [taskB]
+        }
+      ],
+      target
+    })
+  ).toThrow("every conflicting observation must cover the conflict target")
+  expect(() =>
+    decodeConflict({
+      _tag: "TaskTrackerTargetClosureKnowledgeConflict",
+      observations: [
+        validTargetClosureObservation,
+        {
+          ...validTargetClosureObservation,
+          operationId: OperationId.make("same-membership")
+        }
+      ],
+      target
+    })
+  ).toThrow("a conflict requires at least two different target memberships")
+})
+
+it("reports malformed direct reducer inputs without inventing authority", () => {
+  expect(reconstructManagedRunState(runId, [])).toMatchObject({
+    _tag: "ValidReconstructedManagedRun",
+    state: { appliedThrough: null }
+  })
+
+  expect(reconstructManagedRunState(runId, records(observedGraph[1]))).toMatchObject({
+    _tag: "ValidReconstructedManagedRun",
+    state: { graphKnowledge: { targetClosures: [] } }
+  })
+
+  const mispositionedGraph = records(...observedGraph).map((record) => ({
+    ...record,
+    position: JournalPosition.make(record.position + 1)
+  }))
+  expect(reconstructManagedRunState(runId, mispositionedGraph)).toMatchObject({
+    _tag: "InvalidReconstructedManagedRun",
+    issues: [{ _tag: "GraphKnowledgeHistoryMismatch" }]
+  })
+
+  const missingResponsibilityRecord = [{
+    ...records(claimIntent)[0] as JournalRecord,
+    position: JournalPosition.make(2)
+  }]
+  expect(reconstructManagedRunState(runId, missingResponsibilityRecord)).toMatchObject({
+    _tag: "InvalidReconstructedManagedRun",
+    issues: [{ _tag: "ResponsibilityHistoryMismatch" }]
+  })
+
+  const mismatchedResponsibilityRecord = [
+    { ...records(observedGraph[0])[0] as JournalRecord, position: JournalPosition.make(2) },
+    { ...records(claimIntent)[0] as JournalRecord, position: JournalPosition.make(1) }
+  ]
+  expect(reconstructManagedRunState(runId, mismatchedResponsibilityRecord)).toMatchObject({
+    _tag: "InvalidReconstructedManagedRun",
+    issues: [{ _tag: "ResponsibilityHistoryMismatch" }]
+  })
+})
 
 it("keeps graph knowledge separate from workflow responsibility before and after claim intent", () => {
   const beforeIntent = reduceManagedHistory(runId, records(...observedGraph))
@@ -202,6 +314,10 @@ it("retains incomparable target-closure membership as a local conflict", () => {
     OperationId.make("observe-only-A"),
     target
   )
+  const thirdObservation = makeTrackerGraphObservationOperation(
+    OperationId.make("observe-only-B"),
+    target
+  )
   const reduced = reduceManagedHistory(
     runId,
     records(
@@ -217,6 +333,18 @@ it("retains incomparable target-closure membership as a local conflict", () => {
           taskIds: [taskA]
         }),
         key: outcomeRecordKey(laterObservation.operationId)
+      },
+      {
+        event: trackerGraphObservationIntent(thirdObservation),
+        key: intentRecordKey(thirdObservation.operationId)
+      },
+      {
+        event: trackerGraphOutcomeObserved(thirdObservation.operationId, {
+          _tag: "TrackerGraphObserved",
+          revision: TrackerRevision.make("revision-only-B"),
+          taskIds: [taskB]
+        }),
+        key: outcomeRecordKey(thirdObservation.operationId)
       }
     )
   )
@@ -254,6 +382,20 @@ it("retains incomparable target-closure membership as a local conflict", () => {
           revision: TrackerRevision.make("revision-only-A"),
           target,
           taskIds: [taskA]
+        },
+        {
+          _tag: "TaskTrackerTargetClosureObserved",
+          completeness: "Complete",
+          consistency: "PotentiallyMixedTime",
+          explicitlyCoveredTaskIds: [],
+          factFamilies: ["TargetMembership"],
+          freshness: "FreshAtReadBoundary",
+          observedAt: JournalPosition.make(6),
+          operationId: thirdObservation.operationId,
+          provenAbsentTaskIds: [],
+          revision: TrackerRevision.make("revision-only-B"),
+          target,
+          taskIds: [taskB]
         }
       ],
       target
@@ -261,7 +403,73 @@ it("retains incomparable target-closure membership as a local conflict", () => {
   ])
 })
 
-it("records proven absence when a claim predecessor names the covered task", () => {
+it("does not infer graph coverage from causal predecessors", () => {
+  const claimB = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("claim-B-without-read-coverage"),
+      owner: ClaimOwner.make("owner"),
+      taskId: taskB,
+      token: ClaimToken.make("claim-B-without-read-coverage-token")
+    },
+    predecessorOperationIds: [graphObservation.operationId]
+  })
+  const causalObservation = makeTrackerGraphObservationOperation(
+    OperationId.make("observe-after-claim-B"),
+    target,
+    [claimB.acquisition.operationId]
+  )
+  const reduced = reduceManagedHistory(
+    runId,
+    records(
+      ...observedGraph,
+      {
+        event: TaskClaimAcquisitionIntendedEvent.make({
+          operation: claimB,
+          version: 4
+        }),
+        key: intentRecordKey(claimB.acquisition.operationId)
+      },
+      {
+        event: TaskClaimAcquiredEvent.make({
+          claim: ActiveTaskClaim.make(claimB.acquisition),
+          version: 4
+        }),
+        key: outcomeRecordKey(claimB.acquisition.operationId)
+      },
+      {
+        event: trackerGraphObservationIntent(causalObservation),
+        key: intentRecordKey(causalObservation.operationId)
+      },
+      {
+        event: trackerGraphOutcomeObserved(causalObservation.operationId, {
+          _tag: "TrackerGraphObserved",
+          revision: TrackerRevision.make("revision-B-missing-without-coverage"),
+          taskIds: [taskA]
+        }),
+        key: outcomeRecordKey(causalObservation.operationId)
+      }
+    )
+  )
+  expect(reduced._tag).toBe("ValidManagedHistory")
+  if (reduced._tag !== "ValidManagedHistory") return
+  expect(reduced.managedRun.graphKnowledge.targetClosures[0]).toMatchObject({
+    _tag: "TaskTrackerTargetClosureKnowledgeConflict",
+    observations: [
+      {
+        explicitlyCoveredTaskIds: [],
+        provenAbsentTaskIds: [],
+        taskIds: [taskA, taskB]
+      },
+      {
+        explicitlyCoveredTaskIds: [],
+        provenAbsentTaskIds: [],
+        taskIds: [taskA]
+      }
+    ]
+  })
+})
+
+it("records proven absence only when the named read shape covers the task", () => {
   const claimB = makeTaskClaimAcquisitionOperation({
     acquisition: {
       operationId: OperationId.make("claim-B-for-absence"),
@@ -274,7 +482,8 @@ it("records proven absence when a claim predecessor names the covered task", () 
   const absenceObservation = makeTrackerGraphObservationOperation(
     OperationId.make("observe-B-absence"),
     target,
-    [claimB.acquisition.operationId]
+    [claimB.acquisition.operationId],
+    [taskB]
   )
   const reduced = reduceManagedHistory(
     runId,
@@ -376,7 +585,8 @@ it("resolves a local conflict after a focused read covers every disputed task", 
   const focusedObservation = makeTrackerGraphObservationOperation(
     OperationId.make("focused-observe-B-absence"),
     target,
-    [claimB.acquisition.operationId]
+    [claimB.acquisition.operationId],
+    [taskB]
   )
   const reduced = reduceManagedHistory(
     runId,

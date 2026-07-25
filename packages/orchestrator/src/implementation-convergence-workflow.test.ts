@@ -56,7 +56,8 @@ import {
   makeImplementationDispositionOperation,
   makeImplementationReviewOperation,
   makeReviewFindingsHandbackOperation,
-  WorkflowOperation
+  WorkflowOperation,
+  workflowOperationId
 } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 import type { TraceItem, WorkflowInterpreterService } from "./workflow.js"
@@ -509,6 +510,7 @@ it.effect("rejects terminal dispositions whose retained evidence contradicts the
       disposition: accepted,
       operationId: OperationId.make("invalid-predecessor-disposition")
     }, accepted.review.manifest.operationId)
+    expect(workflowOperationId(acceptedOperation)).toBe(acceptedOperation.request.operationId)
     expect(() =>
       Schema.decodeUnknownSync(WorkflowOperation.cases.RecordImplementationDisposition)({
         ...acceptedOperation,

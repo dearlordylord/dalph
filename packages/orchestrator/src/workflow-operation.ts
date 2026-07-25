@@ -1,6 +1,11 @@
 import { Schema } from "effect"
-import type { TrackerTarget } from "./domain.js"
-import { OperationId, PlannedTaskAttempt, TrackerTarget as TrackerTargetSchema } from "./domain.js"
+import type { TaskId, TrackerTarget } from "./domain.js"
+import {
+  OperationId,
+  PlannedTaskAttempt,
+  TaskId as TaskIdSchema,
+  TrackerTarget as TrackerTargetSchema
+} from "./domain.js"
 import {
   ImplementationConvergenceDispositionRequest,
   implementationConvergencePredecessorOperationId
@@ -14,11 +19,19 @@ const CausalPredecessorOperationIds = Schema.Array(OperationId).check(
   Schema.isUnique()
 )
 
+/** A complete target-closure membership read that explicitly names absence-sensitive subjects. */
+const TaskGraphReadShape = Schema.TaggedUnion({
+  TargetClosureMembership: {
+    explicitlyCoveredTaskIds: Schema.Array(TaskIdSchema).check(Schema.isUnique())
+  }
+})
+
 const ReadTrackerGraphOperation = Schema.TaggedStruct(
   "ReadTrackerGraph",
   {
     operationId: OperationId,
     predecessorOperationIds: CausalPredecessorOperationIds,
+    readShape: TaskGraphReadShape,
     target: TrackerTargetSchema
   }
 )
@@ -271,11 +284,15 @@ export const causalGraphProjection = (
 export const makeTrackerGraphObservationOperation = (
   operationId: OperationId,
   target: TrackerTarget,
-  predecessorOperationIds: ReadonlyArray<OperationId> = []
+  predecessorOperationIds: ReadonlyArray<OperationId> = [],
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []
 ): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
   WorkflowOperation.cases.ReadTrackerGraph.make({
     operationId,
     predecessorOperationIds: [...new Set(predecessorOperationIds)].sort(compareOperationIds),
+    readShape: TaskGraphReadShape.cases.TargetClosureMembership.make({
+      explicitlyCoveredTaskIds: [...new Set(explicitlyCoveredTaskIds)].sort()
+    }),
     target
   })
 

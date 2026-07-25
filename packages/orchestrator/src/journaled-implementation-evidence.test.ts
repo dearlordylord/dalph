@@ -5,6 +5,7 @@ import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  JournalPosition,
   JournalRecordKey,
   OperationId,
   PlannedTaskAttempt,
@@ -43,6 +44,7 @@ import {
   TaskExecutionOutcomeObservedEvent
 } from "./journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
+import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionOutcome, TaskExecutionRequest, taskExecutorTestLayer } from "./task-execution.js"
 import { taskRunnerTestLayer } from "./task-work-start.js"
@@ -93,6 +95,22 @@ const executionOperation = makeTaskExecutionOperation({
     plannedAttempt: plan,
     session: { _tag: "EstablishedSession", sessionId: successfulOutcome.sessionId },
     task
+  })
+})
+
+it("reconstructs outstanding evidence responsibility from its exact intent", () => {
+  expect(reconstructManagedRunState(runId, [{
+    event: ImplementationEvidenceSealingIntendedEvent.make({ operation, version: 4 }),
+    key: intentRecordKey(operation.operationId),
+    position: JournalPosition.make(1),
+    runId
+  }])).toMatchObject({
+    _tag: "ValidReconstructedManagedRun",
+    state: {
+      responsibility: {
+        entries: [{ _tag: "ImplementationEvidenceResponsibility" }]
+      }
+    }
   })
 })
 

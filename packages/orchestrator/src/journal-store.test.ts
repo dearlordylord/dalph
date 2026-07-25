@@ -64,6 +64,10 @@ const intent = (operationId: string, taskId: string) =>
     WorkflowOperation.cases.ReadTrackerGraph.make({
       operationId: OperationId.make(operationId),
       predecessorOperationIds: [],
+      readShape: {
+        _tag: "TargetClosureMembership",
+        explicitlyCoveredTaskIds: []
+      },
       target: FixtureTarget.make(taskId)
     })
   )

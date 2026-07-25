@@ -158,6 +158,10 @@ const baseRecords = (): ReadonlyArray<JournalRecord> => [
       _tag: "ReadTrackerGraph",
       operationId: OperationId.make("admission"),
       predecessorOperationIds: [claim.operationId],
+      readShape: {
+        _tag: "TargetClosureMembership",
+        explicitlyCoveredTaskIds: []
+      },
       target: FixtureTarget.make("journaled-convergence")
     },
     version: 4

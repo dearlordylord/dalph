@@ -103,7 +103,8 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         const admissionObservation = makeTrackerGraphObservationOperation(
           yield* allocator.allocate(),
           target,
-          [claimOperation.acquisition.operationId]
+          [claimOperation.acquisition.operationId],
+          [currentTask.id]
         )
         yield* emit(OperationSelected.make({ operation: admissionObservation }))
         const admissionSnapshot = yield* interpreter.readTrackerGraph(

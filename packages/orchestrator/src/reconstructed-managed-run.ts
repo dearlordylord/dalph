@@ -39,14 +39,7 @@ const applyGraphKnowledgeRecord = (
   const targetKey = trackerTargetKey(intent.operation.target)
   const priorKnowledge = targetClosures.get(targetKey)
   const taskIds = [...new Set(graphOutcome.outcome.taskIds)].sort()
-  const explicitlyCoveredTaskIds = [
-    ...new Set(records.flatMap(({ event }) =>
-      event._tag === "TaskClaimAcquisitionIntended"
-        && intent.operation.predecessorOperationIds.includes(event.operation.acquisition.operationId)
-        ? [event.operation.acquisition.taskId]
-        : []
-    ))
-  ].sort()
+  const explicitlyCoveredTaskIds = [...intent.operation.readShape.explicitlyCoveredTaskIds]
   const provenAbsentTaskIds = explicitlyCoveredTaskIds.filter((taskId) => !taskIds.includes(taskId))
   const observation = TaskTrackerTargetClosureObservation.make({
     completeness: "Complete",
