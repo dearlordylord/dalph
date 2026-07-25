@@ -1,7 +1,6 @@
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import { recordReadyWorktreeEvidence } from "../test/task-worktree-evidence.js"
 import {
   AttemptId,
   deterministicTestWorkflowInterpreterLayer,
@@ -68,6 +67,7 @@ import {
   TaskWorkSessionEstablishedEvent,
   TaskWorkSessionEstablishmentIntentRecorded
 } from "./journal-store.js"
+import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
 
 const runId = RunId.make("journaled-execution-run")
 const sessionId = TaskWorkSessionId.make("journaled-execution-session")

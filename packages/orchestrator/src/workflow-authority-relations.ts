@@ -1,3 +1,4 @@
+import { Match } from "effect"
 import type { PlannedTaskAttempt, TaskWorkSessionId } from "./domain.js"
 import type { PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady } from "./git-worktree.js"
 import type { TaskExecutionOutcome, TaskExecutionReport } from "./task-execution.js"
@@ -39,25 +40,25 @@ export const executionAuthorityMatches = (
   durable: TaskExecutionOutcome
 ): boolean => {
   if (observed.operationId !== durable.operationId || observed.sessionId !== durable.sessionId) return false
-  switch (durable._tag) {
-    case "Succeeded":
-      return observed._tag === "SuccessfulTaskExecutionReported"
-        && observed.processId === durable.processId
-        && observed.output === durable.output
-    case "Failed":
-      return observed._tag === "FailedTaskExecutionReported"
-        && observed.processId === durable.processId
-        && observed.exitCode === durable.exitCode
-        && observed.partialOutput === durable.partialOutput
-    case "Interrupted":
-      return observed._tag === "InterruptedTaskExecutionReported"
-        && observed.processId === durable.processId
-        && observed.partialOutput === durable.partialOutput
-    case "ResourceEmergency":
-      return observed._tag === "ResourceEmergencyTaskExecutionReported"
-        && observed.processId === durable.processId
-        && observed.cause === durable.cause
-        && observed.detail === durable.detail
-        && observed.partialOutput === durable.partialOutput
-  }
+  return Match.valueTags(durable, {
+    Succeeded: (durable) =>
+      observed._tag === "SuccessfulTaskExecutionReported"
+      && observed.processId === durable.processId
+      && observed.output === durable.output,
+    Failed: (durable) =>
+      observed._tag === "FailedTaskExecutionReported"
+      && observed.processId === durable.processId
+      && observed.exitCode === durable.exitCode
+      && observed.partialOutput === durable.partialOutput,
+    Interrupted: (durable) =>
+      observed._tag === "InterruptedTaskExecutionReported"
+      && observed.processId === durable.processId
+      && observed.partialOutput === durable.partialOutput,
+    ResourceEmergency: (durable) =>
+      observed._tag === "ResourceEmergencyTaskExecutionReported"
+      && observed.processId === durable.processId
+      && observed.cause === durable.cause
+      && observed.detail === durable.detail
+      && observed.partialOutput === durable.partialOutput
+  })
 }

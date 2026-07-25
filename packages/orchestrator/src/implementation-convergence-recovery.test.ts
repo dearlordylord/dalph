@@ -703,6 +703,10 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
         _tag: "ReadTrackerGraph",
         operationId: collidingOperationId,
         predecessorOperationIds: [],
+        readShape: {
+          _tag: "TargetClosureMembership",
+          explicitlyCoveredTaskIds: []
+        },
         target: FixtureTarget.make("implementation-convergence-recovery")
       },
       version: 4

@@ -66,6 +66,8 @@ requires a setting that cannot correctly be shared.
 - `pnpm typecheck` runs the strict shared TypeScript program.
 - `pnpm lint:code` runs type-aware ESLint and Effect dprint rules.
 - `pnpm check:circular` rejects runtime dependency cycles.
+- `pnpm check:complexity` rejects an increase in the number of production
+  functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
 - `pnpm test:coverage` enforces the configured line, function, branch, and statement coverage bar.
@@ -111,6 +113,12 @@ The empty `.eslintrc` file is a compatibility sentinel consumed by
 `import-x/no-unused-modules` while ESLint itself uses the flat
 `eslint.config.mjs` configuration. Keep the sentinel until the pinned plugin no
 longer requires it for flat-config file discovery.
+
+The separate `eslint.complexity.config.mjs` applies the production-code
+complexity gate. `eslint-complexity-suppressions.json` records the number of
+existing violations per file; it does not bind a suppression to one function or
+complexity value. After reducing complexity, run `pnpm check:complexity:prune`
+to remove obsolete suppressions.
 
 The repository-wide `dalph/effect-class-inheritance-only` rule permits class
 inheritance only for Effect `Context.Service` tags and

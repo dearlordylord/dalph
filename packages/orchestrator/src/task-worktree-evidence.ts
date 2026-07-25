@@ -1,14 +1,14 @@
 import { Effect } from "effect"
-import { PlannedWorktreeReady } from "../src/git-worktree.js"
-import { workflowJournalEventVersion } from "../src/journal-event-version.js"
+import { PlannedWorktreeReady } from "./git-worktree.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import {
   intentRecordKey,
   JournalStore,
   outcomeRecordKey,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent
-} from "../src/journal-store.js"
-import type { WorkflowOperation } from "../src/workflow-operation.js"
+} from "./journal-store.js"
+import type { WorkflowOperation } from "./workflow-operation.js"
 
 export const recordReadyWorktreeEvidence = (
   operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type

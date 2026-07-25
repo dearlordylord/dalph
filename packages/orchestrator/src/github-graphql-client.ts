@@ -1,5 +1,5 @@
 import { NodeHttpClient } from "@effect/platform-node"
-import { Config, Context, Effect, Layer, type Redacted, Schema } from "effect"
+import { Config, Context, Effect, Layer, Match, type Redacted, Schema } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
@@ -174,66 +174,59 @@ const requestBody = (request: GithubGraphqlRequest): {
   readonly query: string
   readonly variables: Readonly<Record<string, unknown>>
 } => {
-  switch (request._tag) {
-    case "FindClaimLabel":
-      return {
-        query: findClaimLabelQuery,
-        variables: {
-          labelName: request.labelName,
-          repositoryNodeId: request.repositoryNodeId
-        }
+  return Match.valueTags(request, {
+    FindClaimLabel: (request) => ({
+      query: findClaimLabelQuery,
+      variables: {
+        labelName: request.labelName,
+        repositoryNodeId: request.repositoryNodeId
       }
-    case "CreateClaimLabel":
-      return {
-        query: createClaimLabelMutation,
-        variables: {
-          description: request.description,
-          labelName: request.labelName,
-          operationId: request.operationId,
-          repositoryNodeId: request.repositoryNodeId
-        }
+    }),
+    CreateClaimLabel: (request) => ({
+      query: createClaimLabelMutation,
+      variables: {
+        description: request.description,
+        labelName: request.labelName,
+        operationId: request.operationId,
+        repositoryNodeId: request.repositoryNodeId
       }
-    case "DeleteClaimLabel":
-      return {
-        query: deleteClaimLabelMutation,
-        variables: {
-          labelNodeId: request.labelNodeId,
-          operationId: request.operationId
-        }
+    }),
+    DeleteClaimLabel: (request) => ({
+      query: deleteClaimLabelMutation,
+      variables: {
+        labelNodeId: request.labelNodeId,
+        operationId: request.operationId
       }
-    case "ResolveIssue":
-      return {
-        query: resolveIssueQuery,
-        variables: {
-          issueNumber: request.target.issueNumber,
-          owner: request.target.owner,
-          repository: request.target.repository
-        }
+    }),
+    ResolveIssue: (request) => ({
+      query: resolveIssueQuery,
+      variables: {
+        issueNumber: request.target.issueNumber,
+        owner: request.target.owner,
+        repository: request.target.repository
       }
-    case "ReadIssue":
-      return {
-        query: readIssueQuery,
-        variables: { issueNodeId: request.issueNodeId }
+    }),
+    ReadIssue: (request) => ({
+      query: readIssueQuery,
+      variables: { issueNodeId: request.issueNodeId }
+    }),
+    ReadSubIssues: (request) => ({
+      query: readSubIssuesQuery,
+      variables: {
+        cursor: request.cursor,
+        issueNodeId: request.issueNodeId,
+        pageSize: connectionPageSize
       }
-    case "ReadSubIssues":
-      return {
-        query: readSubIssuesQuery,
-        variables: {
-          cursor: request.cursor,
-          issueNodeId: request.issueNodeId,
-          pageSize: connectionPageSize
-        }
+    }),
+    ReadBlockedBy: (request) => ({
+      query: readBlockedByQuery,
+      variables: {
+        cursor: request.cursor,
+        issueNodeId: request.issueNodeId,
+        pageSize: connectionPageSize
       }
-    case "ReadBlockedBy":
-      return {
-        query: readBlockedByQuery,
-        variables: {
-          cursor: request.cursor,
-          issueNodeId: request.issueNodeId,
-          pageSize: connectionPageSize
-        }
-      }
-  }
+    })
+  })
 }
 
 const requestError = (

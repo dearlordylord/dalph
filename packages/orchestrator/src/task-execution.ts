@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Match, Ref, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "./coordinator-lock.js"
 import {
   FailedProcessExitCode,
@@ -373,36 +373,32 @@ export const taskExecutionOutcomeFromReport = (
       })
     )
   }
-  switch (report._tag) {
-    case "NoTaskExecutionReported":
-      return Effect.fail(
+  return Match.valueTags(report, {
+    NoTaskExecutionReported: (report) =>
+      Effect.fail(
         new TaskExecutionEvidenceContradiction({
           detail: "no execution exists after the request returned",
           report
         })
-      )
-    case "TaskExecutionSessionConflictReported":
-      return Effect.fail(new TaskExecutionSessionConflict({ report }))
-    case "AmbiguousTaskExecutionReported":
-      return Effect.fail(new TaskExecutionOutcomeAmbiguous({ report }))
-    case "RunningTaskExecutionReported": {
-      return Effect.fail(new TaskExecutionStillRunning({ report }))
-    }
-    case "SuccessfulTaskExecutionReported": {
+      ),
+    TaskExecutionSessionConflictReported: (report) => Effect.fail(new TaskExecutionSessionConflict({ report })),
+    AmbiguousTaskExecutionReported: (report) => Effect.fail(new TaskExecutionOutcomeAmbiguous({ report })),
+    RunningTaskExecutionReported: (report) => Effect.fail(new TaskExecutionStillRunning({ report })),
+    SuccessfulTaskExecutionReported: (report) => {
       const { _tag: _reported, ...evidence } = report
       return Effect.succeed(TaskExecutionOutcome.cases.Succeeded.make(evidence))
-    }
-    case "FailedTaskExecutionReported": {
+    },
+    FailedTaskExecutionReported: (report) => {
       const { _tag: _reported, ...evidence } = report
       return Effect.succeed(TaskExecutionOutcome.cases.Failed.make(evidence))
-    }
-    case "InterruptedTaskExecutionReported": {
+    },
+    InterruptedTaskExecutionReported: (report) => {
       const { _tag: _reported, ...evidence } = report
       return Effect.succeed(TaskExecutionOutcome.cases.Interrupted.make(evidence))
-    }
-    case "ResourceEmergencyTaskExecutionReported": {
+    },
+    ResourceEmergencyTaskExecutionReported: (report) => {
       const { _tag: _reported, ...evidence } = report
       return Effect.succeed(TaskExecutionOutcome.cases.ResourceEmergency.make(evidence))
     }
-  }
+  })
 }

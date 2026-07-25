@@ -280,6 +280,10 @@ it.effect("does not resume a run containing both valid history and a physical de
         WorkflowOperation.cases.ReadTrackerGraph.make({
           operationId: OperationId.make(operationId),
           predecessorOperationIds: [],
+          readShape: {
+            _tag: "TargetClosureMembership",
+            explicitlyCoveredTaskIds: []
+          },
           target: FixtureTarget.make(`target-${operationId}`)
         })
       )

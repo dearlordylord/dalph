@@ -1,3 +1,4 @@
+import { Match } from "effect"
 import type { PlannedTaskAttempt } from "./domain.js"
 import type {
   ImplementationConvergenceDisposition,
@@ -82,35 +83,45 @@ export const convergenceDispositionPredecessorMatches = (
   if (operation.predecessorOperationIds.length !== 1) return false
   const predecessorOperationId = operation.predecessorOperationIds[0]
   const disposition = request.disposition
-  switch (disposition._tag) {
-    case "Accepted":
-    case "ImplementationNonConvergent":
-      return predecessorOperationId === disposition.review.manifest.operationId
-        && records.some(({ event }) =>
-          event._tag === "ImplementationReviewCompleted"
-          && event.review.manifest.operationId === predecessorOperationId
-          && sameEncoded(event.review, disposition.review)
-        )
-    case "ReviewTechnicalRetryExhausted":
-      return predecessorOperationId === disposition.request.operationId
-        && records.some(({ event }) =>
-          event._tag === "ImplementationReviewIntended"
-          && event.operation.request.operationId === predecessorOperationId
-          && sameEncoded(event.operation.request, disposition.request)
-        )
-    case "HandbackTechnicalRetryExhausted":
-      return predecessorOperationId === disposition.request.operationId
-        && records.some(({ event }) =>
-          event._tag === "ReviewFindingsHandbackIntended"
-          && event.operation.request.operationId === predecessorOperationId
-          && sameEncoded(event.operation.request, disposition.request)
-        )
-    case "ResourceEmergency":
-    case "ImplementationExecutionFailed":
-    case "ImplementationExecutionInterrupted":
-      return predecessorOperationId === disposition.outcome.operationId
-        && executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt)
-  }
+  const reviewedDispositionMatches = (
+    disposition: Extract<
+      ImplementationConvergenceDisposition,
+      { readonly _tag: "Accepted" | "ImplementationNonConvergent" }
+    >
+  ) =>
+    predecessorOperationId === disposition.review.manifest.operationId
+    && records.some(({ event }) =>
+      event._tag === "ImplementationReviewCompleted"
+      && event.review.manifest.operationId === predecessorOperationId
+      && sameEncoded(event.review, disposition.review)
+    )
+  return Match.valueTags(disposition, {
+    Accepted: reviewedDispositionMatches,
+    ImplementationNonConvergent: reviewedDispositionMatches,
+    ReviewTechnicalRetryExhausted: (disposition) =>
+      predecessorOperationId === disposition.request.operationId
+      && records.some(({ event }) =>
+        event._tag === "ImplementationReviewIntended"
+        && event.operation.request.operationId === predecessorOperationId
+        && sameEncoded(event.operation.request, disposition.request)
+      ),
+    HandbackTechnicalRetryExhausted: (disposition) =>
+      predecessorOperationId === disposition.request.operationId
+      && records.some(({ event }) =>
+        event._tag === "ReviewFindingsHandbackIntended"
+        && event.operation.request.operationId === predecessorOperationId
+        && sameEncoded(event.operation.request, disposition.request)
+      ),
+    ResourceEmergency: (disposition) =>
+      predecessorOperationId === disposition.outcome.operationId
+      && executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt),
+    ImplementationExecutionFailed: (disposition) =>
+      predecessorOperationId === disposition.outcome.operationId
+      && executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt),
+    ImplementationExecutionInterrupted: (disposition) =>
+      predecessorOperationId === disposition.outcome.operationId
+      && executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt)
+  })
 }
 
 const sameReference = (

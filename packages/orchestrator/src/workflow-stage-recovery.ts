@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import { AttemptId, OperationId, RunId, type Task, type TaskId, type TaskRevision } from "./domain.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
@@ -139,7 +139,8 @@ export const refreshPlannedAttemptEligibility = Effect.fn(
   const observationOperation = makeTrackerGraphObservationOperation(
     observationOperationId,
     priorObservation.operation.target,
-    [planOperation.operationId]
+    [planOperation.operationId],
+    [plannedAttempt.taskId]
   )
   yield* trace.emit(OperationSelected.make({ operation: observationOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(observationOperation)
@@ -184,85 +185,88 @@ export const continuePlannedTaskAttemptStage = Effect.fn(
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
-  switch (stage._tag) {
-    case "TaskWorktreeReconciliationNeeded": {
-      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
-      const operation = makeTaskWorktreeReconciliationOperation({
-        operationId: recoveryOperationId(
-          runId,
-          stage.planOperation.plannedAttempt.attemptId,
-          records,
-          "worktree",
-          new Set([eligible.observationOperationId])
-        ),
-        plannedAttempt: stage.planOperation.plannedAttempt,
-        predecessorOperationIds: [
-          stage.planOperation.operationId,
-          eligible.observationOperationId
-        ]
-      })
-      yield* trace.emit(OperationSelected.make({ operation }))
-      const result = yield* interpreter.reconcileTaskWorktree(operation)
-      if (result._tag !== "AuthoritativeTaskWorktreeReady") {
-        return yield* new TaskWorktreeExecutionModeContradiction({ operationId: operation.operationId })
-      }
-      yield* trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
-      return true
-    }
-    case "TaskWorkSessionEstablishmentNeeded": {
-      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
-      const request = TaskWorkStartRequest.make({
-        operationId: recoveryOperationId(
-          runId,
-          stage.planOperation.plannedAttempt.attemptId,
-          records,
-          "session",
-          new Set([eligible.observationOperationId])
-        ),
-        plannedAttempt: stage.planOperation.plannedAttempt,
-        task: eligible.task
-      })
-      const operation = makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [
-          stage.planOperation.operationId,
-          stage.worktreeOperation.operationId,
-          eligible.observationOperationId
-        ],
-        request
-      })
-      yield* trace.emit(OperationSelected.make({ operation }))
-      const outcome = yield* interpreter.establishTaskWorkSession(operation)
-      yield* trace.emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
-      return true
-    }
-    case "TaskExecutionNeeded": {
-      const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
-      const plannedAttempt = stage.sessionEstablishmentOperation.request.plannedAttempt
-      const operation = makeTaskExecutionOperation({
-        predecessorOperationIds: [
-          stage.sessionEstablishmentOperation.request.operationId,
-          eligible.observationOperationId
-        ],
-        request: TaskExecutionRequest.make({
+  return yield* Match.valueTags(stage, {
+    TaskWorktreeReconciliationNeeded: (stage) =>
+      Effect.gen(function*() {
+        const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
+        const operation = makeTaskWorktreeReconciliationOperation({
           operationId: recoveryOperationId(
             runId,
-            plannedAttempt.attemptId,
+            stage.planOperation.plannedAttempt.attemptId,
             records,
-            "execution",
+            "worktree",
             new Set([eligible.observationOperationId])
           ),
-          plannedAttempt,
-          session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-            sessionId: stage.sessionId
-          }),
+          plannedAttempt: stage.planOperation.plannedAttempt,
+          predecessorOperationIds: [
+            stage.planOperation.operationId,
+            eligible.observationOperationId
+          ]
+        })
+        yield* trace.emit(OperationSelected.make({ operation }))
+        const result = yield* interpreter.reconcileTaskWorktree(operation)
+        if (result._tag !== "AuthoritativeTaskWorktreeReady") {
+          return yield* new TaskWorktreeExecutionModeContradiction({ operationId: operation.operationId })
+        }
+        yield* trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
+        return true
+      }),
+    TaskWorkSessionEstablishmentNeeded: (stage) =>
+      Effect.gen(function*() {
+        const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
+        const request = TaskWorkStartRequest.make({
+          operationId: recoveryOperationId(
+            runId,
+            stage.planOperation.plannedAttempt.attemptId,
+            records,
+            "session",
+            new Set([eligible.observationOperationId])
+          ),
+          plannedAttempt: stage.planOperation.plannedAttempt,
           task: eligible.task
         })
+        const operation = makeTaskWorkSessionEstablishmentOperation({
+          predecessorOperationIds: [
+            stage.planOperation.operationId,
+            stage.worktreeOperation.operationId,
+            eligible.observationOperationId
+          ],
+          request
+        })
+        yield* trace.emit(OperationSelected.make({ operation }))
+        const outcome = yield* interpreter.establishTaskWorkSession(operation)
+        yield* trace.emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
+        return true
+      }),
+    TaskExecutionNeeded: (stage) =>
+      Effect.gen(function*() {
+        const eligible = yield* refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
+        const plannedAttempt = stage.sessionEstablishmentOperation.request.plannedAttempt
+        const operation = makeTaskExecutionOperation({
+          predecessorOperationIds: [
+            stage.sessionEstablishmentOperation.request.operationId,
+            eligible.observationOperationId
+          ],
+          request: TaskExecutionRequest.make({
+            operationId: recoveryOperationId(
+              runId,
+              plannedAttempt.attemptId,
+              records,
+              "execution",
+              new Set([eligible.observationOperationId])
+            ),
+            plannedAttempt,
+            session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+              sessionId: stage.sessionId
+            }),
+            task: eligible.task
+          })
+        })
+        yield* trace.emit(OperationSelected.make({ operation }))
+        yield* trace.emit(TaskExecutionAdmitted.make({ operation }))
+        const outcome = yield* interpreter.executeTaskWork(operation)
+        yield* trace.emit(TaskExecutionOutcomeObserved.make({ operation, outcome }))
+        return true
       })
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* trace.emit(TaskExecutionAdmitted.make({ operation }))
-      const outcome = yield* interpreter.executeTaskWork(operation)
-      yield* trace.emit(TaskExecutionOutcomeObserved.make({ operation, outcome }))
-      return true
-    }
-  }
+  })
 })

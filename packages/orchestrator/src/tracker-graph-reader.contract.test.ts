@@ -43,6 +43,12 @@ trackerGraphReaderContract({
       target: fixture("malformed")
     },
     {
+      expectedErrorTag: "TrackerGraphReader.TrackerReadError",
+      layer: trackerGraphReaderFileLayer,
+      name: "invalid boundary input",
+      target: fixture("invalid")
+    },
+    {
       expectedErrorTag: "FixtureReader.FixtureReadError",
       layer: trackerGraphReaderFileLayer,
       name: "an inaccessible fixture",

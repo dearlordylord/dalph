@@ -146,10 +146,11 @@ observation.
 If a fresh tracker read finds that a task changed during implementation, Dalph
 updates graph knowledge and prevents that branch from crossing another
 state-changing boundary while preserving its outstanding session and resource
-responsibilities. The pause subject and safe boundary belong to W3; W6 decides
-the reconciliation choices and whether any case may continue after an operator
-merely unpauses it. This architecture does not assume that unpause alone
-reconciles changed task intent.
+responsibilities. The pause rules decide how already-started work reaches a safe
+boundary; the
+[external-change reconciliation specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#active-task-continuation-and-external-changes)
+decides what may continue afterward. Unpausing alone never reconciles changed
+task intent.
 
 ## Pause and Resume
 
@@ -272,7 +273,9 @@ needed by the task's preserved responsibilities. Only compatible observations
 allow ordinary operation selection. Edited, completed, closed, newly blocked,
 newly unblocked, foreign-claimed, unreadable, or target-closure-removed tasks
 enter their accepted reconciliation, wait, disposition, or isolation rule
-without stale task work restarting. W6 owns those per-observation choices.
+without stale task work restarting. The canonical
+[external-change table](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#active-task-continuation-and-external-changes)
+owns those per-observation choices.
 
 If the user requests resume while a task is still pausing, Dalph records the
 new requested destination but does not cancel an already-sent interruption or
@@ -300,6 +303,103 @@ separately accepted observation policy may also read paused subjects without
 authorizing forward progress.
 
 See [ADR 0008](adr/0008-derive-run-scoped-pause-state.md).
+
+## Active Continuation and External-Change Reconciliation
+
+Before every new long-running executor invocation, including same-session
+rework, and before pre-promotion integration continues, the orchestrator
+requests sufficiently fresh continuation facts. `ActiveTaskContinuationRead`
+names the usage-shaped task-tracker read covering the authored task-work
+specification and fingerprint, lifecycle, exact claim, target-closure
+membership, and complete blockers needed for that decision. It is not a second
+planned-attempt eligibility decision and does not poll coding-agent progress.
+
+Each read declares its subjects, fact families, completeness, and freshness
+cutoff. A task-tracker adapter may reuse retained knowledge only when it covers
+the exact request and was observed after the cutoff. It may deduplicate
+overlapping fresh reads. There is no global time-to-live policy. A successful
+read updates graph knowledge even when its normalized values are unchanged,
+because its coverage and freshness evidence are new.
+
+Authority changes become independent continuation constraints. User pause,
+authored task change, tracker lifecycle, claim state, target membership,
+dependencies, Git lineage, worktree identity, and provider-session availability
+do not form one Cartesian task status. Clearing a pause cannot clear a
+task-specification change hold, and restoring target membership cannot clear a
+foreign claim.
+
+When authored task instructions change before promotion, Dalph stops the exact
+active executor invocation and observes it to a terminal outer result. The
+Dalph user must then choose one of three distinct durable actions:
+
+1. Continue the existing attempt with an override naming the planned and newly
+   observed fingerprints. The override does not claim that the executor
+   incorporated the changed instructions.
+2. Restart task implementation by superseding the old attempt, retaining the
+   task claim, and planning a new attempt from current instructions and current
+   target head. Old resources remain preserved until separately disposed.
+3. Stop task implementation by abandoning the attempt and releasing only the
+   exact owned claim. It creates no successor and authorizes no generic cleanup.
+
+If the tracker reports successful completion, Dalph accepts that current
+authority fact. It stops active pre-promotion work, preserves worktree and WIP,
+does not repeat Git integration or tracker completion, deletes only its exact
+claim after a fresh read proves ownership, and recomputes graph knowledge.
+Dependants may become runnable without a Dalph-produced Git commit.
+
+A terminal lifecycle that does not mean success activates a reversible
+task-lifecycle hold. A complete read proving removal from the selected target
+closure activates a reversible target-membership constraint. Both preserve the
+attempt, claim, session, worktree, WIP, and evidence. Reopening or returning to
+the closure permits the same attempt to continue only after every independent
+constraint clears. An incomplete or unreadable graph read cannot prove target
+removal.
+
+A fresh read proving that the exact claim is missing, replaced, or foreign
+stops the invocation and every later stage. Dalph never edits a foreign claim.
+Reacquisition requires an explicit user command and a new claim identity.
+Temporary claim unreadability permits only bounded rereads and forbids starting
+another executor, review, integration, or completion action. Exhaustion stops
+active work and activates a claim-authority hold; unreadability never proves
+claim loss.
+
+Dependencies remain tracker facts, not stored wait flags. A new unfinished
+blocker before promotion preserves the integration candidate, releases the
+serialized integration resource, and derives automatic dependency waiting. The
+wait cannot block its prerequisite or unrelated eligible integration. After
+the blocker clears, Dalph rereads the target and reuses a candidate only when
+the accepted result, ancestry, and verification remain compatible. A blocker
+appearing after promotion never rolls Git back: Dalph preserves promotion
+proof, waits before tracker completion, then re-proves ancestry and completes
+without reintegration.
+
+Every planned attempt records the configured local integration target's current
+commit as its immutable planned Base. A compatible target advance leaves that
+Base in ancestry and permits work to continue. A proven rewrite activates a
+Git-lineage constraint; transient Git unreadability proves no rewrite.
+Integration verifies an isolated candidate and promotes it only by atomically
+fast-forwarding the configured target ref from an exact expected old head. A
+stale expected head causes candidate reconciliation and retry and never
+overwrites the intervening update.
+
+Dirty, new, deleted, staged, or committed worktree content is ordinary attempt
+WIP. Dalph does not infer who authored it. At creation, recovery, resume, and
+each stage that requires the worktree, Git must prove the exact path remains the
+exact registered planned worktree. A proven missing or mismatched worktree
+records `AttemptWorktreeLost`, stops the executor, preserves readable external
+evidence, and retains the claim while the user chooses clean restart or stop.
+Dalph does not repair worktrees, search for replacements, or infer cause.
+
+A successful complete provider read that no longer returns one historically
+correlated native session records `NativeTaskWorkSessionUnavailable`. A failed
+or incomplete read instead records temporary unreadability and permits only
+bounded rereads. Replacing an unavailable session requires a user command and
+fresh proof that no predecessor worker remains capable of writing. The
+successor has a new identity over the same attempt and preserved WIP; a stale
+predecessor result can never satisfy successor work.
+
+The canonical behavior and acceptance cases are in
+[Bounded Resumable and Pausable Graph-Frontier Specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md).
 
 ## Frontier Derivation, Scheduling, and Capacity
 
@@ -440,9 +540,9 @@ Before each new long-running executor invocation, including same-session
 rework, the workflow requests sufficiently fresh graph knowledge for the
 control facts that may forbid starting it. This continuation check is not a new
 planned-attempt eligibility decision and does not silently replan the attempt;
-W6 owns how each changed authority fact is classified. The graph boundary may
-satisfy the declared area and freshness from retained knowledge or update that
-knowledge through the provider.
+the active-continuation rules classify each changed authority fact. The graph
+boundary may satisfy the declared area and freshness from retained knowledge or
+update that knowledge through the provider.
 
 Ordinary coordination and startup recovery invoke the same pure transition
 selector after every recorded result. An already-recorded unresolved operation
@@ -961,7 +1061,8 @@ protocol. Evidence capture, when the selected protocol requires it, snapshots
 the complete worktree result relative to the planned Base. The integration
 protocol records the exact result placed on the target branch; that result may
 be a fast-forward tip, squash commit, merge commit, or another typed protocol
-outcome. W6 owns classification of concurrent or manual Git changes.
+outcome. The active-continuation rules classify concurrent or externally
+authored Git changes without attributing an actor.
 
 Successful integration reaches a known result and releases the separately
 serialized Git integration resource before tracker completion begins. Dalph
@@ -1004,13 +1105,56 @@ run termination are distinct facts. Run termination remains governed by the
 run-completion, blocked, cancelled, and failed definitions rather than by any
 single executor, review, integration, or tracker event.
 
+## Formal Models and Executable Conformance
+
+Dalph maintains two canonical Quint models under `specs/`. The focused
+`taskWorkSessionRecovery` model owns provider-session establishment,
+correlation, authoritative absence, unreadability, conflict, and the bounded
+lookup protocol. The `frontierRecovery` model owns composition across graph
+knowledge, responsibility, pause, capacity, crash recovery, reconciliation,
+and the eight claim-through-completion ambiguity-crossing boundaries.
+
+The models overlap only through the versioned `AmbiguityBoundaryV1` projection.
+For one exact subject it carries operation identity, immutable request
+fingerprint, causal predecessors, committed intent, request attempts, fresh
+checks, normalized observations, authority effect identities, the exact outcome
+or nonterminal disposition, and revision/freshness evidence. The focused model,
+broad model, and implementation adapters must project the same session trace to
+equal values.
+
+Each model exports a closed action schema. A test-only Quint-connect driver maps
+every action to a deterministic test control that invokes the production
+workflow algebra or one of its pure reducers. The driver and its controls are
+not production package APIs. Drivers may control named external authorities but
+must not implement another scheduler, set private reducer state, or decide the
+expected next action. After every action they compare reconstructed state,
+derived frontier/admission, external-authority projections, and ordered
+semantic workflow traces.
+
+The conformance suite runs every applicable test cut point through two fresh
+scopes: in-memory recovery over retained journal events and production SQLite
+reopening over the same database file. The test-only cut-point inventory
+includes choices before intent, intents, request attempts, acknowledgements or
+failures, fresh-read intents, observations, and exact outcomes or dispositions.
+It is owned by conformance support, not the production journal-event descriptor.
+Conformance schemas, cut-point maps, model controls, and fake authorities live
+under test support and are neither exported nor emitted by the production
+package. P0–P6 are never production workflow stages, states, or events.
+
+Formal exhaustive checking, sampled model-to-code conformance, and physical
+SQLite reopening remain distinct evidence claims. A behavior change updates
+its specification, model, adapter, retained readable scenarios, and both
+reopening seams together. See
+[ADR 0010](adr/0010-govern-recovery-with-two-quint-models.md) and the
+[formal-model portfolio](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#formal-model-portfolio).
+
 ## Documentation Responsibilities
 
 | Document, application, or store                                                    | Records or decisions provided                                                    |
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | [Dalph tooling context](CONTEXT.md)                                                | Canonical Dalph terminology and the tooling/main-application distinction          |
 | This document                                                                      | Stable Dalph structure and rules for rereading task-tracker and Git state, obtaining task-runner reports, and reading journal history |
-| Accepted implementation specification                                              | Executable Dalph requirements and acceptance                                     |
+| [Bounded resumable graph-frontier specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md) | Accepted behavior, model portfolio, executable seams, conformance-test cut-point matrix, and acceptance scenarios |
 | Configured task tracker                                                            | Task identity, description, lifecycle, dependency/grouping relationships, and claims |
 | [`research/`](../research/)                                                        | Historical investigation and decision evidence; accepted requirements and decisions are recorded in their named specification or decision document |
 | Historical `ralph-run.sh` sources in their origin repository                      | Historical harness behavior only                                                 |

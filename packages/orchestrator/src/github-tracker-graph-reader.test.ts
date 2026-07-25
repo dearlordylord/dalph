@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Match } from "effect"
 import { trackerGraphReaderContract } from "../test/tracker-graph-reader-contract.js"
 import {
   FixtureTarget,
@@ -66,35 +66,29 @@ const connection = (
   })
 
 const responseFor = (request: GithubGraphqlRequest) => {
-  switch (request._tag) {
-    case "FindClaimLabel":
-    case "CreateClaimLabel":
-    case "DeleteClaimLabel":
-      return page({ errors: [{ message: "unexpected claim request" }] })
-    case "ResolveIssue":
-      return page({
+  return Match.valueTags(request, {
+    FindClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    CreateClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    DeleteClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    ResolveIssue: () =>
+      page({
         data: {
           repository: {
             id: "repository-node",
             issue: { id: "root-node" }
           }
         }
-      })
-    case "ReadIssue":
-      switch (request.issueNodeId) {
-        case "root-node":
-          return issue("root-node", null)
-        case "child-node":
-          return issue("child-node", "root-node")
-        case "first-blocker-node":
-          return issue("first-blocker-node", null, "CLOSED", "COMPLETED")
-        case "second-blocker-node":
-          return issue("second-blocker-node", null, "CLOSED", "NOT_PLANNED")
-        case "transitive-blocker-node":
-          return issue("transitive-blocker-node", null, "CLOSED", "COMPLETED")
-      }
-      break
-    case "ReadSubIssues":
+      }),
+    ReadIssue: (request) =>
+      Match.value(request.issueNodeId).pipe(
+        Match.when("root-node", () => issue("root-node", null)),
+        Match.when("child-node", () => issue("child-node", "root-node")),
+        Match.when("first-blocker-node", () => issue("first-blocker-node", null, "CLOSED", "COMPLETED")),
+        Match.when("second-blocker-node", () => issue("second-blocker-node", null, "CLOSED", "NOT_PLANNED")),
+        Match.when("transitive-blocker-node", () => issue("transitive-blocker-node", null, "CLOSED", "COMPLETED")),
+        Match.orElse(() => page({ data: null }))
+      ),
+    ReadSubIssues: (request) => {
       if (request.issueNodeId === "root-node" && request.cursor === null) {
         return connection("subIssues", ["child-node"], true, "next-child")
       }
@@ -102,7 +96,8 @@ const responseFor = (request: GithubGraphqlRequest) => {
         return connection("subIssues", [])
       }
       return connection("subIssues", [], false, null, request.issueNodeId)
-    case "ReadBlockedBy":
+    },
+    ReadBlockedBy: (request) => {
       if (request.issueNodeId === "child-node" && request.cursor === null) {
         return connection("blockedBy", ["first-blocker-node"], true, "next-blocker", "child-node")
       }
@@ -113,9 +108,8 @@ const responseFor = (request: GithubGraphqlRequest) => {
         return connection("blockedBy", ["transitive-blocker-node"], false, null, "first-blocker-node")
       }
       return connection("blockedBy", [], false, null, request.issueNodeId)
-  }
-
-  return page({ data: null })
+    }
+  })
 }
 
 const clientLayerFor = (

@@ -1,10 +1,8 @@
 /* eslint-disable functional/immutable-data, no-magic-numbers */
-import { Cause, Effect, Exit, Fiber, Layer, Queue } from "effect"
+import { Effect, Fiber, Layer, Match, Queue, Result } from "effect"
 import {
   AttemptId,
   GitCommitSha,
-  JournalPosition,
-  type JournalRecordKey,
   OperationId,
   PlannedTaskAttempt,
   ProviderObservationId,
@@ -17,16 +15,11 @@ import {
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   WorktreeLocator
-} from "../src/domain.js"
-import {
-  type JournalRecord,
-  JournalStore,
-  JournalStoreContradiction,
-  type WorkflowJournalEvent
-} from "../src/journal-store.js"
-import { journaledWorkflowInterpreterLayer } from "../src/journaled-workflow-interpreter.js"
-import { taskRevisionFor } from "../src/task-dag.js"
-import { taskExecutorTestLayer } from "../src/task-execution.js"
+} from "../../src/domain.js"
+import { type JournalRecord, JournalStore, type WorkflowJournalEvent } from "../../src/journal-store.js"
+import { journaledWorkflowInterpreterLayer } from "../../src/journaled-workflow-interpreter.js"
+import { taskRevisionFor } from "../../src/task-dag.js"
+import { taskExecutorTestLayer } from "../../src/task-execution.js"
 import {
   MatchingTaskWorkSessionReported,
   NoMatchingTaskWorkSessionReported,
@@ -34,29 +27,45 @@ import {
   TaskWorkSessionCorrelationConflict,
   TaskWorkSessionLookupFailure,
   TaskWorkStartRequest
-} from "../src/task-work-start.js"
-import { TrackerGraphReader } from "../src/tracker-graph-reader.js"
-import { deterministicTestWorkflowInterpreterLayer } from "../src/workflow-interpreters.js"
+} from "../../src/task-work-start.js"
+import { recordReadyWorktreeEvidence } from "../../src/task-worktree-evidence.js"
+import { TrackerGraphReader } from "../../src/tracker-graph-reader.js"
+import { deterministicTestWorkflowInterpreterLayer } from "../../src/workflow-interpreters.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   WorkflowInterpreter,
+  type WorkflowInterpreterService,
   WorkflowTrace
-} from "../src/workflow.js"
-import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
+} from "../../src/workflow.js"
+import { makeTaskWorkSessionRecoveryModelJournal } from "./task-work-session-recovery-model-journal.js"
 
 type Evidence = "Absent" | "Conflict" | "Matching" | "Unreadable"
+type PendingEvidence = Evidence | "NoEvidence"
+type TaskWorkSessionWorkflow = ReturnType<WorkflowInterpreterService["establishTaskWorkSession"]>
+type TaskWorkSessionWorkflowFailure = Effect.Error<TaskWorkSessionWorkflow>
+type TaskWorkSessionWorkflowResult = Result.Result<
+  Effect.Success<TaskWorkSessionWorkflow>,
+  TaskWorkSessionWorkflowFailure
+>
 const lookupBound = 3n
 const taskId = TaskId.make("mbt-task")
 const runId = RunId.make("mbt-run")
+const planOperationId = OperationId.make("mbt-predecessor")
+const worktreeOperationId = OperationId.make("mbt-worktree")
 
 /**
- * Quint controls backed by the real journaled WorkflowInterpreter protocol.
+ * @experimental Executable Quint conformance infrastructure, not a supported
+ * production reducer, scheduler, or package API. Do not derive runtime
+ * architecture from its queues, projections, or deterministic authority
+ * scripts.
+ *
+ * The controls invoke the real journaled WorkflowInterpreter protocol.
  * Local fields only project test observations; all requests, retries, durable
  * records, failures, and recovery decisions are produced by production code.
  */
-export const makeTaskWorkSessionRecoveryHarness = () => {
+export const makeTaskWorkSessionRecoveryModelControls = () => {
   let authorization = "NoAuthorization"
   let candidateSelected = false
   let coordinatorRunning = true
@@ -65,7 +74,7 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
   let lookupAttempts = 0n
   let matchingReportRecorded = false
   let operationId = 0n
-  let pendingEvidence = "NoEvidence"
+  let pendingEvidence: PendingEvidence = "NoEvidence"
   let providerHasSession = false
   let providerObservationOrdinal = 0n
   let recordedEvidence = "NoEvidence"
@@ -88,70 +97,50 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
   let releaseLookupRecord: Queue.Queue<void>
   let outcomePendingSignal: Queue.Queue<void>
   let releaseOutcome: Queue.Queue<void>
-  let workflowExitSignal: Queue.Queue<Exit.Exit<unknown, unknown>>
 
   const requireOperation = () => {
     if (operation === undefined) return Effect.die(new Error("identity must be selected"))
     return Effect.succeed(operation)
   }
 
-  const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent) =>
-    JSON.stringify(left) === JSON.stringify(right)
+  const beforeJournalAppend = (event: WorkflowJournalEvent) =>
+    event._tag === "TaskWorkSessionEstablished"
+      ? Queue.offer(outcomePendingSignal, undefined).pipe(Effect.andThen(Queue.take(releaseOutcome)))
+      : Effect.void
 
-  const appendRecord = (
-    requestedRunId: RunId,
-    key: JournalRecordKey,
-    event: WorkflowJournalEvent
+  const observedLookupEvidence = (event: WorkflowJournalEvent): Evidence | undefined =>
+    event._tag === "TaskWorkSessionLookupFailed"
+      ? "Unreadable"
+      : event._tag !== "TaskWorkSessionReported"
+      ? undefined
+      : event.report._tag === "MatchingTaskWorkSessionReported"
+      ? "Matching"
+      : event.report._tag === "NoMatchingTaskWorkSessionReported"
+      ? "Absent"
+      : "Conflict"
+
+  const afterJournalAppend = (
+    event: WorkflowJournalEvent,
+    existed: boolean
   ) =>
     Effect.gen(function*() {
-      const existing = records.find((record) => record.runId === requestedRunId && record.key === key)
-      if (existing !== undefined) {
-        if (sameEvent(existing.event, event)) return existing
-        return yield* new JournalStoreContradiction({
-          existingPosition: existing.position,
-          key,
-          runId: requestedRunId
-        })
+      if (event._tag === "TaskWorkSessionEstablishmentIntentRecorded" && !existed) {
+        yield* Queue.offer(intentCommittedSignal, undefined)
+        yield* Queue.take(releaseIntent)
       }
-      const record: JournalRecord = {
-        event,
-        key,
-        position: JournalPosition.make(records.length + 1),
-        runId: requestedRunId
+      const evidence = observedLookupEvidence(event)
+      if (evidence !== undefined) {
+        yield* Queue.offer(lookupRecordedSignal, evidence)
+        yield* Queue.take(releaseLookupRecord)
       }
-      records.push(record)
-      return record
     })
 
-  const journal = JournalStore.of({
-    append: (requestedRunId, key, event) =>
-      Effect.gen(function*() {
-        if (event._tag === "TaskWorkSessionEstablished") {
-          yield* Queue.offer(outcomePendingSignal, undefined)
-          yield* Queue.take(releaseOutcome)
-        }
-        const existed = records.some((record) => record.runId === requestedRunId && record.key === key)
-        const record = yield* appendRecord(requestedRunId, key, event)
-        if (event._tag === "TaskWorkSessionEstablishmentIntentRecorded" && !existed) {
-          yield* Queue.offer(intentCommittedSignal, undefined)
-          yield* Queue.take(releaseIntent)
-        }
-        if (event._tag === "TaskWorkSessionReported" || event._tag === "TaskWorkSessionLookupFailed") {
-          const evidence: Evidence = event._tag === "TaskWorkSessionLookupFailed"
-            ? "Unreadable"
-            : event.report._tag === "MatchingTaskWorkSessionReported"
-            ? "Matching"
-            : event.report._tag === "NoMatchingTaskWorkSessionReported"
-            ? "Absent"
-            : "Conflict"
-          yield* Queue.offer(lookupRecordedSignal, evidence)
-          yield* Queue.take(releaseLookupRecord)
-        }
-        return record
-      }),
-    read: (requestedRunId) => Effect.succeed(records.filter((record) => record.runId === requestedRunId)),
-    scan: () => Effect.succeed({ issues: [], runs: [{ records, runId }] })
-  })
+  const journal = makeTaskWorkSessionRecoveryModelJournal(
+    records,
+    runId,
+    beforeJournalAppend,
+    afterJournalAppend
+  )
 
   const runner = TaskRunner.of({
     lookupTaskWorkSession: () =>
@@ -215,12 +204,12 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
     Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
   )
 
+  let workflowResultSignal: Queue.Queue<TaskWorkSessionWorkflowResult>
+
   const startWorkflow = Effect.gen(function*() {
     const selected = yield* requireOperation()
-    const fiber = yield* Effect.gen(function*() {
+    const workflow = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
-      const planOperationId = selected.predecessorOperationIds[0] ?? OperationId.make("mbt-predecessor")
-      const worktreeOperationId = selected.predecessorOperationIds[1] ?? OperationId.make("mbt-worktree")
       yield* interpreter.recordTaskAttemptPlan(makeTaskAttemptPlanOperation({
         operationId: planOperationId,
         plannedAttempt: selected.request.plannedAttempt,
@@ -232,15 +221,14 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         predecessorOperationIds: [planOperationId]
       })
       yield* recordReadyWorktreeEvidence(worktreeOperation)
-      return yield* interpreter.establishTaskWorkSession(selected)
+      return interpreter.establishTaskWorkSession(selected)
     }).pipe(
-      Effect.onExit((exit) =>
-        Exit.isFailure(exit) && exit.cause.reasons.every(Cause.isInterruptReason)
-          ? Effect.void
-          : Queue.offer(workflowExitSignal, exit)
-      ),
       Effect.provide(interpreterLayer),
-      Effect.provide(Layer.succeed(JournalStore, journal)),
+      Effect.provide(Layer.succeed(JournalStore, journal))
+    )
+    const fiber = yield* workflow.pipe(
+      Effect.result,
+      Effect.flatMap((result) => Queue.offer(workflowResultSignal, result)),
       Effect.forkDetach
     )
     interruptWorkflow = Fiber.interrupt(fiber).pipe(Effect.asVoid)
@@ -252,34 +240,73 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
       pendingEvidence = yield* Queue.take(lookupRecordedSignal)
     })
 
-  const applyWorkflowExit = (exit: Exit.Exit<unknown, unknown>) => {
-    if (Exit.isSuccess(exit)) {
+  const applyWorkflowResult = (result: TaskWorkSessionWorkflowResult) => {
+    if (Result.isSuccess(result)) {
       return Effect.sync(() => {
         status = "Established"
       })
     }
-    const failure = Cause.squash(exit.cause)
-    if (typeof failure !== "object" || failure === null || !("_tag" in failure)) {
-      return Effect.die(failure)
-    }
-    switch (failure._tag) {
-      case "TaskWorkSessionLookupDidNotConverge":
-        return Effect.sync(() => {
-          status = "LookupDidNotConverge"
-        })
-      case "TaskWorkSessionEstablishmentDidNotConverge":
-        return Effect.sync(() => {
-          status = "EstablishmentDidNotConverge"
-        })
-      case "TaskWorkSessionCorrelationConflict":
-      case "TaskWorkSessionEvidenceContradiction":
-        return Effect.sync(() => {
-          status = "CorrelationConflict"
-        })
-      default:
-        return Effect.die(failure)
-    }
+    const recordStatus = (next: string) =>
+      Effect.sync(() => {
+        status = next
+      })
+    const recordCorrelationConflict = () => recordStatus("CorrelationConflict")
+    const dieUnexpectedFailure: typeof Effect.die = Effect.die
+    return Match.valueTags(result.failure, {
+      CoordinatorLockObservationContradiction: dieUnexpectedFailure,
+      CoordinatorOwnershipLost: dieUnexpectedFailure,
+      JournalDataCorruption: dieUnexpectedFailure,
+      JournalSchemaIncompatible: dieUnexpectedFailure,
+      JournalStorageAccessDenied: dieUnexpectedFailure,
+      JournalStorageCapacityExhausted: dieUnexpectedFailure,
+      JournalStorageLocked: dieUnexpectedFailure,
+      JournalStorageUnavailable: dieUnexpectedFailure,
+      JournalStoreContradiction: dieUnexpectedFailure,
+      TaskAttemptPlanHistoryContradiction: dieUnexpectedFailure,
+      TaskWorkSessionCorrelationConflict: recordCorrelationConflict,
+      TaskWorkSessionEstablishmentDidNotConverge: () => recordStatus("EstablishmentDidNotConverge"),
+      TaskWorkSessionEvidenceContradiction: recordCorrelationConflict,
+      TaskWorkSessionLookupDidNotConverge: () => recordStatus("LookupDidNotConverge"),
+      TaskWorkSessionRunContradiction: dieUnexpectedFailure,
+      TaskWorktreeHistoryContradiction: dieUnexpectedFailure,
+      "TraceOutput.TraceOutputError": dieUnexpectedFailure
+    })
   }
+
+  const recordLookup = (evidence: Evidence) =>
+    Effect.gen(function*() {
+      yield* Queue.offer(releaseLookupRecord, undefined)
+      recordedEvidence = evidence
+      pendingEvidence = "NoEvidence"
+      yield* Match.value(evidence).pipe(
+        Match.when("Matching", () =>
+          Effect.sync(() => {
+            matchingReportRecorded = true
+          }).pipe(Effect.andThen(Queue.take(outcomePendingSignal)))),
+        Match.when("Absent", () =>
+          matchingReportRecorded || lookupAttempts === lookupBound
+            ? Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))
+            : Effect.sync(() => {
+              authorization = "FreshAbsence"
+            })),
+        Match.when("Conflict", () => Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))),
+        Match.when("Unreadable", () =>
+          lookupAttempts === lookupBound
+            ? Queue.take(workflowResultSignal).pipe(Effect.flatMap(applyWorkflowResult))
+            : Effect.void),
+        Match.exhaustive
+      )
+    })
+
+  const recordPendingLookup = (evidence: PendingEvidence) =>
+    Match.value(evidence).pipe(
+      Match.when("NoEvidence", () => Effect.die("no provider lookup is pending")),
+      Match.when("Absent", () => recordLookup("Absent")),
+      Match.when("Conflict", () => recordLookup("Conflict")),
+      Match.when("Matching", () => recordLookup("Matching")),
+      Match.when("Unreadable", () => recordLookup("Unreadable")),
+      Match.exhaustive
+    )
 
   return {
     init: () =>
@@ -313,7 +340,7 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         releaseLookupRecord = yield* Queue.unbounded<void>()
         outcomePendingSignal = yield* Queue.unbounded<void>()
         releaseOutcome = yield* Queue.unbounded<void>()
-        workflowExitSignal = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>()
+        workflowResultSignal = yield* Queue.unbounded<TaskWorkSessionWorkflowResult>()
       }),
     selectIdentity: () =>
       Effect.sync(() => {
@@ -342,8 +369,8 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
         })
         operation = makeTaskWorkSessionEstablishmentOperation({
           predecessorOperationIds: [
-            OperationId.make("mbt-predecessor"),
-            OperationId.make("mbt-worktree")
+            planOperationId,
+            worktreeOperationId
           ],
           request
         })
@@ -376,28 +403,11 @@ export const makeTaskWorkSessionRecoveryHarness = () => {
     lookupContradictoryAbsence: () => lookup("Absent"),
     lookupMatching: () => lookup("Matching"),
     lookupUnreadable: () => lookup("Unreadable"),
-    recordLookup: () =>
-      Effect.gen(function*() {
-        const evidence = pendingEvidence
-        yield* Queue.offer(releaseLookupRecord, undefined)
-        recordedEvidence = evidence
-        pendingEvidence = "NoEvidence"
-        if (evidence === "Matching") {
-          matchingReportRecorded = true
-          yield* Queue.take(outcomePendingSignal)
-        } else if (evidence === "Absent" && !matchingReportRecorded && lookupAttempts < lookupBound) {
-          authorization = "FreshAbsence"
-        }
-        if (
-          evidence === "Conflict"
-          || (evidence === "Absent" && (matchingReportRecorded || lookupAttempts === lookupBound))
-          || (evidence === "Unreadable" && lookupAttempts === lookupBound)
-        ) yield* Queue.take(workflowExitSignal).pipe(Effect.flatMap(applyWorkflowExit))
-      }),
+    recordLookup: () => recordPendingLookup(pendingEvidence),
     recordOutcome: () =>
       Queue.offer(releaseOutcome, undefined).pipe(
-        Effect.andThen(Queue.take(workflowExitSignal)),
-        Effect.flatMap(applyWorkflowExit),
+        Effect.andThen(Queue.take(workflowResultSignal)),
+        Effect.flatMap(applyWorkflowResult),
         Effect.asVoid
       ),
     crash: () =>

@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { OperationId, PlannedTaskAttempt } from "./domain.js"
 import type { TaskWorkSessionCorrelationConflict, TaskWorkSessionReport } from "./task-work-start.js"
 import { NoMatchingTaskWorkSessionReported, TaskWorkSessionLookupFailure } from "./task-work-start.js"
@@ -15,7 +15,10 @@ export class TaskWorkSessionLookupDidNotConverge extends Schema.TaggedErrorClass
   }
 ) {}
 
-/** Three fresh lookups proved absence without establishing a session. */
+/**
+ * The provider reported no matching session on all three fresh checks, so
+ * Dalph stops trying to establish one instead of looping or guessing.
+ */
 export class TaskWorkSessionEstablishmentDidNotConverge
   extends Schema.TaggedErrorClass<TaskWorkSessionEstablishmentDidNotConverge>()(
     "TaskWorkSessionEstablishmentDidNotConverge",
@@ -45,6 +48,9 @@ type TaskWorkSessionRecoveryDecision =
 
 type RetryLookupDecision = Extract<TaskWorkSessionRecoveryDecision, { readonly _tag: "RetryLookup" }>
 type ReportDecision = Exclude<TaskWorkSessionRecoveryDecision, RetryLookupDecision>
+type EstablishedDecision = Extract<ReportDecision, { readonly _tag: "Established" }>
+type FailedDecision = Extract<ReportDecision, { readonly _tag: "Failed" }>
+type RepeatRequestDecision = Extract<ReportDecision, { readonly _tag: "RepeatRequest" }>
 
 /** The total provider-observation decision shared by live recovery and MBT. */
 export function decideTaskWorkSessionRecovery(
@@ -67,18 +73,16 @@ export function decideTaskWorkSessionRecovery(
     })
     return { _tag: "RetryLookup", retry: { _tag: "Retry", atBoundError: error } }
   }
-  switch (observation._tag) {
-    case "MatchingTaskWorkSessionReported":
-      return {
-        _tag: "Established",
-        outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished.make({
-          operationId: operation.request.operationId,
-          sessionId: observation.sessionId
-        })
-      }
-    case "TaskWorkSessionCorrelationConflict":
-      return { _tag: "Failed", error: observation }
-    case "NoMatchingTaskWorkSessionReported": {
+  return Match.valueTags(observation, {
+    MatchingTaskWorkSessionReported: (observation): EstablishedDecision => ({
+      _tag: "Established",
+      outcome: WorkflowOutcome.cases.TaskWorkSessionEstablished.make({
+        operationId: operation.request.operationId,
+        sessionId: observation.sessionId
+      })
+    }),
+    TaskWorkSessionCorrelationConflict: (observation): FailedDecision => ({ _tag: "Failed", error: observation }),
+    NoMatchingTaskWorkSessionReported: (observation): RepeatRequestDecision => {
       const error = new TaskWorkSessionEstablishmentDidNotConverge({
         operationId: operation.request.operationId,
         plannedAttempt: operation.request.plannedAttempt,
@@ -86,5 +90,5 @@ export function decideTaskWorkSessionRecovery(
       })
       return { _tag: "RepeatRequest", retry: { _tag: "Retry", atBoundError: error } }
     }
-  }
+  })
 }
