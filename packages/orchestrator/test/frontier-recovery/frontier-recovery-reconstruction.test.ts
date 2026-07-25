@@ -2,7 +2,7 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, FileSystem } from "effect"
 import { expect } from "vitest"
-import { JournalDatabaseLocator, RunId } from "../../src/domain.js"
+import { JournalDatabaseLocator } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
@@ -129,13 +129,7 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
       journal
     })
     yield* controls.init()
-    yield* controls.observeTargetClosure({
-      explicitlyCoveredTasks: [1n],
-      operation: 2n,
-      predecessorOperations: [],
-      revision: 1n,
-      tasks: [0n, 2n, 3n]
-    })
+    yield* controls.observeProvenAbsence()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures).toEqual([
@@ -173,13 +167,7 @@ it.effect("does not treat a causal predecessor as read coverage", () =>
       journal
     })
     yield* controls.init()
-    yield* controls.observeTargetClosure({
-      explicitlyCoveredTasks: [],
-      operation: 2n,
-      predecessorOperations: [0n],
-      revision: 1n,
-      tasks: [0n, 2n, 3n]
-    })
+    yield* controls.observeIncomparableMembership()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures[0]).toMatchObject({
@@ -217,13 +205,7 @@ it.effect("replaces compatible membership knowledge with the fresh observation",
       journal
     })
     yield* controls.init()
-    yield* controls.observeTargetClosure({
-      explicitlyCoveredTasks: [],
-      operation: 2n,
-      predecessorOperations: [],
-      revision: 1n,
-      tasks: [0n, 1n, 2n, 3n]
-    })
+    yield* controls.observeCompatibleReplacement()
 
     expect((yield* controls.getState()).graphKnowledge.targetClosures).toEqual([
       expect.objectContaining({
@@ -232,35 +214,6 @@ it.effect("replaces compatible membership knowledge with the fresh observation",
         revision: "frontier-recovery-revision-1"
       })
     ])
-  }).pipe(Effect.provide(memoryJournalStoreLayer)))
-
-it.effect("rejects lossy target-closure inputs before appending production records", () =>
-  Effect.gen(function*() {
-    const journal = yield* JournalStore
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
-      coordinatorRunning: true,
-      journal
-    })
-    const exit = yield* controls.observeTargetClosure({
-      explicitlyCoveredTasks: [],
-      operation: 2n,
-      predecessorOperations: [],
-      revision: 0n,
-      tasks: [0n, 0n]
-    }).pipe(Effect.exit)
-
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.squash(exit.cause)).toMatchObject({
-        _tag: "FrontierRecoveryConformanceIssue",
-        reason: "LossyProjection"
-      })
-    }
-    expect(
-      yield* journal.read(
-        RunId.make("frontier-recovery-reconstruction-run")
-      )
-    ).toEqual([])
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
