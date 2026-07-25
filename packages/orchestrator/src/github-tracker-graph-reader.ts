@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data -- Request accumulation is private adapter scratch and never becomes authority. */
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Match, Option, Schema } from "effect"
 import { TaskLifecycle } from "./domain.js"
 import type { GithubIssueTarget, TaskId, TrackerTarget, TrackerTask } from "./domain.js"
 import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./github-graphql-client.js"
@@ -132,16 +132,12 @@ const githubTarget = (
 const operationForRequest = (
   request: GithubTrackerGraphReadRequest
 ): GithubTrackerReadOperation => {
-  switch (request._tag) {
-    case "ResolveIssue":
-      return "GithubTrackerGraphReader.resolveIssue"
-    case "ReadIssue":
-      return "GithubTrackerGraphReader.readIssue"
-    case "ReadSubIssues":
-      return "GithubTrackerGraphReader.readSubIssues"
-    case "ReadBlockedBy":
-      return "GithubTrackerGraphReader.readBlockedBy"
-  }
+  return Match.valueTags(request, {
+    ResolveIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.resolveIssue",
+    ReadIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readIssue",
+    ReadSubIssues: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readSubIssues",
+    ReadBlockedBy: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readBlockedBy"
+  })
 }
 
 export const githubTrackerGraphReaderLayer: Layer.Layer<

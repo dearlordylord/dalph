@@ -11,7 +11,7 @@
   },
   "packages/orchestrator/src/implementation-convergence-history.ts": {
     "complexity": {
-      "count": 5
+      "count": 4
     }
   },
   "packages/orchestrator/src/implementation-convergence-recovery.ts": {
@@ -24,24 +24,14 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/implementation-convergence.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/journal-event-codec.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/journal-event-descriptor.ts": {
     "complexity": {
       "count": 1
     }
   },
   "packages/orchestrator/src/journaled-implementation-convergence.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/journaled-implementation-evidence.ts": {
@@ -74,19 +64,9 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/sqlite-journal-store.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/task-dag.ts": {
     "complexity": {
       "count": 2
-    }
-  },
-  "packages/orchestrator/src/task-execution.ts": {
-    "complexity": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/task-worktree-journal-evidence.ts": {
@@ -100,11 +80,6 @@
     }
   },
   "packages/orchestrator/src/technical-retry.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow-authority-relations.ts": {
     "complexity": {
       "count": 1
     }

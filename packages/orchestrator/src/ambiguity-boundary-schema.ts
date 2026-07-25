@@ -11,7 +11,14 @@ import {
 const firstModelIdentity = 0n
 const ModelIdentity = Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(firstModelIdentity))
 
-/** Identifies the coordinator activation that obtained one fresh authority observation. */
+/**
+ * Identifies one coordinator application scope from startup or restart until
+ * that scope closes or crashes. An earlier activation's observations cannot
+ * authorize a request in the new activation.
+ *
+ * @experimental The activation ordinal's presence in this conformance boundary
+ * remains under consideration; it is freshness evidence, not provider identity.
+ */
 export const RecoveryActivationOrdinal = ModelIdentity.pipe(Schema.brand("RecoveryActivationOrdinal"))
 export type RecoveryActivationOrdinal = typeof RecoveryActivationOrdinal.Type
 

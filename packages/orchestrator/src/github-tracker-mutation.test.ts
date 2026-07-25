@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Context, Crypto, Effect, Layer, PlatformError, Ref } from "effect"
+import { Context, Crypto, Effect, Layer, Match, PlatformError, Ref } from "effect"
 import { expect } from "vitest"
 import type { GithubGraphqlRequest, GithubGraphqlResponse } from "./github-graphql-client.js"
 import { GithubGraphqlRequestError } from "./github-graphql-client.js"
@@ -49,50 +49,52 @@ const githubClaimFixtureLayer = Layer.effectContext(
     const client = GithubGraphqlClient.of({
       execute: Effect.fn("GithubGraphqlClient.ClaimFixture.execute")(
         function*(request: GithubGraphqlRequest) {
-          switch (request._tag) {
-            case "FindClaimLabel": {
-              const current = yield* Ref.get(label)
-              return {
-                body: {
-                  data: {
-                    node: current === null
-                      ? { id: repositoryNodeId, label: null }
-                      : { id: repositoryNodeId, label: current }
-                  }
-                }
-              }
-            }
-            case "CreateClaimLabel": {
-              const created = yield* Ref.modify(label, (current) =>
-                current === null
-                  ? [true, {
-                    description: request.description,
-                    id: `label:${request.operationId}`,
-                    name: request.labelName
-                  }] as const
-                  : [false, current] as const)
-              return created
-                ? {
+          return yield* Match.valueTags(request, {
+            FindClaimLabel: () =>
+              Effect.gen(function*() {
+                const current = yield* Ref.get(label)
+                return {
                   body: {
                     data: {
-                      createLabel: {
-                        label: yield* Ref.get(label)
-                      }
+                      node: current === null
+                        ? { id: repositoryNodeId, label: null }
+                        : { id: repositoryNodeId, label: current }
                     }
                   }
                 }
-                : { body: { errors: [{ message: "label name already exists" }] } }
-            }
-            case "DeleteClaimLabel": {
-              yield* Ref.update(label, (current) => current?.id === request.labelNodeId ? null : current)
-              return { body: { data: { deleteLabel: { clientMutationId: null } } } }
-            }
-            case "ResolveIssue":
-            case "ReadIssue":
-            case "ReadSubIssues":
-            case "ReadBlockedBy":
-              return yield* Effect.die(`unexpected ${request._tag} request`)
-          }
+              }),
+            CreateClaimLabel: (request) =>
+              Effect.gen(function*() {
+                const created = yield* Ref.modify(label, (current) =>
+                  current === null
+                    ? [true, {
+                      description: request.description,
+                      id: `label:${request.operationId}`,
+                      name: request.labelName
+                    }] as const
+                    : [false, current] as const)
+                return created
+                  ? {
+                    body: {
+                      data: {
+                        createLabel: {
+                          label: yield* Ref.get(label)
+                        }
+                      }
+                    }
+                  }
+                  : { body: { errors: [{ message: "label name already exists" }] } }
+              }),
+            DeleteClaimLabel: (request) =>
+              Effect.gen(function*() {
+                yield* Ref.update(label, (current) => current?.id === request.labelNodeId ? null : current)
+                return { body: { data: { deleteLabel: { clientMutationId: null } } } }
+              }),
+            ResolveIssue: () => Effect.die("unexpected ResolveIssue request"),
+            ReadIssue: () => Effect.die("unexpected ReadIssue request"),
+            ReadSubIssues: () => Effect.die("unexpected ReadSubIssues request"),
+            ReadBlockedBy: () => Effect.die("unexpected ReadBlockedBy request")
+          })
         }
       )
     })

@@ -1,7 +1,7 @@
 /* eslint-disable functional/immutable-data -- Scan accumulation is private adapter scratch and never becomes journal authority. */
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import * as SqliteMigrator from "@effect/sql-sqlite-node/SqliteMigrator"
-import { Cause, Config, Effect, Layer, Result, Schema } from "effect"
+import { Cause, Config, Effect, Layer, Match, Result, Schema } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 import * as SqlError from "effect/unstable/sql/SqlError"
@@ -107,23 +107,22 @@ export const classifyJournalStorageFailure = (
   failure: unknown
 ): JournalStoreError => {
   const fields = { detail: failureDetail(failure), operation }
-  switch (sqlitePrimaryResultCode(failure)) {
-    case sqliteResultCode.busy:
-    case sqliteResultCode.locked:
-      return new JournalStorageLocked(fields)
-    case sqliteResultCode.accessDenied:
-    case sqliteResultCode.readonly:
-    case sqliteResultCode.unauthorized:
-      return new JournalStorageAccessDenied(fields)
-    case sqliteResultCode.capacityExhausted:
-      return new JournalStorageCapacityExhausted(fields)
-    case sqliteResultCode.corrupt:
-    case sqliteResultCode.notADatabase:
-      return new JournalDataCorruption(fields)
-    case undefined:
-    default:
-      return new JournalStorageUnavailable(fields)
-  }
+  return Match.value(sqlitePrimaryResultCode(failure)).pipe(
+    Match.whenOr(sqliteResultCode.busy, sqliteResultCode.locked, () => new JournalStorageLocked(fields)),
+    Match.whenOr(
+      sqliteResultCode.accessDenied,
+      sqliteResultCode.readonly,
+      sqliteResultCode.unauthorized,
+      () => new JournalStorageAccessDenied(fields)
+    ),
+    Match.when(sqliteResultCode.capacityExhausted, () => new JournalStorageCapacityExhausted(fields)),
+    Match.whenOr(
+      sqliteResultCode.corrupt,
+      sqliteResultCode.notADatabase,
+      () => new JournalDataCorruption(fields)
+    ),
+    Match.orElse(() => new JournalStorageUnavailable(fields))
+  )
 }
 
 const decodeBoundary = <A>(

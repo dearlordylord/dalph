@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { ImplementationReviewRoundLimit, OperationId, PlannedTaskAttempt, TaskWorkSessionId } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
 import {
@@ -85,40 +85,51 @@ const ImplementationConvergenceDispositionVariants = Schema.TaggedUnion({
 })
 const validDisposition = Schema.makeFilter((disposition: typeof ImplementationConvergenceDispositionVariants.Type) => {
   const subject = disposition.subject
-  switch (disposition._tag) {
-    case "Accepted":
-      return disposition.review.manifest.disposition._tag === "Accepted"
-          && disposition.review.manifest.implementerSessionId === subject.sessionId
-          && samePlannedTaskAttempt(disposition.review.manifest.plannedAttempt, subject.plannedAttempt)
+  const validTerminalExecutionDisposition = (
+    disposition: Extract<
+      typeof ImplementationConvergenceDispositionVariants.Type,
+      {
+        readonly _tag:
+          | "ImplementationExecutionFailed"
+          | "ImplementationExecutionInterrupted"
+          | "ResourceEmergency"
+      }
+    >
+  ) =>
+    disposition.outcome.sessionId === subject.sessionId
+      ? undefined
+      : "terminal execution evidence must bind the retained session"
+  return Match.valueTags(disposition, {
+    Accepted: (disposition) =>
+      disposition.review.manifest.disposition._tag === "Accepted"
+        && disposition.review.manifest.implementerSessionId === subject.sessionId
+        && samePlannedTaskAttempt(disposition.review.manifest.plannedAttempt, subject.plannedAttempt)
         ? undefined
-        : "accepted disposition must bind an accepted review for the retained attempt and session"
-    case "ImplementationNonConvergent":
-      return disposition.review.manifest.disposition._tag === "Findings"
-          && Number(disposition.review.manifest.round) === Number(disposition.review.manifest.roundLimit)
-          && disposition.review.manifest.implementerSessionId === subject.sessionId
-          && samePlannedTaskAttempt(disposition.review.manifest.plannedAttempt, subject.plannedAttempt)
+        : "accepted disposition must bind an accepted review for the retained attempt and session",
+    ImplementationNonConvergent: (disposition) =>
+      disposition.review.manifest.disposition._tag === "Findings"
+        && Number(disposition.review.manifest.round) === Number(disposition.review.manifest.roundLimit)
+        && disposition.review.manifest.implementerSessionId === subject.sessionId
+        && samePlannedTaskAttempt(disposition.review.manifest.plannedAttempt, subject.plannedAttempt)
         ? undefined
-        : "non-convergent disposition requires findings at the captured limit for the retained attempt and session"
-    case "ReviewTechnicalRetryExhausted":
-      return disposition.failure.operationId === disposition.request.operationId
-          && disposition.failure.reviewerSessionId === disposition.request.reviewerSessionId
-          && disposition.request.implementerSessionId === subject.sessionId
-          && samePlannedTaskAttempt(disposition.request.plannedAttempt, subject.plannedAttempt)
+        : "non-convergent disposition requires findings at the captured limit for the retained attempt and session",
+    ReviewTechnicalRetryExhausted: (disposition) =>
+      disposition.failure.operationId === disposition.request.operationId
+        && disposition.failure.reviewerSessionId === disposition.request.reviewerSessionId
+        && disposition.request.implementerSessionId === subject.sessionId
+        && samePlannedTaskAttempt(disposition.request.plannedAttempt, subject.plannedAttempt)
         ? undefined
-        : "review exhaustion must bind the exact failed request and retained attempt/session"
-    case "HandbackTechnicalRetryExhausted":
-      return disposition.failure.operationId === disposition.request.operationId
-          && disposition.request.implementerSessionId === subject.sessionId
-          && samePlannedTaskAttempt(disposition.request.plannedAttempt, subject.plannedAttempt)
+        : "review exhaustion must bind the exact failed request and retained attempt/session",
+    HandbackTechnicalRetryExhausted: (disposition) =>
+      disposition.failure.operationId === disposition.request.operationId
+        && disposition.request.implementerSessionId === subject.sessionId
+        && samePlannedTaskAttempt(disposition.request.plannedAttempt, subject.plannedAttempt)
         ? undefined
-        : "handback exhaustion must bind the exact failed request and retained attempt/session"
-    case "ResourceEmergency":
-    case "ImplementationExecutionFailed":
-    case "ImplementationExecutionInterrupted":
-      return disposition.outcome.sessionId === subject.sessionId
-        ? undefined
-        : "terminal execution evidence must bind the retained session"
-  }
+        : "handback exhaustion must bind the exact failed request and retained attempt/session",
+    ResourceEmergency: validTerminalExecutionDisposition,
+    ImplementationExecutionFailed: validTerminalExecutionDisposition,
+    ImplementationExecutionInterrupted: validTerminalExecutionDisposition
+  })
 })
 export const ImplementationConvergenceDisposition = Object.assign(
   ImplementationConvergenceDispositionVariants.check(validDisposition),
@@ -162,16 +173,13 @@ export type ImplementationConvergenceResult = typeof ImplementationConvergenceRe
 export const implementationConvergencePredecessorOperationId = (
   disposition: ImplementationConvergenceDisposition
 ): OperationId => {
-  switch (disposition._tag) {
-    case "Accepted":
-    case "ImplementationNonConvergent":
-      return disposition.review.manifest.operationId
-    case "ReviewTechnicalRetryExhausted":
-    case "HandbackTechnicalRetryExhausted":
-      return disposition.failure.operationId
-    case "ResourceEmergency":
-    case "ImplementationExecutionFailed":
-    case "ImplementationExecutionInterrupted":
-      return disposition.outcome.operationId
-  }
+  return Match.valueTags(disposition, {
+    Accepted: ({ review }) => review.manifest.operationId,
+    ImplementationNonConvergent: ({ review }) => review.manifest.operationId,
+    ReviewTechnicalRetryExhausted: ({ failure }) => failure.operationId,
+    HandbackTechnicalRetryExhausted: ({ failure }) => failure.operationId,
+    ResourceEmergency: ({ outcome }) => outcome.operationId,
+    ImplementationExecutionFailed: ({ outcome }) => outcome.operationId,
+    ImplementationExecutionInterrupted: ({ outcome }) => outcome.operationId
+  })
 }

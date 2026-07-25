@@ -183,7 +183,6 @@ export {
   PlannedTaskAttemptPlanner
 } from "./task-work-planning.js"
 export * from "./task-work-session-recovery-conformance.js"
-export * from "./task-work-session-recovery-model-controls.js"
 export {
   AvailableProviderWorkUnit,
   MatchingTaskWorkSessionReported,

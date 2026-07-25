@@ -539,6 +539,33 @@ it.effect("rejects terminal dispositions whose retained evidence contradicts the
     expect(() =>
       Schema.decodeUnknownSync(ImplementationConvergenceDisposition)({
         ...accepted,
+        subject: {
+          ...accepted.subject,
+          worktreeProof: { ...accepted.subject.worktreeProof, baseSha: "foreign-base-sha" }
+        }
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(ImplementationConvergenceDisposition)({
+        ...accepted,
+        subject: {
+          ...accepted.subject,
+          worktreeProof: { ...accepted.subject.worktreeProof, branch: "foreign-branch" }
+        }
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(ImplementationConvergenceDisposition)({
+        ...accepted,
+        subject: {
+          ...accepted.subject,
+          worktreeProof: { ...accepted.subject.worktreeProof, worktree: "foreign-worktree" }
+        }
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(ImplementationConvergenceDisposition)({
+        ...accepted,
         review: {
           ...accepted.review,
           manifest: { ...accepted.review.manifest, implementerSessionId: "foreign-session" }

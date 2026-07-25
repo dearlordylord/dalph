@@ -49,7 +49,12 @@ const planOperationId = OperationId.make("mbt-predecessor")
 const worktreeOperationId = OperationId.make("mbt-worktree")
 
 /**
- * Quint controls backed by the real journaled WorkflowInterpreter protocol.
+ * @experimental Executable Quint conformance infrastructure, not a supported
+ * production reducer, scheduler, or package API. Its placement and shape remain
+ * under consideration. Do not derive runtime architecture from its queues,
+ * projections, or deterministic authority scripts.
+ *
+ * The controls invoke the real journaled WorkflowInterpreter protocol.
  * Local fields only project test observations; all requests, retries, durable
  * records, failures, and recovery decisions are produced by production code.
  */

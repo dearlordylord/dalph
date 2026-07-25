@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import { OperationId, type RunId } from "./domain.js"
 import {
   claimForPlannedAttempt,
@@ -133,13 +133,19 @@ const validateDispositionEvidence = (
   operationId: DispositionOperation["request"]["operationId"],
   disposition: ImplementationConvergenceDisposition
 ): Effect.Effect<void, ImplementationConvergenceHistoryContradiction> => {
-  switch (disposition._tag) {
-    case "Accepted":
-    case "ImplementationNonConvergent":
-      return requireReview(records, disposition.review)
-        ? Effect.void
-        : Effect.fail(fail(operationId, "MissingReview"))
-    case "ReviewTechnicalRetryExhausted": {
+  const validateReviewDisposition = (
+    disposition: Extract<
+      ImplementationConvergenceDisposition,
+      { readonly _tag: "Accepted" | "ImplementationNonConvergent" }
+    >
+  ) =>
+    requireReview(records, disposition.review)
+      ? Effect.void
+      : Effect.fail(fail(operationId, "MissingReview"))
+  return Match.valueTags(disposition, {
+    Accepted: validateReviewDisposition,
+    ImplementationNonConvergent: validateReviewDisposition,
+    ReviewTechnicalRetryExhausted: (disposition) => {
       if (!exactInvocationIntentExists(records, disposition)) {
         return Effect.fail(fail(operationId, "IntentMismatch"))
       }
@@ -154,8 +160,8 @@ const validateDispositionEvidence = (
       return isRetryExhausted(records, disposition)
         ? Effect.void
         : Effect.fail(fail(operationId, "RetryNotExhausted"))
-    }
-    case "HandbackTechnicalRetryExhausted":
+    },
+    HandbackTechnicalRetryExhausted: (disposition) => {
       if (!exactInvocationIntentExists(records, disposition)) {
         return Effect.fail(fail(operationId, "IntentMismatch"))
       }
@@ -168,22 +174,33 @@ const validateDispositionEvidence = (
       return isRetryExhausted(records, disposition)
         ? Effect.void
         : Effect.fail(fail(operationId, "RetryNotExhausted"))
-    case "ResourceEmergency":
-    case "ImplementationExecutionFailed":
-    case "ImplementationExecutionInterrupted": {
-      const executionIndex = records.findIndex(({ event }) =>
-        event._tag === "TaskExecutionOutcomeObserved"
-        && sameEncoded(event.outcome.outcome, disposition.outcome)
-      )
-      if (
-        executionIndex < 0
-        || !executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt)
-      ) return Effect.fail(fail(operationId, "MissingExecution"))
-      return requirePriorEvidence(records, disposition, executionIndex)
-        ? Effect.void
-        : Effect.fail(fail(operationId, "MissingReview"))
-    }
-  }
+    },
+    ResourceEmergency: (disposition) => validateExecutionDispositionEvidence(records, operationId, disposition),
+    ImplementationExecutionFailed: (disposition) =>
+      validateExecutionDispositionEvidence(records, operationId, disposition),
+    ImplementationExecutionInterrupted: (disposition) =>
+      validateExecutionDispositionEvidence(records, operationId, disposition)
+  })
+}
+
+const validateExecutionDispositionEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  operationId: DispositionOperation["request"]["operationId"],
+  disposition: Extract<ImplementationConvergenceDisposition, {
+    readonly _tag: "ImplementationExecutionFailed" | "ImplementationExecutionInterrupted" | "ResourceEmergency"
+  }>
+): Effect.Effect<void, ImplementationConvergenceHistoryContradiction> => {
+  const executionIndex = records.findIndex(({ event }) =>
+    event._tag === "TaskExecutionOutcomeObserved"
+    && sameEncoded(event.outcome.outcome, disposition.outcome)
+  )
+  if (
+    executionIndex < 0
+    || !executionOutcomeCausalChainMatches(records, disposition.outcome, disposition.subject.plannedAttempt)
+  ) return Effect.fail(fail(operationId, "MissingExecution"))
+  return requirePriorEvidence(records, disposition, executionIndex)
+    ? Effect.void
+    : Effect.fail(fail(operationId, "MissingReview"))
 }
 
 /** Records one exact terminal implementation disposition after validating all retained lineage. */
