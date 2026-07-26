@@ -1,0 +1,54 @@
+{
+  "scenarioId": "target-closure-read-evidence",
+  "model": "frontierRecovery",
+  "modelVersion": 3,
+  "source": {
+    "actionSequence": [
+      "init; taskTrackerReportsProvenAbsenceInTargetClosure",
+      "init; taskTrackerReportsIncomparableTargetClosureMembership",
+      "init; taskTrackerReportsCompatibleTargetClosureReplacement"
+    ],
+    "backend": "quint-typescript",
+    "bounds": {
+      "capacity": 2,
+      "deterministicTests": 3
+    },
+    "capacityProfiles": [2],
+    "coverage": ["issue-144-target-closure-read-evidence"],
+    "modelBlobSha": "fa12de2e69f5cf74fb2706ed97ad5a6306fa66b5",
+    "modelCommit": "f51c5550e525bf41e2feb6ef06f0f369faf6d6d9",
+    "profile": "three-normalized-target-closure-read-outcomes",
+    "seed": null,
+    "toolVersions": {
+      "quint": "0.32.0",
+      "quintConnect": "2.0.2-effect4.1"
+    },
+    "traceHash": "3579ea6de4b9544fb4b079a92f6075c7aca124fe45af4a2673045db7d520ca31"
+  },
+  "initialFacts": {
+    "targetClosureTasks": ["A", "B", "C", "D"],
+    "trackerRevision": 0
+  },
+  "observations": [
+    {
+      "profile": "ProvenAbsence",
+      "returnedTasks": ["A", "C", "D"],
+      "explicitlyCoveredAbsentTasks": ["B"]
+    },
+    {
+      "profile": "IncomparableMembership",
+      "returnedTasks": ["A", "C", "D"],
+      "predecessorOperations": [0]
+    },
+    {
+      "profile": "CompatibleReplacement",
+      "returnedTasks": ["A", "B", "C", "D"]
+    }
+  ],
+  "expected": {
+    "graphReadCreatesResponsibility": false,
+    "predecessorAloneProvesAbsence": false,
+    "profilesRemainDistinct": true,
+    "readShape": "TargetClosureMembership"
+  }
+}

@@ -1,10 +1,11 @@
 {
   "model": "frontierRecovery",
-  "modelVersion": 2,
+  "modelVersion": 3,
   "selection": {
     "method": "deterministic-semantic-bin-witness",
     "scenarios": [
       "frontierRecovery/responsibility-first-resume",
+      "frontierRecovery/target-closure-read-evidence",
       "frontierRecovery/unsettled-responsibility-prevents-termination"
     ]
   }
