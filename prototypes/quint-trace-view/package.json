@@ -1,0 +1,25 @@
+{
+  "name": "@dalph-prototype/quint-trace-view",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "generate": "pnpm build && node dist/generate.mjs",
+    "test": "vitest run",
+    "check": "pnpm test && pnpm generate"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.99",
+    "effect-analyzer": "2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}
