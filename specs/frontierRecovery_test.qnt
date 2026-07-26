@@ -240,7 +240,24 @@ module frontierRecoveryCapacityOneTest {
         state.selectorProjection.operationIds.get(A) == 1,
         state.selectorProjection.operationIds.get(C) == -1,
         state.selectorProjection.reservationTaskIds == Set(A),
-        state.selectorProjection.explanationTags == Set("CapacityWait"),
+        state.selectorProjection.explanations == Set({
+          taskId: C,
+          tag: "CapacityWait",
+          wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
+        }),
         initialReservedCount(state) == 1,
+      })
+
+  run existingResponsibilityPrecedesSmallerFreshTaskTest =
+    initCapacityOneResponsibilityFirstProfile
+      .expect(and {
+        state.selectorProjection.frontierTaskIds == Set(A, C),
+        state.selectorProjection.admittedTaskIds == Set(C),
+        state.selectorProjection.reservationTaskIds == Set(C),
+        state.selectorProjection.explanations == Set({
+          taskId: A,
+          tag: "CapacityWait",
+          wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
+        }),
       })
 }

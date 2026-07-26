@@ -432,7 +432,7 @@ assistant response.
 
 | ID | Status | Answer and evidence | Fastest next verification |
 | --- | --- | --- | --- |
-| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Implementation proof recorded; owner acceptance pending** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C; `frontierRecoveryCapacityCounterexample` proves that admitting both violates `boundedCapacity`; and Quint-connect compares the model export with the production selector/controller at capacities one and two. Full production activation remains #132 scope. | Issue owner reviews the returned commit, exact profiles, review dispositions, and final gate before accepting #131. |
+| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Implementation proof recorded; owner acceptance pending** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C and separately with existing C responsibility versus fresh A; `frontierRecoveryCapacityCounterexample` proves that omitting only the capacity check violates `boundedCapacity`; and Quint-connect compares the model export—including the waiting task and wake condition—with the production selector/controller at capacities one and two. Full production activation remains #132 scope. | Issue owner reviews the returned commit, exact profiles, review dispositions, and final gate before accepting #131. |
 | F2 — Explain stale task observation and propose visuals | **Resolved as explanation; prototype open** | See “Why one reservation needs the operation identity” and the exact-capacity timeline proposal above. | Build the trace-only prototype after acceptance behavior is settled. |
 | F3 — Can the controller be tested rigorously, prioritizing MBT/property/unit? | **Partially resolved** | Yes. Evidence now spans capacity-one/two exhaustive model profiles, model-exported Quint-connect replay, fresh-memory and closed/reopened SQLite examples, and focused units. Arbitrary activation/controller command-sequence generation remains deliberately assigned to H3 after #132 makes ownership states model-visible; adding it here would harden the superseded waiter seam. | Preserve the capacity-one proof; add generated command-sequence invariants under H3 after the accepted #132 design. |
 | F4 — Visual step simulation of convergence recovery | **Resolved as a proposal** | Existing journal/reconstruction/controller projections can drive a stepper. Issue 132 supplies the complete activation seam; issue 133 prevents internal review from becoming universal UI vocabulary. | Prototype a read-only trace viewer against the issue-132 projection, not production code. |
@@ -630,9 +630,12 @@ U1–U8:
 1. **Capacity-one model evidence (implementation proof recorded; owner
    acceptance pending):** `CAPACITY` is now supplied by the checking profile.
    The gate exhaustively checks `frontierRecoveryCapacityOne` with independently
-   eligible A and C and requires the deliberately weakened capacity-one action
-   to violate `boundedCapacity`. Quint-connect replays the model export through
-   the production selector/controller at capacities one and two.
+   eligible A and C and with existing C responsibility versus fresh A. It
+   requires the deliberately weakened capacity-one action—which omits only the
+   configured-position check—to violate `boundedCapacity`. Quint-connect
+   replays both capacity-one projections, including exact explanation task and
+   wake-condition identities, through the production selector/controller and
+   retains the capacity-two comparison.
 2. **Model projection scope:** `computeSelectorProjection` considers only model
    tasks A and C, has empty explanations/occupancy, and equates frontier,
    admission, and reservations at capacity two

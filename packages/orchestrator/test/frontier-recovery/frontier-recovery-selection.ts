@@ -7,7 +7,8 @@ import {
   type RunnableFrontierTransition
 } from "../../src/runnable-frontier.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
-import type { FrontierRecoveryConformanceIssue } from "./frontier-recovery-conformance.js"
+import { FrontierRecoveryConformanceIssue } from "./frontier-recovery-conformance.js"
+import type { FrontierRecoveryAdmissionExplanation } from "./frontier-recovery-projection.js"
 
 interface FrontierRecoveryTaskEntry {
   readonly branded: TaskId
@@ -64,32 +65,57 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     "operationId" in transition
       ? input.identityMapping.operationToModel(transition.operationId)
       : Effect.succeed(freshOperationIdentity)
+  const projectTransitions = (
+    transitions: ReadonlyArray<RunnableFrontierTransition>
+  ) =>
+    Effect.forEach(
+      transitions.toSorted((left, right) => left.taskId.localeCompare(right.taskId)),
+      (transition) =>
+        Effect.all({
+          modelOperationId: operationToModel(transition),
+          modelTaskId: input.identityMapping.taskToModel(transition.taskId)
+        }).pipe(
+          Effect.map(({ modelOperationId, modelTaskId }) => ({
+            modelOperationId,
+            modelTaskId,
+            tag: transition._tag
+          }))
+        )
+    )
+  const admittedTransitions = yield* projectTransitions(admission.transitions)
+  const frontierTransitions = yield* projectTransitions(frontier.transitions)
+  const admissionExplanations = yield* Effect.forEach(
+    admission.explanations,
+    (explanation) =>
+      explanation._tag === "CapacityWait"
+        ? input.identityMapping.taskToModel(explanation.taskId).pipe(
+          Effect.map((modelTaskId) => ({
+            modelTaskId,
+            tag: explanation._tag,
+            wakeCondition: explanation.wakeCondition
+          } satisfies FrontierRecoveryAdmissionExplanation))
+        )
+        : Effect.fail(
+          new FrontierRecoveryConformanceIssue({
+            detail: `M2 reconstruction cannot project ${explanation._tag} as a capacity explanation`,
+            reason: "LossyProjection"
+          })
+        )
+  )
   return {
     admissionCapacity: BigInt(controllerSnapshot.capacity),
-    admittedModelTaskIds: yield* Effect.forEach(
-      admission.transitions.map(({ taskId }) => taskId),
-      input.identityMapping.taskToModel
-    ),
-    admittedTransitionTags: admission.transitions.map(({ _tag }) => _tag),
-    admittedModelOperationIds: yield* Effect.forEach(
-      admission.transitions,
-      operationToModel
-    ),
-    admissionExplanationTags: admission.explanations.map(({ _tag }) => _tag),
+    admittedModelTaskIds: admittedTransitions.map(({ modelTaskId }) => modelTaskId),
+    admittedTransitionTags: admittedTransitions.map(({ tag }) => tag),
+    admittedModelOperationIds: admittedTransitions.map(({ modelOperationId }) => modelOperationId),
+    admissionExplanations,
     admissionReservedModelTaskIds: yield* Effect.forEach(
       controllerSnapshot.reservedTaskIds,
       input.identityMapping.taskToModel
     ),
     admission,
-    frontierModelTaskIds: yield* Effect.forEach(
-      frontier.transitions.map(({ taskId }) => taskId),
-      input.identityMapping.taskToModel
-    ),
-    frontierModelOperationIds: yield* Effect.forEach(
-      frontier.transitions,
-      operationToModel
-    ),
-    frontierTransitionTags: frontier.transitions.map(({ _tag }) => _tag),
+    frontierModelTaskIds: frontierTransitions.map(({ modelTaskId }) => modelTaskId),
+    frontierModelOperationIds: frontierTransitions.map(({ modelOperationId }) => modelOperationId),
+    frontierTransitionTags: frontierTransitions.map(({ tag }) => tag),
     occupiedModelTaskIds: yield* Effect.forEach(
       controllerSnapshot.occupied.map(({ taskId }) => taskId),
       input.identityMapping.taskToModel

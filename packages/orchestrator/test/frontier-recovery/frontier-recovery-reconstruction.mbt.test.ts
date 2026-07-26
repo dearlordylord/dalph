@@ -14,12 +14,15 @@ const actionSchema = {
   commitFirstIntent: { task: ITFBigInt },
   crash: {},
   init: {},
+  initCapacityOneResponsibilityFirstProfile: {},
   observeCompatibleReplacement: {},
   observeIncomparableMembership: {},
   observeProvenAbsence: {},
   reconstructionStep: {},
   restart: {}
-} satisfies FrontierRecoveryReconstructionActionFields
+} satisfies FrontierRecoveryReconstructionActionFields & {
+  readonly initCapacityOneResponsibilityFirstProfile: Record<never, never>
+}
 
 const ModelReconstructionGraphEvidence = ITFVariant({
   CompatibleReplacementGraphObservation: Schema.Struct({
@@ -38,6 +41,14 @@ const ModelReconstructionGraphEvidence = ITFVariant({
   })
 })
 
+const ModelAdmissionExplanation = Schema.Struct({
+  tag: Schema.Literal("CapacityWait"),
+  taskId: ITFBigInt,
+  wakeCondition: Schema.Literal(
+    "CapacityReleasedOrReconstructedStateChanged"
+  )
+})
+
 const ModelProjection = Schema.Struct({
   state: Schema.Struct({
     control: Schema.Struct({
@@ -53,7 +64,7 @@ const ModelProjection = Schema.Struct({
     selectorProjection: Schema.Struct({
       admittedTaskIds: ITFSet(ITFBigInt),
       capacity: ITFBigInt,
-      explanationTags: ITFSet(Schema.String),
+      explanations: ITFSet(ModelAdmissionExplanation),
       frontierTaskIds: ITFSet(ITFBigInt),
       occupiedTaskIds: ITFSet(ITFBigInt),
       operationIds: ITFMap(ITFBigInt, ITFBigInt),
@@ -90,7 +101,7 @@ type ReconstructionComparable =
     | "admittedModelOperationIds"
     | "admittedModelTaskIds"
     | "admittedTransitionTags"
-    | "admissionExplanationTags"
+    | "admissionExplanations"
     | "admissionReservedModelTaskIds"
     | "coordinatorRunning"
     | "frontierModelOperationIds"
@@ -388,7 +399,10 @@ const exactGraphProfileMatches = (
       === JSON.stringify({ entries: [] })
 }
 
-const makeReconstructionDriver = (configuredCapacity: 1 | 2) =>
+const makeReconstructionDriver = (
+  configuredCapacity: 1 | 2,
+  initiallyResponsibleTask?: 0 | 2
+) =>
   defineDriver(
     actionSchema,
     () => {
@@ -405,6 +419,18 @@ const makeReconstructionDriver = (configuredCapacity: 1 | 2) =>
         }).pipe(Effect.orDie)
       )
       const controlsRef = Effect.runSync(Ref.make(controls))
+      const initialize = () =>
+        Ref.get(controlsRef).pipe(
+          Effect.flatMap((current) =>
+            current.init().pipe(
+              Effect.andThen(
+                initiallyResponsibleTask === undefined
+                  ? Effect.void
+                  : current.commitFirstIntent(BigInt(initiallyResponsibleTask))
+              )
+            )
+          )
+        )
       return {
         commitFirstIntent: ({ task }) =>
           Ref.get(controlsRef).pipe(
@@ -418,10 +444,8 @@ const makeReconstructionDriver = (configuredCapacity: 1 | 2) =>
           Ref.get(controlsRef).pipe(
             Effect.flatMap((current) => current.getState())
           ),
-        init: () =>
-          Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.init())
-          ),
+        init: initialize,
+        initCapacityOneResponsibilityFirstProfile: initialize,
         observeCompatibleReplacement: () =>
           Ref.get(controlsRef).pipe(
             Effect.flatMap((current) => current.observeCompatibleReplacement())
@@ -484,7 +508,19 @@ const decodeReconstructionModelState = (raw: unknown) =>
         admittedModelOperationIds: admittedModelTaskIds.map((taskId) => selector.operationIds.get(taskId) ?? -2n),
         admittedModelTaskIds,
         admittedTransitionTags: admittedModelTaskIds.map(transitionTagFor),
-        admissionExplanationTags: [...selector.explanationTags].sort(),
+        admissionExplanations: [...selector.explanations]
+          .map(({ tag, taskId, wakeCondition }) => ({
+            modelTaskId: taskId,
+            tag,
+            wakeCondition
+          }))
+          .sort((left, right) =>
+            left.modelTaskId < right.modelTaskId
+              ? -1
+              : left.modelTaskId > right.modelTaskId
+              ? 1
+              : 0
+          ),
         admissionReservedModelTaskIds: sortedBigInts(
           selector.reservationTaskIds
         ),
@@ -530,6 +566,16 @@ const decodeReconstructionModelState = (raw: unknown) =>
     Effect.orDie
   )
 
+const explanationIdentity = (explanation: {
+  readonly modelTaskId: bigint
+  readonly tag: string
+  readonly wakeCondition: string
+}): string => `${explanation.modelTaskId}:${explanation.tag}:${explanation.wakeCondition}`
+
+const explanationIdentities = (
+  explanations: ReconstructionComparable["admissionExplanations"]
+): string => explanations.map(explanationIdentity).sort().join(",")
+
 const compareReconstructionState = (
   model: ReconstructionComparable,
   implementation: ReconstructionComparable
@@ -545,8 +591,8 @@ const compareReconstructionState = (
     === implementation.admittedModelTaskIds.join(",")
   && model.admittedTransitionTags.join(",")
     === implementation.admittedTransitionTags.join(",")
-  && model.admissionExplanationTags.join(",")
-    === implementation.admissionExplanationTags.join(",")
+  && explanationIdentities(model.admissionExplanations)
+    === explanationIdentities(implementation.admissionExplanations)
   && model.admissionReservedModelTaskIds.join(",")
     === implementation.admissionReservedModelTaskIds.join(",")
   && model.frontierModelTaskIds.join(",")
@@ -597,6 +643,24 @@ for (const configuredCapacity of [1, 2] as const) {
     60_000
   )
 }
+
+quintIt(
+  it.effect,
+  "replays M2 capacity-one responsibility-first selection through production reducers",
+  {
+    backend: "typescript",
+    driverFactory: makeReconstructionDriver(1, 2),
+    init: "initCapacityOneResponsibilityFirstProfile",
+    main: "frontierRecoveryCapacityOne",
+    maxSteps: 2,
+    nTraces: 8,
+    seed: "132",
+    spec: "specs/frontierRecovery.qnt",
+    step: "reconstructionStep",
+    stateCheck: reconstructionStateCheck
+  },
+  60_000
+)
 
 for (
   const { action: profile, seed } of [

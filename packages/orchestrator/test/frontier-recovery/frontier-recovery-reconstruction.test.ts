@@ -127,7 +127,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
         expect({
           admittedModelTaskIds: restarted.admittedModelTaskIds,
           admittedTransitionTags: restarted.admittedTransitionTags,
-          admissionExplanationTags: restarted.admissionExplanationTags,
+          admissionExplanations: restarted.admissionExplanations,
           admissionReservedModelTaskIds: restarted.admissionReservedModelTaskIds,
           frontierModelTaskIds: restarted.frontierModelTaskIds,
           frontierTransitionTags: restarted.frontierTransitionTags,
@@ -135,7 +135,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
         }).toEqual({
           admittedModelTaskIds: uninterrupted.admittedModelTaskIds,
           admittedTransitionTags: uninterrupted.admittedTransitionTags,
-          admissionExplanationTags: uninterrupted.admissionExplanationTags,
+          admissionExplanations: uninterrupted.admissionExplanations,
           admissionReservedModelTaskIds: uninterrupted.admissionReservedModelTaskIds,
           frontierModelTaskIds: uninterrupted.frontierModelTaskIds,
           frontierTransitionTags: uninterrupted.frontierTransitionTags,

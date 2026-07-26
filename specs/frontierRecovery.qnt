@@ -125,7 +125,11 @@ module frontierRecovery {
     admittedTaskIds: Set[TaskId],
     transitionTags: TaskId -> str,
     operationIds: TaskId -> int,
-    explanationTags: Set[str],
+    explanations: Set[{
+      taskId: TaskId,
+      tag: str,
+      wakeCondition: str,
+    }],
     reservationTaskIds: Set[TaskId],
     occupiedTaskIds: Set[TaskId],
   }
@@ -311,13 +315,21 @@ module frontierRecovery {
         },
       }
     })
+    val responsible = selected.filter(task =>
+      workflow.get(task).responsibility == Outstanding
+    )
     val admitted =
       if (selected.size() <= CAPACITY)
         selected
+      else if (responsible.contains(A))
+        Set(A)
+      else if (responsible.contains(C))
+        Set(C)
       else if (selected.contains(A))
         Set(A)
       else
         Set(C)
+    val waiting = selected.exclude(admitted)
     {
       capacity: CAPACITY,
       frontierTaskIds: selected,
@@ -334,8 +346,11 @@ module frontierRecovery {
         else
           -1
       ),
-      explanationTags:
-        if (selected.size() > admitted.size()) Set("CapacityWait") else Set(),
+      explanations: waiting.map(task => {
+        taskId: task,
+        tag: "CapacityWait",
+        wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
+      }),
       reservationTaskIds: admitted,
       occupiedTaskIds: Set(),
     }
@@ -1249,6 +1264,12 @@ module frontierRecovery {
     }
   }
 
+  // Capacity-one ordering profile: C already has one workflow responsibility
+  // while A is a newly eligible task. The selector must keep C first even
+  // though A has the smaller task identity.
+  pure def capacityOneResponsibilityFirstState: State =
+    refreshSelectorProjection(applyCommitFirstIntent(initialState, C))
+
   pure def applySettleExternalCompletion(s: State, task: TaskId): State = {
     val current = s.workflow.get(task)
     {
@@ -1348,6 +1369,9 @@ module frontierRecovery {
 
   action initReconciliationProfile: bool =
     state' = reconciliationProfileState
+
+  action initCapacityOneResponsibilityFirstProfile: bool =
+    state' = capacityOneResponsibilityFirstState
 
   action commitFirstIntent(task: TaskId): bool = all {
     canCommitFirstIntent(state, task),

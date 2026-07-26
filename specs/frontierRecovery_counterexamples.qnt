@@ -85,6 +85,7 @@ module frontierRecoveryCapacityCounterexample {
   action commitIgnoringConfiguredCapacity(task: TaskId): bool = all {
     state.coordinator.running,
     freshTaskIsEligible(state, task),
+    not(hasSmallerEligibleFreshTask(state, task)),
     state' = refreshSelectorProjection(applyCommitFirstIntent(state, task)),
   }
 

@@ -159,6 +159,12 @@ const exhaustiveProfiles = [
     "reconstructionStep"
   ],
   [
+    "capacity one prioritizes existing responsibility over a smaller fresh task",
+    "frontierRecoveryCapacityOne",
+    "initCapacityOneResponsibilityFirstProfile",
+    "reconstructionStep"
+  ],
+  [
     "all boundaries",
     "frontierRecoveryCapacityTwo",
     "initAnyBoundaryProfile",

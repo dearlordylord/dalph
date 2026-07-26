@@ -26,12 +26,18 @@ export type FrontierRecoveryReconstructionGraphEvidence =
     readonly returnedModelTaskIds: ReadonlyArray<bigint>
   }
 
+export interface FrontierRecoveryAdmissionExplanation {
+  readonly modelTaskId: bigint
+  readonly tag: "CapacityWait"
+  readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
+}
+
 export interface FrontierRecoveryReconstructionProjection {
   readonly admissionCapacity: bigint
   readonly admittedModelOperationIds: ReadonlyArray<bigint>
   readonly admittedModelTaskIds: ReadonlyArray<bigint>
   readonly admittedTransitionTags: ReadonlyArray<string>
-  readonly admissionExplanationTags: ReadonlyArray<string>
+  readonly admissionExplanations: ReadonlyArray<FrontierRecoveryAdmissionExplanation>
   readonly admissionReservedModelTaskIds: ReadonlyArray<bigint>
   readonly coordinatorRunning: boolean
   readonly frontierModelTaskIds: ReadonlyArray<bigint>

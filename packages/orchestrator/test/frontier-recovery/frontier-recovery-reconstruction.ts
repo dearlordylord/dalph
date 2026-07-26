@@ -367,7 +367,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         admittedModelOperationIds: selection.admittedModelOperationIds,
         admittedModelTaskIds: selection.admittedModelTaskIds,
         admittedTransitionTags: selection.admittedTransitionTags,
-        admissionExplanationTags: selection.admissionExplanationTags,
+        admissionExplanations: selection.admissionExplanations,
         admissionReservedModelTaskIds: selection.admissionReservedModelTaskIds,
         coordinatorRunning,
         frontierModelOperationIds: selection.frontierModelOperationIds,
