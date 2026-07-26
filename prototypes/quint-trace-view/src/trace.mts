@@ -113,6 +113,64 @@ export const ArtifactProvenanceSchema = Schema.Union([
 ])
 export type ArtifactProvenance = typeof ArtifactProvenanceSchema.Type
 
+const taggedWire = <const Tags extends ReadonlyArray<string>>(tags: Tags) =>
+  Schema.Struct({
+    tag: Schema.Literals(tags),
+    value: Schema.Unknown
+  })
+const ClaimWire = taggedWire([
+  "Unclaimed",
+  "ActiveClaim",
+  "CompletionClaim",
+  "ForeignClaim"
+])
+const InvocationWire = taggedWire([
+  "NoInvocation",
+  "RunningInvocation",
+  "AcceptedInvocation",
+  "InterruptedInvocation"
+])
+const LifecycleWire = taggedWire(["Open", "Completed", "Closed"])
+const AvailabilityWire = taggedWire(["Missing", "Available"])
+const ObservationWire = taggedWire([
+  "NeverObserved",
+  "UsableObservation",
+  "UnreadableObservation",
+  "ConflictingObservation"
+])
+const BoundaryWire = taggedWire([
+  "ClaimBoundary",
+  "WorktreeBoundary",
+  "SessionBoundary",
+  "InvocationBoundary",
+  "PromotionBoundary",
+  "CompletionClaimBoundary",
+  "CompletionBoundary",
+  "ClaimDeleteBoundary",
+  "NoBoundary"
+])
+const IsolationWire = taggedWire([
+  "NotIsolated",
+  "ClaimAuthorityIsolated",
+  "WorktreeLostIsolated",
+  "GitLineageIsolated",
+  "LifecycleIsolated",
+  "MembershipIsolated",
+  "ObservationIsolated",
+  "RequestDidNotConvergeIsolated"
+])
+const ResponsibilityWire = taggedWire([
+  "Unowned",
+  "Outstanding",
+  "Settled",
+  "Relinquished"
+])
+const SettlementWire = taggedWire([
+  "TaskUnsettled",
+  "TrackerCompleted",
+  "ResponsibilityRelinquished"
+])
+
 export interface DecisionEntry {
   readonly modelOperationId: ModelOperationId
   readonly modelTaskId: ModelTaskId
@@ -173,21 +231,21 @@ export interface NormalizedFrame {
 export interface NormalizedTaskState {
   readonly authorityRevision: AdmissionCapacity
   readonly baseCompatible: boolean
-  readonly boundary: string
-  readonly claim: string
+  readonly boundary: (typeof BoundaryWire.Type)["tag"]
+  readonly claim: (typeof ClaimWire.Type)["tag"]
   readonly inTarget: boolean
-  readonly invocation: string
-  readonly isolation: string
-  readonly lifecycle: string
+  readonly invocation: (typeof InvocationWire.Type)["tag"]
+  readonly isolation: (typeof IsolationWire.Type)["tag"]
+  readonly lifecycle: (typeof LifecycleWire.Type)["tag"]
   readonly knowledgeActivation: AdmissionCapacity
   readonly knowledgeRevision: AdmissionCapacity
   readonly modelTaskId: ModelTaskId
-  readonly observation: string
+  readonly observation: (typeof ObservationWire.Type)["tag"]
   readonly paused: boolean
   readonly promoted: boolean
-  readonly responsibility: string
-  readonly settlement: string
-  readonly worktree: string
+  readonly responsibility: (typeof ResponsibilityWire.Type)["tag"]
+  readonly settlement: (typeof SettlementWire.Type)["tag"]
+  readonly worktree: (typeof AvailabilityWire.Type)["tag"]
 }
 
 export interface NormalizedTrace {
@@ -241,63 +299,6 @@ const ExplanationWire = Schema.Struct({
     "CapacityReleasedOrReconstructedStateChanged"
   )
 })
-const taggedWire = <const Tags extends ReadonlyArray<string>>(tags: Tags) =>
-  Schema.Struct({
-    tag: Schema.Literals(tags),
-    value: Schema.Unknown
-  })
-const ClaimWire = taggedWire([
-  "Unclaimed",
-  "ActiveClaim",
-  "CompletionClaim",
-  "ForeignClaim"
-])
-const InvocationWire = taggedWire([
-  "NoInvocation",
-  "RunningInvocation",
-  "AcceptedInvocation",
-  "InterruptedInvocation"
-])
-const LifecycleWire = taggedWire(["Open", "Completed", "Closed"])
-const AvailabilityWire = taggedWire(["Missing", "Available"])
-const ObservationWire = taggedWire([
-  "NeverObserved",
-  "UsableObservation",
-  "UnreadableObservation",
-  "ConflictingObservation"
-])
-const BoundaryWire = taggedWire([
-  "ClaimBoundary",
-  "WorktreeBoundary",
-  "SessionBoundary",
-  "InvocationBoundary",
-  "PromotionBoundary",
-  "CompletionClaimBoundary",
-  "CompletionBoundary",
-  "ClaimDeleteBoundary",
-  "NoBoundary"
-])
-const IsolationWire = taggedWire([
-  "NotIsolated",
-  "ClaimAuthorityIsolated",
-  "WorktreeLostIsolated",
-  "GitLineageIsolated",
-  "LifecycleIsolated",
-  "MembershipIsolated",
-  "ObservationIsolated",
-  "RequestDidNotConvergeIsolated"
-])
-const ResponsibilityWire = taggedWire([
-  "Unowned",
-  "Outstanding",
-  "Settled",
-  "Relinquished"
-])
-const SettlementWire = taggedWire([
-  "TaskUnsettled",
-  "TrackerCompleted",
-  "ResponsibilityRelinquished"
-])
 const AuthorityStoryWire = Schema.Struct({
   baseCompatible: Schema.Boolean,
   claim: ClaimWire,
