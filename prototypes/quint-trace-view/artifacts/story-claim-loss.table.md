@@ -1,4 +1,4 @@
-<!-- provenance: {"dalphRevision":"a6233814c","init":"claimLossIsolatesOnlyAffectedTaskTest","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"observed-dag-prototype@1","scenarioTest":"claimLossIsolatesOnlyAffectedTaskTest","scenarioTestSourceSha256":"abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185","seed":"13103","step":"step","traceKind":"story-claim-loss"} -->
+<!-- provenance: {"dalphRevision":"a6233814c","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"observed-dag-prototype@1","seed":"13103","step":"step","init":"claimLossIsolatesOnlyAffectedTaskTest","scenarioTest":"claimLossIsolatesOnlyAffectedTaskTest","scenarioTestSourceSha256":"abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185","traceKind":"story-claim-loss"} -->
 # story-claim-loss trace
 
 | Position | Action / picked task | Coordinator | Capacity | Frontier | Admission | Occupied | Reserved | Explanations | Comparison |

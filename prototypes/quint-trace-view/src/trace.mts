@@ -60,20 +60,57 @@ const FixtureFileName = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9.-]*\.json$/)
 ).pipe(Schema.brand("FixtureFileName"))
 
-export const ArtifactProvenanceSchema = Schema.Struct({
+const CommonArtifactProvenanceFields = {
   dalphRevision: DalphRevision,
-  init: Schema.NonEmptyString,
   modelRevision: ModelRevision,
   modelSha256: ModelSha256,
   projectionVersion: Schema.Literal(PROJECTION_VERSION),
   quintVersion: Schema.Literal("0.32.0"),
   rendererVersion: Schema.Literal("observed-dag-prototype@1"),
-  scenarioTest: Schema.optional(Schema.NonEmptyString),
-  scenarioTestSourceSha256: Schema.optional(ModelSha256),
   seed: TraceSeed,
-  step: Schema.NonEmptyString,
-  traceKind: TraceKindSchema
+  step: Schema.NonEmptyString
+} as const
+const NonStoryArtifactProvenanceSchema = Schema.Struct({
+  ...CommonArtifactProvenanceFields,
+  init: Schema.NonEmptyString,
+  scenarioTest: Schema.optional(Schema.Never),
+  scenarioTestSourceSha256: Schema.optional(Schema.Never),
+  traceKind: Schema.Literals(["sampled", "restart", "counterexample"])
 })
+const storyProvenance = <
+  const Kind extends string,
+  const Test extends string
+>(traceKind: Kind, scenarioTest: Test) =>
+  Schema.Struct({
+    ...CommonArtifactProvenanceFields,
+    init: Schema.Literal(scenarioTest),
+    scenarioTest: Schema.Literal(scenarioTest),
+    scenarioTestSourceSha256: ModelSha256,
+    traceKind: Schema.Literal(traceKind)
+  })
+export const ArtifactProvenanceSchema = Schema.Union([
+  NonStoryArtifactProvenanceSchema,
+  storyProvenance(
+    "story-crash-after-intent",
+    "crashAfterIntentRequiresFreshReadTest"
+  ),
+  storyProvenance(
+    "story-pause-independent",
+    "taskPauseLeavesIndependentBranchRunnableTest"
+  ),
+  storyProvenance(
+    "story-claim-loss",
+    "claimLossIsolatesOnlyAffectedTaskTest"
+  ),
+  storyProvenance(
+    "story-git-rewrite",
+    "rewrittenTargetIsolatesOnlyAffectedTaskTest"
+  ),
+  storyProvenance(
+    "story-external-completion",
+    "externallyCompletedTaskSettlesWithoutDuplicateEffectTest"
+  )
+])
 export type ArtifactProvenance = typeof ArtifactProvenanceSchema.Type
 
 export interface DecisionEntry {
@@ -204,30 +241,83 @@ const ExplanationWire = Schema.Struct({
     "CapacityReleasedOrReconstructedStateChanged"
   )
 })
-const TaggedWire = Schema.Struct({
-  tag: Schema.String,
-  value: Schema.Unknown
-})
+const taggedWire = <const Tags extends ReadonlyArray<string>>(tags: Tags) =>
+  Schema.Struct({
+    tag: Schema.Literals(tags),
+    value: Schema.Unknown
+  })
+const ClaimWire = taggedWire([
+  "Unclaimed",
+  "ActiveClaim",
+  "CompletionClaim",
+  "ForeignClaim"
+])
+const InvocationWire = taggedWire([
+  "NoInvocation",
+  "RunningInvocation",
+  "AcceptedInvocation",
+  "InterruptedInvocation"
+])
+const LifecycleWire = taggedWire(["Open", "Completed", "Closed"])
+const AvailabilityWire = taggedWire(["Missing", "Available"])
+const ObservationWire = taggedWire([
+  "NeverObserved",
+  "UsableObservation",
+  "UnreadableObservation",
+  "ConflictingObservation"
+])
+const BoundaryWire = taggedWire([
+  "ClaimBoundary",
+  "WorktreeBoundary",
+  "SessionBoundary",
+  "InvocationBoundary",
+  "PromotionBoundary",
+  "CompletionClaimBoundary",
+  "CompletionBoundary",
+  "ClaimDeleteBoundary",
+  "NoBoundary"
+])
+const IsolationWire = taggedWire([
+  "NotIsolated",
+  "ClaimAuthorityIsolated",
+  "WorktreeLostIsolated",
+  "GitLineageIsolated",
+  "LifecycleIsolated",
+  "MembershipIsolated",
+  "ObservationIsolated",
+  "RequestDidNotConvergeIsolated"
+])
+const ResponsibilityWire = taggedWire([
+  "Unowned",
+  "Outstanding",
+  "Settled",
+  "Relinquished"
+])
+const SettlementWire = taggedWire([
+  "TaskUnsettled",
+  "TrackerCompleted",
+  "ResponsibilityRelinquished"
+])
 const AuthorityStoryWire = Schema.Struct({
   baseCompatible: Schema.Boolean,
-  claim: TaggedWire,
+  claim: ClaimWire,
   inTarget: Schema.Boolean,
-  invocation: TaggedWire,
-  lifecycle: TaggedWire,
+  invocation: InvocationWire,
+  lifecycle: LifecycleWire,
   promoted: Schema.Boolean,
   revision: BigIntWire,
-  worktree: TaggedWire
+  worktree: AvailabilityWire
 })
 const KnowledgeStoryWire = Schema.Struct({
   activation: BigIntWire,
   durableRevision: BigIntWire,
-  observation: TaggedWire
+  observation: ObservationWire
 })
 const WorkflowStoryWire = Schema.Struct({
-  boundary: TaggedWire,
-  isolation: TaggedWire,
-  responsibility: TaggedWire,
-  settlement: TaggedWire
+  boundary: BoundaryWire,
+  isolation: IsolationWire,
+  responsibility: ResponsibilityWire,
+  settlement: SettlementWire
 })
 export const SelectorProjectionWire = Schema.Struct({
   admittedTaskIds: SetOfBigIntWire,
@@ -316,7 +406,8 @@ const displayedFieldNames = [
   "state.control.runPaused",
   "state.control.taskPaused",
   "state.authority.{lifecycle,claim,worktree,invocation,promoted,baseCompatible,inTarget}",
-  "state.knowledge.observation",
+  "state.authority.revision",
+  "state.knowledge.{activation,durableRevision,observation}",
   "state.workflow.{boundary,responsibility,isolation,settlement}",
   "state.selectorProjection.capacity",
   "state.selectorProjection.frontierTaskIds",
@@ -807,10 +898,10 @@ const decodeTraceUnsafe = (
     fidelity: {
       decodedFields: displayedFieldNames,
       projectedAwayFields: [
-        "authority revisions, blockers, and readability",
+        "authority blockers and readability",
         "control epochs",
         "effect identity sets and counters",
-        "knowledge revisions and reconstructed facts",
+        "reconstructed knowledge facts and observed-authority revision",
         "request identity sets and counters",
         "workflow intent, request counters, and attempt outcome"
       ],

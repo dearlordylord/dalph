@@ -50,7 +50,7 @@ for (const name of manifests) {
     )
   }
   if (
-    manifest.provenance.scenarioTestSourceSha256 !== undefined
+    "scenarioTestSourceSha256" in manifest.provenance
     && manifest.provenance.scenarioTestSourceSha256
       !== scenarioTestSourceSha256
   ) {

@@ -83,13 +83,20 @@ const reverseItfCollections = (value: unknown): void => {
 const mutableSelector = (
   state: Readonly<Record<string, unknown>>
 ): Record<string, unknown> => {
+  const stateRecord = mutableModelState(state)
+  const projection = stateRecord.selectorProjection
+  if (!isRecord(projection)) throw new Error("fixture selector is not a record")
+  return projection
+}
+
+const mutableModelState = (
+  state: Readonly<Record<string, unknown>>
+): Record<string, unknown> => {
   const key = Object.keys(state).find((candidate) => candidate.endsWith("::state"))
   if (key === undefined) throw new Error("fixture has no model state")
   const stateRecord = state[key]
   if (!isRecord(stateRecord)) throw new Error("fixture model state is not a record")
-  const projection = stateRecord.selectorProjection
-  if (!isRecord(projection)) throw new Error("fixture selector is not a record")
-  return projection
+  return stateRecord
 }
 
 const requiredState = (
@@ -394,6 +401,21 @@ describe("ITF to normalized frame boundary", () => {
 })
 
 describe("fail-closed inputs", () => {
+  const storyFixture = (): {
+    readonly manifest: typeof FixtureManifestSchema.Type
+    readonly raw: typeof ItfEnvelopeWire.Type
+  } => {
+    const storyManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
+      readJson(resolve(fixtureRoot, "story-claim-loss.manifest.json"))
+    )
+    return {
+      manifest: storyManifest,
+      raw: Schema.decodeUnknownSync(ItfEnvelopeWire)(
+        readJson(resolve(fixtureRoot, storyManifest.rawItf))
+      )
+    }
+  }
+
   it("rejects an implementation operation identity below the model sentinel", () => {
     const changed: unknown = clone(implementationFixture)
     if (!isRecord(changed) || !Array.isArray(changed.frames)) {
@@ -462,5 +484,71 @@ describe("fail-closed inputs", () => {
     const changed = clone(raw)
     delete mutableSelector(requiredState(changed.states, 0)).reservationTaskIds
     expectReason(changed, "MissingDecisionField")
+  })
+
+  it("rejects an unknown closed Quint story variant", () => {
+    const story = storyFixture()
+    const changed = clone(story.raw)
+    const authority = mutableModelState(
+      requiredState(changed.states, 0)
+    ).authority
+    if (!isRecord(authority) || !Array.isArray(authority["#map"])) {
+      throw new Error("story fixture authority is not an ITF map")
+    }
+    const first = authority["#map"][0]
+    if (!Array.isArray(first) || !isRecord(first[1])) {
+      throw new Error("story fixture has no authority entry")
+    }
+    const claim = first[1].claim
+    if (!isRecord(claim)) throw new Error("story fixture claim is not tagged")
+    claim.tag = "InventedClaim"
+    expectReason(changed, "MissingDecisionField", story.manifest.provenance)
+  })
+
+  it("rejects removal of a displayed story revision", () => {
+    const story = storyFixture()
+    const changed = clone(story.raw)
+    const knowledge = mutableModelState(
+      requiredState(changed.states, 0)
+    ).knowledge
+    if (!isRecord(knowledge) || !Array.isArray(knowledge["#map"])) {
+      throw new Error("story fixture knowledge is not an ITF map")
+    }
+    const first = knowledge["#map"][0]
+    if (!Array.isArray(first) || !isRecord(first[1])) {
+      throw new Error("story fixture has no knowledge entry")
+    }
+    delete first[1].durableRevision
+    expectReason(changed, "MissingDecisionField", story.manifest.provenance)
+  })
+
+  it("requires complete and internally consistent story provenance", () => {
+    const incomplete = clone(
+      readJson(resolve(fixtureRoot, "story-claim-loss.manifest.json"))
+    )
+    if (
+      !isRecord(incomplete)
+      || !isRecord(incomplete.provenance)
+    ) {
+      throw new Error("story fixture has no provenance")
+    }
+    delete incomplete.provenance.scenarioTestSourceSha256
+    expect(() =>
+      Schema.decodeUnknownSync(FixtureManifestSchema)(incomplete)
+    ).toThrow()
+
+    const mismatched = clone(
+      readJson(resolve(fixtureRoot, "story-claim-loss.manifest.json"))
+    )
+    if (
+      !isRecord(mismatched)
+      || !isRecord(mismatched.provenance)
+    ) {
+      throw new Error("story fixture has no provenance")
+    }
+    mismatched.provenance.init = "anotherTest"
+    expect(() =>
+      Schema.decodeUnknownSync(FixtureManifestSchema)(mismatched)
+    ).toThrow()
   })
 })

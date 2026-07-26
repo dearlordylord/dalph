@@ -179,7 +179,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       20 passed (20)
+Tests       23 passed (23)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -204,12 +204,14 @@ Fail-closed cases reject:
 - a sampled trace with violation status or counterexample trace with ok status;
 - a model task identity outside the bounded `0..3` identity map;
 - an unsafe JavaScript state index that would lose integer precision; and
-- removal of `reservationTaskIds`, a decision-bearing field.
+- removal of a decision-bearing or displayed revision field;
+- an unknown closed Quint state variant; and
+- incomplete or mismatched acceptance-test provenance.
 
 ## Performance observations
 
 On the retained 855,280 bytes of raw ITF (51 frames total), the latest warm
-`pnpm check` completed in 2.8 seconds: Vitest reported 521 ms, with the
+`pnpm check` completed in 2.5 seconds: Vitest reported 479 ms, with the
 remaining time covering TypeScript compilation plus all eighteen presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.

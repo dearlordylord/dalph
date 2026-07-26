@@ -140,10 +140,15 @@ const transitionChanges = (
     if (afterTask === undefined) continue
     for (const [field, label] of fields) {
       if (beforeTask[field] !== afterTask[field]) {
-        const display = (value: string | boolean): string =>
-          typeof value === "boolean"
-            ? value ? "yes" : "no"
-            : value
+        const display = (value: string | boolean): string => {
+          if (typeof value !== "boolean") return value
+          if (field === "paused") return value ? "paused" : "active"
+          if (field === "baseCompatible")
+            return value ? "compatible" : "rewritten/incompatible"
+          if (field === "inTarget") return value ? "included" : "absent"
+          if (field === "promoted") return value ? "promoted" : "not promoted"
+          return value ? "yes" : "no"
+        }
         changes.push(
           `Task ${taskName(beforeTask.modelTaskId)} ${label}: ${display(beforeTask[field])} → ${display(afterTask[field])}`
         )

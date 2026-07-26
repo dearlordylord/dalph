@@ -1,4 +1,4 @@
-<!-- provenance: {"dalphRevision":"a6233814c","init":"init","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"observed-dag-prototype@1","seed":"9132","step":"restartTraceStep","traceKind":"restart"} -->
+<!-- provenance: {"dalphRevision":"a6233814c","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"observed-dag-prototype@1","seed":"9132","step":"restartTraceStep","init":"init","traceKind":"restart"} -->
 # restart trace
 
 | Position | Action / picked task | Coordinator | Capacity | Frontier | Admission | Occupied | Reserved | Explanations | Comparison |
