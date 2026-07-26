@@ -1,15 +1,17 @@
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
-import { OperationId, TaskId } from "../../src/domain.js"
+import { OperationId, TaskId, TrackerRevision } from "../../src/domain.js"
 import {
   FrontierRecoveryModelOperationId,
+  FrontierRecoveryModelRevision,
   FrontierRecoveryModelTaskId,
   frontierRecoveryReconstructionActions,
   frontierRecoveryReconstructionConformanceVersion,
   makeFrontierRecoveryIdentityMapping,
   runFrontierRecoveryReconstructionAction
 } from "./frontier-recovery-conformance.js"
+import { modelRevisionFromTracker, trackerRevisionFromModel } from "./frontier-recovery-fixture-identities.js"
 
 const taskA = TaskId.make("frontier-recovery-task-A")
 const taskB = TaskId.make("frontier-recovery-task-B")
@@ -93,6 +95,30 @@ it.effect("round-trips bounded M2 task and operation identities", () =>
         reason: "UnknownModelIdentity"
       })
     }
+  }))
+
+it.effect("returns a typed failure for revisions outside the closed M2 map", () =>
+  Effect.gen(function*() {
+    const exits = yield* Effect.all([
+      trackerRevisionFromModel(
+        FrontierRecoveryModelRevision.make(99n)
+      ).pipe(Effect.exit),
+      modelRevisionFromTracker(
+        TrackerRevision.make("unknown-frontier-recovery-revision")
+      ).pipe(Effect.exit)
+    ])
+
+    const assertTypedUnknownIdentity = (exit: Exit.Exit<unknown, unknown>) => {
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          _tag: "FrontierRecoveryConformanceIssue",
+          reason: "UnknownModelIdentity"
+        })
+      }
+    }
+    assertTypedUnknownIdentity(exits[0])
+    assertTypedUnknownIdentity(exits[1])
   }))
 
 it.effect("rejects missing, duplicate, and lossy M2 identity mappings", () =>

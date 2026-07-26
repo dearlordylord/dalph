@@ -24,6 +24,12 @@ export const FrontierRecoveryModelRevision = Schema.BigInt.pipe(
 )
 export type FrontierRecoveryModelRevision = typeof FrontierRecoveryModelRevision.Type
 
+/** Records one bounded M2 capacity value, not a task, operation, or revision. */
+export const FrontierRecoveryModelCapacity = Schema.BigInt.pipe(
+  Schema.brand("FrontierRecoveryModelCapacity")
+)
+export type FrontierRecoveryModelCapacity = typeof FrontierRecoveryModelCapacity.Type
+
 /**
  * Closed M2 action inventory for reconstructed-run and bounded-frontier selection.
  */

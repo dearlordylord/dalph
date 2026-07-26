@@ -7,33 +7,40 @@ import {
   type RunnableFrontierTransition
 } from "../../src/runnable-frontier.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
-import { FrontierRecoveryConformanceIssue } from "./frontier-recovery-conformance.js"
+import {
+  FrontierRecoveryConformanceIssue,
+  FrontierRecoveryModelCapacity,
+  FrontierRecoveryModelOperationId,
+  type FrontierRecoveryModelTaskId
+} from "./frontier-recovery-conformance.js"
 import type { FrontierRecoveryAdmissionExplanation } from "./frontier-recovery-projection.js"
 
 interface FrontierRecoveryTaskEntry {
   readonly branded: TaskId
-  readonly model: bigint
+  readonly model: FrontierRecoveryModelTaskId
 }
 
 interface FrontierRecoveryTaskIdentityMapping {
   readonly operationToModel: (
     operationId: OperationId
-  ) => Effect.Effect<bigint, FrontierRecoveryConformanceIssue>
+  ) => Effect.Effect<FrontierRecoveryModelOperationId, FrontierRecoveryConformanceIssue>
   readonly taskToModel: (
     taskId: TaskId
-  ) => Effect.Effect<bigint, FrontierRecoveryConformanceIssue>
+  ) => Effect.Effect<FrontierRecoveryModelTaskId, FrontierRecoveryConformanceIssue>
 }
 
 interface SelectFrontierRecoveryAdmissionInput {
   readonly capacity: TaskWorkCapacity
-  readonly eligibleModelTaskIds: ReadonlyArray<bigint>
+  readonly eligibleModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly identityMapping: FrontierRecoveryTaskIdentityMapping
   readonly responsibility: WorkflowResponsibilityState
   readonly taskEntries: ReadonlyArray<FrontierRecoveryTaskEntry>
 }
 
 // Model identity for a fresh transition that has no durable operation yet.
-const freshOperationIdentity = -1n
+// Negative one is the closed M2 sentinel for a fresh transition without a durable operation.
+// eslint-disable-next-line no-magic-numbers
+const freshOperationIdentity = FrontierRecoveryModelOperationId.make(-1n)
 
 /** Applies the production selector to one bounded M2 authority projection. */
 export const selectFrontierRecoveryAdmission = Effect.fn(
@@ -103,7 +110,9 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
         )
   )
   return {
-    admissionCapacity: BigInt(controllerSnapshot.capacity),
+    admissionCapacity: FrontierRecoveryModelCapacity.make(
+      BigInt(controllerSnapshot.capacity)
+    ),
     admittedModelTaskIds: admittedTransitions.map(({ modelTaskId }) => modelTaskId),
     admittedTransitionTags: admittedTransitions.map(({ tag }) => tag),
     admittedModelOperationIds: admittedTransitions.map(({ modelOperationId }) => modelOperationId),

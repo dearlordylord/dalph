@@ -6,18 +6,22 @@ import type {
   ReconstructedPauseState,
   WorkflowResponsibilityState
 } from "../../src/reconstructed-managed-run-state.js"
+import type {
+  FrontierRecoveryModelCapacity,
+  FrontierRecoveryModelOperationId,
+  FrontierRecoveryModelRevision,
+  FrontierRecoveryModelTaskId
+} from "./frontier-recovery-conformance.js"
 
 interface FrontierRecoveryTargetClosureReadEvidence {
   readonly completeness: "Complete"
   readonly consistency: "PotentiallyMixedTime"
-  readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
   readonly factFamily: "TargetMembership"
   readonly freshness: "FreshAtReadBoundary"
-  readonly modelOperationId: bigint
-  readonly modelPredecessorOperationIds: ReadonlyArray<bigint>
-  readonly modelRevision: bigint
+  readonly modelOperationId: FrontierRecoveryModelOperationId
+  readonly modelRevision: FrontierRecoveryModelRevision
   readonly readShape: "TargetClosureMembership"
-  readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  readonly returnedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
 }
 
 export type FrontierRecoveryReconstructionGraphEvidence =
@@ -31,36 +35,38 @@ export type FrontierRecoveryReconstructionGraphEvidence =
     }
     | {
       readonly observationProfile: "IncomparableMembership"
+      readonly modelPredecessorOperationIds: ReadonlyArray<FrontierRecoveryModelOperationId>
     }
     | {
+      readonly explicitlyCoveredModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
       readonly observationProfile: "ProvenAbsence"
     }
   )
 
 export interface FrontierRecoveryAdmissionExplanation {
-  readonly modelTaskId: bigint
+  readonly modelTaskId: FrontierRecoveryModelTaskId
   readonly tag: "CapacityWait"
   readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
 }
 
 export interface FrontierRecoveryReconstructionProjection {
-  readonly admissionCapacity: bigint
-  readonly admittedModelOperationIds: ReadonlyArray<bigint>
-  readonly admittedModelTaskIds: ReadonlyArray<bigint>
+  readonly admissionCapacity: FrontierRecoveryModelCapacity
+  readonly admittedModelOperationIds: ReadonlyArray<FrontierRecoveryModelOperationId>
+  readonly admittedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly admittedTransitionTags: ReadonlyArray<string>
   readonly admissionExplanations: ReadonlyArray<FrontierRecoveryAdmissionExplanation>
-  readonly admissionReservedModelTaskIds: ReadonlyArray<bigint>
+  readonly admissionReservedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly coordinatorRunning: boolean
-  readonly frontierModelTaskIds: ReadonlyArray<bigint>
-  readonly frontierModelOperationIds: ReadonlyArray<bigint>
+  readonly frontierModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly frontierModelOperationIds: ReadonlyArray<FrontierRecoveryModelOperationId>
   readonly frontierTransitionTags: ReadonlyArray<string>
   readonly graphEvidence: FrontierRecoveryReconstructionGraphEvidence
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
-  readonly knownModelTaskIds: ReadonlyArray<bigint>
-  readonly occupiedModelTaskIds: ReadonlyArray<bigint>
+  readonly knownModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly occupiedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly pause: ReconstructedPauseState
   readonly responsibility: WorkflowResponsibilityState
-  readonly responsibleModelTaskIds: ReadonlyArray<bigint>
+  readonly responsibleModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly workflowHistory: ReadonlyArray<JournalRecord>
   readonly workflowEventTags: ReadonlyArray<string>
 }
@@ -69,7 +75,7 @@ export interface MakeFrontierRecoveryReconstructionControlsOptions {
   readonly capacity: TaskWorkCapacity
   readonly coordinatorRunning: boolean
   /** Fresh tracker eligibility supplied to this adapter invocation. */
-  readonly freshEligibleModelTaskIds?: ReadonlyArray<bigint>
+  readonly freshEligibleModelTaskIds?: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly journal: JournalStoreService
 }
 

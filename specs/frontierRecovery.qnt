@@ -42,57 +42,30 @@ module frontierRecovery {
 
   type AttemptOutcome = AttemptPending | AttemptAccepted | AttemptWorktreeLost | AttemptAbandoned
   type TaskSettlement = TaskUnsettled | TrackerCompleted | ResponsibilityRelinquished
+  // Evidence shared by every normalized target-closure membership read.
+  type TargetClosureReadEvidence = {
+    completeness: str,
+    consistency: str,
+    factFamily: str,
+    freshness: str,
+    operationId: int,
+    readShape: str,
+    revision: int,
+    returnedTaskIds: Set[TaskId],
+  }
+
   // The last bounded target-closure observation emitted to the conformance
-  // adapter. This historical read evidence is distinct from per-task authority
-  // knowledge and each variant carries only evidence valid for that read.
+  // adapter. Profile-specific fields exist only where they are meaningful.
   type ReconstructionGraphEvidence =
-    | InitialReconstructionGraphObservation({
-        completeness: str,
-        consistency: str,
-        explicitlyCoveredTaskIds: Set[TaskId],
-        factFamily: str,
-        freshness: str,
-        operationId: int,
-        predecessorOperationIds: Set[int],
-        readShape: str,
-        revision: int,
-        returnedTaskIds: Set[TaskId],
-      })
-    | CompatibleReplacementGraphObservation({
-        completeness: str,
-        consistency: str,
-        explicitlyCoveredTaskIds: Set[TaskId],
-        factFamily: str,
-        freshness: str,
-        operationId: int,
-        predecessorOperationIds: Set[int],
-        readShape: str,
-        revision: int,
-        returnedTaskIds: Set[TaskId],
-      })
+    | InitialReconstructionGraphObservation(TargetClosureReadEvidence)
+    | CompatibleReplacementGraphObservation(TargetClosureReadEvidence)
     | IncomparableMembershipGraphObservation({
-        completeness: str,
-        consistency: str,
-        explicitlyCoveredTaskIds: Set[TaskId],
-        factFamily: str,
-        freshness: str,
-        operationId: int,
+        read: TargetClosureReadEvidence,
         predecessorOperationIds: Set[int],
-        readShape: str,
-        revision: int,
-        returnedTaskIds: Set[TaskId],
       })
     | ProvenAbsenceGraphObservation({
-        completeness: str,
-        consistency: str,
+        read: TargetClosureReadEvidence,
         explicitlyCoveredTaskIds: Set[TaskId],
-        factFamily: str,
-        freshness: str,
-        operationId: int,
-        predecessorOperationIds: Set[int],
-        readShape: str,
-        revision: int,
-        returnedTaskIds: Set[TaskId],
       })
 
   // Facts currently owned by the task tracker, Git, or executor provider.
@@ -276,11 +249,9 @@ module frontierRecovery {
       InitialReconstructionGraphObservation({
         completeness: "Complete",
         consistency: "PotentiallyMixedTime",
-        explicitlyCoveredTaskIds: Set(),
         factFamily: "TargetMembership",
         freshness: "FreshAtReadBoundary",
         operationId: 0,
-        predecessorOperationIds: Set(),
         readShape: "TargetClosureMembership",
         revision: 0,
         returnedTaskIds: TASKS,
@@ -1417,6 +1388,12 @@ module frontierRecovery {
 
   action init: bool = state' = initialState
 
+  action initStoppedCoordinator: bool =
+    state' = {
+      ...initialState,
+      coordinator: {...initialState.coordinator, running: false},
+    }
+
   action initAnyBoundaryProfile: bool = {
     nondet boundary = BOUNDARIES.oneOf()
     state' = stateBeforeBoundary(boundary)
@@ -1435,6 +1412,10 @@ module frontierRecovery {
     canCommitFirstIntent(state, task),
     state' = refreshSelectorProjection(applyCommitFirstIntent(state, task)),
   }
+
+  // Nullary Quint-connect lane for the parameterized closed M2 action.
+  action orchestratorCommitsFirstFreshTaskClaimIntent: bool =
+    orchestratorCommitsFreshTaskClaimIntent(A)
 
   action commitResponsibleIntent(task: TaskId): bool = all {
     canCommitResponsibleIntent(state, task),
@@ -1696,16 +1677,17 @@ module frontierRecovery {
       ...state,
       reconstructionGraphEvidence:
         ProvenAbsenceGraphObservation({
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
         explicitlyCoveredTaskIds: Set(B),
-        factFamily: "TargetMembership",
-        freshness: "FreshAtReadBoundary",
-        operationId: 2,
-        predecessorOperationIds: Set(),
-        readShape: "TargetClosureMembership",
-        revision: 1,
-        returnedTaskIds: Set(A, C, D),
+        read: {
+          completeness: "Complete",
+          consistency: "PotentiallyMixedTime",
+          factFamily: "TargetMembership",
+          freshness: "FreshAtReadBoundary",
+          operationId: 2,
+          readShape: "TargetClosureMembership",
+          revision: 1,
+          returnedTaskIds: Set(A, C, D),
+        },
       }),
     })
 
@@ -1714,16 +1696,17 @@ module frontierRecovery {
       ...state,
       reconstructionGraphEvidence:
         IncomparableMembershipGraphObservation({
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
-        explicitlyCoveredTaskIds: Set(),
-        factFamily: "TargetMembership",
-        freshness: "FreshAtReadBoundary",
-        operationId: 2,
         predecessorOperationIds: Set(0),
-        readShape: "TargetClosureMembership",
-        revision: 1,
-        returnedTaskIds: Set(A, C, D),
+        read: {
+          completeness: "Complete",
+          consistency: "PotentiallyMixedTime",
+          factFamily: "TargetMembership",
+          freshness: "FreshAtReadBoundary",
+          operationId: 2,
+          readShape: "TargetClosureMembership",
+          revision: 1,
+          returnedTaskIds: Set(A, C, D),
+        },
       }),
     })
 
@@ -1734,11 +1717,9 @@ module frontierRecovery {
         CompatibleReplacementGraphObservation({
         completeness: "Complete",
         consistency: "PotentiallyMixedTime",
-        explicitlyCoveredTaskIds: Set(),
         factFamily: "TargetMembership",
         freshness: "FreshAtReadBoundary",
         operationId: 2,
-        predecessorOperationIds: Set(),
         readShape: "TargetClosureMembership",
         revision: 1,
         returnedTaskIds: TASKS,

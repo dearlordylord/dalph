@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { ClaimOwner, ClaimToken, FixtureTarget, OperationId, RunId, TaskId, TrackerRevision } from "../../src/domain.js"
+import { ClaimOwner, ClaimToken, OperationId } from "../../src/domain.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
@@ -17,13 +17,30 @@ import {
 } from "../../src/workflow-operation.js"
 import {
   FrontierRecoveryConformanceIssue,
-  FrontierRecoveryModelOperationId,
-  FrontierRecoveryModelRevision,
-  FrontierRecoveryModelTaskId,
   makeFrontierRecoveryIdentityMapping,
-  runFrontierRecoveryReconstructionAction,
-  type TargetClosureObservationInput
+  runFrontierRecoveryReconstructionAction
 } from "./frontier-recovery-conformance.js"
+import type { FrontierRecoveryModelTaskId, TargetClosureObservationInput } from "./frontier-recovery-conformance.js"
+import {
+  firstClaimOperationIdentity,
+  frontierRecoveryClaimOperationEntries as claimOperationEntries,
+  frontierRecoveryGraphObservationEntries as graphObservationEntries,
+  frontierRecoveryRunId as runId,
+  frontierRecoveryTarget as target,
+  frontierRecoveryTaskEntries as taskEntries,
+  initialGraphOperationId as graphOperationId,
+  initialGraphOperationIdentity,
+  initialModelRevision,
+  modelRevisionFromTracker,
+  modelTaskA,
+  modelTaskB,
+  modelTaskC,
+  modelTaskD,
+  replacementModelRevision,
+  secondClaimOperationIdentity,
+  targetClosureReplacementOperationIdentity,
+  trackerRevisionFromModel
+} from "./frontier-recovery-fixture-identities.js"
 import type {
   FrontierRecoveryReconstructionProjection,
   MakeFrontierRecoveryReconstructionControlsOptions
@@ -35,45 +52,9 @@ export type {
   FrontierRecoveryReconstructionProjection
 } from "./frontier-recovery-projection.js"
 
-const runId = RunId.make("frontier-recovery-reconstruction-run")
-const target = FixtureTarget.make("frontier-recovery-reconstruction-target")
-/* eslint-disable no-magic-numbers -- Closed M2 identities are the versioned conformance manifest. */
-const modelTaskA = FrontierRecoveryModelTaskId.make(0n)
-const modelTaskB = FrontierRecoveryModelTaskId.make(1n)
-const modelTaskC = FrontierRecoveryModelTaskId.make(2n)
-const modelTaskD = FrontierRecoveryModelTaskId.make(3n)
-const initialGraphOperationIdentity = FrontierRecoveryModelOperationId.make(0n)
+// Revisions are non-negative ordinals in this bounded conformance model.
+
 const minimumRevisionIdentity = 0n
-const firstClaimOperationIdentity = FrontierRecoveryModelOperationId.make(1n)
-const targetClosureReplacementOperationIdentity = FrontierRecoveryModelOperationId.make(2n)
-const secondClaimOperationIdentity = FrontierRecoveryModelOperationId.make(3n)
-const initialModelRevision = FrontierRecoveryModelRevision.make(0n)
-const replacementModelRevision = FrontierRecoveryModelRevision.make(1n)
-/* eslint-enable no-magic-numbers */
-const taskEntries = [
-  { branded: TaskId.make("frontier-recovery-task-A"), model: modelTaskA },
-  { branded: TaskId.make("frontier-recovery-task-B"), model: modelTaskB },
-  { branded: TaskId.make("frontier-recovery-task-C"), model: modelTaskC },
-  { branded: TaskId.make("frontier-recovery-task-D"), model: modelTaskD }
-] as const
-const graphOperationId = OperationId.make("frontier-recovery-graph-observation-0")
-const claimOperationEntries = [
-  {
-    branded: OperationId.make("frontier-recovery-claim-operation-1"),
-    model: firstClaimOperationIdentity
-  },
-  {
-    branded: OperationId.make("frontier-recovery-claim-operation-3"),
-    model: secondClaimOperationIdentity
-  }
-] as const
-const graphObservationEntries = [
-  initialGraphOperationIdentity,
-  targetClosureReplacementOperationIdentity
-].map((model) => ({
-  branded: OperationId.make(`frontier-recovery-graph-observation-${model}`),
-  model
-}))
 
 const reconstructionIssue = (
   reason: FrontierRecoveryReconstructionIssue["reason"],
@@ -158,7 +139,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       outcomeRecordKey(operation.operationId),
       trackerGraphOutcomeObserved(operation.operationId, {
         _tag: "TrackerGraphObserved",
-        revision: TrackerRevision.make(`frontier-recovery-revision-${input.revision}`),
+        revision: yield* trackerRevisionFromModel(input.revision),
         taskIds
       })
     )
@@ -334,47 +315,59 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           identityMapping.taskToModel
         )
         : []
-      const graphEvidence = latestGraphIntent?._tag
+      const graphReadCommon = latestGraphIntent?._tag
             === "TrackerGraphObservationIntentRecorded"
           && latestGraphOutcome?._tag === "TrackerGraphOutcomeObserved"
         ? {
-          completeness: "Complete",
-          consistency: "PotentiallyMixedTime",
+          completeness: "Complete" as const,
+          consistency: "PotentiallyMixedTime" as const,
+          factFamily: "TargetMembership" as const,
+          freshness: "FreshAtReadBoundary" as const,
+          modelOperationId: yield* identityMapping.operationToModel(
+            latestGraphIntent.operation.operationId
+          ),
+          modelRevision: yield* modelRevisionFromTracker(
+            latestGraphOutcome.outcome.revision
+          ),
+          readShape: "TargetClosureMembership" as const,
+          returnedModelTaskIds
+        }
+        : {
+          completeness: "Complete" as const,
+          consistency: "PotentiallyMixedTime" as const,
+          factFamily: "TargetMembership" as const,
+          freshness: "FreshAtReadBoundary" as const,
+          modelOperationId: initialGraphOperationIdentity,
+          modelRevision: initialModelRevision,
+          readShape: "TargetClosureMembership" as const,
+          returnedModelTaskIds: taskEntries.map(({ model }) => model)
+        }
+      const graphEvidence = graphObservationProfile === "ProvenAbsence"
+          && latestGraphIntent?._tag === "TrackerGraphObservationIntentRecorded"
+        ? {
+          ...graphReadCommon,
           explicitlyCoveredModelTaskIds: yield* Effect.forEach(
             latestGraphIntent.operation.readShape.explicitlyCoveredTaskIds,
             identityMapping.taskToModel
           ),
-          factFamily: "TargetMembership",
-          freshness: "FreshAtReadBoundary",
-          modelOperationId: yield* identityMapping.operationToModel(
-            latestGraphIntent.operation.operationId
-          ),
+          observationProfile: "ProvenAbsence" as const
+        }
+        : graphObservationProfile === "IncomparableMembership"
+            && latestGraphIntent?._tag === "TrackerGraphObservationIntentRecorded"
+        ? {
+          ...graphReadCommon,
           modelPredecessorOperationIds: yield* Effect.forEach(
             latestGraphIntent.operation.predecessorOperationIds,
             identityMapping.operationToModel
           ),
-          modelRevision: FrontierRecoveryModelRevision.make(
-            // Negative one selects the final fixture revision component.
-            // eslint-disable-next-line no-magic-numbers
-            BigInt(latestGraphOutcome.outcome.revision.split("-").at(-1) ?? "")
-          ),
-          observationProfile: graphObservationProfile,
-          readShape: "TargetClosureMembership",
-          returnedModelTaskIds
-        } as const
+          observationProfile: "IncomparableMembership" as const
+        }
         : {
-          completeness: "Complete",
-          consistency: "PotentiallyMixedTime",
-          explicitlyCoveredModelTaskIds: [],
-          factFamily: "TargetMembership",
-          freshness: "FreshAtReadBoundary",
-          modelOperationId: initialGraphOperationIdentity,
-          modelPredecessorOperationIds: [],
-          modelRevision: initialModelRevision,
-          observationProfile: "InitialObservation",
-          readShape: "TargetClosureMembership",
-          returnedModelTaskIds: taskEntries.map(({ model }) => model)
-        } as const
+          ...graphReadCommon,
+          observationProfile: graphObservationProfile === "CompatibleReplacement"
+            ? "CompatibleReplacement" as const
+            : "InitialObservation" as const
+        }
       return {
         admissionCapacity: selection.admissionCapacity,
         admittedModelOperationIds: selection.admittedModelOperationIds,
