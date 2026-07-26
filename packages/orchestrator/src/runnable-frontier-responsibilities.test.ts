@@ -604,6 +604,49 @@ it.effect("drains blocked waiters in canonical task and operation order", () =>
     expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
   })))
 
+it.effect("hands one exact reservation to one of two duplicate waiters", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskA = TaskId.make("duplicate-wait-A")
+    const taskB = TaskId.make("duplicate-wait-B")
+    const operationB = OperationId.make("duplicate-wait-B-review")
+    const transition = RunnableFrontierTransition.ContinueImplementationReview({
+      operationId: operationB,
+      taskId: taskB
+    })
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedTaskIds: [taskA]
+    })
+    const first = yield* controller.awaitAdmission(transition).pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+    const duplicate = yield* Effect.exit(controller.awaitAdmission(transition))
+    expect(duplicate._tag).toBe("Failure")
+
+    yield* controller.releaseReservation(taskA, null)
+    yield* Fiber.join(first)
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskB])
+
+    yield* controller.releaseReservation(taskB, operationB)
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([])
+  })))
+
+it.effect("hands an exact reconstructed reservation to its first waiter", () =>
+  Effect.gen(function*() {
+    const taskId = TaskId.make("reconstructed-wait")
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedTaskIds: [taskId]
+    })
+
+    yield* controller.awaitAdmission(
+      RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId })
+    )
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
+    yield* controller.releaseReservation(taskId, null)
+  }))
+
 it.effect("reserves at most one exact operation for a task in one admission decision", () =>
   Effect.gen(function*() {
     const taskId = TaskId.make("same-task")
