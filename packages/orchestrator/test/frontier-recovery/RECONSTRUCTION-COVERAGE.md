@@ -1,8 +1,9 @@
-# M2 reconstructed-run conformance inventory
+# Model 2 (M2) reconstructed-run conformance inventory
 
-This inventory covers the M2 slice before the Dalph orchestrator derives a
-runnable frontier. Each row names the concrete actor, action, and boundary
-before the canonical model property and executable lane.
+Model 2 is the Quint model for graph/frontier recovery. This inventory covers
+the slice before the Dalph orchestrator derives a runnable frontier. Each row
+names the concrete actor, action, and boundary before the canonical model
+property and executable lane.
 
 `E` is the checked finite M2 profile, `S` is sampled Quint-connect replay, and
 `P0`/`P1` are the in-memory and closed/reopened SQLite conformance-test cut

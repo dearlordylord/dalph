@@ -14,7 +14,7 @@ const taskB = TaskId.make("frontier-recovery-task-B")
 const operationOne = OperationId.make("frontier-recovery-operation-1")
 
 it("defines the versioned closed M2 reconstruction action map", () => {
-  expect(frontierRecoveryReconstructionConformanceVersion).toBe(2)
+  expect(frontierRecoveryReconstructionConformanceVersion).toBe(1)
   expect(frontierRecoveryReconstructionActions).toEqual([
     "init",
     "reconstructionStep",
@@ -22,7 +22,6 @@ it("defines the versioned closed M2 reconstruction action map", () => {
     "observeProvenAbsence",
     "observeIncomparableMembership",
     "observeCompatibleReplacement",
-    "observeTask",
     "crash",
     "restart"
   ])
@@ -38,7 +37,6 @@ it.effect("rejects unknown M2 reconstruction actions before invoking a control",
       observeCompatibleReplacement: () => Effect.sync(() => invocations += 1),
       observeIncomparableMembership: () => Effect.sync(() => invocations += 1),
       observeProvenAbsence: () => Effect.sync(() => invocations += 1),
-      observeTask: () => Effect.sync(() => invocations += 1),
       reconstructionStep: () => Effect.sync(() => invocations += 1),
       restart: () => Effect.sync(() => invocations += 1)
     }

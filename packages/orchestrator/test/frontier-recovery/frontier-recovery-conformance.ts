@@ -2,8 +2,7 @@ import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
-// eslint-disable-next-line no-magic-numbers
-export const frontierRecoveryReconstructionConformanceVersion = 2 as const
+export const frontierRecoveryReconstructionConformanceVersion = 1 as const
 const minimumModelIdentity = 0n
 
 /**
@@ -17,7 +16,6 @@ const frontierRecoveryReconstructionActionFields = {
   observeProvenAbsence: {},
   observeIncomparableMembership: {},
   observeCompatibleReplacement: {},
-  observeTask: { task: Schema.BigInt },
   crash: {},
   restart: {}
 } as const
@@ -51,7 +49,6 @@ export interface FrontierRecoveryReconstructionControls<A, E, R> {
   readonly observeCompatibleReplacement: () => Effect.Effect<A, E, R>
   readonly observeIncomparableMembership: () => Effect.Effect<A, E, R>
   readonly observeProvenAbsence: () => Effect.Effect<A, E, R>
-  readonly observeTask: (task: bigint) => Effect.Effect<A, E, R>
   readonly reconstructionStep: () => Effect.Effect<A, E, R>
   readonly restart: () => Effect.Effect<A, E, R>
 }
@@ -96,7 +93,6 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       observeCompatibleReplacement: controls.observeCompatibleReplacement,
       observeIncomparableMembership: controls.observeIncomparableMembership,
       observeProvenAbsence: controls.observeProvenAbsence,
-      observeTask: ({ task }) => controls.observeTask(task),
       reconstructionStep: controls.reconstructionStep,
       restart: controls.restart
     }),

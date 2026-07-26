@@ -16,7 +16,6 @@ const actionSchema = {
   observeCompatibleReplacement: {},
   observeIncomparableMembership: {},
   observeProvenAbsence: {},
-  observeTask: { task: ITFBigInt },
   reconstructionStep: {},
   restart: {}
 } satisfies FrontierRecoveryReconstructionActionFields
@@ -401,10 +400,6 @@ const reconstructionDriver = defineDriver(
       observeProvenAbsence: () =>
         Ref.get(controlsRef).pipe(
           Effect.flatMap((current) => current.observeProvenAbsence())
-        ),
-      observeTask: ({ task }) =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.observeTask(task))
         ),
       reconstructionStep: () =>
         Ref.get(controlsRef).pipe(

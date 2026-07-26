@@ -38,8 +38,6 @@ const initialGraphOperationIdentity = 0n
 const minimumRevisionIdentity = 0n
 const firstClaimOperationIdentity = 1n
 const provenAbsenceOperationIdentity = 2n
-const conflictOperationIdentity = 3n
-const replacementOperationIdentity = 4n
 const taskEntries = [
   { branded: TaskId.make("frontier-recovery-task-A"), model: modelTaskA },
   { branded: TaskId.make("frontier-recovery-task-B"), model: modelTaskB },
@@ -50,9 +48,7 @@ const graphOperationId = OperationId.make("frontier-recovery-graph-observation-0
 const claimOperationId = OperationId.make("frontier-recovery-claim-operation-1")
 const graphObservationEntries = [
   initialGraphOperationIdentity,
-  provenAbsenceOperationIdentity,
-  conflictOperationIdentity,
-  replacementOperationIdentity
+  provenAbsenceOperationIdentity
 ].map((model) => ({
   branded: OperationId.make(`frontier-recovery-graph-observation-${model}`),
   model
@@ -254,21 +250,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         revision: firstClaimOperationIdentity,
         tasks: [modelTaskA, modelTaskC, modelTaskD]
       }),
-    observeTask: (modelTaskId: bigint) =>
-      Effect.gen(function*() {
-        yield* identityMapping.taskFromModel(modelTaskId)
-        const records = yield* options.journal.read(runId)
-        const observationCount = records.filter(
-          ({ event }) => event._tag === "TrackerGraphOutcomeObserved"
-        ).length
-        yield* appendTargetClosureObservation({
-          explicitlyCoveredTasks: [],
-          operation: BigInt(observationCount + 1),
-          predecessorOperations: [],
-          revision: BigInt(observationCount),
-          tasks: taskEntries.map(({ model }) => model)
-        })
-      }),
     reconstructionStep: () =>
       Effect.gen(function*() {
         yield* rawControls.commitFirstIntent(modelTaskA)
@@ -407,11 +388,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     observeProvenAbsence: () =>
       runFrontierRecoveryReconstructionAction(
         { _tag: "observeProvenAbsence" },
-        rawControls
-      ),
-    observeTask: (task: bigint) =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "observeTask", task },
         rawControls
       ),
     reconstructionStep: () =>

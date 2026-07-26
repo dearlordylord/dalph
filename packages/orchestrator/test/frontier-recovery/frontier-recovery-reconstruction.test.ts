@@ -103,7 +103,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
       journal
     })
     yield* afterCrash.restart()
-    yield* afterCrash.observeTask(0n)
+    yield* afterCrash.observeCompatibleReplacement()
     expect((yield* afterCrash.getState()).workflowEventTags).toEqual([
       "TrackerGraphObservationIntentRecorded",
       "TrackerGraphOutcomeObserved",
