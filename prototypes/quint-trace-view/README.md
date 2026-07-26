@@ -53,7 +53,7 @@ step, seed, and trace kind.
 | --- | --- | ---: | --- |
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
-| Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action reserves A and C with capacity one; Quint records status `violation`. |
+| Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action makes A and C carry outstanding workflow responsibility at capacity one; Quint records status `violation`. |
 
 The sample's `fixtures/normal.mbt-projection.json` was independently captured
 from the existing version-3 production-backed MBT controls by running `init`
@@ -206,6 +206,13 @@ Projected away from the first-screen view:
 
 Those fields remain in `rawItfState` and in the raw fixture. The decoder does
 not claim equivalence for them.
+
+The counterexample's violated `initialReservedCount` conjunct counts
+responsibility-backed initial reservations from the raw workflow state. That
+is distinct from the first-screen `selectorProjection.reservationTaskIds`
+field, which contains only A in the final frame. The retained counterexample
+therefore proves fail-closed decoding of a violation trace; this narrow view
+does not by itself explain that violated conjunct.
 
 Unsupported inputs fail closed:
 
