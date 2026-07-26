@@ -1,9 +1,9 @@
 {
   "implementationProjection": "normal.mbt-projection.json",
   "provenance": {
-    "dalphRevision": "f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67",
+    "dalphRevision": "a6233814c",
     "init": "init",
-    "modelRevision": "f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67",
+    "modelRevision": "a6233814c",
     "modelSha256": "2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1",
     "projectionVersion": 3,
     "quintVersion": "0.32.0",

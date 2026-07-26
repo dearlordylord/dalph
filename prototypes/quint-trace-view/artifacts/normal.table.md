@@ -1,4 +1,4 @@
-<!-- provenance: {"dalphRevision":"f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67","init":"init","modelRevision":"f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"effect-analyzer@2.1.0","seed":"131","step":"reconstructionStep","traceKind":"sampled"} -->
+<!-- provenance: {"dalphRevision":"a6233814c","init":"init","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"effect-analyzer@2.1.0","seed":"131","step":"reconstructionStep","traceKind":"sampled"} -->
 # sampled trace
 
 | Position | Action / picked task | Coordinator | Capacity | Frontier | Admission | Occupied | Reserved | Explanations | Comparison |

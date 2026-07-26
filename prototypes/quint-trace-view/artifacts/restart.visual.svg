@@ -1,4 +1,4 @@
-<!-- provenance: {"dalphRevision":"f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67","init":"init","modelRevision":"f415c52f9+working-tree-60b49566132807b09c3821d5e78b63599c0fbe67","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"effect-analyzer@2.1.0","seed":"9132","step":"restartTraceStep","traceKind":"restart"} -->
+<!-- provenance: {"dalphRevision":"a6233814c","init":"init","modelRevision":"a6233814c","modelSha256":"2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1","projectionVersion":3,"quintVersion":"0.32.0","rendererVersion":"effect-analyzer@2.1.0","seed":"9132","step":"restartTraceStep","traceKind":"restart"} -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1858" height="172" viewBox="0 0 1858 172" font-family="system-ui, sans-serif">
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8a93a2"/></marker></defs>
   <rect x="0" y="0" width="1858" height="172" fill="#16191f"/>

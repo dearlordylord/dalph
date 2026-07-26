@@ -4,64 +4,114 @@ export const PROJECTION_VERSION = 3 as const
 
 export type TraceKind = "sampled" | "restart" | "counterexample"
 
-export interface ArtifactProvenance {
-  readonly dalphRevision: string
-  readonly init: string
-  readonly modelRevision: string
-  readonly modelSha256: string
-  readonly projectionVersion: typeof PROJECTION_VERSION
-  readonly quintVersion: "0.32.0"
-  readonly rendererVersion: "effect-analyzer@2.1.0"
-  readonly seed: string
-  readonly step: string
-  readonly traceKind: TraceKind
-}
+/** Identifies one bounded Quint model task, not a Dalph tracker task. */
+export const ModelTaskId = Schema.Literals(["0", "1", "2", "3"]).pipe(
+  Schema.brand("ModelTaskId")
+)
+export type ModelTaskId = typeof ModelTaskId.Type
+
+/** Identifies one modeled workflow operation, including the -1 not-yet-created sentinel. */
+export const ModelOperationId = Schema.String.check(
+  Schema.isPattern(/^-?(0|[1-9][0-9]*)$/)
+).pipe(Schema.brand("ModelOperationId"))
+export type ModelOperationId = typeof ModelOperationId.Type
+
+/** Carries the model's exact admission capacity without JavaScript number conversion. */
+export const AdmissionCapacity = Schema.String.check(
+  Schema.isPattern(/^(0|[1-9][0-9]*)$/)
+).pipe(Schema.brand("AdmissionCapacity"))
+export type AdmissionCapacity = typeof AdmissionCapacity.Type
+
+/** Identifies one retained trace frame ordinal. */
+export const TraceStep = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0)
+).pipe(Schema.brand("TraceStep"))
+export type TraceStep = typeof TraceStep.Type
+
+/** Displays one retained trace frame without implying a model state identity. */
+export const TracePosition = Schema.String.check(
+  Schema.isPattern(/^S(0|[1-9][0-9]*)$/)
+).pipe(Schema.brand("TracePosition"))
+export type TracePosition = typeof TracePosition.Type
+
+const ArtifactRevision = Schema.NonEmptyString.pipe(
+  Schema.brand("ArtifactRevision")
+)
+const ModelSha256 = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{64}$/)
+).pipe(Schema.brand("ModelSha256"))
+const TraceSeed = Schema.NonEmptyString.pipe(Schema.brand("TraceSeed"))
+const FixtureFileName = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9.-]*\.json$/)
+).pipe(Schema.brand("FixtureFileName"))
+
+export const ArtifactProvenanceSchema = Schema.Struct({
+  dalphRevision: ArtifactRevision,
+  init: Schema.NonEmptyString,
+  modelRevision: ArtifactRevision,
+  modelSha256: ModelSha256,
+  projectionVersion: Schema.Literal(PROJECTION_VERSION),
+  quintVersion: Schema.Literal("0.32.0"),
+  rendererVersion: Schema.Literal("effect-analyzer@2.1.0"),
+  seed: TraceSeed,
+  step: Schema.NonEmptyString,
+  traceKind: Schema.Literals(["sampled", "restart", "counterexample"])
+})
+export type ArtifactProvenance = typeof ArtifactProvenanceSchema.Type
 
 export interface DecisionEntry {
-  readonly modelOperationId: string
-  readonly modelTaskId: string
+  readonly modelOperationId: ModelOperationId
+  readonly modelTaskId: ModelTaskId
   readonly transitionTag: string
 }
 
-export interface AdmissionExplanation {
-  readonly modelTaskId: string
-  readonly tag: "CapacityWait"
-  readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-}
+export const AdmissionExplanationSchema = Schema.Struct({
+  modelTaskId: ModelTaskId,
+  tag: Schema.Literal("CapacityWait"),
+  wakeCondition: Schema.Literal(
+    "CapacityReleasedOrReconstructedStateChanged"
+  )
+})
+export type AdmissionExplanation = typeof AdmissionExplanationSchema.Type
 
-export interface MbtComparableProjection {
-  readonly admissionCapacity: string
-  readonly admittedModelOperationIds: ReadonlyArray<string>
-  readonly admittedModelTaskIds: ReadonlyArray<string>
-  readonly admittedTransitionTags: ReadonlyArray<string>
-  readonly admissionExplanations: ReadonlyArray<AdmissionExplanation>
-  readonly admissionReservedModelTaskIds: ReadonlyArray<string>
-  readonly coordinatorRunning: boolean
-  readonly frontierModelOperationIds: ReadonlyArray<string>
-  readonly frontierModelTaskIds: ReadonlyArray<string>
-  readonly frontierTransitionTags: ReadonlyArray<string>
-  readonly occupiedModelTaskIds: ReadonlyArray<string>
-}
+export const MbtComparableProjectionSchema = Schema.Struct({
+  admissionCapacity: AdmissionCapacity,
+  admittedModelOperationIds: Schema.Array(ModelOperationId),
+  admittedModelTaskIds: Schema.Array(ModelTaskId),
+  admittedTransitionTags: Schema.Array(Schema.String),
+  admissionExplanations: Schema.Array(AdmissionExplanationSchema),
+  admissionReservedModelTaskIds: Schema.Array(ModelTaskId),
+  coordinatorRunning: Schema.Boolean,
+  frontierModelOperationIds: Schema.Array(ModelOperationId),
+  frontierModelTaskIds: Schema.Array(ModelTaskId),
+  frontierTransitionTags: Schema.Array(Schema.String),
+  occupiedModelTaskIds: Schema.Array(ModelTaskId)
+})
+export type MbtComparableProjection =
+  typeof MbtComparableProjectionSchema.Type
 
-export interface FrameComparison {
-  readonly firstDivergentField?: keyof MbtComparableProjection
-  readonly status: "Match" | "Mismatch" | "NotSupplied"
-}
+export type FrameComparison =
+  | { readonly status: "Match" }
+  | { readonly status: "NotSupplied" }
+  | {
+    readonly firstDivergentField: keyof MbtComparableProjection
+    readonly status: "Mismatch"
+  }
 
 export interface NormalizedFrame {
   readonly action: string
   readonly admission: ReadonlyArray<DecisionEntry>
-  readonly capacity: string
+  readonly capacity: AdmissionCapacity
   readonly comparison: FrameComparison
   readonly coordinatorStatus: "Running" | "Crashed"
   readonly explanations: ReadonlyArray<AdmissionExplanation>
   readonly frontier: ReadonlyArray<DecisionEntry>
-  readonly occupiedModelTaskIds: ReadonlyArray<string>
-  readonly pickedModelTaskId?: string
-  readonly position: `S${number}`
+  readonly occupiedModelTaskIds: ReadonlyArray<ModelTaskId>
+  readonly pickedModelTaskId?: ModelTaskId
+  readonly position: TracePosition
   readonly rawItfState: Readonly<Record<string, unknown>>
-  readonly reservedModelTaskIds: ReadonlyArray<string>
-  readonly step: number
+  readonly reservedModelTaskIds: ReadonlyArray<ModelTaskId>
+  readonly step: TraceStep
 }
 
 export interface NormalizedTrace {
@@ -73,6 +123,28 @@ export interface NormalizedTrace {
   readonly frames: ReadonlyArray<NormalizedFrame>
   readonly provenance: ArtifactProvenance
 }
+
+export interface FixtureManifest {
+  readonly implementationProjection?: string
+  readonly provenance: ArtifactProvenance
+  readonly rawItf: string
+}
+
+export const FixtureManifestSchema = Schema.Struct({
+  implementationProjection: Schema.optional(FixtureFileName),
+  provenance: ArtifactProvenanceSchema,
+  rawItf: FixtureFileName
+})
+
+export interface ImplementationFixture {
+  readonly frames: ReadonlyArray<MbtComparableProjection>
+  readonly provenance: ArtifactProvenance
+}
+
+export const ImplementationFixtureSchema = Schema.Struct({
+  frames: Schema.Array(MbtComparableProjectionSchema),
+  provenance: ArtifactProvenanceSchema
+})
 
 export type TraceDecodeReason =
   | "MalformedIdentity"
@@ -101,8 +173,8 @@ export class TraceDecodeError extends Schema.TaggedErrorClass<TraceDecodeError>(
   }
 ) {}
 
-const BigIntWire = Schema.Struct({ "#bigint": Schema.String })
-const SetOfBigIntWire = Schema.Struct({
+export const BigIntWire = Schema.Struct({ "#bigint": Schema.String })
+export const SetOfBigIntWire = Schema.Struct({
   "#set": Schema.Array(BigIntWire)
 })
 const ExplanationWire = Schema.Struct({
@@ -112,7 +184,7 @@ const ExplanationWire = Schema.Struct({
     "CapacityReleasedOrReconstructedStateChanged"
   )
 })
-const SelectorProjectionWire = Schema.Struct({
+export const SelectorProjectionWire = Schema.Struct({
   admittedTaskIds: SetOfBigIntWire,
   capacity: BigIntWire,
   explanations: Schema.Struct({
@@ -128,12 +200,12 @@ const SelectorProjectionWire = Schema.Struct({
     "#map": Schema.Array(Schema.Tuple([BigIntWire, Schema.String]))
   })
 })
-const DisplayedModelStateWire = Schema.Struct({
+export const DisplayedModelStateWire = Schema.Struct({
   coordinator: Schema.Struct({ running: Schema.Boolean }),
   selectorProjection: SelectorProjectionWire
 })
 const ItfStateWire = Schema.Record(Schema.String, Schema.Unknown)
-const ItfEnvelopeWire = Schema.Struct({
+export const ItfEnvelopeWire = Schema.Struct({
   "#meta": Schema.Struct({
     format: Schema.Literal("ITF"),
     source: Schema.String,
@@ -143,7 +215,7 @@ const ItfEnvelopeWire = Schema.Struct({
   vars: Schema.Array(Schema.String)
 })
 
-const reconstructionActions = new Set([
+export const retainedReconstructionActions = [
   "init",
   "commitFirstIntent",
   "crash",
@@ -152,12 +224,12 @@ const reconstructionActions = new Set([
   "observeProvenAbsence",
   "reconstructionStep",
   "restart"
-])
+] as const
+const reconstructionActions = new Set(retainedReconstructionActions)
 const counterexampleActions = new Set([
   ...reconstructionActions,
   "weakenedCapacityStep"
 ])
-const modelTaskIdentities = new Set(["0", "1", "2", "3"])
 const displayedFieldNames = [
   "#meta.index",
   "mbt::actionTaken",
@@ -198,10 +270,22 @@ const decodeSync = <S extends Schema.ConstraintDecoder<unknown>>(
   }
 }
 
-const exactInteger = (
+function exactInteger(
+  wire: typeof BigIntWire.Type,
+  identity: "operation"
+): ModelOperationId
+function exactInteger(
+  wire: typeof BigIntWire.Type,
+  identity: "task"
+): ModelTaskId
+function exactInteger(
+  wire: typeof BigIntWire.Type,
+  identity: "value"
+): AdmissionCapacity
+function exactInteger(
   wire: typeof BigIntWire.Type,
   identity: "operation" | "task" | "value"
-): string => {
+): AdmissionCapacity | ModelOperationId | ModelTaskId {
   if (!/^-?(0|[1-9][0-9]*)$/.test(wire["#bigint"])) {
     throw new TraceDecodeError({
       detail: `${identity} is not an exact ITF integer: ${wire["#bigint"]}`,
@@ -209,24 +293,45 @@ const exactInteger = (
     })
   }
   const normalized = BigInt(wire["#bigint"]).toString()
-  if (identity === "task" && !modelTaskIdentities.has(normalized)) {
+  if (identity === "operation") {
+    if (BigInt(normalized) < -1n) {
+      throw new TraceDecodeError({
+        detail: `invalid model operation identity ${normalized}`,
+        reason: "MalformedIdentity"
+      })
+    }
+    return decodeSync(
+      ModelOperationId,
+      normalized,
+      `invalid model operation identity ${normalized}`
+    )
+  }
+  if (identity === "task") {
+    try {
+      return Schema.decodeUnknownSync(ModelTaskId)(normalized)
+    } catch {
+      throw new TraceDecodeError({
+        detail: `unknown bounded model task identity ${normalized}`,
+        reason: "MalformedIdentity"
+      })
+    }
+  }
+  if (BigInt(normalized) < 0n) {
     throw new TraceDecodeError({
-      detail: `unknown bounded model task identity ${normalized}`,
-      reason: "MalformedIdentity"
+      detail: `negative admission capacity ${normalized}`,
+      reason: "LossyInteger"
     })
   }
-  if (identity === "operation" && BigInt(normalized) < -1n) {
-    throw new TraceDecodeError({
-      detail: `invalid model operation identity ${normalized}`,
-      reason: "MalformedIdentity"
-    })
-  }
-  return normalized
+  return decodeSync(
+    AdmissionCapacity,
+    normalized,
+    `invalid admission capacity ${normalized}`
+  )
 }
 
 const sortedIdentities = (
   wire: typeof SetOfBigIntWire.Type
-): ReadonlyArray<string> =>
+): ReadonlyArray<ModelTaskId> =>
   wire["#set"]
     .map((identity) => exactInteger(identity, "task"))
     .sort((left, right) => Number(left) - Number(right))
@@ -260,7 +365,7 @@ const stateModelValue = (
 
 const pickedTaskFrom = (
   rawState: Readonly<Record<string, unknown>>
-): string | undefined => {
+): ModelTaskId | undefined => {
   const picks = requiredStateValue(rawState, "mbt::nondetPicks")
   if (typeof picks !== "object" || picks === null || Array.isArray(picks)) {
     throw new TraceDecodeError({
@@ -313,7 +418,7 @@ const actionFrom = (
 const indexFrom = (
   rawState: Readonly<Record<string, unknown>>,
   expected: number
-): number => {
+): TraceStep => {
   const metadata = requiredStateValue(rawState, "#meta")
   if (
     typeof metadata !== "object"
@@ -334,14 +439,14 @@ const indexFrom = (
       reason: "InvalidItf"
     })
   }
-  return metadata.index
+  return decodeSync(TraceStep, metadata.index, "invalid trace step")
 }
 
 const mapsFrom = (
   selector: typeof SelectorProjectionWire.Type
 ): {
-  readonly operationIds: ReadonlyMap<string, string>
-  readonly transitionTags: ReadonlyMap<string, string>
+  readonly operationIds: ReadonlyMap<ModelTaskId, ModelOperationId>
+  readonly transitionTags: ReadonlyMap<ModelTaskId, string>
 } => {
   const operationIds = new Map(
     selector.operationIds["#map"].map(([task, operation]) => [
@@ -366,9 +471,9 @@ const mapsFrom = (
 }
 
 const decisionEntries = (
-  taskIds: ReadonlyArray<string>,
-  operationIds: ReadonlyMap<string, string>,
-  transitionTags: ReadonlyMap<string, string>
+  taskIds: ReadonlyArray<ModelTaskId>,
+  operationIds: ReadonlyMap<ModelTaskId, ModelOperationId>,
+  transitionTags: ReadonlyMap<ModelTaskId, string>
 ): ReadonlyArray<DecisionEntry> =>
   taskIds.map((modelTaskId) => {
     const modelOperationId = operationIds.get(modelTaskId)
@@ -455,8 +560,7 @@ const frameFrom = (
       transitionTags
     ),
     capacity: exactInteger(selector.capacity, "value"),
-    coordinatorStatus:
-      state.coordinator.running ? "Running" as const : "Crashed" as const,
+    coordinatorStatus: state.coordinator.running ? "Running" : "Crashed",
     explanations: explanationsFrom(selector),
     frontier: decisionEntries(
       frontierTaskIds,
@@ -465,7 +569,11 @@ const frameFrom = (
     ),
     occupiedModelTaskIds: sortedIdentities(selector.occupiedTaskIds),
     ...(pickedModelTaskId === undefined ? {} : { pickedModelTaskId }),
-    position: `S${step}` as const,
+    position: decodeSync(
+      TracePosition,
+      `S${step}`,
+      `invalid display position S${step}`
+    ),
     rawItfState: rawState,
     reservedModelTaskIds: sortedIdentities(selector.reservationTaskIds),
     step
@@ -490,9 +598,12 @@ export const decodeTrace = (
       reason: "InvalidItf"
     })
   }
-  if (envelope["#meta"].status !== "ok" && provenance.traceKind !== "counterexample") {
+  const expectedStatus =
+    provenance.traceKind === "counterexample" ? "violation" : "ok"
+  if (envelope["#meta"].status !== expectedStatus) {
     throw new TraceDecodeError({
-      detail: `non-counterexample trace status ${envelope["#meta"].status}`,
+      detail:
+        `${provenance.traceKind} trace status ${envelope["#meta"].status}; expected ${expectedStatus}`,
       reason: "InvalidItf"
     })
   }

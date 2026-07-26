@@ -21,11 +21,11 @@ Use Node 22.22.2+ or 24.15.0+ and pnpm 10.29.3:
 
 ```sh
 cd prototypes/quint-trace-view
-pnpm install --ignore-workspace --frozen-lockfile
+pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs ten decoder/equality/fail-closed tests, compiles the
+`pnpm check` runs thirteen decoder/equality/drift/fail-closed tests, compiles the
 prototype, and regenerates byte-identical normalized, table, Mermaid, SVG, and
 side-by-side HTML artifacts.
 
@@ -39,8 +39,9 @@ Pinned versions:
 - pnpm `10.29.3`.
 
 No dependency was added to Dalph's root package, production packages, or CI.
-The prototype has its own isolated package and frozen lockfile on this
-throwaway branch.
+The prototype has its own isolated package manifest on this throwaway branch.
+It deliberately has no second lockfile or package-local quality configuration;
+the exact dependency versions are pinned in `package.json`.
 
 ## Retained evidence
 
@@ -72,10 +73,9 @@ Generated evidence for each trace:
 
 ## Exact fixture commands
 
-The retained fixtures were produced from Dalph commit `f415c52f9` plus
-working-tree patch identity
-`60b49566132807b09c3821d5e78b63599c0fbe67`. The exact
-`specs/frontierRecovery.qnt` SHA-256 was
+The retained fixtures were produced from Dalph commit `a6233814c`, which is an
+ancestor of this prototype branch. The exact `specs/frontierRecovery.qnt`
+SHA-256 was
 `2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1`.
 
 Normal sampled trace:
@@ -130,35 +130,38 @@ pnpm exec quint run specs/frontierRecovery_counterexamples.qnt \
   --verbosity 0
 ```
 
+The normal command was rerun after the source change landed. Removing only
+Quint's timestamp and human-readable generation time produced a byte-identical
+canonical JSON trace.
+
 ## Test result
 
 Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       10 passed (10)
+Tests       13 passed (13)
 ```
 
-`pnpm check:all` was run three times from the isolated worktree. Build, package
+The final `pnpm check:all` run passed from the isolated worktree: build, package
 boundaries, typecheck, lint/format, cycle, complexity, duplication, deterministic
-Quint tests, and sampled Quint witnesses passed. The shared Apalache endpoint
-on `localhost:8822` then dropped its gRPC connection during different exhaustive
-profiles, so the aggregate command did not finish.
-
-To distinguish an endpoint failure from a model failure, Apalache 0.56.1 was
-started on private port 8823 and the gate's exact five exhaustive
-frontier-recovery profiles were rerun with
-`--server-endpoint localhost:8823`. All five returned
-`[ok] No violation found`. The failed aggregate gate is not reported as green.
+and exhaustive Quint checks, 454 production tests with coverage thresholds,
+and the secret scan all completed successfully. Earlier attempts encountered
+transient dropped connections from the shared Apalache endpoint; a private
+Apalache 0.56.1 server had already returned `[ok] No violation found` for the
+same five exhaustive profiles before the final shared-endpoint run succeeded.
 
 Positive cases prove raw-ITF-to-frame preservation, equality with the existing
 MBT comparable projection at all three sampled steps, first-divergence
-reporting, deterministic normalized bytes, and decoding of all three retained
-trace kinds.
+reporting, agreement with the existing version-3 closed reconstruction action
+inventory, deterministic normalized bytes, and decoding of all three retained
+trace kinds. Artifact generation also hashes the checked-out Quint model and
+refuses to proceed unless it matches the manifest.
 
 Fail-closed cases reject:
 
 - an unknown action;
+- a sampled trace with violation status or counterexample trace with ok status;
 - a model task identity outside the bounded `0..3` identity map;
 - an unsafe JavaScript state index that would lose integer precision; and
 - removal of `reservationTaskIds`, a decision-bearing field.
@@ -166,8 +169,9 @@ Fail-closed cases reject:
 ## Performance observations
 
 On the retained 218,756 bytes of raw ITF (13 frames total), `pnpm check`
-completed in 2.87 seconds wall-clock: Vitest reported 302 ms and the remaining
-time covered TypeScript compilation plus all 15 presentation artifacts.
+completed in 5.06 seconds cold and 2.47 seconds warm: Vitest reported 635 ms
+and 406 ms respectively, with the remaining time covering TypeScript
+compilation plus all 15 presentation artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
 The fixture sizes are 50,548 bytes sampled, 117,454 bytes restart, and 50,754
@@ -224,3 +228,18 @@ This result makes no decision about Effect Analyzer source analysis. That
 separate decision still requires all seven Decision B results in
 `research/effect-analyzer-quint-evaluation.md`, including diagnosis of the
 incomplete whole-directory audit and one unique review finding.
+
+## Review dispositions
+
+Fresh domain/spec, architecture/connascence, and strict code-review passes
+found reproducibility, schema-boundary, invalid-state, comparison coverage,
+and conformance-inventory drift risks. All were accepted and corrected.
+
+One tooling recommendation was intentionally not applied: adding disposable
+prototype sources to the root TypeScript/lint configuration would change
+Dalph's CI gate, which this handoff explicitly forbids. The prototype instead
+uses strict standalone compilation and focused tests without a second
+lockfile or package-local quality configuration. Its retained action inventory
+cannot import production test code during standalone artifact generation
+without coupling the disposable package to Dalph internals, so a focused test
+imports the existing version-3 conformance inventory and fails on drift.
