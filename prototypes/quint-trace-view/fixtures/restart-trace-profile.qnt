@@ -1,7 +1,7 @@
-// PROTOTYPE ONLY: restricts generated restart traces to the existing closed
-// reconstruction action inventory. It does not compute legal transitions.
+// Prototype-only profile: restricts a restart trace to the closed M2
+// reconstruction action inventory.
 module frontierRecoveryRestartTrace {
-  import frontierRecovery(CAPACITY = 1).* from "../../../specs/frontierRecovery"
+  import frontierRecovery(CAPACITY = 1).* from "./frontierRecovery"
 
   action restartTraceStep: bool = any {
     reconstructionStep,

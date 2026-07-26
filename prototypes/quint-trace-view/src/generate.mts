@@ -12,7 +12,7 @@ import {
   FixtureManifestSchema,
   ImplementationFixtureSchema
 } from "./trace.mjs"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(packageRoot, "..", "..")
@@ -51,10 +51,12 @@ for (const name of manifests) {
   ) {
     throw new Error("implementation and ITF fixture provenance disagree")
   }
-  const trace = decodeTrace(
-    raw,
-    manifest.provenance,
-    implementationFixture?.frames
+  const trace = await Effect.runPromise(
+    decodeTrace(
+      raw,
+      manifest.provenance,
+      implementationFixture?.frames
+    )
   )
   const table = renderTable(trace)
   const { mermaid, svg } = renderVisuals(trace)

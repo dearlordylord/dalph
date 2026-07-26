@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 export const PROJECTION_VERSION = 3 as const
 
@@ -12,7 +12,7 @@ export type ModelTaskId = typeof ModelTaskId.Type
 
 /** Identifies one modeled workflow operation, including the -1 not-yet-created sentinel. */
 export const ModelOperationId = Schema.String.check(
-  Schema.isPattern(/^-?(0|[1-9][0-9]*)$/)
+  Schema.isPattern(/^(-1|0|[1-9][0-9]*)$/)
 ).pipe(Schema.brand("ModelOperationId"))
 export type ModelOperationId = typeof ModelOperationId.Type
 
@@ -34,8 +34,13 @@ export const TracePosition = Schema.String.check(
 ).pipe(Schema.brand("TracePosition"))
 export type TracePosition = typeof TracePosition.Type
 
-const ArtifactRevision = Schema.NonEmptyString.pipe(
-  Schema.brand("ArtifactRevision")
+/** Identifies the Dalph source revision used to produce retained evidence. */
+const DalphRevision = Schema.NonEmptyString.pipe(
+  Schema.brand("DalphRevision")
+)
+/** Identifies the Quint model revision, independently of Dalph package lineage. */
+const ModelRevision = Schema.NonEmptyString.pipe(
+  Schema.brand("ModelRevision")
 )
 const ModelSha256 = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{64}$/)
@@ -46,9 +51,9 @@ const FixtureFileName = Schema.String.check(
 ).pipe(Schema.brand("FixtureFileName"))
 
 export const ArtifactProvenanceSchema = Schema.Struct({
-  dalphRevision: ArtifactRevision,
+  dalphRevision: DalphRevision,
   init: Schema.NonEmptyString,
-  modelRevision: ArtifactRevision,
+  modelRevision: ModelRevision,
   modelSha256: ModelSha256,
   projectionVersion: Schema.Literal(PROJECTION_VERSION),
   quintVersion: Schema.Literal("0.32.0"),
@@ -124,35 +129,16 @@ export interface NormalizedTrace {
   readonly provenance: ArtifactProvenance
 }
 
-export interface FixtureManifest {
-  readonly implementationProjection?: string
-  readonly provenance: ArtifactProvenance
-  readonly rawItf: string
-}
-
 export const FixtureManifestSchema = Schema.Struct({
   implementationProjection: Schema.optional(FixtureFileName),
   provenance: ArtifactProvenanceSchema,
   rawItf: FixtureFileName
 })
 
-export interface ImplementationFixture {
-  readonly frames: ReadonlyArray<MbtComparableProjection>
-  readonly provenance: ArtifactProvenance
-}
-
 export const ImplementationFixtureSchema = Schema.Struct({
   frames: Schema.Array(MbtComparableProjectionSchema),
   provenance: ArtifactProvenanceSchema
 })
-
-export type TraceDecodeReason =
-  | "MalformedIdentity"
-  | "LossyInteger"
-  | "MissingDecisionField"
-  | "UnknownAction"
-  | "InvalidItf"
-  | "ProjectionMismatch"
 
 /**
  * The artifact boundary refused to guess after encountering an unsupported,
@@ -174,7 +160,7 @@ export class TraceDecodeError extends Schema.TaggedErrorClass<TraceDecodeError>(
 ) {}
 
 export const BigIntWire = Schema.Struct({ "#bigint": Schema.String })
-export const SetOfBigIntWire = Schema.Struct({
+const SetOfBigIntWire = Schema.Struct({
   "#set": Schema.Array(BigIntWire)
 })
 const ExplanationWire = Schema.Struct({
@@ -584,7 +570,7 @@ const frameFrom = (
   }
 }
 
-export const decodeTrace = (
+const decodeTraceUnsafe = (
   input: unknown,
   provenance: ArtifactProvenance,
   implementation: ReadonlyArray<MbtComparableProjection> = []
@@ -641,3 +627,23 @@ export const decodeTrace = (
     provenance
   }
 }
+
+/**
+ * Decodes one retained ITF artifact without allowing malformed evidence to
+ * escape the typed failure channel.
+ */
+export const decodeTrace = (
+  input: unknown,
+  provenance: ArtifactProvenance,
+  implementation: ReadonlyArray<MbtComparableProjection> = []
+): Effect.Effect<NormalizedTrace, TraceDecodeError> =>
+  Effect.try({
+    catch: (cause) =>
+      cause instanceof TraceDecodeError
+        ? cause
+        : new TraceDecodeError({
+          detail: `unexpected trace decode failure: ${String(cause)}`,
+          reason: "InvalidItf"
+        }),
+    try: () => decodeTraceUnsafe(input, provenance, implementation)
+  })

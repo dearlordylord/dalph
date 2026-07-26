@@ -25,7 +25,7 @@ pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs thirteen decoder/equality/drift/fail-closed tests, compiles the
+`pnpm check` runs fourteen decoder/equality/drift/fail-closed tests, compiles the
 prototype, and regenerates byte-identical normalized, table, Mermaid, SVG, and
 side-by-side HTML artifacts.
 
@@ -95,11 +95,14 @@ pnpm exec quint run specs/frontierRecovery.qnt \
   --verbosity 0
 ```
 
-Restart candidates (sequence zero was retained):
+Restart candidates (sequence zero was retained). The copies recreate the exact
+absolute wrapper source recorded in the raw ITF:
 
 ```sh
-pnpm exec quint run \
-  prototypes/quint-trace-view/fixtures/restart-trace-profile.qnt \
+cp specs/frontierRecovery.qnt /tmp/frontierRecovery.qnt
+cp prototypes/quint-trace-view/fixtures/restart-trace-profile.qnt \
+  /tmp/frontierRecoveryRestartTrace.qnt
+pnpm exec quint run /tmp/frontierRecoveryRestartTrace.qnt \
   --main frontierRecoveryRestartTrace \
   --init init \
   --step restartTraceStep \
@@ -130,9 +133,9 @@ pnpm exec quint run specs/frontierRecovery_counterexamples.qnt \
   --verbosity 0
 ```
 
-The normal command was rerun after the source change landed. Removing only
-Quint's timestamp and human-readable generation time produced a byte-identical
-canonical JSON trace.
+The normal and restart commands were rerun after the source change landed.
+Removing only Quint's timestamp and human-readable generation time produced
+byte-identical canonical JSON traces.
 
 ## Test result
 
@@ -140,7 +143,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       13 passed (13)
+Tests       14 passed (14)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -169,8 +172,8 @@ Fail-closed cases reject:
 ## Performance observations
 
 On the retained 218,756 bytes of raw ITF (13 frames total), `pnpm check`
-completed in 5.06 seconds cold and 2.47 seconds warm: Vitest reported 635 ms
-and 406 ms respectively, with the remaining time covering TypeScript
+completed in 8.16 seconds cold and 7.06 seconds warm: Vitest reported 1.22
+seconds and 881 ms respectively, with the remaining time covering TypeScript
 compilation plus all 15 presentation artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 

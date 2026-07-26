@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   frontierRecoveryReconstructionActions,
@@ -40,6 +40,11 @@ const implementationFixture = Schema.decodeUnknownSync(
 const implementation = implementationFixture.frames
 
 const clone = <A,>(value: A): A => structuredClone(value)
+const decode = (
+  input: unknown,
+  provenance = manifest.provenance,
+  suppliedImplementation: ReadonlyArray<MbtComparableProjection> = []
+) => Effect.runSync(decodeTrace(input, provenance, suppliedImplementation))
 
 const modelState = (
   state: Readonly<Record<string, unknown>>
@@ -143,16 +148,17 @@ const expectedPickedTask = (
 
 const expectReason = (
   input: unknown,
-  reason: TraceDecodeError["reason"]
+  reason: TraceDecodeError["reason"],
+  provenance = manifest.provenance
 ): void => {
-  expect(() => decodeTrace(input, manifest.provenance)).toThrowError(
-    expect.objectContaining({ reason })
-  )
+  expect(
+    Effect.runSync(Effect.flip(decodeTrace(input, provenance)))
+  ).toMatchObject({ reason })
 }
 
 describe("ITF to normalized frame boundary", () => {
   it("preserves every displayed value from every sampled ITF state", () => {
-    const trace = decodeTrace(raw, manifest.provenance)
+    const trace = decode(raw)
     trace.frames.forEach((frame, index) => {
       const rawState = requiredState(raw.states, index)
       const projection = selector(rawState)
@@ -193,7 +199,7 @@ describe("ITF to normalized frame boundary", () => {
   })
 
   it("equals the existing version-3 MBT comparable projection at every step", () => {
-    const trace = decodeTrace(raw, manifest.provenance, implementation)
+    const trace = decode(raw, manifest.provenance, implementation)
     expect(trace.frames.map(({ comparison }) => comparison)).toEqual(
       implementation.map(() => ({ status: "Match" }))
     )
@@ -207,7 +213,7 @@ describe("ITF to normalized frame boundary", () => {
       ...second,
       admissionCapacity: Schema.decodeUnknownSync(AdmissionCapacity)("2")
     }
-    const trace = decodeTrace(raw, manifest.provenance, divergent)
+    const trace = decode(raw, manifest.provenance, divergent)
     expect(trace.frames[1]?.comparison).toEqual({
       firstDivergentField: "admissionCapacity",
       status: "Mismatch"
@@ -215,8 +221,8 @@ describe("ITF to normalized frame boundary", () => {
   })
 
   it("is byte-identical when decoding the same trace twice", () => {
-    expect(JSON.stringify(decodeTrace(raw, manifest.provenance))).toBe(
-      JSON.stringify(decodeTrace(raw, manifest.provenance))
+    expect(JSON.stringify(decode(raw))).toBe(
+      JSON.stringify(decode(raw))
     )
   })
 
@@ -230,13 +236,28 @@ describe("ITF to normalized frame boundary", () => {
     const retainedRaw = Schema.decodeUnknownSync(ItfEnvelopeWire)(
       readJson(resolve(fixtureRoot, retainedManifest.rawItf))
     )
-    const trace = decodeTrace(retainedRaw, retainedManifest.provenance)
+    const trace = decode(retainedRaw, retainedManifest.provenance)
     expect(trace.frames).toHaveLength(frameCount)
     expect(trace.frames.at(-1)?.action).toBe(finalAction)
   })
 })
 
 describe("fail-closed inputs", () => {
+  it("rejects an implementation operation identity below the model sentinel", () => {
+    const changed: unknown = clone(implementationFixture)
+    if (!isRecord(changed) || !Array.isArray(changed.frames)) {
+      throw new Error("implementation fixture has no frames")
+    }
+    const first = changed.frames[0]
+    if (!isRecord(first) || !Array.isArray(first.admittedModelOperationIds)) {
+      throw new Error("implementation fixture has no admitted operation IDs")
+    }
+    first.admittedModelOperationIds[0] = "-2"
+    expect(() =>
+      Schema.decodeUnknownSync(ImplementationFixtureSchema)(changed)
+    ).toThrow()
+  })
+
   it("rejects a violation mislabeled as a sampled trace", () => {
     const changed = clone(raw)
     changed["#meta"].status = "violation"
@@ -251,9 +272,11 @@ describe("fail-closed inputs", () => {
       readJson(resolve(fixtureRoot, counterexampleManifest.rawItf))
     )
     counterexample["#meta"].status = "ok"
-    expect(() =>
-      decodeTrace(counterexample, counterexampleManifest.provenance)
-    ).toThrowError(expect.objectContaining({ reason: "InvalidItf" }))
+    expectReason(
+      counterexample,
+      "InvalidItf",
+      counterexampleManifest.provenance
+    )
   })
 
   it("rejects an unknown action", () => {
