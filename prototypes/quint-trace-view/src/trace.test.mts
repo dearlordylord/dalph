@@ -284,13 +284,14 @@ describe("ITF to normalized frame boundary", () => {
     expect(html).not.toContain("stateDiagram-v2")
   })
 
-  it("builds meaningful branches from existing Quint acceptance tests", () => {
+  it("shows real nondeterministic paths reconverging by exact state", () => {
     const storyNames = [
-      "story-crash-after-intent",
-      "story-pause-independent",
-      "story-claim-loss",
-      "story-git-rewrite",
-      "story-external-completion"
+      "explore-advance-unreadable-a",
+      "explore-unreadable-advance-a",
+      "explore-pause-unreadable-b",
+      "explore-unreadable-pause-b",
+      "explore-conflict-c-then-a",
+      "explore-conflict-a-then-c"
     ]
     const stories = storyNames.map((name) => {
       const storyManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
@@ -305,23 +306,17 @@ describe("ITF to normalized frame boundary", () => {
     })
 
     const dag = buildObservedStateDag(stories)
-    const initial = dag.nodes.find(({ firstSeenStep }) => firstSeenStep === 0)
-    const initialActions = dag.edges
-      .filter(({ source }) => source === initial?.id)
-      .map(({ action }) => action)
-      .sort()
+    const predecessorCounts = dag.nodes.map(({ id }) =>
+      new Set(
+        dag.edges
+          .filter(({ target }) => target === id)
+          .map(({ source }) => source)
+      ).size
+    )
 
-    expect(initialActions).toEqual([
-      "commitFirstIntent",
-      "completeClaim",
-      "requestTaskPause"
-    ])
-    expect(
-      dag.edges.flatMap(({ changes }) => changes)
-    ).toContain("admitted tasks: {A, C} → {C}")
-    expect(
-      dag.nodes.flatMap(({ terminalTraceKinds }) => terminalTraceKinds)
-    ).toHaveLength(stories.length)
+    expect(dag.nodes).toHaveLength(10)
+    expect(predecessorCounts.filter((count) => count === 2)).toHaveLength(3)
+    expect(Math.max(...predecessorCounts)).toBe(2)
   })
 
   it("preserves every displayed value from every sampled ITF state", () => {

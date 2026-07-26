@@ -10,7 +10,13 @@ export const TraceKindSchema = Schema.Literals([
   "story-pause-independent",
   "story-claim-loss",
   "story-git-rewrite",
-  "story-external-completion"
+  "story-external-completion",
+  "explore-advance-unreadable-a",
+  "explore-unreadable-advance-a",
+  "explore-pause-unreadable-b",
+  "explore-unreadable-pause-b",
+  "explore-conflict-c-then-a",
+  "explore-conflict-a-then-c"
 ])
 export type TraceKind = typeof TraceKindSchema.Type
 
@@ -77,6 +83,20 @@ const NonStoryArtifactProvenanceSchema = Schema.Struct({
   scenarioTestSourceSha256: Schema.optional(Schema.Never),
   traceKind: Schema.Literals(["sampled", "restart", "counterexample"])
 })
+const ExplorationArtifactProvenanceSchema = Schema.Struct({
+  ...CommonArtifactProvenanceFields,
+  init: Schema.Literal("init"),
+  scenarioTest: Schema.optional(Schema.Never),
+  scenarioTestSourceSha256: Schema.optional(Schema.Never),
+  traceKind: Schema.Literals([
+    "explore-advance-unreadable-a",
+    "explore-unreadable-advance-a",
+    "explore-pause-unreadable-b",
+    "explore-unreadable-pause-b",
+    "explore-conflict-c-then-a",
+    "explore-conflict-a-then-c"
+  ])
+})
 const storyProvenance = <
   const Kind extends string,
   const Test extends string
@@ -90,6 +110,7 @@ const storyProvenance = <
   })
 export const ArtifactProvenanceSchema = Schema.Union([
   NonStoryArtifactProvenanceSchema,
+  ExplorationArtifactProvenanceSchema,
   storyProvenance(
     "story-crash-after-intent",
     "crashAfterIntentRequiresFreshReadTest"
@@ -382,8 +403,11 @@ const counterexampleActions = new Set([
   "weakenedCapacityStep"
 ])
 const storyActions = new Set([
+  "advanceTargetCompatibly",
   "init",
   "applyAndRecordCurrentBoundary",
+  "authorityBecomesConflicting",
+  "authorityBecomesUnreadable",
   "classifyAuthorityConstraint",
   "commitFirstIntent",
   "completeClaim",
@@ -393,6 +417,7 @@ const storyActions = new Set([
   "observeTask",
   "recordBoundaryOutcome",
   "requestApplies",
+  "requestRunPause",
   "requestTaskPause",
   "requestTaskResume",
   "restart",
@@ -580,7 +605,7 @@ const actionFrom = (
   const action = requiredStateValue(rawState, "mbt::actionTaken")
   const allowed = traceKind === "counterexample"
     ? counterexampleActions
-    : traceKind.startsWith("story-")
+    : traceKind.startsWith("story-") || traceKind.startsWith("explore-")
       ? storyActions
       : reconstructionActions
   if (typeof action !== "string" || !allowed.has(action)) {

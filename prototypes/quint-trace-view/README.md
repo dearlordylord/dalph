@@ -1,16 +1,16 @@
 # Quint trace explanation view — throwaway prototype
 
-This isolated prototype executes five existing acceptance tests from
-`specs/frontierRecovery_test.qnt` and combines their ITF traces into one
-interactive observed state graph. One exact model state is one node regardless
-of where it occurs in a trace, so shared prefixes, branches, reconvergence,
-and cycles remain visible. Selecting a node reveals task boundary,
-responsibility, isolation, pause, admission, and the raw ITF state.
+This isolated prototype combines six paths sampled from the real
+`frontierRecovery.step` action into one interactive observed state graph. The
+paths form three concrete diamonds: independent actions execute in opposite
+orders and reach the same full Quint state. One exact model state is one node
+regardless of where it occurs in a trace. Selecting a node reveals task
+boundary, responsibility, isolation, pause, admission, and the raw ITF state.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
-**This graph is observed and incomplete.** Its edges are transitions executed by
-the five named tests. An absent edge is unknown, not disabled. It is not the
+**This graph is observed and incomplete.** Its edges are transitions executed
+by six retained samples. An absent edge is unknown, not disabled. It is not the
 complete state machine, model checking, MBT, or proof of correctness. The
 decoder never selects an action or computes a legal transition.
 
@@ -52,15 +52,21 @@ step, seed, and trace kind.
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
 | Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action makes A and C carry outstanding workflow responsibility at capacity one; Quint records status `violation`. |
+| Advance A, then unreadable A | `fixtures/explore-advance-unreadable-a.itf.json` | 3 | First half of one real confluence diamond. |
+| Unreadable A, then advance A | `fixtures/explore-unreadable-advance-a.itf.json` | 3 | Reaches the same state in the opposite order. |
+| Pause B, then unreadable B | `fixtures/explore-pause-unreadable-b.itf.json` | 3 | First half of a task-control/authority diamond. |
+| Unreadable B, then pause B | `fixtures/explore-unreadable-pause-b.itf.json` | 3 | Reaches the same state in the opposite order. |
+| Conflict C, then conflict A | `fixtures/explore-conflict-c-then-a.itf.json` | 3 | First half of a branch-local authority diamond. |
+| Conflict A, then conflict C | `fixtures/explore-conflict-a-then-c.itf.json` | 3 | Reaches the same state in the opposite order. |
 | Crash after intent | `fixtures/story-crash-after-intent.itf.json` | 6 | Existing test proves restart requires a fresh task read before retry. |
 | Pause with independent progress | `fixtures/story-pause-independent.itf.json` | 6 | Existing test pauses A while C remains admitted and records responsibility. |
 | Claim loss | `fixtures/story-claim-loss.itf.json` | 9 | Existing test isolates A after claim loss while C progresses. |
 | Git rewrite | `fixtures/story-git-rewrite.itf.json` | 9 | Existing test isolates A after incompatible target rewrite while C progresses. |
 | External completion | `fixtures/story-external-completion.itf.json` | 8 | Existing test settles A from tracker completion without a duplicate effect. |
 
-Only the five acceptance-test traces feed the interactive graph. The earlier
-sample, restart, and counterexample remain retained decoder/conformance
-evidence.
+Only the six nondeterministic exploration paths feed the interactive graph.
+The sample, restart, counterexample, and acceptance stories remain retained
+decoder/conformance evidence.
 
 The sample's `fixtures/normal.mbt-projection.json` was independently captured
 from the existing version-3 production-backed MBT controls by running `init`
@@ -87,6 +93,24 @@ SHA-256 was
 `2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1`.
 The exact `specs/frontierRecovery_test.qnt` SHA-256 for the story traces was
 `abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185`.
+
+The six displayed paths were retained from this 500-path sample using the
+manifest names in the evidence table:
+
+```sh
+pnpm quint run specs/frontierRecovery.qnt \
+  --main frontierRecoveryCapacityTwo \
+  --init init \
+  --step step \
+  --max-steps 2 \
+  --max-samples 500 \
+  --n-traces 500 \
+  --seed 131132 \
+  --mbt \
+  --backend typescript \
+  --out-itf "explore_{seq}.json" \
+  --verbosity 1
+```
 
 Each story used this command with the manifest's exact `INIT`, `SEED`, and
 `OUTPUT` values:
@@ -210,9 +234,9 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 855,280 bytes of raw ITF (51 frames total), the latest warm
-`pnpm check` completed in 2.5 seconds: Vitest reported 479 ms, with the
-remaining time covering TypeScript compilation plus all eighteen presentation
+On the retained 1,158,021 bytes of raw ITF (69 frames total), the latest warm
+`pnpm check` completed in 3.0 seconds: Vitest reported 591 ms, with the
+remaining time covering TypeScript compilation plus all thirty presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 

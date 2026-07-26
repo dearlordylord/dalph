@@ -24,7 +24,13 @@ const manifests = [
   "story-pause-independent",
   "story-claim-loss",
   "story-git-rewrite",
-  "story-external-completion"
+  "story-external-completion",
+  "explore-advance-unreadable-a",
+  "explore-unreadable-advance-a",
+  "explore-pause-unreadable-b",
+  "explore-unreadable-pause-b",
+  "explore-conflict-c-then-a",
+  "explore-conflict-a-then-c"
 ]
 await mkdir(resolve(packageRoot, "artifacts"), { recursive: true })
 
@@ -93,7 +99,7 @@ for (const name of manifests) {
 }
 
 const storyTraces = traces.filter(({ provenance }) =>
-  provenance.traceKind.startsWith("story-")
+  provenance.traceKind.startsWith("explore-")
 )
 const dagHtml = renderObservedDagHtml(storyTraces)
 await Promise.all([

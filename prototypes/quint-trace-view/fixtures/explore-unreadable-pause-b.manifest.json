@@ -1,0 +1,15 @@
+{
+  "provenance": {
+    "dalphRevision": "b0cf3da56",
+    "init": "init",
+    "modelRevision": "b0cf3da56",
+    "modelSha256": "2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1",
+    "projectionVersion": 3,
+    "quintVersion": "0.32.0",
+    "rendererVersion": "observed-dag-prototype@1",
+    "seed": "131132",
+    "step": "step",
+    "traceKind": "explore-unreadable-pause-b"
+  },
+  "rawItf": "explore-unreadable-pause-b.itf.json"
+}

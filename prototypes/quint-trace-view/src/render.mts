@@ -48,6 +48,18 @@ const taskSet = (modelTaskIds: ReadonlyArray<string>): string =>
   `{${modelTaskIds.map(taskName).join(", ") || "none"}}`
 
 const storyName = (traceKind: TraceKind): string => {
+  if (traceKind === "explore-advance-unreadable-a")
+    return "Advance A → unreadable A"
+  if (traceKind === "explore-unreadable-advance-a")
+    return "Unreadable A → advance A"
+  if (traceKind === "explore-pause-unreadable-b")
+    return "Pause B → unreadable B"
+  if (traceKind === "explore-unreadable-pause-b")
+    return "Unreadable B → pause B"
+  if (traceKind === "explore-conflict-c-then-a")
+    return "Conflict C → conflict A"
+  if (traceKind === "explore-conflict-a-then-c")
+    return "Conflict A → conflict C"
   if (traceKind === "story-crash-after-intent") return "Crash after intent"
   if (traceKind === "story-pause-independent")
     return "Pause A; C keeps moving"
@@ -61,6 +73,8 @@ const storyName = (traceKind: TraceKind): string => {
 }
 
 const storySource = (traceKind: TraceKind): string => {
+  if (traceKind.startsWith("explore-"))
+    return "frontierRecovery.qnt:1674 · sampled step"
   if (traceKind === "story-crash-after-intent")
     return "frontierRecovery_test.qnt:78"
   if (traceKind === "story-pause-independent")
@@ -76,7 +90,10 @@ const storySource = (traceKind: TraceKind): string => {
 
 const actionName = (action: string): string => {
   const names: Readonly<Record<string, string>> = {
+    advanceTargetCompatibly: "advance target compatibly",
     applyAndRecordCurrentBoundary: "apply claim request",
+    authorityBecomesConflicting: "mark authority conflicting",
+    authorityBecomesUnreadable: "mark authority unreadable",
     classifyAuthorityConstraint: "classify authority constraint",
     commitFirstIntent: "record first intent",
     completeClaim: "complete claim protocol",
@@ -86,11 +103,15 @@ const actionName = (action: string): string => {
     observeTask: "reread task authority",
     recordBoundaryOutcome: "record observed outcome",
     requestApplies: "retry request applies",
-    requestTaskPause: "pause Task A",
-    requestTaskResume: "resume Task A",
+    requestTaskPause: "pause task",
+    requestTaskResume: "resume task",
     restart: "coordinator restarts",
     rewriteTarget: "Git target is rewritten",
     settleExternalCompletion: "settle external completion"
+  }
+  const picked = /^(.*)\(task ([0-3])\)$/.exec(action)
+  if (picked !== null) {
+    return `${names[picked[1] ?? ""] ?? picked[1]} · Task ${taskName(picked[2] ?? "")}`
   }
   return names[action] ?? action
 }
@@ -370,6 +391,16 @@ interface PositionedNode {
   readonly y: number
 }
 
+const predecessorCount = (
+  dag: ObservedStateDag,
+  nodeId: string
+): number =>
+  new Set(
+    dag.edges
+      .filter(({ target }) => target === nodeId)
+      .map(({ source }) => source)
+  ).size
+
 const renderDagSvg = (dag: ObservedStateDag): string => {
   const nodeWidth = 250
   const nodeHeight = 116
@@ -446,13 +477,22 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     const observedStories = [
       ...new Set(node.occurrences.map(({ traceKind }) => traceKind))
     ]
-    return `<g class="node${node.terminalTraceKinds.includes("counterexample") ? " violation" : ""}" data-node-id="${node.id}" data-stories="${escapeHtml(observedStories.join(" "))}" role="button" tabindex="0" transform="translate(${x} ${y})">
+    const predecessors = predecessorCount(dag, node.id)
+    const nodeClass = [
+      "node",
+      node.terminalTraceKinds.includes("counterexample") ? "violation" : "",
+      predecessors > 1 ? "reconvergent" : ""
+    ].filter(Boolean).join(" ")
+    const footer = predecessors > 1
+      ? `↳ ${predecessors} distinct predecessors`
+      : terminal
+    return `<g class="${nodeClass}" data-node-id="${node.id}" data-stories="${escapeHtml(observedStories.join(" "))}" role="button" tabindex="0" transform="translate(${x} ${y})">
       <rect width="${nodeWidth}" height="${nodeHeight}" rx="10" />
       <text x="14" y="24" class="node-title">${node.id} · first seen S${node.firstSeenStep}</text>
       <text x="14" y="45">${frame.coordinatorStatus} · admitted tasks ${escapeHtml(taskSet(frame.admission.map(({ modelTaskId }) => modelTaskId)))}</text>
       <text x="14" y="66">${escapeHtml(taskSummary("A", taskA))}</text>
       <text x="14" y="86">${escapeHtml(taskSummary("C", taskC))}</text>
-      <text x="14" y="107" class="terminal">${escapeHtml(terminal)}</text>
+      <text x="14" y="107" class="${predecessors > 1 ? "reconvergence" : "terminal"}">${escapeHtml(footer)}</text>
     </g>`
   }).join("\n")
 
@@ -470,9 +510,10 @@ const browserDagData = (dag: ObservedStateDag): string =>
       firstSeenStep: node.firstSeenStep,
       incoming: dag.edges
         .filter(({ target }) => target === node.id)
-        .map(({ action, changes }) => ({
+        .map(({ action, changes, source }) => ({
           action: actionName(action),
-          changes
+          changes,
+          source
         })),
       occurrences: node.occurrences.map(({ frame, traceKind }) => ({
         action: eventLabel(frame),
@@ -500,6 +541,9 @@ export const renderObservedDagHtml = (
   traces: ReadonlyArray<NormalizedTrace>
 ): string => {
   const dag = buildObservedStateDag(traces)
+  const reconvergenceCount = dag.nodes.filter(
+    ({ id }) => predecessorCount(dag, id) > 1
+  ).length
   const provenance = traces.map(({ provenance: item }) => item)
   return `<!doctype html>
 <html lang="en">
@@ -529,9 +573,11 @@ export const renderObservedDagHtml = (
     .dag .node rect { fill: #23303b; stroke: #6b8194; stroke-width: 2; }
     .dag .node:hover rect, .dag .node:focus rect, .dag .node.selected rect { fill: #29445a; stroke: #66c2ff; stroke-width: 3; }
     .dag .node.violation rect { fill: #4a2528; stroke: #ef6b73; }
+    .dag .node.reconvergent rect { fill: #3d351d; stroke: #f0bd4f; stroke-width: 3; }
     .dag .node text { fill: #dfe8ef; font-size: 12px; pointer-events: none; }
     .dag .node .node-title { fill: #fff; font-size: 14px; font-weight: 700; }
     .dag .node .terminal { fill: #ef9ca2; font-size: 10px; }
+    .dag .node .reconvergence { fill: #ffd778; font-size: 11px; font-weight: 700; }
     .dag .dimmed { opacity: .1; }
     #inspector pre { background: #0d1217; border-radius: 6px; max-height: 440px; overflow: auto; padding: 10px; white-space: pre-wrap; word-break: break-word; }
     #inspector dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 10px; }
@@ -552,9 +598,10 @@ export const renderObservedDagHtml = (
   <h1>Observed Quint state graph</h1>
   <div class="status">
     <span class="badge">Observed paths · not exhaustive</span>
-    <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${traces.length} existing Quint acceptance tests</span>
+    <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${reconvergenceCount} states with multiple predecessors</span>
   </div>
-  <p>Every path below was executed from a named <code>run</code> in <code>specs/frontierRecovery_test.qnt</code>. Equal full Quint model states are one node, regardless of trace position. An absent edge is unknown, not disabled.</p>
+  <p>These paths were sampled from the real nondeterministic <code>step</code> action in <code>specs/frontierRecovery.qnt</code>. Each gold node is the same full Quint state reached from two distinct predecessor states by applying independent actions in opposite orders.</p>
+  <p>Equal full Quint model states are one node, regardless of trace position. An absent edge is unknown, not disabled.</p>
   <p><strong>Reading admission:</strong> <code>{A, C}</code> means Tasks A and C are admitted; it is not a numeric count. These are executable Quint-model traces from checked-in code, not fabricated UI fixtures and not production TypeScript runtime logs.</p>
   <nav class="story-filter" aria-label="Highlight one real acceptance story">
     <button class="active" data-story-filter="all">All branches</button>
@@ -598,7 +645,7 @@ export const renderObservedDagHtml = (
         .map((item) => item.story + " · " + item.position)
         .join(", ");
       const incoming = node.incoming
-        .map((edge) => "<strong>" + escapeText(edge.action) + "</strong><br>" + edge.changes.map(escapeText).join("<br>"))
+        .map((edge) => "<strong>from " + escapeText(edge.source) + " via " + escapeText(edge.action) + "</strong><br>" + edge.changes.map(escapeText).join("<br>"))
         .join("<hr>");
       const taskRows = occurrence.taskStates.map((task) => \`
         <tr>
