@@ -774,10 +774,11 @@ _Avoid_: Operation identity, task identity, persisted frontier entry, admission 
 **Activation ownership**:
 The process-local exclusive capability held by one coordinator fiber while it
 records or executes one exact selected workflow transition. The coordinator
-creates ownership atomically before execution, keys it by selected transition
-identity before intent and operation identity afterward, and removes it after
-the exact result or interruption rule completes. It is not authority over a
-tracker, Git, executor, provider, or their resources.
+creates ownership in its single transition consumer, keys it by selected
+transition identity before intent and operation identity afterward, and removes
+it after the exact result or interruption rule completes. Trigger callers
+cannot submit a transition or obtain this capability. It is not authority over
+a tracker, Git, executor, provider, or their resources.
 _Avoid_: Workflow responsibility, task claim, admission reservation, durable lease
 
 **Task admission position**:

@@ -148,9 +148,10 @@ task/operation-identity choice.
 The selector gives each pre-intent result an exact process-local selected
 transition identity over the run, transition kind, exact subject, and immutable
 decision inputs carried by that transition. The activation coordinator
-atomically claims that identity in its single consumer before execution. A
-second concurrent claim returns a typed duplicate-activation issue and creates
-no execution. When the owner records operation intent, the ownership entry and
+creates ownership for that identity in its single transition consumer before
+execution. Trigger callers cannot submit a transition or obtain the owned
+capability, so a second transition owner cannot be represented through the
+public API. When the owner records operation intent, the ownership entry and
 any matching admission reservation bind to the durable `OperationId`; every
 later request, result check, retry, reconciliation action, and outcome retains
 it.

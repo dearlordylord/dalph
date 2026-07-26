@@ -44,10 +44,11 @@ The controller returns an atomic admission decision and exact reservations; it
 does not expose a dormant `awaitAdmission` operation. One scoped activation
 consumer receives order-free triggers, derives again, and atomically registers
 one activation owner for the exact first admitted transition. It executes and
-records that operation's result before deriving again. A duplicate registration
-is a subject-local typed issue and does not stop unrelated responsibilities.
-This keeps capacity accounting in the controller, workflow order in the
-selector, and execution uniqueness in the activation coordinator.
+records that operation's result before deriving again. Trigger callers cannot
+submit transitions or obtain the owned capability, so the public API cannot
+represent duplicate ownership. This keeps capacity accounting in the
+controller, workflow order in the selector, and execution uniqueness in the
+activation coordinator.
 
 Tracker read and mutation results update durable graph knowledge rather than
 enqueueing downstream tasks. The default read assembles the complete bounded

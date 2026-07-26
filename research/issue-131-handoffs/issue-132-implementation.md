@@ -25,8 +25,9 @@ owned by issues #53/#55.
   transition capability. Document the phenomenon above each branded type.
 - Expose only trigger signaling from the activation loop; triggers carry no
   transition or order key.
-- Make exact ownership insertion atomic before forking and return a typed
-  duplicate-activation issue.
+- Keep admitted and owned transition constructors internal to the single
+  activation consumer. Trigger callers must have no API that can submit,
+  claim, or execute a transition.
 - Remove `awaitAdmission` and its waiter ordering. Return `CapacityWait`, then
   signal rederivation after release, cancellation, or fresh non-consumption.
 - Before Dalph asks the tracker, Git, executor, or task-work provider to change
@@ -57,6 +58,8 @@ Required test lanes:
 - delayed A-17 release after A-18 occupies capacity;
 - in-memory and closed/reopened SQLite `8 → 2`, `1 → 2`, and `2 → 1`;
 - generated activation/controller command sequences; and
+- a subject-local activation or boundary issue for A while independent C
+  remains selectable; and
 - all positive witnesses and expected counterexamples named by the decision.
 
 ## Acceptance return

@@ -64,9 +64,9 @@ flowchart LR
 ```
 
 The activation loop is the only actor that turns a selected transition into an
-activation fiber. A trigger never carries a task, transition, priority, or
-order key. It only asks the loop to read current reconstructed state and the
-current controller snapshot again.
+owned execution. A trigger never carries a task, transition, priority, or order
+key. It only asks the loop to read current reconstructed state and the current
+controller snapshot again.
 
 ## Ordering traces
 
@@ -161,7 +161,7 @@ journal event or durable workflow lifecycle state.
 | `Selected` | Accept as `SelectedTransition` | The selector creates it during derivation. The next derivation replaces it. | It exists before intent and creates no responsibility. |
 | `Reserved` | Accept as `AdmissionReservation` | The controller creates it atomically while bounding one admission set. It removes it after exact cancellation, release, a matching occupied observation, or process loss. | It starts under `SelectedTransitionIdentity` and binds to `OperationId` after intent. |
 | `Granted` | Reject | “Grant” does not say whether capacity was reserved or a fiber obtained exclusive execution. Those are separate actions above and below. | No separate intent relationship exists. |
-| `Owned` | Rename to `ActivationOwnership` | The activation registry creates it atomically before the loop forks a fiber. It removes it after the returned result is recorded or the exact interruption rule completes. | It starts under selected-transition identity and rekeys to operation identity when intent is recorded. |
+| `Owned` | Rename to `ActivationOwnership` | The single activation consumer creates it before executing one transition. It removes it after the returned result is recorded or the exact interruption rule completes. | It starts under selected-transition identity and rekeys to operation identity when intent is recorded. |
 | `Released` | Reject as a phase | Releasing is the registry/controller action that removes exact ownership or reservation. | A post-intent release keeps the durable operation identity in journal history. |
 | `Cancelled` | Reject as a phase | Cancelling removes a pre-effect reservation after the accepted interruption rule proves cancellation is safe. | It cannot erase recorded intent or authorize retry after an ambiguous outcome. |
 | `Reconstructed` | Reject as a phase; retain `ReconstructedReservation` as an origin label | On restart the controller creates process-local positions from current configuration, reconstructed responsibility, and fresh invocation observations. | A reconstructed post-intent reservation names the retained `OperationId`; a lost pre-intent reservation is simply rederived. |
@@ -215,8 +215,8 @@ interface AdmissionController {
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
 }
 
-interface ActivationOwnershipRegistry {
-  readonly runOwned: (
+interface ActivationOwnershipScope {
+  readonly run: (
     selected: AdmittedTransition,
     run: (
       owned: OwnedTransition
@@ -224,20 +224,22 @@ interface ActivationOwnershipRegistry {
       WorkflowOperationResult,
       WorkflowInterpreterFailure | WorkflowResultRecordingFailure
     >
-  ) => Effect.Effect<void, DuplicateActivationIssue>
+  ) => Effect.Effect<
+    WorkflowOperationResult,
+    WorkflowInterpreterFailure | WorkflowResultRecordingFailure
+  >
 }
 ```
 
 `AdmittedTransition`, `OwnedTransition`, and their constructors are not
-exported from the activation module. `runOwned` inserts the exact transition
-key in one atomic registry operation before executing the callback in the
-single consumer fiber. A second claim returns the typed
-`DuplicateActivationIssue`; it never creates another execution. The activation
-loop converts that issue into an exact-transition `TypedIssue` explanation,
-leaves unrelated responsibilities selectable, and continues after the current
-owner signals its result. It does not fail the shared loop. The owned capability
-has one internal atomic `recordIntent` operation, so sharing the same JavaScript
-reference cannot record two intents.
+exported from the activation module. Only the single activation consumer can
+call `ActivationOwnershipScope.run`; trigger callers cannot submit transitions
+or obtain an ownership capability. The scope creates one owned capability,
+executes its callback, and removes that capability before returning. The owned
+capability has one internal `recordIntent` operation. There is no public
+operation with which a second fiber can claim or execute the same transition,
+so duplicate ownership is unrepresentable rather than a recoverable production
+branch.
 
 `AdmissionAvailabilityChange` is the tagged union
 `AdmissionMayNowBePossible | AdmissionAvailabilityUnchanged`.
@@ -261,8 +263,8 @@ One pass performs these concrete actions:
 2. The selector derives the runnable frontier and exact explanations.
 3. The controller computes the bounded admission set but reserves only its
    exact first transition for this pass.
-4. The ownership registry atomically claims that one exact transition in the
-   single consumer fiber.
+4. The ownership scope creates the exact owned capability in the single
+   consumer.
 5. The owner records intent when required, invokes exactly that operation
    through `WorkflowInterpreter`, records its exact returned result, releases
    its ownership, and signals the next pass.
@@ -340,6 +342,7 @@ The full invariant set must include:
 - `newReservationsRespectConfiguredCapacity`;
 - `lowerRestartCapacityDoesNotPreemptObservedUsage`;
 - `releaseAffectsOnlyItsExactOperation`; and
+- `exactActivationIssueDoesNotStopIndependentResponsibility`; and
 - `everyResponsibilityIsActionableOrExactlyExplained`.
 
 The negative modules must deliberately produce:
@@ -367,10 +370,13 @@ Required readable and generated lanes are:
    observations.
 2. Closed/reopened SQLite versions of the same three scenarios.
 3. Two simultaneous startup/result triggers for one unchanged pre-intent
-   transition: exactly one owner and one intent.
+   transition: the consumer coalesces them and produces exactly one owner and
+   one intent.
 4. Interrupt before ownership, after ownership/before intent, and after intent,
    with no leaked reservation and correct durable responsibility.
-5. Model-based generated sequences covering derive, reserve, own, intent,
+5. A subject-local activation or boundary issue for A while independent C
+   remains selectable; only shared history or a shared capability may stop C.
+6. Model-based generated sequences covering derive, reserve, own, intent,
    interrupt, result, release, crash, reconstruction, and exact delayed
    correlation.
 
@@ -399,8 +405,8 @@ executes one workflow operation, records its exact result, and derives again.
 
 Before intent, process-local `SelectedTransitionIdentity` prevents duplicate
 execution. After intent, ownership and any reservation bind to the durable
-`OperationId`. A duplicate claim becomes an exact-transition typed issue and
-does not stop unrelated responsibilities.
+`OperationId`. Trigger callers cannot submit a transition or obtain ownership;
+the single consumer makes a second owner unrepresentable.
 
 The controller exposes no dormant waiter or second order. Restart uses current
 configuration, durable responsibility, and fresh occupied-invocation evidence;
