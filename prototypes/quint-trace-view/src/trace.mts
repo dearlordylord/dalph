@@ -153,6 +153,7 @@ const InvocationWire = taggedWire([
 ])
 const LifecycleWire = taggedWire(["Open", "Completed", "Closed"])
 const AvailabilityWire = taggedWire(["Missing", "Available"])
+const ReadabilityWire = taggedWire(["Readable", "Unreadable", "Conflicting"])
 const ObservationWire = taggedWire([
   "NeverObserved",
   "UsableObservation",
@@ -264,6 +265,7 @@ export interface NormalizedTaskState {
   readonly observation: (typeof ObservationWire.Type)["tag"]
   readonly paused: boolean
   readonly promoted: boolean
+  readonly readability: (typeof ReadabilityWire.Type)["tag"]
   readonly responsibility: (typeof ResponsibilityWire.Type)["tag"]
   readonly settlement: (typeof SettlementWire.Type)["tag"]
   readonly worktree: (typeof AvailabilityWire.Type)["tag"]
@@ -327,6 +329,7 @@ const AuthorityStoryWire = Schema.Struct({
   invocation: InvocationWire,
   lifecycle: LifecycleWire,
   promoted: Schema.Boolean,
+  readability: ReadabilityWire,
   revision: BigIntWire,
   worktree: AvailabilityWire
 })
@@ -431,7 +434,7 @@ const displayedFieldNames = [
   "state.coordinator.running",
   "state.control.runPaused",
   "state.control.taskPaused",
-  "state.authority.{lifecycle,claim,worktree,invocation,promoted,baseCompatible,inTarget}",
+  "state.authority.{lifecycle,claim,worktree,invocation,promoted,baseCompatible,inTarget,readability}",
   "state.authority.revision",
   "state.knowledge.{activation,durableRevision,observation}",
   "state.workflow.{boundary,responsibility,isolation,settlement}",
@@ -793,6 +796,7 @@ const storyTaskStatesFrom = (
       observation: knowledgeState.observation.tag,
       paused: taskPaused,
       promoted: authorityState.promoted,
+      readability: authorityState.readability.tag,
       responsibility: workflowState.responsibility.tag,
       settlement: workflowState.settlement.tag,
       worktree: authorityState.worktree.tag
@@ -924,7 +928,7 @@ const decodeTraceUnsafe = (
     fidelity: {
       decodedFields: displayedFieldNames,
       projectedAwayFields: [
-        "authority blockers and readability",
+        "authority blockers",
         "control epochs",
         "effect identity sets and counters",
         "reconstructed knowledge facts and observed-authority revision",

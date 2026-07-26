@@ -146,6 +146,7 @@ const transitionChanges = (
     ["worktree", "worktree"],
     ["invocation", "invocation"],
     ["observation", "knowledge"],
+    ["readability", "authority readability"],
     ["knowledgeActivation", "knowledge activation"],
     ["knowledgeRevision", "knowledge revision"],
     ["authorityRevision", "authority revision"],
@@ -402,8 +403,8 @@ const predecessorCount = (
   ).size
 
 const renderDagSvg = (dag: ObservedStateDag): string => {
-  const nodeWidth = 250
-  const nodeHeight = 116
+  const nodeWidth = 280
+  const nodeHeight = 150
   const xGap = 190
   const yGap = 90
   const padding = 48
@@ -466,14 +467,10 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     const terminal = node.terminalTraceKinds.length === 0
       ? ""
       : node.terminalTraceKinds.map(storyName).join(" · ")
-    const taskA = frame.taskStates.find(({ modelTaskId }) => modelTaskId === "0")
-    const taskC = frame.taskStates.find(({ modelTaskId }) => modelTaskId === "2")
     const taskSummary = (
-      name: string,
-      task: typeof taskA
-    ): string => task === undefined
-      ? `${name}: missing`
-      : `${name}: ${task.boundary.replace("Boundary", "")} · ${task.responsibility}${task.isolation === "NotIsolated" ? "" : ` · ${task.isolation}`}${task.paused ? " · PAUSED" : ""}`
+      task: NormalizedFrame["taskStates"][number]
+    ): string =>
+      `${taskName(task.modelTaskId)} · ${task.readability} r${task.authorityRevision} · ${task.paused ? "paused" : "active"} · ${task.responsibility}`
     const observedStories = [
       ...new Set(node.occurrences.map(({ traceKind }) => traceKind))
     ]
@@ -488,11 +485,10 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
       : terminal
     return `<g class="${nodeClass}" data-node-id="${node.id}" data-stories="${escapeHtml(observedStories.join(" "))}" role="button" tabindex="0" transform="translate(${x} ${y})">
       <rect width="${nodeWidth}" height="${nodeHeight}" rx="10" />
-      <text x="14" y="24" class="node-title">${node.id} · first seen S${node.firstSeenStep}</text>
+      <text x="14" y="24" class="node-title">${node.id}</text>
       <text x="14" y="45">${frame.coordinatorStatus} · admitted tasks ${escapeHtml(taskSet(frame.admission.map(({ modelTaskId }) => modelTaskId)))}</text>
-      <text x="14" y="66">${escapeHtml(taskSummary("A", taskA))}</text>
-      <text x="14" y="86">${escapeHtml(taskSummary("C", taskC))}</text>
-      <text x="14" y="107" class="${predecessors > 1 ? "reconvergence" : "terminal"}">${escapeHtml(footer)}</text>
+      ${frame.taskStates.map((task, index) => `<text x="14" y="${66 + index * 19}">${escapeHtml(taskSummary(task))}</text>`).join("\n")}
+      <text x="14" y="143" class="${predecessors > 1 ? "reconvergence" : "terminal"}">${escapeHtml(footer)}</text>
     </g>`
   }).join("\n")
 
@@ -651,13 +647,14 @@ export const renderObservedDagHtml = (
         <tr>
           <td>Task \${escapeText(["A", "B", "C", "D"][Number(task.modelTaskId)])}</td>
           <td>\${escapeText(task.boundary.replace("Boundary", ""))}</td>
+          <td>\${escapeText(task.readability)} r\${escapeText(task.authorityRevision)}</td>
           <td>\${escapeText(task.responsibility)}</td>
           <td>\${escapeText(task.isolation)}</td>
           <td>\${task.paused ? "yes" : "no"}</td>
         </tr>
       \`).join("");
       inspector.innerHTML = \`
-        <h2>\${escapeText(id)} · first seen S\${node.firstSeenStep}</h2>
+        <h2>\${escapeText(id)}</h2>
         <dl>
           <dt>seen in</dt><dd>\${escapeText(seenIn)}</dd>
           <dt>arrived via</dt><dd>\${incoming || "initial state"}</dd>
@@ -665,7 +662,7 @@ export const renderObservedDagHtml = (
           <dt>admitted tasks</dt><dd>\${escapeText(occurrence.admittedTasks)}</dd>
         </dl>
         <div class="table-wrap"><table>
-          <thead><tr><th>Task</th><th>Boundary</th><th>Responsibility</th><th>Isolation</th><th>Paused</th></tr></thead>
+          <thead><tr><th>Task</th><th>Boundary</th><th>Authority</th><th>Responsibility</th><th>Isolation</th><th>Paused</th></tr></thead>
           <tbody>\${taskRows}</tbody>
         </table></div>
         <details><summary>Raw ITF state</summary><pre>\${escapeText(JSON.stringify(occurrence.rawItfState, null, 2))}</pre></details>
