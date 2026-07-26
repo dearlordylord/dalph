@@ -1,7 +1,9 @@
 # Handoff: Wayfind issue #132 activation ownership
 
-Status: returned as the
-[issue 132 activation ownership decision](../issue-132-activation-ownership-decision.md).
+Status: returned as the accepted
+[exact activation ownership and admission handoff](../issue-132-activation-ownership-decision.md)
+from
+[Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151).
 Production implementation remains open under the
 [bounded implementation handoff](issue-132-implementation.md).
 
@@ -12,7 +14,7 @@ implementation.
 ## Destination
 
 Make [Activate fresh and recovered work through one loop](https://github.com/dearlordylord/dalph/issues/132)
-implementation-ready by designing one coordinator activation loop and an
+implementation-ready by designing one activation coordinator and an
 admission handoff whose invalid duplicate-owner states are unrepresentable and
 model-checkable.
 

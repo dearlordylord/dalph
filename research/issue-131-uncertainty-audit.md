@@ -87,7 +87,7 @@ checks and unchecked issue boxes are not acceptance.
 | Add transitional source comments | **Resolved — repository proven** | The #132/#133 comments in `runnable-frontier.ts`, `reconstructed-managed-run-state.ts`, and `task-admission-controller.ts` were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. They change no runtime behavior. |
 | Validate the complete review bundle | **Resolved — repository proven** | `pnpm check:all` passed on the reviewed substantive state on 2026-07-26: build, package boundary, typecheck, lint/format, circularity, complexity, duplication, both Quint model gates including expected counterexamples, 452 tests in 70 files, coverage thresholds, and secret scanning. All three repeated review passes returned clean; commit `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69` was pushed and matched `origin/master`. |
 | Persist the owner's responsibility-order decision | **Resolved — repository proven** | The owner accepted Option B on 2026-07-26. The live [#132](https://github.com/dearlordylord/dalph/issues/132) body was updated and reread: whenever a controller-snapshot change can permit admission—including confirmed provider non-consumption or reservation release/cancellation—the coordinator reads current reconstructed managed-run state plus the snapshot and derives again; no dormant waiter supplies a second order. The canonical specification and ADR 0009 were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. Implementation remains open under #132. |
-| Design issue #132 activation ownership | **Applied locally — proof pending** | The reviewed [activation ownership decision](issue-132-activation-ownership-decision.md) and [implementation handoff](issue-131-handoffs/issue-132-implementation.md) are committed locally in `f2e00851a` and `c5ef79e88`. They define the single trigger-driven coordinator, exact pre-/post-intent identities, uniqueness by construction, accepted ephemeral presentation states, rejected controller order, restart capacity rules, exact M2 work, and required in-memory/SQLite lanes. Both final review axes returned clean, and `pnpm check:all` passed with 454 tests in 70 files. The live [issue #132](https://github.com/dearlordylord/dalph/issues/132) was updated and reread at `2026-07-26T20:51:10Z` with `Activation ownership design`, all 15 checkboxes still open, and state `OPEN`. Repository proof remains pending until the design commits are pushed; production behavior remains open under H3. |
+| Design issue #132 activation ownership | **Accepted by owner — repository and tracker proof pending** | Human grilling in [Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151) accepted the [exact activation ownership and admission handoff](issue-132-activation-ownership-decision.md) and [implementation handoff](issue-131-handoffs/issue-132-implementation.md). The decision replaces the earlier serial consumer with one activation coordinator and capacity-N overlapping owned-operation runners, keeps reserved capacity as internal task-admission-position accounting, models coordinator and provider-worker failure independently even in local deployment, retains non-preemptive restart capacity, and requires typed duplicate-ownership failure plus fully MBT-testable M2 profile decomposition if state explosion occurs. Repository review, gate, commit, and tracker-resolution proof remain pending. |
 | Preserve the unrelated issue-120 research location | **Resolved — externally proven** | The live [#120](https://github.com/dearlordylord/dalph/issues/120) body was updated and reread on 2026-07-26 with its branch, dedicated worktree, repository-relative path, uncommitted status, and scope warning. No research conclusion was accepted by this bookkeeping action. |
 
 No production behavior was implemented during this review.
@@ -434,7 +434,7 @@ assistant response.
 
 | ID | Status | Answer and evidence | Fastest next verification |
 | --- | --- | --- | --- |
-| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Resolved — repository proven** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C and separately with existing C responsibility versus fresh A; `frontierRecoveryCapacityCounterexample` proves that omitting only the capacity check violates `boundedCapacity`; and Quint-connect compares the model export—including the waiting task and wake condition—with the production selector/controller at capacities one and two. On 2026-07-26, the issue owner reviewed the [concrete baseline-versus-completed example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and explicitly accepted this evidence. Both final review axes returned clean, `pnpm check:all` passed with 454 tests in 70 files, and `origin/master` was remotely reread at acceptance commit `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`. Full production activation remains #132 scope. | No further capacity-one verification; #132 owns activation behavior. |
+| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Resolved — repository proven** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C and separately with existing C responsibility versus fresh A; `frontierRecoveryCapacityCounterexample` proves that omitting only the capacity check violates `boundedCapacity`; and Quint-connect compares the model export—including the waiting task and wake condition—with the production selector/controller at capacities one and two. On 2026-07-26, the issue owner reviewed the [capacity-one proof example](#capacity-one-proof-example) and explicitly accepted this evidence. Both final review axes returned clean, `pnpm check:all` passed with 454 tests in 70 files, and `origin/master` was remotely reread at acceptance commit `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`. Full production activation remains #132 scope. | No further capacity-one verification; #132 owns activation behavior. |
 | F2 — Explain stale task observation and propose visuals | **Resolved as explanation; prototype open** | See “Why one reservation needs the operation identity” and the exact-capacity timeline proposal above. | Build the trace-only prototype after acceptance behavior is settled. |
 | F3 — Can the controller be tested rigorously, prioritizing MBT/property/unit? | **Partially resolved** | Yes. Evidence now spans capacity-one/two exhaustive model profiles, model-exported Quint-connect replay, fresh-memory and closed/reopened SQLite examples, and focused units. Arbitrary activation/controller command-sequence generation remains deliberately assigned to H3 after #132 makes ownership states model-visible; adding it here would harden the superseded waiter seam. | Preserve the capacity-one proof; add generated command-sequence invariants under H3 after the accepted #132 design. |
 | F4 — Visual step simulation of convergence recovery | **Resolved as a proposal** | Existing journal/reconstruction/controller projections can drive a stepper. Issue 132 supplies the complete activation seam; issue 133 prevents internal review from becoming universal UI vocabulary. | Prototype a read-only trace viewer against the issue-132 projection, not production code. |
@@ -648,10 +648,10 @@ U1–U8:
    and freshly reread during this review; see **Actions completed in this
    review**.
 4. **Acceptance state:** On 2026-07-26, the issue owner reviewed the
-   [concrete capacity-one example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example)
+   [capacity-one proof example](#capacity-one-proof-example)
    and explicitly accepted that evidence. Issue 131 remains open and unchecked,
-   and the accepted local commits have not been published to `origin/master`;
-   those external facts do not negate the recorded owner decision.
+   but the accepted commits were published and `origin/master` was reread at
+   acceptance commit `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`.
 
 ## Historical recommended sequence and current disposition
 
@@ -680,7 +680,7 @@ This ledger preserves all 25 annotations from the review of this document.
 | ID | Status | Disposition and required proof |
 | --- | --- | --- |
 | SF1 — Narrow #131; preserve useful #132 context | **Resolved — externally proven** | #131 and #132 were amended and reread. This closes the wording action only. #132 now records exact-operation dispatch, repeated derivation, changed restart capacity, and one-chooser requirements; its implementation remains open. |
-| SF2 — Handoff the #131 gaps | **Resolved — repository proven** | [Capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) returned `frontierRecoveryCapacityOne`, `frontierRecoveryCapacityTwo`, the weakened `frontierRecoveryCapacityCounterexample`, capacity-one/two Quint-connect replay, passing fresh-memory and closed/reopened SQLite lanes, canonical coverage updates, review dispositions, and the full repository gate. On 2026-07-26, the issue owner reviewed the [concrete example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and explicitly accepted this evidence. Both review axes returned clean, `pnpm check:all` passed with 454 tests in 70 files, and `origin/master` was remotely reread at acceptance commit `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`; #132 activation behavior remains separate. |
+| SF2 — Handoff the #131 gaps | **Resolved — repository proven** | The completed capacity-one continuation returned `frontierRecoveryCapacityOne`, `frontierRecoveryCapacityTwo`, the weakened `frontierRecoveryCapacityCounterexample`, capacity-one/two Quint-connect replay, passing fresh-memory and closed/reopened SQLite lanes, canonical coverage updates, review dispositions, and the full repository gate. On 2026-07-26, the issue owner reviewed the [capacity-one proof example](#capacity-one-proof-example) and explicitly accepted this evidence. Both review axes returned clean, `pnpm check:all` passed with 454 tests in 70 files, and `origin/master` was remotely reread at acceptance commit `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`; #132 activation behavior remains separate. |
 | SF3 — Persist pause ownership like SF1 | **Resolved — externally proven** | #134/#135 were amended and reread. This closes the wording action only; existing #62/#134/#135 tickets remain the implementation continuations. |
 | SF4 — How to continue the executor-boundary work | **Handoff ready** | The [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md) starts only after #132. No new Wayfinder is needed because the destination and accepted boundary already exist. |
 | SF5 — Update drifted metadata | **Resolved — externally proven** | Native issue dependencies were changed and reread. |
@@ -695,7 +695,7 @@ This ledger preserves all 25 annotations from the review of this document.
 | SF14 — Handoff the rigorous test order | **Handoff ready** | Capacity-one formal checking is H1. Activation interleavings, generated command sequences, and readable edge examples belong in H3 after H2. |
 | SF15 — “Later” means this review's continuations | **Handoff ready** | Visual work is now the explicit H5 handoff/sub-agent continuation in this review, not an unspecified future. |
 | SF16 — Research Effect Analyzer with Quint and Dalph | **Resolved — repository proven** | The cited [evaluation](effect-analyzer-quint-evaluation.md) records pinned-source trials against Dalph. It rejects analyzer-as-correctness-gate and source-to-Quint generation, supports one isolated ITF-view prototype, and separates later source-analysis adoption. The note was independently reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; H5 remains separately **Handoff ready**. |
-| SF17 — Where capacity-one checking belongs | **Resolved — repository proven** | The narrow [capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) is implemented without #132 activation, changed-capacity restart, pause-command, or #133 executor-boundary work. On 2026-07-26, the issue owner reviewed the [concrete example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and accepted this evidence. The reviewed and verified commits were pushed, and `origin/master` was reread at `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`. |
+| SF17 — Where capacity-one checking belongs | **Resolved — repository proven** | The narrow capacity-one continuation is implemented without #132 activation, changed-capacity restart, pause-command, or #133 executor-boundary work. On 2026-07-26, the issue owner reviewed the [capacity-one proof example](#capacity-one-proof-example) and accepted this evidence. The reviewed and verified commits were pushed, and `origin/master` was reread at `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`. |
 | SF18 — Where the #131 review-type audit belongs | **Handoff ready** | The audit evidence names the affected symbols in #133. No more discovery sub-agent is needed; replacement belongs to the [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md). |
 | SF19 — Repair dependencies now | **Resolved — externally proven** | Completed and reread through GitHub's native dependency endpoint. |
 | SF20 — Preserve the callable activation seam in #132 | **Resolved — externally proven** | The live #132 body was updated and reread. This closes the wording action only: it now forbids broad phase-tag sweeps and requires one exact selected operation/result/rederive step. Implementation remains open. |
@@ -709,20 +709,42 @@ This ledger preserves all 25 annotations from the review of this document.
 
 ### H1 — Issue #131 capacity-one evidence
 
-Handoff: [Capacity-one evidence](issue-131-handoffs/capacity-one-evidence.md)
-
 Implementation proof, issue-owner acceptance, and repository publication are
 recorded. The returned evidence consists of real capacity-one/two Quint profiles, the
 weakened-capacity counterexample, sampled production selector/controller
 comparison, fresh-memory and closed/reopened SQLite lanes, canonical coverage
 updates, all three review dispositions, and `pnpm check:all`. On 2026-07-26,
 the issue owner reviewed the
-[concrete baseline-versus-completed example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example)
+[capacity-one proof example](#capacity-one-proof-example)
 and explicitly accepted the evidence. Both final review axes returned clean,
 `pnpm check:all` passed with 454 tests in 70 files, the commits were pushed, and
 `origin/master` was remotely reread at acceptance commit
 `dfaa54da862bee89a0269b1aa9667a13fb28f4a5`. H1 is
 **Resolved — repository proven**.
+
+#### Capacity-one proof example
+
+With configured capacity one and independently eligible fresh tasks A and C,
+the derived frontier contains both tasks. The controller admits and reserves
+only canonical-first A. C is paired with `CapacityWait` and wake condition
+`CapacityReleasedOrReconstructedStateChanged`.
+
+The deliberately invalid `weakenedCapacityStep` omits only the configured
+position check. Two steps create outstanding workflow responsibilities for A
+and C, so `initialReservedCount` becomes two while the configured limit is one.
+The exported selector reservation set remains `{A}`; the expected
+`boundedCapacity` counterexample is specifically the excess reconstructed
+responsibility count. Quint-connect separately compares the valid
+capacity-one selector/controller projection, including exact task, transition,
+operation, explanation, reservation, and occupied identities.
+
+Implementation commits:
+
+- `f415c52f9` — capacity-one model, counterexample, conformance lane, and
+  coverage;
+- `a6233814c` — responsibility-first and exact explanation conformance
+  corrections; and
+- `8cdae1abc` — projection-scope documentation correction.
 
 ### H2 — Issue #132 activation Wayfinder
 

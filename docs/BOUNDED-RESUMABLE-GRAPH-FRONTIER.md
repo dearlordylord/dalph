@@ -147,26 +147,27 @@ task/operation-identity choice.
 
 The selector gives each pre-intent result an exact process-local selected
 transition identity over the run, transition kind, exact subject, and immutable
-decision inputs carried by that transition. The activation coordinator
-creates ownership for that identity in its single transition consumer before
-execution. Trigger callers cannot submit a transition or obtain the owned
-capability, so a second transition owner cannot be represented through the
-public API. When the owner records operation intent, the ownership entry and
-any matching admission reservation bind to the durable `OperationId`; every
-later request, result check, retry, reconciliation action, and outcome retains
-it.
+decision inputs carried by that transition. The activation coordinator creates
+ownership for that identity while starting one scoped owned-operation runner.
+Trigger callers cannot submit a transition or obtain the owned capability, so
+a second transition owner cannot be represented through the public API. When
+the runner records operation intent, the ownership entry and any reserved task
+admission position bind to the durable `OperationId`; every later request,
+result check, retry, reconciliation action, and outcome retains it.
 
-The activation loop exposes trigger signaling, not transition submission.
+The activation coordinator exposes trigger signaling, not transition submission.
 Startup, restart, resume, a recorded workflow result, and a controller change
-that may permit admission signal one scoped consumer. Signals carry no task,
+that may permit admission signal one scoped coordinator. Signals carry no task,
 transition, priority, or order key and may coalesce. One pass reads current
 reconstructed managed-run state and the controller snapshot, derives the
 frontier and bounded admission set, reserves and claims its exact first
-transition, executes that one operation through the injected workflow
-interpreter, records its exact result, releases exact activation ownership,
-and signals another pass. The next pass rereads current state before selecting
-another operation. Capacity exhaustion returns a `CapacityWait`; it does not
-park a transition-owning waiter.
+transition, and starts one scoped owned-operation runner. After that handoff is
+established, the coordinator rereads current state and may admit another
+transition without waiting for the earlier runner's final result. Each runner
+executes exactly one operation through the injected workflow interpreter,
+records its exact result, releases activation ownership, and signals the
+coordinator. Capacity exhaustion returns a `CapacityWait`; it does not park a
+transition-owning waiter.
 
 Selection, reservation, and activation ownership are process-local. Restart
 discards every pre-intent instance and derives again. A recorded intent retains
@@ -409,6 +410,12 @@ SQLite Layer over the same database file. Neither lane may retain pre-reduced
 test state. Both compare the same semantic trace and authority projection;
 SQLite additionally proves migration, decode/upcast, canonical order,
 idempotent append, corruption handling, and exclusive writer behavior.
+
+The harness models coordinator and provider-worker lifetimes as separate
+controls even though Dalph is deployed locally. Coordinator crash does not
+implicitly terminate workers. Selected lanes cover coordinator-only failure,
+co-failure, and mixed survival, then use fresh provider observations to decide
+which task-admission positions remain occupied.
 
 ### Coverage lanes
 

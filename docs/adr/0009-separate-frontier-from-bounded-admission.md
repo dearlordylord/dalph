@@ -40,15 +40,17 @@ responsibility-first choice with task- or operation-identity ordering. Fresh
 facts may change the newly derived choice; exact recreation of the lost
 pre-crash frontier is not required.
 
-The controller returns an atomic admission decision and exact reservations; it
-does not expose a dormant `awaitAdmission` operation. One scoped activation
-consumer receives order-free triggers, derives again, and atomically registers
-one activation owner for the exact first admitted transition. It executes and
-records that operation's result before deriving again. Trigger callers cannot
-submit transitions or obtain the owned capability, so the public API cannot
-represent duplicate ownership. This keeps capacity accounting in the
-controller, workflow order in the selector, and execution uniqueness in the
-activation coordinator.
+The controller returns an atomic admission decision and exact reserved task
+admission positions; it does not expose a dormant `awaitAdmission` operation.
+One scoped activation coordinator receives order-free triggers, derives again,
+and atomically registers one activation owner while starting an
+owned-operation runner for the exact first admitted transition. The coordinator
+derives again after the handoff without waiting for that runner's final result;
+several runners may overlap within capacity N and other resource bounds.
+Trigger callers cannot submit transitions or obtain the owned capability, so
+the public API cannot represent duplicate ownership. This keeps capacity
+accounting in the controller, workflow order in the selector, and execution
+uniqueness in the activation coordinator.
 
 Tracker read and mutation results update durable graph knowledge rather than
 enqueueing downstream tasks. The default read assembles the complete bounded

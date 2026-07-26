@@ -86,6 +86,15 @@ coordination and presentation state from those reads. A restarted process must
 not treat a pre-crash queue buffer, capacity reservation, timer instance,
 frontier, presentation cursor, or projection as proof that work occurred.
 
+Dalph is deployed locally, but the coordinator process and provider-owned
+worker processes remain distinct failure and observation boundaries. A
+coordinator crash does not prove that a worker stopped, and a worker exit does
+not imply coordinator failure. Deterministic-test and live-fake harnesses
+control those deaths independently and cover coordinator-only failure,
+co-failure, and mixed worker survival. This local separation preserves truthful
+recovery now and a later distributed deployment path without changing
+authority ownership.
+
 Discovery accumulates independent physical-row, envelope, payload, identity,
 ownership, semantic-history, and reconciliation issues. A row that cannot be
 decoded does not hide another row or become an empty history. Any run with a
@@ -93,6 +102,13 @@ boundary issue or invalid managed history remains preserved and is not resumed;
 ambiguous external resources likewise remain untouched for operator repair.
 Startup fails closed after collecting the available issues rather than allowing
 one unreadable authority to hide another authority's reconciliation fact.
+
+Manual mutation of journal storage is outside Dalph's supported threat model:
+the journal provides no cryptographic tamper resistance and Dalph does not
+repair manually altered history. Crash-consistent append, process death,
+storage reopening, decoding, and semantic validation remain supported.
+Whenever startup encounters invalid physical or semantic history, it preserves
+the evidence and fails the affected run closed.
 
 Journal storage, decoding, and reduction are separate boundaries. The
 reconstruction workflow reads each run's physical rows once in canonical

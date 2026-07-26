@@ -1,6 +1,8 @@
-# Issue 132 activation ownership decision
+# Exact activation ownership and admission handoff
 
-Status: implementation-ready design for
+Status: accepted owner decision from
+[Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151).
+Production implementation remains open in
 [Activate fresh and recovered work through one loop](https://github.com/dearlordylord/dalph/issues/132).
 This decision changes no production control-plane behavior. The implementation
 and validation work is bounded by the
@@ -17,8 +19,58 @@ scheduler or verification model.
 
 The tracker, Git, executor, and task-work provider continue to own their current
 facts. The Dalph workflow journal continues to own only recorded workflow
-history. Selection, reservations, activation ownership, and trigger
-coalescing are process-local coordination facts.
+history. Selection, reserved task-admission positions, activation ownership,
+and trigger coalescing are process-local coordination facts. Dalph is deployed
+locally, but coordinator and worker lifetimes remain independently observable:
+local deployment does not let recovery infer that a provider-owned process died
+with the coordinator. Keeping this boundary explicit also preserves a later
+distributed deployment path.
+
+## Owner decisions in this Wayfinder session
+
+1. Before intent, structural `SelectedTransitionIdentity` contains no random
+   nonce; unchanged inputs recreate an equal identity. Durable `OperationId`
+   replaces it after intent.
+2. Capacity reservation is only the behavior-bearing reserved condition of an
+   existing task-admission position. It is not a new public phase, journal
+   event, or authority fact. Crash recovery reconstructs post-intent capacity
+   commitment from responsibility and fresh provider evidence and fails closed
+   when that evidence cannot free a position.
+3. One activation coordinator serializes selection and admission, then starts
+   scoped owned-operation runners that may overlap up to capacity N and other
+   resource bounds.
+4. The public activation surface exposes only order-free signaling. Selection,
+   admission, activation ownership, and runner creation remain private to the
+   activation coordinator.
+5. Restart capacity changes remain non-preemptive. Actively interrupting excess
+   workers to converge immediately to a lower limit is a separate operator
+   policy decision, not task pause and not activation behavior.
+6. Local deployment does not collapse failure domains in the model or test
+   harness. Coordinator death and provider-worker death are separate actions;
+   recovery scenarios cover all workers stopped, all surviving, and mixed
+   survival.
+7. After a live-runtime ownership handoff, the coordinator may derive again.
+   Runtime-observed runner exit releases process-local state and signals the
+   coordinator; abrupt process death guarantees neither finalization nor a
+   signal, so later startup reconstruction is the only recovery trigger.
+8. Activation ownership, independent coordinator/worker death, and changed
+   restart capacity first extend canonical M2. Verification work must measure
+   explored states and wall time and use a predefined profile-decomposition
+   fallback if full composition causes material state explosion.
+9. Any state-space fallback remains fully model-based-testable: every positive
+   action and compared state field stays in the closed executable adapter and
+   production projection. Profile decomposition cannot create a
+   verification-only behavior or replace action/state correspondence with
+   hand-written expected results.
+10. The private atomic ownership registry still returns a typed
+    `DuplicateActivationOwnership` issue if an internal defect attempts a
+    second runner for one exact transition. It starts no second runner or
+    external effect and isolates only the affected subject unless shared
+    history is invalid.
+11. Manual journal mutation is outside the supported threat model; Dalph does
+    not add tamper resistance or repair manually altered history. Coordinator
+    crashes and storage reopening remain supported. Any invalid history that
+    startup encounters still fails closed.
 
 ## Owner, action, and boundary
 
@@ -26,7 +78,7 @@ coalescing are process-local coordination facts.
 flowchart LR
   T["Startup, restart, resume, recorded result,
   or controller change that may permit admission"]
-  L["Activation loop
+  L["Activation coordinator
   coalesces triggers"]
   R["Reconstruction workflow
   reads and decodes journal rows"]
@@ -38,10 +90,11 @@ flowchart LR
   derives exact transitions and waits"]
   A["Admission controller
   reserves the exact first admitted transition"]
-  O["Activation ownership registry
-  claims that transition in the consumer"]
-  I["Workflow interpreter
-  executes one exact owned transition"]
+  O["Activation coordinator
+  creates one owned-operation runner"]
+  I["Owned-operation runner
+  invokes the workflow interpreter for
+  one exact owned transition"]
   J["Workflow journal
   records intent and returned result"]
   E["Tracker / Git / executor / provider
@@ -56,6 +109,7 @@ flowchart LR
   S --> A
   A --> O
   O --> I
+  O --> L
   I --> J
   I --> E
   E --> I
@@ -63,10 +117,13 @@ flowchart LR
   C -->|"release, cancellation, or fresh non-consumption"| L
 ```
 
-The activation loop is the only actor that turns a selected transition into an
-owned execution. A trigger never carries a task, transition, priority, or order
-key. It only asks the loop to read current reconstructed state and the current
-controller snapshot again.
+The activation coordinator is the only actor that turns a selected transition
+into an owned-operation runner. It serializes derivation and admission, but it
+does not wait for one long-running operation to finish before deriving again.
+Each child runner owns and executes exactly one transition; runners may overlap
+up to every applicable resource bound. A trigger never carries a task,
+transition, priority, or order key. It only asks the coordinator to read
+current reconstructed state and controller snapshot again.
 
 ## Ordering traces
 
@@ -80,7 +137,7 @@ position 10; task A has one begun at position 20.
 2. A provider observation confirms that the occupied invocation stopped.
 3. The controller removes that exact occupied position and signals
    "admission may now be possible."
-4. The activation loop rereads managed-run state and the controller snapshot.
+4. The activation coordinator rereads managed-run state and the controller snapshot.
 5. The selector again derives [Z@10, A@20].
 6. The controller reserves the available position for Z.
 ```
@@ -100,7 +157,7 @@ through the accepted control boundary and the occupied invocation stops.
 3. Before restart, the journal gains the task-control fact that prevents Z's
    next forward-progress operation, and the provider stops the invocation.
 4. Restart folds current journal history and freshly observes non-consumption.
-5. The activation loop reads that managed-run state and the rebuilt controller
+5. The activation coordinator reads that managed-run state and the rebuilt controller
    snapshot.
 6. The selector explains Z's pause and derives [A@20].
 7. The controller reserves the available position for A.
@@ -130,26 +187,28 @@ responsibility order. Both forms are rejected.
 ## Exact identities
 
 Before intent, the selector returns a `SelectedTransitionIdentity`. It is a
-branded process-local value over:
+branded structural process-local value over:
 
 - the exact `RunId`;
 - the transition tag;
 - the exact subject identity;
-- the immutable selector inputs carried by that transition, including a task
-  revision fingerprint or predecessor operation identities when applicable.
+- a deterministic fingerprint of the immutable selector inputs carried by that
+  transition, including a task revision fingerprint or predecessor operation
+  identities when applicable.
 
-Equality uses the complete normalized value, not task identity alone. A fresh
-derivation may recreate an equal identity, but the identity is not persisted
-and creates no workflow responsibility.
+It contains no random nonce. Equality uses the complete normalized structural
+value, not task identity alone. A fresh derivation of unchanged inputs recreates
+an equal identity; changed decision inputs create a different identity. The
+identity is not persisted and creates no workflow responsibility.
 
 When the activation owner records operation intent, the selected workflow
 operation receives its durable `OperationId`. The ownership registry atomically
 rekeys that entry from `SelectedTransitionIdentity` to `OperationId`, and the
-controller binds any matching reservation to the same `OperationId`. Every
-request, fresh result check, retry, reconciliation action, and outcome after
-that point uses the `OperationId`. Restart may choose a new pre-intent identity
-and operation identity; it must retain a recorded post-intent identity and
-payload.
+controller binds any matching reserved task-admission position to the same
+`OperationId`. Every request, fresh result check, retry, reconciliation action,
+and outcome after that point uses the `OperationId`. Restart may choose a new
+pre-intent identity and operation identity; it must retain a recorded
+post-intent identity and payload.
 
 ## Ephemeral handoff vocabulary
 
@@ -159,32 +218,48 @@ journal event or durable workflow lifecycle state.
 | Candidate | Decision | Actor, creation, and removal | Relationship to intent |
 | --- | --- | --- | --- |
 | `Selected` | Accept as `SelectedTransition` | The selector creates it during derivation. The next derivation replaces it. | It exists before intent and creates no responsibility. |
-| `Reserved` | Accept as `AdmissionReservation` | The controller creates it atomically while bounding one admission set. It removes it after exact cancellation, release, a matching occupied observation, or process loss. | It starts under `SelectedTransitionIdentity` and binds to `OperationId` after intent. |
+| `Reserved` | Accept only as the internal reserved condition of an existing `TaskAdmissionPosition`, not as a separate domain or public lifecycle phase | The controller atomically changes one available position to reserved so a later activation pass cannot promise the same capacity again. It makes the position available after exact cancellation or release, changes it to occupied after matching fresh provider evidence, and discards it on process loss. | Before intent it is correlated to `SelectedTransitionIdentity`; after intent it is correlated to `OperationId`. |
 | `Granted` | Reject | “Grant” does not say whether capacity was reserved or a fiber obtained exclusive execution. Those are separate actions above and below. | No separate intent relationship exists. |
-| `Owned` | Rename to `ActivationOwnership` | The single activation consumer creates it before executing one transition. It removes it after the returned result is recorded or the exact interruption rule completes. | It starts under selected-transition identity and rekeys to operation identity when intent is recorded. |
-| `Released` | Reject as a phase | Releasing is the registry/controller action that removes exact ownership or reservation. | A post-intent release keeps the durable operation identity in journal history. |
-| `Cancelled` | Reject as a phase | Cancelling removes a pre-effect reservation after the accepted interruption rule proves cancellation is safe. | It cannot erase recorded intent or authorize retry after an ambiguous outcome. |
-| `Reconstructed` | Reject as a phase; retain `ReconstructedReservation` as an origin label | On restart the controller creates process-local positions from current configuration, reconstructed responsibility, and fresh invocation observations. | A reconstructed post-intent reservation names the retained `OperationId`; a lost pre-intent reservation is simply rederived. |
+| `Owned` | Rename to `ActivationOwnership` | The activation coordinator creates it while starting one owned-operation runner. That runner alone holds it until the returned result is recorded or the exact interruption rule completes. | It starts under selected-transition identity and rekeys to operation identity when intent is recorded. |
+| `Released` | Reject as a phase | Releasing is the controller or ownership-registry action that makes an exact position available or removes exact ownership. | A post-intent release keeps the durable operation identity in journal history. |
+| `Cancelled` | Reject as a phase | Cancelling makes a pre-effect reserved position available after the accepted interruption rule proves cancellation is safe. | It cannot erase recorded intent or authorize retry after an ambiguous outcome. |
+| `Reconstructed` | Reject as a phase or origin object | On restart the controller recomputes position conditions from current configuration, reconstructed responsibility, and fresh invocation observations. | A recorded post-intent responsibility retains its `OperationId`; a lost pre-intent selection and position promise are simply rederived. |
+
+The reserved condition is behavior-bearing: it reduces available capacity for
+later activation passes. It is not an additional journal fact, public message,
+or durable authority record.
+
+### Crash classification
+
+| Crash boundary | Recovery rule |
+| --- | --- |
+| Before operation intent | Selection, ownership, and the reserved position condition disappear. No durable responsibility exists, so restart derives again from current facts. |
+| After intent and before a conclusive provider result | The journal reconstructs the exact responsibility and `OperationId`. The controller counts the position as reserved until a fresh provider observation proves whether the invocation consumes capacity. |
+| After an external request with an unknown outcome | Recovery retains the same `OperationId`, checks the provider, and treats unreadable or inconclusive evidence as unable to free the position. It never admits replacement capacity from absence of proof. |
+
+Corrupt journal history fails the affected run closed. An unreadable provider
+may prevent capacity-requiring work, but it does not prevent unrelated
+transitions that consume no task-admission position.
 
 ## Public API
 
-The production surface must make the activation loop the only transition
-consumer:
+The production surface must make the activation coordinator the only actor
+that selects a transition or creates an owned-operation runner:
 
 ```ts
-interface ActivationLoop {
+interface ActivationCoordinator {
   readonly signal: (
     cause: ActivationCause
-  ) => Effect.Effect<void, ActivationLoopClosed>
+  ) => Effect.Effect<void, ActivationCoordinatorClosed>
 }
 ```
 
-The Layer starts one scoped consumer. `signal` accepts only a cause such as
+The Layer starts one scoped coordinator. `signal` accepts only a cause such as
 `Startup`, `Restart`, `Resume`, `WorkflowResultRecorded`, or
 `AdmissionMayNowBePossible`; it accepts no transition or order key. Multiple
 signals coalesce into another pass.
 
-The following services remain internal to that consumer:
+The following services remain internal to that coordinator:
 
 ```ts
 interface AdmissionController {
@@ -215,42 +290,52 @@ interface AdmissionController {
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
 }
 
-interface ActivationOwnershipScope {
-  readonly run: (
-    selected: AdmittedTransition,
-    run: (
-      owned: OwnedTransition
-    ) => Effect.Effect<
-      WorkflowOperationResult,
-      WorkflowInterpreterFailure | WorkflowResultRecordingFailure
-    >
+interface OwnedOperationRunnerFactory {
+  readonly start: (
+    selected: AdmittedTransition
   ) => Effect.Effect<
-    WorkflowOperationResult,
-    WorkflowInterpreterFailure | WorkflowResultRecordingFailure
+    OwnedOperationRunnerStarted,
+    ActivationOwnershipIssue
   >
 }
 ```
 
 `AdmittedTransition`, `OwnedTransition`, and their constructors are not
-exported from the activation module. Only the single activation consumer can
-call `ActivationOwnershipScope.run`; trigger callers cannot submit transitions
-or obtain an ownership capability. The scope creates one owned capability,
-executes its callback, and removes that capability before returning. The owned
-capability has one internal `recordIntent` operation. There is no public
-operation with which a second fiber can claim or execute the same transition,
-so duplicate ownership is unrepresentable rather than a recoverable production
-branch.
+exported from the activation module. Only the activation coordinator can call
+`OwnedOperationRunnerFactory.start`; trigger callers cannot submit transitions
+or obtain an ownership capability. `start` registers exact ownership and forks
+one child in the coordinator Layer's scope before acknowledging the handoff.
+The child has one internal `recordIntent` operation, invokes one exact workflow
+operation, records its result, releases ownership, and signals the coordinator.
+There is no public operation with which a second fiber can claim or execute the
+same transition, so duplicate ownership is unrepresentable rather than a
+recoverable production branch.
+
+The private atomic registry nevertheless returns a typed
+`DuplicateActivationOwnership` issue if an internal implementation defect
+attempts the second registration. It creates no runner and sends no external
+effect. The issue isolates the exact subject; only invalid shared history or a
+shared capability issue may stop unrelated transitions.
+
+A signal or finalizer is reliable only when the live Effect runtime observes
+runner completion, failure, or interruption. An abrupt process death runs no
+assumed finalizer and emits no signal. The next process starts from its
+independent `Startup` or `Restart` activation cause: it discards lost
+pre-intent ownership and reserved-position state, or reconstructs a recorded
+post-intent `OperationId` and reconciles it. No runner may send an external
+state-changing request before recording intent, so loss before intent cannot
+hide an external effect.
 
 `AdmissionAvailabilityChange` is the tagged union
 `AdmissionMayNowBePossible | AdmissionAvailabilityUnchanged`.
 `NextAdmissionDecision` is
 `NoTransitionAdmitted | ExactTransitionAdmitted`; the admitted variant contains
-one transition and, when required, its exact reservation. Neither type carries
-an order key.
+one transition and, when required, its exact reserved task-admission position.
+Neither type carries an order key.
 
 The accepted controller API removes `awaitAdmission`. Capacity exhaustion is a
 returned `CapacityWait` explanation. A later controller change signals the
-activation loop, which derives again. The implementation deletes the dormant
+activation coordinator, which derives again. The implementation deletes the dormant
 waiter queue, its duplicate-waiter guard, and every production call to
 `awaitAdmission`.
 
@@ -263,15 +348,18 @@ One pass performs these concrete actions:
 2. The selector derives the runnable frontier and exact explanations.
 3. The controller computes the bounded admission set but reserves only its
    exact first transition for this pass.
-4. The ownership scope creates the exact owned capability in the single
-   consumer.
-5. The owner records intent when required, invokes exactly that operation
+4. The coordinator registers exact ownership and starts one scoped
+   owned-operation runner.
+5. After that handoff is established, the coordinator derives again without
+   waiting for the runner's final result.
+6. The runner records intent when required, invokes exactly that operation
    through `WorkflowInterpreter`, records its exact returned result, releases
-   its ownership, and signals the next pass.
+   ownership, and signals the coordinator.
 
 The next pass reads current state before choosing another transition, even when
-the preceding admission set contained several transitions. Concurrency comes
-from provider work already started by earlier bounded workflow operations, not
+the preceding admission set contained several transitions. Selection and
+admission remain serialized, while owned-operation runners overlap up to
+capacity N and every other applicable resource bound. Concurrency never comes
 from sweeping several operations out of one selector snapshot. A pass does not
 sweep a broad phase tag, return merely because an unrelated journal event was
 appended, or keep a dormant fiber for a capacity wait.
@@ -315,20 +403,21 @@ executable adapter:
 | Model action | Observable state change |
 | --- | --- |
 | `deriveActivationPass` | Replaces selected transitions and explanations from current reconstructed inputs. |
-| `reserveSelectedTransition` | Creates a reservation for the exact first transition in the bounded admission set only when future-admission usage is below the configured limit. |
+| `reserveTaskAdmissionPosition` | Changes one available task-admission position to reserved for the exact first transition only when future-admission usage is below the configured limit. |
 | `claimActivationOwnership` | Atomically creates one owner for one exact selected transition. |
-| `recordOwnedOperationIntent` | Records intent, assigns the stable operation identity, and rekeys ownership/reservation. |
-| `interruptBeforeOwnership` | Cancels the exact reservation; no owner or intent exists. |
-| `interruptAfterOwnershipBeforeIntent` | Removes exact ownership and reservation; later derivation may choose anew. |
+| `recordOwnedOperationIntent` | Records intent, assigns the stable operation identity, and rekeys ownership plus the reserved task-admission position. |
+| `interruptBeforeOwnership` | Makes the exact reserved position available; no owner or intent exists. |
+| `interruptAfterOwnershipBeforeIntent` | Removes exact ownership and makes the reserved position available; later derivation may choose anew. |
 | `interruptAfterIntent` | Removes only process-local ownership and retains the exact operation responsibility for reconciliation. |
 | `recordOwnedResultAndRelease` | Records the result, removes exact ownership, and signals rederivation. |
-| `observeCapacityConsumed` | Replaces a matching reservation with fresh occupied evidence. |
+| `observeCapacityConsumed` | Replaces a matching reserved position with fresh occupied evidence. |
 | `observeCapacityReleased` | Removes only the exactly correlated occupied invocation and permits rederivation. |
-| `crashWithActivation` | Discards selection, ownership, triggers, and process-local reservations. |
+| `crashCoordinatorWithActivation` | Discards selection, ownership, triggers, and process-local reserved-position state without changing provider-worker observations. |
+| `stopProviderWorker` | Independently changes one exact provider worker to non-consuming evidence. |
 | `reconstructActivation` | Rebuilds positions from current capacity, durable responsibilities, and fresh occupied evidence. |
 
-The model state needs separate selected-transition, reservation, ownership, and
-freshly occupied maps keyed by exact identity. `OperationId` is an `Option`
+The model state needs separate selected-transition, reserved-position,
+ownership, and freshly occupied maps keyed by exact identity. `OperationId` is an `Option`
 until intent rather than a sentinel. Controller change is modeled as a trigger,
 not an ordered queue.
 
@@ -359,6 +448,25 @@ reach ownership before intent, ownership after intent, interruption on both
 sides of intent, result release/rederive, fresh non-consumption rederive, and
 changed-capacity reconstruction.
 
+### State-space fallback
+
+Plan A adds the activation behavior to the existing M2 composition profiles and
+records explored-state counts and wall time. If the extended gate materially
+degrades or an exhaustive profile no longer completes reliably, Plan B keeps
+the same canonical model and invariants but splits exhaustive exploration into
+focused activation-ownership, coordinator/worker-crash, changed-capacity, and
+stale-release profiles with smaller relevant initial states and action sets.
+At least one sampled full-composition profile continues across their seams.
+
+Every Plan B positive action remains decodable by the same versioned
+Quint-connect driver, invokes a production seam or an explicit physical-harness
+control, and compares the versioned production projection after every step.
+Every action tag appears in executable coverage. Deliberately weakened negative
+actions remain counterexample generators and are not falsely presented as
+production operations. Plan B may reduce exhaustive composition breadth; it
+may not weaken an invariant, add an unexecutable positive abstraction, or
+substitute assigned expected state for production reduction.
+
 ## Required executable lanes
 
 The implementation must update the model, action decoder, TypeScript driver,
@@ -386,10 +494,9 @@ scheduler, or treat the bounded model's state types as production types.
 
 ## Patch-ready canonical changes
 
-The accepted specification gains the identity, ownership, one-pass, and restart
+The specification gains the identity, ownership, runner-handoff, and restart
 rules above. ADR 0009 gains the no-waiter controller API consequence. ADR 0010
-continues to assign this behavior to M2. The main issue-131 ledger marks H2
-returned and H3 handoff-ready without claiming production behavior exists.
+continues to assign this behavior to M2.
 
 Append this exact section to the live issue:
 
@@ -398,15 +505,20 @@ Append this exact section to the live issue:
 
 The accepted design is
 [`research/issue-132-activation-ownership-decision.md`](https://github.com/dearlordylord/dalph/blob/master/research/issue-132-activation-ownership-decision.md).
-One scoped consumer receives order-free triggers. Each pass reads current
+It was resolved with the owner in
+[Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151).
+One scoped activation coordinator receives order-free triggers. Each pass reads current
 reconstructed managed-run state and the controller snapshot, derives the
-frontier and bounded admission set, reserves and owns one exact transition,
-executes one workflow operation, records its exact result, and derives again.
+frontier and bounded admission set, reserves one exact transition, and creates
+one scoped owned-operation runner. The coordinator then derives again without
+waiting for that runner's final result. Each runner executes one exact workflow
+operation, records its result, releases ownership, and signals the coordinator.
 
 Before intent, process-local `SelectedTransitionIdentity` prevents duplicate
-execution. After intent, ownership and any reservation bind to the durable
+execution. After intent, ownership and any reserved task-admission position bind to the durable
 `OperationId`. Trigger callers cannot submit a transition or obtain ownership;
-the single consumer makes a second owner unrepresentable.
+the activation coordinator's private runner factory makes a second owner
+unrepresentable through the public API.
 
 The controller exposes no dormant waiter or second order. Restart uses current
 configuration, durable responsibility, and fresh occupied-invocation evidence;

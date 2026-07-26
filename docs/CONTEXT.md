@@ -763,30 +763,52 @@ operation intent.
 _Avoid_: Runnable frontier, persisted queue, task claim, task execution admitted
 
 **Selected transition identity**:
-The exact process-local identity of one workflow transition returned by the
-selector before its operation intent is recorded. It combines the run,
-transition kind, exact subject, and immutable decision inputs carried by that
-transition. It creates no workflow responsibility and may be recreated or
-replaced by a later derivation. After intent, the durable operation identity
-replaces it for requests, checks, retries, reconciliation, and outcomes.
+The exact structural process-local identity of one workflow transition returned
+by the selector before its operation intent is recorded. It combines the run,
+transition kind, exact subject, and a deterministic fingerprint of the
+transition's immutable decision inputs, with no random nonce. Unchanged inputs
+recreate an equal identity; changed decision inputs create a different one. It
+creates no workflow responsibility and is not persisted. After intent, the
+durable operation identity replaces it for requests, checks, retries,
+reconciliation, and outcomes.
 _Avoid_: Operation identity, task identity, persisted frontier entry, admission position
 
 **Activation ownership**:
-The process-local exclusive capability held by one coordinator fiber while it
-records or executes one exact selected workflow transition. The coordinator
-creates ownership in its single transition consumer, keys it by selected
+The process-local exclusive capability held by one owned-operation runner while
+it records or executes one exact selected workflow transition. The activation
+coordinator creates ownership while starting that runner, keys it by selected
 transition identity before intent and operation identity afterward, and removes
 it after the exact result or interruption rule completes. Trigger callers
 cannot submit a transition or obtain this capability. It is not authority over
 a tracker, Git, executor, provider, or their resources.
 _Avoid_: Workflow responsibility, task claim, admission reservation, durable lease
 
+**Activation coordinator**:
+The single scoped process-local actor that receives order-free activation
+signals, reads current reconstructed state and capacity, serially selects and
+admits one exact transition, and creates its owned-operation runner. It derives
+again after each established handoff without waiting for an earlier runner's
+final result. It is not a task executor and stores no durable mailbox, frontier,
+or authority state.
+_Avoid_: Activation consumer, scheduler queue, task executor, actor-system authority
+
+**Owned-operation runner**:
+One scoped Effect fiber created only by the activation coordinator to hold
+activation ownership, execute one exact workflow transition through the
+workflow interpreter, record its exact result, and signal the coordinator.
+Several runners may overlap within capacity and other resource bounds. It is
+not the provider-owned task-work invocation that the interpreted operation may
+start or observe. Its finalizer and signal are live-runtime behavior, not
+guarantees after abrupt process death; later startup reconstructs instead.
+_Avoid_: Activation coordinator, task executor, task-work invocation, worker process
+
 **Task admission position**:
 One process-local unit of configured task-work capacity, reserved while Dalph
 prepares a freshly committed task or occupied while a task-work invocation
 consumes capacity. It is recreated after process loss from configuration,
 workflow responsibility, and fresh observations rather than restored as
-authority.
+authority. Missing or unreadable provider evidence cannot make an ambiguously
+used position available.
 _Avoid_: Task claim, persisted capacity reservation, worker process
 
 **Capacity waiting**:

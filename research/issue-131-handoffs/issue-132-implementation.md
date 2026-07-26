@@ -1,5 +1,9 @@
 # Handoff: implement and validate issue #132 activation ownership
 
+Status: implementation-ready from the accepted
+[Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151)
+owner decision. Production behavior remains open.
+
 Use the `implement`, `domain-modeling`, `tdd`, `effect`, `quint-modeling`,
 `quint-lang`, `property-based-testing`, and `code-review` skills. Work on
 `master` with pnpm.
@@ -7,7 +11,7 @@ Use the `implement`, `domain-modeling`, `tdd`, `effect`, `quint-modeling`,
 ## Objective
 
 Implement
-[the accepted activation ownership decision](../issue-132-activation-ownership-decision.md)
+[the exact activation ownership and admission handoff](../issue-132-activation-ownership-decision.md)
 for
 [Activate fresh and recovered work through one loop](https://github.com/dearlordylord/dalph/issues/132).
 Replace the fixed startup/recovery activation topologies and the controller's
@@ -23,19 +27,23 @@ owned by issues #53/#55.
 
 - Add the branded selected-transition identity and the internal owned-
   transition capability. Document the phenomenon above each branded type.
-- Expose only trigger signaling from the activation loop; triggers carry no
+- Expose only trigger signaling from the activation coordinator; triggers carry no
   transition or order key.
-- Keep admitted and owned transition constructors internal to the single
-  activation consumer. Trigger callers must have no API that can submit,
+- Keep admitted and owned transition constructors internal to the activation
+  coordinator. Trigger callers must have no API that can submit,
   claim, or execute a transition.
 - Remove `awaitAdmission` and its waiter ordering. Return `CapacityWait`, then
   signal rederivation after release, cancellation, or fresh non-consumption.
 - Before Dalph asks the tracker, Git, executor, or task-work provider to change
-  state, the activation coordinator may cancel the exact pre-intent reservation
-  and derive again. After intent, it retains the exact `OperationId` and uses
-  the operation's fresh-result-check and reconciliation rules.
-- Execute one exact selected workflow operation, record its returned result,
-  and read current reconstructed state before selecting another operation.
+  state, the activation coordinator may make the exact pre-intent reserved
+  task-admission position available and derive again. After intent, it retains
+  the exact `OperationId` and uses the operation's fresh-result-check and
+  reconciliation rules.
+- Serially select and admit one transition, establish its scoped
+  owned-operation runner, and read current reconstructed state before selecting
+  another transition without waiting for the earlier runner's final result.
+  Each runner executes one exact workflow operation, records its returned
+  result, releases ownership, and signals the coordinator.
 - Use one workflow algebra and injected interpreter in dry-run, live-fake,
   deterministic-test, and production compositions.
 - On restart, honor current configured capacity without preempting fresh
@@ -49,11 +57,23 @@ create a third model. Update the closed action map, versioned projection,
 Quint-connect driver, model gate, and reconstruction coverage inventory in the
 same dependency path.
 
+If state explosion requires focused exhaustive profiles, every positive model
+action and compared field must remain executable through the same closed
+Quint-connect adapter and production projection. Record explored states and
+wall time, retain sampled full-composition traces, and never make a profile
+tractable by weakening its invariant or assigning expected implementation
+state.
+
 Required test lanes:
 
 - two concurrent triggers for one exact transition;
+- capacity-N serialized admission with overlapping owned-operation runners;
 - interruption before ownership, after ownership/before intent, and after
   intent;
+- coordinator-only crash while provider workers survive, coordinator/worker
+  co-failure, and mixed survival; the deterministic harness must control these
+  as separate process-lifetime boundaries even though production deployment is
+  local;
 - result recording, exact release, and rederivation;
 - delayed A-17 release after A-18 occupies capacity;
 - in-memory and closed/reopened SQLite `8 → 2`, `1 → 2`, and `2 → 1`;
