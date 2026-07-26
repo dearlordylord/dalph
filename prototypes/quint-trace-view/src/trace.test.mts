@@ -66,6 +66,20 @@ const selector = (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+const reverseItfCollections = (value: unknown): void => {
+  if (Array.isArray(value)) {
+    value.forEach(reverseItfCollections)
+    return
+  }
+  if (!isRecord(value)) return
+  for (const [key, entry] of Object.entries(value)) {
+    if ((key === "#set" || key === "#map") && Array.isArray(entry)) {
+      entry.reverse()
+    }
+    reverseItfCollections(entry)
+  }
+}
+
 const mutableSelector = (
   state: Readonly<Record<string, unknown>>
 ): Record<string, unknown> => {
@@ -204,6 +218,41 @@ describe("ITF to normalized frame boundary", () => {
         .map((edge) => edge.action)
     ).toEqual(["reconstructionStep", "weakenedCapacityStep(task 0)"])
     expect(dag.edges.some((edge) => edge.traceKinds.length > 1)).toBe(true)
+  })
+
+  it("treats ITF set and map serialization order as semantically irrelevant", () => {
+    const sampled = decode(raw)
+    const reorderedRaw = clone(raw)
+    reverseItfCollections(reorderedRaw)
+    const reordered = decode(reorderedRaw)
+
+    const dag = buildObservedStateDag([sampled, reordered])
+
+    expect(dag.nodes).toHaveLength(sampled.frames.length)
+    expect(
+      dag.nodes.every((node) => node.occurrences.length === 2)
+    ).toBe(true)
+  })
+
+  it("keeps an equal model state at a later depth as a distinct DAG node", () => {
+    const sampled = decode(raw)
+    const first = sampled.frames[0]
+    const second = sampled.frames[1]
+    if (first === undefined || second === undefined) {
+      throw new Error("sampled fixture must have two frames")
+    }
+    const repeatedState = {
+      ...sampled,
+      frames: [
+        first,
+        { ...second, rawItfState: first.rawItfState }
+      ]
+    }
+
+    const dag = buildObservedStateDag([repeatedState])
+
+    expect(dag.nodes).toHaveLength(2)
+    expect(dag.nodes.map(({ depth }) => depth)).toEqual([0, 1])
   })
 
   it("renders one interactive observed DAG and no linear path visual", () => {

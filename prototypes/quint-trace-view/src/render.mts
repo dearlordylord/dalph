@@ -46,6 +46,20 @@ const canonicalJson = (value: unknown): string => {
     return `[${value.map(canonicalJson).join(",")}]`
   }
   if (typeof value === "object" && value !== null) {
+    if (
+      "#set" in value
+      && Array.isArray(value["#set"])
+    ) {
+      const entries = value["#set"].map(canonicalJson).sort()
+      return `{"#set":[${entries.join(",")}]}`
+    }
+    if (
+      "#map" in value
+      && Array.isArray(value["#map"])
+    ) {
+      const entries = value["#map"].map(canonicalJson).sort()
+      return `{"#map":[${entries.join(",")}]}`
+    }
     return `{${Object.entries(value)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
@@ -54,13 +68,13 @@ const canonicalJson = (value: unknown): string => {
   return JSON.stringify(value)
 }
 
-const authoritativeModelState = (
+const retainedQuintModelState = (
   frame: NormalizedFrame
 ): unknown => {
   const entry = Object.entries(frame.rawItfState)
     .find(([key]) => key.endsWith("::state"))
   if (entry === undefined) {
-    throw new Error(`${frame.position} has no authoritative Quint model state`)
+    throw new Error(`${frame.position} has no retained Quint model state`)
   }
   return entry[1]
 }
@@ -117,7 +131,7 @@ export const buildObservedStateDag = (
 
   for (const trace of traces) {
     const traceNodes = trace.frames.map((frame, index) => {
-      const identity = `${frame.step}:${canonicalJson(authoritativeModelState(frame))}`
+      const identity = `${frame.step}:${canonicalJson(retainedQuintModelState(frame))}`
       let node = nodeByIdentity.get(identity)
       if (node === undefined) {
         node = {
@@ -343,7 +357,8 @@ export const renderObservedDagHtml = (
     .status { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
     .badge { background: #623c12; border: 1px solid #c8852f; border-radius: 999px; color: #ffd899; font-weight: 700; padding: 4px 10px; }
     .provenance { color: #91a2b3; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-    .workspace { display: grid; gap: 18px; grid-template-columns: minmax(0, 3fr) minmax(320px, 1fr); margin: 20px 0; }
+    .workspace { display: grid; gap: 18px; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); margin: 20px 0; }
+    .side-column { display: grid; gap: 18px; min-width: 0; }
     section { background: #171f27; border: 1px solid #34414d; border-radius: 10px; padding: 16px; overflow: auto; }
     .dag-scroll { min-height: 430px; overflow: auto; }
     .dag .edge path { fill: none; stroke: #77899a; stroke-width: 2; }
@@ -383,15 +398,17 @@ export const renderObservedDagHtml = (
       <h2>Branching and reconvergence</h2>
       ${renderDagSvg(dag)}
     </section>
-    <section id="inspector">
-      <h2>Selected state</h2>
-      <p>Click a node to inspect its normalized values and raw ITF state.</p>
-    </section>
+    <div class="side-column">
+      <section>
+        <h2>Frame tables</h2>
+        ${traces.map((trace, index) => `<details class="trace"${index === 0 ? " open" : ""}><summary>${trace.provenance.traceKind} · ${trace.frames.length} frames</summary>${renderHtmlTable(trace)}</details>`).join("\n")}
+      </section>
+      <section id="inspector">
+        <h2>Selected state</h2>
+        <p>Click a node to inspect its normalized values and raw ITF state.</p>
+      </section>
+    </div>
   </div>
-  <section>
-    <h2>Frame tables</h2>
-    ${traces.map((trace, index) => `<details class="trace"${index === 0 ? " open" : ""}><summary>${trace.provenance.traceKind} · ${trace.frames.length} frames</summary>${renderHtmlTable(trace)}</details>`).join("\n")}
-  </section>
   <script>
     const nodes = ${browserDagData(dag)};
     const inspector = document.querySelector("#inspector");

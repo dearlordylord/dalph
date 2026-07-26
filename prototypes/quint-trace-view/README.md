@@ -4,6 +4,8 @@ This isolated prototype combines retained frontier-recovery Quint traces into
 one interactive observed state DAG. Equal exact model states at the same
 exploration depth are merged, so shared prefixes and reconvergence are visible.
 Selecting a node reveals its normalized decision fields and raw ITF state.
+ITF set and map entries are canonicalized as unordered values before equality;
+tuple and sequence order remains significant.
 
 **This DAG is sampled and incomplete.** Its edges are transitions observed in
 the three retained traces. An absent edge is unknown, not disabled. It is not
@@ -138,7 +140,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       17 passed (17)
+Tests       19 passed (19)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -167,7 +169,7 @@ Fail-closed cases reject:
 ## Performance observations
 
 On the retained 218,756 bytes of raw ITF (13 frames total), the latest warm
-`pnpm check` completed in 3.3 seconds: Vitest reported 486 ms, with the
+`pnpm check` completed in 2.5 seconds: Vitest reported 398 ms, with the
 remaining time covering TypeScript compilation plus all eight presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
