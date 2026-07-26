@@ -638,8 +638,8 @@ U1–U8:
    wake-condition identities, through the production selector/controller and
    retains the capacity-two comparison.
 2. **Model projection scope:** `computeSelectorProjection` considers only model
-   tasks A and C, has empty explanations/occupancy, and equates frontier,
-   admission, and reservations at capacity two
+   tasks A and C, exports only capacity-wait explanations, has empty occupancy,
+   and equates frontier, admission, and reservations at capacity two
    ([projection](../specs/frontierRecovery.qnt#L288-L330)). This is adequate only
    for the declared reconstruction slice, not a complete scheduler refinement.
 3. **Native dependency drift (closed external action):** GitHub's native edges
