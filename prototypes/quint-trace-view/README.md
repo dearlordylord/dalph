@@ -1,11 +1,11 @@
 # Quint trace explanation view — throwaway prototype
 
 This isolated prototype combines six paths sampled from the real
-`frontierRecovery.step` action into one interactive observed state graph. The
-paths form three concrete diamonds: independent actions execute in opposite
-orders and reach the same full Quint state. One exact model state is one node
-regardless of where it occurs in a trace. Selecting a node reveals task
-boundary, responsibility, isolation, pause, admission, and the raw ITF state.
+`frontierRecovery.reconciliationProfileStep` action into one interactive
+observed state graph. Task A begins `Outstanding`. Three concrete diamonds
+show Task C becoming `Outstanding` before or after A loses authority; each pair
+reconverges, rereads A, and isolates only A. One exact model state is one node
+regardless of where it occurs in a trace.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
@@ -52,12 +52,12 @@ step, seed, and trace kind.
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
 | Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action makes A and C carry outstanding workflow responsibility at capacity one; Quint records status `violation`. |
-| Advance A, then unreadable A | `fixtures/explore-advance-unreadable-a.itf.json` | 3 | First half of one real confluence diamond. |
-| Unreadable A, then advance A | `fixtures/explore-unreadable-advance-a.itf.json` | 3 | Reaches the same state in the opposite order. |
-| Pause B, then unreadable B | `fixtures/explore-pause-unreadable-b.itf.json` | 3 | First half of a task-control/authority diamond. |
-| Unreadable B, then pause B | `fixtures/explore-unreadable-pause-b.itf.json` | 3 | Reaches the same state in the opposite order. |
-| Conflict C, then conflict A | `fixtures/explore-conflict-c-then-a.itf.json` | 3 | First half of a branch-local authority diamond. |
-| Conflict A, then conflict C | `fixtures/explore-conflict-a-then-c.itf.json` | 3 | Reaches the same state in the opposite order. |
+| Claim C, then A loses claim | `fixtures/explore-claim-c-then-claim-loss.itf.json` | 5 | C becomes outstanding before A loses its claim; A is then isolated. |
+| A loses claim, then claim C | `fixtures/explore-claim-loss-then-claim-c.itf.json` | 5 | Same final state with the independent claim after A's authority change. |
+| Claim C, then rewrite A | `fixtures/explore-claim-c-then-git-rewrite.itf.json` | 5 | C becomes outstanding before A's Git target changes; A is then isolated. |
+| Rewrite A, then claim C | `fixtures/explore-git-rewrite-then-claim-c.itf.json` | 5 | Same final state with the independent claim after the rewrite. |
+| Claim C, then conflict A | `fixtures/explore-claim-c-then-authority-conflict.itf.json` | 5 | C becomes outstanding before A's authority conflicts; A is then isolated. |
+| Conflict A, then claim C | `fixtures/explore-authority-conflict-then-claim-c.itf.json` | 5 | Same final state with the independent claim after the conflict. |
 | Crash after intent | `fixtures/story-crash-after-intent.itf.json` | 6 | Existing test proves restart requires a fresh task read before retry. |
 | Pause with independent progress | `fixtures/story-pause-independent.itf.json` | 6 | Existing test pauses A while C remains admitted and records responsibility. |
 | Claim loss | `fixtures/story-claim-loss.itf.json` | 9 | Existing test isolates A after claim loss while C progresses. |
@@ -94,18 +94,18 @@ SHA-256 was
 The exact `specs/frontierRecovery_test.qnt` SHA-256 for the story traces was
 `abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185`.
 
-The six displayed paths were retained from this 500-path sample using the
+The six displayed paths were retained from this 1,500-path sample using the
 manifest names in the evidence table:
 
 ```sh
 pnpm quint run specs/frontierRecovery.qnt \
   --main frontierRecoveryCapacityTwo \
-  --init init \
-  --step step \
-  --max-steps 2 \
-  --max-samples 500 \
-  --n-traces 500 \
-  --seed 131132 \
+  --init initReconciliationProfile \
+  --step reconciliationProfileStep \
+  --max-steps 4 \
+  --max-samples 1500 \
+  --n-traces 1500 \
+  --seed 131136 \
   --mbt \
   --backend typescript \
   --out-itf "explore_{seq}.json" \
@@ -234,8 +234,8 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 1,158,021 bytes of raw ITF (69 frames total), the latest warm
-`pnpm check` completed in 3.0 seconds: Vitest reported 591 ms, with the
+On the retained 1,357,366 bytes of raw ITF (81 frames total), the latest warm
+`pnpm check` completed in 2.9 seconds: Vitest reported 575 ms, with the
 remaining time covering TypeScript compilation plus all thirty presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.

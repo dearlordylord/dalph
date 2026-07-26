@@ -286,12 +286,12 @@ describe("ITF to normalized frame boundary", () => {
 
   it("shows real nondeterministic paths reconverging by exact state", () => {
     const storyNames = [
-      "explore-advance-unreadable-a",
-      "explore-unreadable-advance-a",
-      "explore-pause-unreadable-b",
-      "explore-unreadable-pause-b",
-      "explore-conflict-c-then-a",
-      "explore-conflict-a-then-c"
+      "explore-claim-c-then-claim-loss",
+      "explore-claim-loss-then-claim-c",
+      "explore-claim-c-then-git-rewrite",
+      "explore-git-rewrite-then-claim-c",
+      "explore-claim-c-then-authority-conflict",
+      "explore-authority-conflict-then-claim-c"
     ]
     const stories = storyNames.map((name) => {
       const storyManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
@@ -314,7 +314,7 @@ describe("ITF to normalized frame boundary", () => {
       ).size
     )
 
-    expect(dag.nodes).toHaveLength(10)
+    expect(dag.nodes).toHaveLength(14)
     expect(predecessorCounts.filter((count) => count === 2)).toHaveLength(3)
     expect(Math.max(...predecessorCounts)).toBe(2)
   })

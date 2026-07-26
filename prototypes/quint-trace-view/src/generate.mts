@@ -25,12 +25,12 @@ const manifests = [
   "story-claim-loss",
   "story-git-rewrite",
   "story-external-completion",
-  "explore-advance-unreadable-a",
-  "explore-unreadable-advance-a",
-  "explore-pause-unreadable-b",
-  "explore-unreadable-pause-b",
-  "explore-conflict-c-then-a",
-  "explore-conflict-a-then-c"
+  "explore-claim-c-then-claim-loss",
+  "explore-claim-loss-then-claim-c",
+  "explore-claim-c-then-git-rewrite",
+  "explore-git-rewrite-then-claim-c",
+  "explore-claim-c-then-authority-conflict",
+  "explore-authority-conflict-then-claim-c"
 ]
 await mkdir(resolve(packageRoot, "artifacts"), { recursive: true })
 

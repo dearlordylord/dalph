@@ -48,18 +48,18 @@ const taskSet = (modelTaskIds: ReadonlyArray<string>): string =>
   `{${modelTaskIds.map(taskName).join(", ") || "none"}}`
 
 const storyName = (traceKind: TraceKind): string => {
-  if (traceKind === "explore-advance-unreadable-a")
-    return "Advance A → unreadable A"
-  if (traceKind === "explore-unreadable-advance-a")
-    return "Unreadable A → advance A"
-  if (traceKind === "explore-pause-unreadable-b")
-    return "Pause B → unreadable B"
-  if (traceKind === "explore-unreadable-pause-b")
-    return "Unreadable B → pause B"
-  if (traceKind === "explore-conflict-c-then-a")
-    return "Conflict C → conflict A"
-  if (traceKind === "explore-conflict-a-then-c")
-    return "Conflict A → conflict C"
+  if (traceKind === "explore-claim-c-then-claim-loss")
+    return "Claim C → A loses claim"
+  if (traceKind === "explore-claim-loss-then-claim-c")
+    return "A loses claim → claim C"
+  if (traceKind === "explore-claim-c-then-git-rewrite")
+    return "Claim C → rewrite A"
+  if (traceKind === "explore-git-rewrite-then-claim-c")
+    return "Rewrite A → claim C"
+  if (traceKind === "explore-claim-c-then-authority-conflict")
+    return "Claim C → conflict A"
+  if (traceKind === "explore-authority-conflict-then-claim-c")
+    return "Conflict A → claim C"
   if (traceKind === "story-crash-after-intent") return "Crash after intent"
   if (traceKind === "story-pause-independent")
     return "Pause A; C keeps moving"
@@ -74,7 +74,7 @@ const storyName = (traceKind: TraceKind): string => {
 
 const storySource = (traceKind: TraceKind): string => {
   if (traceKind.startsWith("explore-"))
-    return "frontierRecovery.qnt:1674 · sampled step"
+    return "frontierRecovery.qnt:1589 · sampled reconciliation profile"
   if (traceKind === "story-crash-after-intent")
     return "frontierRecovery_test.qnt:78"
   if (traceKind === "story-pause-independent")
@@ -92,21 +92,21 @@ const actionName = (action: string): string => {
   const names: Readonly<Record<string, string>> = {
     advanceTargetCompatibly: "advance target compatibly",
     applyAndRecordCurrentBoundary: "apply claim request",
-    authorityBecomesConflicting: "mark authority conflicting",
+    authorityBecomesConflicting: "mark Task A authority conflicting",
     authorityBecomesUnreadable: "mark authority unreadable",
-    classifyAuthorityConstraint: "classify authority constraint",
-    commitFirstIntent: "record first intent",
+    classifyAuthorityConstraint: "isolate Task A",
+    commitFirstIntent: "claim Task C",
     completeClaim: "complete claim protocol",
     crash: "coordinator crashes",
     externallyCompleteTask: "tracker completes task",
-    loseClaim: "tracker claim disappears",
-    observeTask: "reread task authority",
+    loseClaim: "Task A claim disappears",
+    observeTask: "reread Task A authority",
     recordBoundaryOutcome: "record observed outcome",
     requestApplies: "retry request applies",
     requestTaskPause: "pause task",
     requestTaskResume: "resume task",
     restart: "coordinator restarts",
-    rewriteTarget: "Git target is rewritten",
+    rewriteTarget: "rewrite Task A target",
     settleExternalCompletion: "settle external completion"
   }
   const picked = /^(.*)\(task ([0-3])\)$/.exec(action)
@@ -403,7 +403,7 @@ const predecessorCount = (
   ).size
 
 const renderDagSvg = (dag: ObservedStateDag): string => {
-  const nodeWidth = 280
+  const nodeWidth = 390
   const nodeHeight = 150
   const xGap = 190
   const yGap = 90
@@ -470,7 +470,7 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     const taskSummary = (
       task: NormalizedFrame["taskStates"][number]
     ): string =>
-      `${taskName(task.modelTaskId)} · ${task.readability} r${task.authorityRevision} · ${task.paused ? "paused" : "active"} · ${task.responsibility}`
+      `${taskName(task.modelTaskId)} · ${task.readability} r${task.authorityRevision} · ${task.paused ? "paused" : "active"} · ${task.responsibility}${task.isolation === "NotIsolated" ? "" : ` · ${task.isolation}`}`
     const observedStories = [
       ...new Set(node.occurrences.map(({ traceKind }) => traceKind))
     ]
@@ -596,7 +596,7 @@ export const renderObservedDagHtml = (
     <span class="badge">Observed paths · not exhaustive</span>
     <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${reconvergenceCount} states with multiple predecessors</span>
   </div>
-  <p>These paths were sampled from the real nondeterministic <code>step</code> action in <code>specs/frontierRecovery.qnt</code>. Each gold node is the same full Quint state reached from two distinct predecessor states by applying independent actions in opposite orders.</p>
+  <p>These paths were sampled from the real nondeterministic <code>reconciliationProfileStep</code> action in <code>specs/frontierRecovery.qnt</code>. Task A starts <code>Outstanding</code>; Task C can be claimed before or after A loses authority. Each pair reconverges, rereads A, then isolates only A while C remains <code>Outstanding</code>.</p>
   <p>Equal full Quint model states are one node, regardless of trace position. An absent edge is unknown, not disabled.</p>
   <p><strong>Reading admission:</strong> <code>{A, C}</code> means Tasks A and C are admitted; it is not a numeric count. These are executable Quint-model traces from checked-in code, not fabricated UI fixtures and not production TypeScript runtime logs.</p>
   <nav class="story-filter" aria-label="Highlight one real acceptance story">
