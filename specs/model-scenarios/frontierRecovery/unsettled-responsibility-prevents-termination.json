@@ -11,8 +11,8 @@
     },
     "capacityProfiles": [1, 2],
     "coverage": ["scenario-17"],
-    "modelBlobSha": "0dec48bd6b9ec2fa81e592eaf7b613ed362fd04e",
-    "modelCommit": "e7c6e27e6",
+    "modelBlobSha": "bb2583c8e740c0b34862a247fb20f7a8759bbf04",
+    "modelCommit": "214a8fbab",
     "profile": "completeProtocolKeepsFinalitiesDistinctTest",
     "seed": null,
     "toolVersions": {
