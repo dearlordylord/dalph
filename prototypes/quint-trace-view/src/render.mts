@@ -90,9 +90,50 @@ const escapeHtml = (value: string): string =>
     .replaceAll(">", "&gt;")
     .replaceAll("\"", "&quot;")
 
+const htmlCode = (value: unknown): string =>
+  `<code>${escapeHtml(
+    typeof value === "string" ? value : JSON.stringify(value)
+  )}</code>`
+
+const renderHtmlTable = (trace: NormalizedTrace): string => {
+  const headings = [
+    "Position",
+    "Action / picked task",
+    "Coordinator",
+    "Capacity",
+    "Frontier",
+    "Admission",
+    "Occupied",
+    "Reserved",
+    "Explanations",
+    "Comparison"
+  ]
+  const rows = trace.frames.map((frame) => {
+    const comparison = frame.comparison.status === "Mismatch"
+      ? `Mismatch: ${frame.comparison.firstDivergentField}`
+      : frame.comparison.status
+    const values = [
+      frame.position,
+      `${frame.action}${frame.pickedModelTaskId === undefined ? "" : ` / ${frame.pickedModelTaskId}`}`,
+      frame.coordinatorStatus,
+      frame.capacity,
+      frame.frontier,
+      frame.admission,
+      frame.occupiedModelTaskIds,
+      frame.reservedModelTaskIds,
+      frame.explanations,
+      comparison
+    ]
+    return `<tr>${values.map((value) => `<td>${htmlCode(value)}</td>`).join("")}</tr>`
+  })
+  return `<div class="table-wrap"><table>
+  <thead><tr>${headings.map((heading) => `<th>${heading}</th>`).join("")}</tr></thead>
+  <tbody>${rows.join("\n")}</tbody>
+</table></div>`
+}
+
 export const renderSideBySideHtml = (
   trace: NormalizedTrace,
-  table: string,
   svg: string
 ): string => `<!doctype html>
 <html lang="en">
@@ -106,6 +147,11 @@ export const renderSideBySideHtml = (
     .views { display: grid; gap: 20px; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); }
     section { background: #182028; border: 1px solid #34414d; border-radius: 10px; padding: 16px; overflow: auto; }
     pre { white-space: pre-wrap; }
+    .table-wrap { max-height: 70vh; overflow: auto; }
+    table { border-collapse: collapse; min-width: 1500px; width: 100%; }
+    th, td { border: 1px solid #465564; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #25313c; position: sticky; top: 0; z-index: 1; }
+    td code { white-space: pre-wrap; word-break: break-word; }
     details { border-top: 1px solid #34414d; margin-top: 12px; padding-top: 12px; }
     @media (max-width: 1000px) { .views { grid-template-columns: 1fr; } }
   </style>
@@ -115,7 +161,7 @@ export const renderSideBySideHtml = (
   <p>This is one ${trace.provenance.traceKind} path, not the state machine and not proof of correctness.</p>
   <p class="provenance">${escapeHtml(provenanceText(trace.provenance))}</p>
   <div class="views">
-    <section><h2>Frame table</h2><pre>${escapeHtml(table)}</pre></section>
+    <section><h2>Frame table</h2>${renderHtmlTable(trace)}</section>
     <section><h2>Generated path visual</h2>${svg}</section>
   </div>
   <section>

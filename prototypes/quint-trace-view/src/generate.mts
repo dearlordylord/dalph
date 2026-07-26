@@ -68,7 +68,7 @@ for (const name of manifests) {
     writeFile(`${artifactRoot}.visual.svg`, svg),
     writeFile(
       `${artifactRoot}.side-by-side.html`,
-      renderSideBySideHtml(trace, table, svg)
+      renderSideBySideHtml(trace, svg)
     )
   ])
   process.stdout.write(

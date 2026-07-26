@@ -19,6 +19,9 @@ import {
   SelectorProjectionWire,
   TraceDecodeError
 } from "./trace.mjs"
+import {
+  renderSideBySideHtml
+} from "./render.mjs"
 
 const fixtureRoot = resolve(import.meta.dirname, "..", "fixtures")
 const readJson = (path: string): unknown =>
@@ -157,6 +160,18 @@ const expectReason = (
 }
 
 describe("ITF to normalized frame boundary", () => {
+  it("renders the frame table as semantic HTML", () => {
+    const trace = decode(raw)
+    const html = renderSideBySideHtml(
+      trace,
+      "<svg></svg>"
+    )
+    expect(html).toContain("<table>")
+    expect(html).toContain("<th>Position</th>")
+    expect(html).toContain("<td><code>S0</code></td>")
+    expect(html).not.toContain("<section><h2>Frame table</h2><pre>")
+  })
+
   it("preserves every displayed value from every sampled ITF state", () => {
     const trace = decode(raw)
     trace.frames.forEach((frame, index) => {

@@ -25,7 +25,7 @@ pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs fourteen decoder/equality/drift/fail-closed tests, compiles the
+`pnpm check` runs fifteen decoder/equality/drift/fail-closed tests, compiles the
 prototype, and regenerates byte-identical normalized, table, Mermaid, SVG, and
 side-by-side HTML artifacts.
 
@@ -143,7 +143,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       14 passed (14)
+Tests       15 passed (15)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -171,10 +171,10 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 218,756 bytes of raw ITF (13 frames total), `pnpm check`
-completed in 8.16 seconds cold and 7.06 seconds warm: Vitest reported 1.22
-seconds and 881 ms respectively, with the remaining time covering TypeScript
-compilation plus all 15 presentation artifacts.
+On the retained 218,756 bytes of raw ITF (13 frames total), the latest warm
+`pnpm check` completed in 2.86 seconds: Vitest reported 586 ms, with the
+remaining time covering TypeScript compilation plus all 15 presentation
+artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
 The fixture sizes are 50,548 bytes sampled, 117,454 bytes restart, and 50,754
