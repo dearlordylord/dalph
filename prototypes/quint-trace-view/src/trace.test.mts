@@ -192,7 +192,7 @@ describe("ITF to normalized frame boundary", () => {
     expect(html).not.toContain("<section><h2>Frame table</h2><pre>")
   })
 
-  it("merges identical model states at the same depth into a branching DAG", () => {
+  it("merges identical model states into a branching graph", () => {
     const sampled = decode(raw)
     const restartManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
       readJson(resolve(fixtureRoot, "restart.manifest.json"))
@@ -220,7 +220,9 @@ describe("ITF to normalized frame boundary", () => {
         + restart.frames.length
         + counterexample.frames.length
     )
-    expect(dag.nodes.filter((node) => node.depth === 0)).toHaveLength(1)
+    expect(
+      dag.nodes.filter((node) => node.firstSeenStep === 0)
+    ).toHaveLength(1)
     expect(
       dag.edges.filter((edge) => edge.source === dag.nodes[0]?.id)
         .map((edge) => edge.action)
@@ -234,15 +236,19 @@ describe("ITF to normalized frame boundary", () => {
     reverseItfCollections(reorderedRaw)
     const reordered = decode(reorderedRaw)
 
-    const dag = buildObservedStateDag([sampled, reordered])
+    const singleGraph = buildObservedStateDag([sampled])
+    const graph = buildObservedStateDag([sampled, reordered])
 
-    expect(dag.nodes).toHaveLength(sampled.frames.length)
+    expect(graph.nodes).toHaveLength(singleGraph.nodes.length)
     expect(
-      dag.nodes.every((node) => node.occurrences.length === 2)
-    ).toBe(true)
+      graph.nodes.reduce(
+        (total, node) => total + node.occurrences.length,
+        0
+      )
+    ).toBe(sampled.frames.length * 2)
   })
 
-  it("keeps an equal model state at a later depth as a distinct DAG node", () => {
+  it("uses one node for an equal model state at a later trace position", () => {
     const sampled = decode(raw)
     const first = sampled.frames[0]
     const second = sampled.frames[1]
@@ -259,15 +265,18 @@ describe("ITF to normalized frame boundary", () => {
 
     const dag = buildObservedStateDag([repeatedState])
 
-    expect(dag.nodes).toHaveLength(2)
-    expect(dag.nodes.map(({ depth }) => depth)).toEqual([0, 1])
+    expect(dag.nodes).toHaveLength(1)
+    expect(dag.nodes[0]?.occurrences).toHaveLength(2)
+    expect(dag.edges).toMatchObject([
+      { source: "N0", target: "N0" }
+    ])
   })
 
-  it("renders one interactive observed DAG and no linear path visual", () => {
+  it("renders one interactive observed graph and no linear path visual", () => {
     const trace = decode(raw)
     const html = renderObservedDagHtml([trace])
 
-    expect(html).toContain("<h1>Observed Quint state DAG</h1>")
+    expect(html).toContain("<h1>Observed Quint state graph</h1>")
     expect(html).toContain("Observed paths · not exhaustive")
     expect(html).toContain('data-node-id="N0"')
     expect(html).toContain("addEventListener")
@@ -296,7 +305,7 @@ describe("ITF to normalized frame boundary", () => {
     })
 
     const dag = buildObservedStateDag(stories)
-    const initial = dag.nodes.find(({ depth }) => depth === 0)
+    const initial = dag.nodes.find(({ firstSeenStep }) => firstSeenStep === 0)
     const initialActions = dag.edges
       .filter(({ source }) => source === initial?.id)
       .map(({ action }) => action)

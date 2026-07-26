@@ -202,7 +202,7 @@ export interface ObservedStateOccurrence {
 }
 
 export interface ObservedStateNode {
-  readonly depth: number
+  readonly firstSeenStep: number
   readonly id: string
   readonly occurrences: ReadonlyArray<ObservedStateOccurrence>
   readonly representative: NormalizedFrame
@@ -224,15 +224,15 @@ export interface ObservedStateDag {
 }
 
 /**
- * Builds the bounded unfolding observed in retained traces. State equality is
- * exact Quint model-state equality at the same exploration depth. Depth keeps
- * the artifact acyclic; this does not compute enabled or legal transitions.
+ * Builds the observed state graph from retained traces. One exact Quint model
+ * state has one node across every trace position; repeated states therefore
+ * expose reconvergence, back edges, and self-loops instead of an unfolding.
  */
 export const buildObservedStateDag = (
   traces: ReadonlyArray<NormalizedTrace>
 ): ObservedStateDag => {
   const mutableNodes: Array<{
-    depth: number
+    firstSeenStep: number
     id: string
     occurrences: Array<ObservedStateOccurrence>
     representative: NormalizedFrame
@@ -250,11 +250,11 @@ export const buildObservedStateDag = (
 
   for (const trace of traces) {
     const traceNodes = trace.frames.map((frame, index) => {
-      const identity = `${frame.step}:${canonicalJson(retainedQuintModelState(frame))}`
+      const identity = canonicalJson(retainedQuintModelState(frame))
       let node = nodeByIdentity.get(identity)
       if (node === undefined) {
         node = {
-          depth: frame.step,
+          firstSeenStep: frame.step,
           id: `N${mutableNodes.length}`,
           occurrences: [],
           representative: frame,
@@ -262,6 +262,8 @@ export const buildObservedStateDag = (
         }
         mutableNodes.push(node)
         nodeByIdentity.set(identity, node)
+      } else {
+        node.firstSeenStep = Math.min(node.firstSeenStep, frame.step)
       }
       node.occurrences.push({
         frame,
@@ -376,7 +378,10 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
   const padding = 48
   const levels = new Map<number, ReadonlyArray<ObservedStateNode>>()
   for (const node of dag.nodes) {
-    levels.set(node.depth, [...(levels.get(node.depth) ?? []), node])
+    levels.set(
+      node.firstSeenStep,
+      [...(levels.get(node.firstSeenStep) ?? []), node]
+    )
   }
   const positioned: Array<PositionedNode> = []
   for (const [depth, nodes] of [...levels.entries()].sort(([a], [b]) => a - b)) {
@@ -389,7 +394,7 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     })
   }
   const byId = new Map(positioned.map((entry) => [entry.node.id, entry]))
-  const maxDepth = Math.max(0, ...dag.nodes.map((node) => node.depth))
+  const maxDepth = Math.max(0, ...dag.nodes.map((node) => node.firstSeenStep))
   const maxLevelSize = Math.max(
     1,
     ...[...levels.values()].map((nodes) => nodes.length)
@@ -443,7 +448,7 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     ]
     return `<g class="node${node.terminalTraceKinds.includes("counterexample") ? " violation" : ""}" data-node-id="${node.id}" data-stories="${escapeHtml(observedStories.join(" "))}" role="button" tabindex="0" transform="translate(${x} ${y})">
       <rect width="${nodeWidth}" height="${nodeHeight}" rx="10" />
-      <text x="14" y="24" class="node-title">${node.id} · depth ${node.depth}</text>
+      <text x="14" y="24" class="node-title">${node.id} · first seen S${node.firstSeenStep}</text>
       <text x="14" y="45">${frame.coordinatorStatus} · admitted tasks ${escapeHtml(taskSet(frame.admission.map(({ modelTaskId }) => modelTaskId)))}</text>
       <text x="14" y="66">${escapeHtml(taskSummary("A", taskA))}</text>
       <text x="14" y="86">${escapeHtml(taskSummary("C", taskC))}</text>
@@ -451,7 +456,7 @@ const renderDagSvg = (dag: ObservedStateDag): string => {
     </g>`
   }).join("\n")
 
-  return `<div class="dag-scroll"><svg class="dag" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-label="Observed Quint state DAG">
+  return `<div class="dag-scroll"><svg class="dag" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-label="Observed Quint state graph">
     <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
     ${edges}
     ${nodes}
@@ -462,7 +467,7 @@ const browserDagData = (dag: ObservedStateDag): string =>
   JSON.stringify(Object.fromEntries(dag.nodes.map((node) => [
     node.id,
     {
-      depth: node.depth,
+      firstSeenStep: node.firstSeenStep,
       incoming: dag.edges
         .filter(({ target }) => target === node.id)
         .map(({ action, changes }) => ({
@@ -501,7 +506,7 @@ export const renderObservedDagHtml = (
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Observed Quint state DAG</title>
+  <title>Observed Quint state graph</title>
   <style>
     :root { color-scheme: dark; }
     body { background: #0d1217; color: #e7edf3; font: 15px/1.45 system-ui, sans-serif; margin: 0; padding: 24px; }
@@ -544,12 +549,12 @@ export const renderObservedDagHtml = (
   </style>
 </head>
 <body>
-  <h1>Observed Quint state DAG</h1>
+  <h1>Observed Quint state graph</h1>
   <div class="status">
     <span class="badge">Observed paths · not exhaustive</span>
     <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${traces.length} existing Quint acceptance tests</span>
   </div>
-  <p>Every path below was executed from a named <code>run</code> in <code>specs/frontierRecovery_test.qnt</code>. Equal Quint model states at the same depth merge. An absent edge is unknown, not disabled.</p>
+  <p>Every path below was executed from a named <code>run</code> in <code>specs/frontierRecovery_test.qnt</code>. Equal full Quint model states are one node, regardless of trace position. An absent edge is unknown, not disabled.</p>
   <p><strong>Reading admission:</strong> <code>{A, C}</code> means Tasks A and C are admitted; it is not a numeric count. These are executable Quint-model traces from checked-in code, not fabricated UI fixtures and not production TypeScript runtime logs.</p>
   <nav class="story-filter" aria-label="Highlight one real acceptance story">
     <button class="active" data-story-filter="all">All branches</button>
@@ -605,7 +610,7 @@ export const renderObservedDagHtml = (
         </tr>
       \`).join("");
       inspector.innerHTML = \`
-        <h2>\${escapeText(id)} · depth \${node.depth}</h2>
+        <h2>\${escapeText(id)} · first seen S\${node.firstSeenStep}</h2>
         <dl>
           <dt>seen in</dt><dd>\${escapeText(seenIn)}</dd>
           <dt>arrived via</dt><dd>\${incoming || "initial state"}</dd>

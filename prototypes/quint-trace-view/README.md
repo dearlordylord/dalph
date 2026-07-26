@@ -2,14 +2,14 @@
 
 This isolated prototype executes five existing acceptance tests from
 `specs/frontierRecovery_test.qnt` and combines their ITF traces into one
-interactive observed state DAG. Equal exact model states at the same
-exploration depth are merged, so shared prefixes, branches, and reconvergence
-are visible. Selecting a node reveals task boundary, responsibility, isolation,
-pause, admission, and the raw ITF state.
+interactive observed state graph. One exact model state is one node regardless
+of where it occurs in a trace, so shared prefixes, branches, reconvergence,
+and cycles remain visible. Selecting a node reveals task boundary,
+responsibility, isolation, pause, admission, and the raw ITF state.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
-**This DAG is observed and incomplete.** Its edges are transitions executed by
+**This graph is observed and incomplete.** Its edges are transitions executed by
 the five named tests. An absent edge is unknown, not disabled. It is not the
 complete state machine, model checking, MBT, or proof of correctness. The
 decoder never selects an action or computes a legal transition.
@@ -24,9 +24,9 @@ pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs the decoder/equality/drift/fail-closed and DAG tests, compiles
+`pnpm check` runs the decoder/equality/drift/fail-closed and graph tests, compiles
 the prototype, and regenerates byte-identical normalized, table, and
-interactive DAG artifacts.
+interactive graph artifacts.
 
 Pinned versions:
 
@@ -58,7 +58,7 @@ step, seed, and trace kind.
 | Git rewrite | `fixtures/story-git-rewrite.itf.json` | 9 | Existing test isolates A after incompatible target rewrite while C progresses. |
 | External completion | `fixtures/story-external-completion.itf.json` | 8 | Existing test settles A from tracker completion without a duplicate effect. |
 
-Only the five acceptance-test traces feed the interactive DAG. The earlier
+Only the five acceptance-test traces feed the interactive graph. The earlier
 sample, restart, and counterexample remain retained decoder/conformance
 evidence.
 
@@ -74,7 +74,7 @@ Generated evidence for each trace:
   retained for inspection;
 - `artifacts/*.table.md`: the complete decision-bearing frame table; and
 - `index.html` and `artifacts/observed-state-dag.html`: the same interactive
-  branching DAG, node inspector, semantic HTML frame tables, and raw ITF state.
+  branching graph, node inspector, semantic HTML frame tables, and raw ITF state.
 
 The earlier per-trace Mermaid, SVG, and side-by-side linear path artifacts were
 deleted.
@@ -273,7 +273,7 @@ implementation projection. It does not decide whether either side is correct.
 ## Adoption boundary
 
 If Dalph later adopts a trace explanation artifact, the normalized decoder,
-semantic tables, and observed DAG may be useful as test/research tooling. A
+semantic tables, and observed graph may be useful as test/research tooling. A
 durable graph must retain the sampled/incomplete label unless an authoritative
 bounded explorer supplies every successor. Keep Quint and the existing MBT
 comparison authoritative.
