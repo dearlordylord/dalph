@@ -2,12 +2,12 @@ import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
-export const frontierRecoveryReconstructionConformanceVersion = 1 as const
+// eslint-disable-next-line no-magic-numbers -- Version two adds bounded frontier and admission selection.
+export const frontierRecoveryReconstructionConformanceVersion = 2 as const
 const minimumModelIdentity = 0n
 
 /**
- * Closed M2 action inventory for the reconstructed-run slice that precedes
- * runnable-frontier derivation.
+ * Closed M2 action inventory for reconstructed-run and bounded-frontier selection.
  */
 const frontierRecoveryReconstructionActionFields = {
   init: {},

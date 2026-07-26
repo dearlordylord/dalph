@@ -26,6 +26,11 @@ import {
   ReviewFindingsHandbackRequest,
   type SealedImplementationReview
 } from "./implementation-review.js"
+import {
+  type RunnableFrontierTransition,
+  RunnableFrontierTransition as FrontierTransition
+} from "./runnable-frontier.js"
+import type { TaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { type TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import type { OperationIdAllocatorService } from "./task-work-planning.js"
@@ -43,6 +48,7 @@ import type { TraceItem, WorkflowInterpreterService } from "./workflow.js"
 
 // eslint-disable-next-line functional/no-mixed-types -- One workflow invocation carries services and immutable resume state.
 interface LiveImplementationConvergenceOptions {
+  readonly admissionController?: TaskAdmissionController
   readonly allocator: OperationIdAllocatorService
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
   readonly initialExecutionOutcome: TaskExecutionOutcome
@@ -60,6 +66,20 @@ interface LiveImplementationConvergenceOptions {
     readonly sealed: SealedImplementationEvidence
   }
 }
+
+const withTaskAdmission = <A, E, R>(
+  controller: TaskAdmissionController | undefined,
+  transition: RunnableFrontierTransition,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  controller === undefined
+    ? effect
+    : Effect.gen(function*() {
+      yield* controller.awaitAdmission(transition)
+      return yield* effect.pipe(
+        Effect.ensuring(controller.releaseReservation(transition.taskId))
+      )
+    })
 
 const priorEvidence = (
   review: SealedImplementationReview | undefined
@@ -182,7 +202,14 @@ export const runLiveImplementationConvergence = Effect.fn(
       if (!recoveringReviewOperation) {
         yield* options.emit(OperationSelected.make({ operation: actualReviewOperation }))
       }
-      const reviewResult = yield* Effect.result(options.interpreter.reviewImplementation(actualReviewOperation))
+      const reviewResult = yield* Effect.result(withTaskAdmission(
+        options.admissionController,
+        FrontierTransition.ContinueImplementationReview({
+          operationId: reviewOperationId,
+          taskId: options.task.id
+        }),
+        options.interpreter.reviewImplementation(actualReviewOperation)
+      ))
       if (reviewResult._tag === "Failure") {
         if (!(reviewResult.failure instanceof ImplementationReviewInvocationFailure)) {
           return yield* Effect.fail(reviewResult.failure)
@@ -241,7 +268,14 @@ export const runLiveImplementationConvergence = Effect.fn(
       if (!recoveringHandbackOperation) {
         yield* options.emit(OperationSelected.make({ operation: handbackOperation }))
       }
-      const handbackResult = yield* Effect.result(options.interpreter.handBackReviewFindings(handbackOperation))
+      const handbackResult = yield* Effect.result(withTaskAdmission(
+        options.admissionController,
+        FrontierTransition.ContinueReviewFindingsHandback({
+          operationId: handbackOperationId,
+          taskId: options.task.id
+        }),
+        options.interpreter.handBackReviewFindings(handbackOperation)
+      ))
       if (handbackResult._tag === "Failure") {
         if (!(handbackResult.failure instanceof ReviewFindingsHandbackFailure)) {
           return yield* Effect.fail(handbackResult.failure)
@@ -274,7 +308,14 @@ export const runLiveImplementationConvergence = Effect.fn(
     })
     yield* options.emit(OperationSelected.make({ operation: executionOperation }))
     yield* options.emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
-    const execution = yield* options.interpreter.executeTaskWork(executionOperation)
+    const execution = yield* withTaskAdmission(
+      options.admissionController,
+      FrontierTransition.ContinueTaskExecution({
+        operationId: executionOperation.request.operationId,
+        taskId: options.task.id
+      }),
+      options.interpreter.executeTaskWork(executionOperation)
+    )
     yield* options.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: execution }))
     previousReview = completedReview
     executionOutcome = execution.outcome

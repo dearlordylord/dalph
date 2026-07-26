@@ -136,19 +136,22 @@ const taskBoundaryResponsibility = (
   if (event._tag === "TaskClaimAcquisitionIntended") {
     return WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
       acquisition: event.operation.acquisition,
-      beganAt: record.position
+      beganAt: record.position,
+      taskId: event.operation.acquisition.taskId
     })
   }
   if (event._tag === "TaskWorktreeReconciliationIntended") {
     return WorkflowResponsibilityEntry.cases.TaskWorktreeResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      taskId: event.operation.plannedAttempt.taskId
     })
   }
   if (event._tag === "TaskWorkSessionEstablishmentIntentRecorded") {
     return WorkflowResponsibilityEntry.cases.TaskWorkSessionResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      taskId: event.operation.request.plannedAttempt.taskId
     })
   }
   if (
@@ -157,10 +160,24 @@ const taskBoundaryResponsibility = (
   ) {
     return WorkflowResponsibilityEntry.cases.TaskExecutionResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      taskId: event.operation.request.plannedAttempt.taskId
     })
   }
   return undefined
+}
+
+const implementationReviewPlannedAttempt = (
+  records: ReadonlyArray<JournalRecord>,
+  evidenceSealingOperationId: OperationId
+) => {
+  const evidenceIntent = records.find(({ event }) =>
+    event._tag === "ImplementationEvidenceSealingIntended"
+    && event.operation.operationId === evidenceSealingOperationId
+  )
+  return evidenceIntent?.event._tag === "ImplementationEvidenceSealingIntended"
+    ? evidenceIntent.event.operation.plannedAttempt
+    : undefined
 }
 
 const reviewBoundaryResponsibility = (
@@ -174,16 +191,24 @@ const reviewBoundaryResponsibility = (
   ) {
     return WorkflowResponsibilityEntry.cases.ImplementationEvidenceResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      taskId: event.operation.plannedAttempt.taskId
     })
   }
   if (
     event._tag === "ImplementationReviewIntended"
     && !hasOutcome(records, event.operation.request.operationId)
   ) {
+    const plannedAttempt = implementationReviewPlannedAttempt(
+      records,
+      event.operation.request.evidenceSealingOperationId
+    )
+    if (plannedAttempt === undefined) return undefined
     return WorkflowResponsibilityEntry.cases.ImplementationReviewResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      plannedAttempt,
+      taskId: plannedAttempt.taskId
     })
   }
   if (
@@ -192,7 +217,8 @@ const reviewBoundaryResponsibility = (
   ) {
     return WorkflowResponsibilityEntry.cases.ReviewFindingsHandbackResponsibility.make({
       beganAt: record.position,
-      operation: event.operation
+      operation: event.operation,
+      taskId: event.operation.request.plannedAttempt.taskId
     })
   }
   return undefined
@@ -288,6 +314,27 @@ const validateResponsibility = (
     ]
   })
 
+const validateReviewSubjects = (
+  responsibility: WorkflowResponsibilityState,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<ReconstructedManagedRunInvariantIssue> =>
+  records.flatMap(({ event, position }) => {
+    if (
+      event._tag !== "ImplementationReviewIntended"
+      || hasOutcome(records, event.operation.request.operationId)
+      || responsibility.entries.some((entry) =>
+        entry._tag === "ImplementationReviewResponsibility"
+        && entry.operation.request.operationId === event.operation.request.operationId
+      )
+    ) return []
+    return [
+      ReconstructedManagedRunInvariantIssue.cases.UnresolvedReviewSubject.make({
+        operationId: event.operation.request.operationId,
+        position
+      })
+    ]
+  })
+
 /**
  * Composes the distinct reducers only after managed-history validation has
  * accepted canonical order and causal relationships.
@@ -308,7 +355,8 @@ export const reconstructManagedRunState = (
   }
   const issues = [
     ...validateGraphKnowledge(graphKnowledge, records),
-    ...validateResponsibility(responsibility, records)
+    ...validateResponsibility(responsibility, records),
+    ...validateReviewSubjects(responsibility, records)
   ]
   if (issues.length === 0) return { _tag: "ValidReconstructedManagedRun", state }
   return {

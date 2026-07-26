@@ -1508,12 +1508,17 @@ module frontierRecovery {
     }
   }
 
-  // Executable adapter slice before runnable-frontier derivation exists in
-  // production. The deterministic first admission is the only state-changing
-  // choice in this slice; crash prefixes are exercised through both journal
-  // stores by the matching P0/P1 conformance lanes.
+  // One selector step records the canonically first admissible intent.
+  // Repeating the ordinary selector admits independent C under capacity two.
+  // The executable adapter also checks the required capacity-one profile
+  // through both journal stores.
   action reconstructionStep: bool =
-    commitFirstIntent(A)
+    if (canCommitFirstIntent(state, A))
+      state' = applyCommitFirstIntent(state, A)
+    else if (canCommitFirstIntent(state, C))
+      state' = applyCommitFirstIntent(state, C)
+    else
+      state' = state
 
   // Named bounded tracker-read profiles used by the M2 reconstruction
   // conformance adapter. Each observes a distinct model subject so the sampled

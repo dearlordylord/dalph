@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, ITFSet, ITFVariant, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import type { FrontierRecoveryReconstructionActionFields } from "./frontier-recovery-conformance.js"
 import {
@@ -75,7 +76,13 @@ type GraphProfile =
 type ReconstructionComparable =
   & Pick<
     FrontierRecoveryReconstructionProjection,
+    | "admittedModelTaskIds"
+    | "admittedTransitionTags"
+    | "admissionExplanationTags"
+    | "admissionReservedModelTaskIds"
     | "coordinatorRunning"
+    | "frontierModelTaskIds"
+    | "frontierTransitionTags"
     | "graphEvidence"
     | "knownModelTaskIds"
     | "responsibleModelTaskIds"
@@ -246,41 +253,50 @@ const exactGraphProfileMatches = (
     taskIds: allTasks
   }
   if (profile === undefined) {
-    const hasClaimIntent = responsibleModelTaskIds.length === 1
-    const acquisition = {
-      operationId: "frontier-recovery-claim-operation-1",
-      owner: "frontier-recovery-owner",
-      taskId: "frontier-recovery-task-A",
-      token: "frontier-recovery-token-0"
-    }
-    const claimRecord = {
-      event: {
-        _tag: "TaskClaimAcquisitionIntended",
-        operation: {
-          _tag: "AcquireTaskClaim",
-          acquisition,
-          predecessorOperationIds: [
-            "frontier-recovery-graph-observation-0"
-          ]
-        },
-        version: 4
-      },
-      key: "operation:frontier-recovery-claim-operation-1:intent",
-      position: 3,
-      runId
-    }
+    const claimSubjects = responsibleModelTaskIds.map((modelTask, index) => {
+      const taskName = modelTaskName(modelTask)
+      const operationIdentity = modelTask === 0n ? 1 : 3
+      const operationId = `frontier-recovery-claim-operation-${operationIdentity}`
+      const acquisition = {
+        operationId,
+        owner: "frontier-recovery-owner",
+        taskId: taskName,
+        token: `frontier-recovery-token-${modelTask}`
+      }
+      return {
+        acquisition,
+        record: {
+          event: {
+            _tag: "TaskClaimAcquisitionIntended",
+            operation: {
+              _tag: "AcquireTaskClaim",
+              acquisition,
+              predecessorOperationIds: [
+                "frontier-recovery-graph-observation-0"
+              ]
+            },
+            version: 4
+          },
+          key: `operation:${operationId}:intent`,
+          position: index + 3,
+          runId
+        }
+      }
+    })
     const expectedResponsibility = {
-      entries: hasClaimIntent
-        ? [{
-          _tag: "TaskClaimResponsibility",
-          acquisition,
-          beganAt: 3
-        }]
-        : []
+      entries: claimSubjects.map(({ acquisition }, index) => ({
+        _tag: "TaskClaimResponsibility",
+        acquisition,
+        beganAt: index + 3,
+        taskId: acquisition.taskId
+      }))
     }
     return JSON.stringify(implementation.workflowHistory)
         === JSON.stringify(
-          hasClaimIntent ? [...initialHistory, claimRecord] : initialHistory
+          [
+            ...initialHistory,
+            ...claimSubjects.map(({ record }) => record)
+          ]
         )
       && JSON.stringify(implementation.graphKnowledge)
         === JSON.stringify({ targetClosures: [observationZero] })
@@ -367,6 +383,7 @@ const reconstructionDriver = defineDriver(
     const journal = Context.get(services, JournalStore)
     const controls = Effect.runSync(
       makeFrontierRecoveryReconstructionControls({
+        capacity: TaskWorkCapacity.make(2),
         coordinatorRunning: true,
         journal
       }).pipe(Effect.orDie)
@@ -408,6 +425,7 @@ const reconstructionDriver = defineDriver(
       restart: () =>
         Effect.gen(function*() {
           const freshControls = yield* makeFrontierRecoveryReconstructionControls({
+            capacity: TaskWorkCapacity.make(2),
             coordinatorRunning: false,
             journal
           })
@@ -431,8 +449,19 @@ const decodeReconstructionModelState = (raw: unknown) =>
         state.reconstructionGraphEvidence
       )
       const graphProfile = graphProfileFrom(graphEvidence)
+      const transitionTags: ReadonlyArray<string> = [0n, 2n].map((taskId) =>
+        responsibleModelTaskIds.includes(taskId)
+          ? "CheckTaskClaim"
+          : "CommitFreshTaskClaimIntent"
+      )
       return {
+        admittedModelTaskIds: [0n, 2n],
+        admittedTransitionTags: transitionTags,
+        admissionExplanationTags: [] as ReadonlyArray<string>,
+        admissionReservedModelTaskIds: [0n, 2n],
         coordinatorRunning: state.coordinator.running,
+        frontierModelTaskIds: [0n, 2n],
+        frontierTransitionTags: transitionTags,
         graphEvidence,
         knownModelTaskIds: sortedBigInts(state.knowledge.keys()),
         pause: {
@@ -463,7 +492,7 @@ const decodeReconstructionModelState = (raw: unknown) =>
           : [
             "TrackerGraphObservationIntentRecorded",
             "TrackerGraphOutcomeObserved",
-            "TaskClaimAcquisitionIntended"
+            ...responsibleModelTaskIds.map(() => "TaskClaimAcquisitionIntended" as const)
           ]
       }
     }),
@@ -478,6 +507,18 @@ const compareReconstructionState = (
   && implementation.responsibility !== undefined
   && implementation.workflowHistory !== undefined
   && model.coordinatorRunning === implementation.coordinatorRunning
+  && model.admittedModelTaskIds.join(",")
+    === implementation.admittedModelTaskIds.join(",")
+  && model.admittedTransitionTags.join(",")
+    === implementation.admittedTransitionTags.join(",")
+  && model.admissionExplanationTags.join(",")
+    === implementation.admissionExplanationTags.join(",")
+  && model.admissionReservedModelTaskIds.join(",")
+    === implementation.admissionReservedModelTaskIds.join(",")
+  && model.frontierModelTaskIds.join(",")
+    === implementation.frontierModelTaskIds.join(",")
+  && model.frontierTransitionTags.join(",")
+    === implementation.frontierTransitionTags.join(",")
   && model.knownModelTaskIds.join(",")
     === implementation.knownModelTaskIds.join(",")
   && model.responsibleModelTaskIds.join(",")

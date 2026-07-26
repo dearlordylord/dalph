@@ -14,7 +14,7 @@ const taskB = TaskId.make("frontier-recovery-task-B")
 const operationOne = OperationId.make("frontier-recovery-operation-1")
 
 it("defines the versioned closed M2 reconstruction action map", () => {
-  expect(frontierRecoveryReconstructionConformanceVersion).toBe(1)
+  expect(frontierRecoveryReconstructionConformanceVersion).toBe(2)
   expect(frontierRecoveryReconstructionActions).toEqual([
     "init",
     "reconstructionStep",

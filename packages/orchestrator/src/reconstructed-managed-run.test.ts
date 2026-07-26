@@ -6,13 +6,16 @@ import {
   ClaimOwner,
   ClaimToken,
   FixtureTarget,
+  ImplementationReviewRoundLimit,
   JournalDatabaseLocator,
   JournalPosition,
   OperationId,
   RunId,
+  SemanticReviewRound,
   TaskId,
   TrackerRevision
 } from "./domain.js"
+import { ImplementationReviewIntendedEvent } from "./implementation-review-journal.js"
 import {
   intentRecordKey,
   type JournalRecord,
@@ -32,7 +35,11 @@ import {
 import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
 import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
-import { makeTaskClaimAcquisitionOperation, makeTrackerGraphObservationOperation } from "./workflow-operation.js"
+import {
+  makeImplementationReviewOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTrackerGraphObservationOperation
+} from "./workflow-operation.js"
 
 const runId = RunId.make("reconstructed-run")
 const target = FixtureTarget.make("reconstructed-run-target")
@@ -66,6 +73,33 @@ const observedGraph = [
     key: outcomeRecordKey(graphObservation.operationId)
   }
 ] as const
+
+it("does not create a review responsibility without its evidence-sealing subject", () => {
+  const operationId = OperationId.make("orphan-review")
+  const operation = makeImplementationReviewOperation({
+    _tag: "SimulatedImplementationReview",
+    evidenceSealingOperationId: OperationId.make("missing-evidence"),
+    operationId,
+    round: SemanticReviewRound.make(1),
+    roundLimit: ImplementationReviewRoundLimit.make(1)
+  })
+
+  const reconstructed = reconstructManagedRunState(
+    runId,
+    records({
+      event: ImplementationReviewIntendedEvent.make({ operation, version: 4 }),
+      key: intentRecordKey(operationId)
+    })
+  )
+  expect(reconstructed).toEqual({
+    _tag: "InvalidReconstructedManagedRun",
+    issues: [{
+      _tag: "UnresolvedReviewSubject",
+      operationId,
+      position: JournalPosition.make(1)
+    }]
+  })
+})
 
 const validTargetClosureObservation = {
   _tag: "TaskTrackerTargetClosureObserved" as const,
@@ -261,7 +295,8 @@ it("keeps graph knowledge separate from workflow responsibility before and after
     {
       _tag: "TaskClaimResponsibility",
       acquisition: claimA.acquisition,
-      beganAt: JournalPosition.make(3)
+      beganAt: JournalPosition.make(3),
+      taskId: taskA
     }
   ])
   expect(

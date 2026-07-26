@@ -2,7 +2,7 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, FileSystem } from "effect"
 import { expect } from "vitest"
-import { JournalDatabaseLocator } from "../../src/domain.js"
+import { JournalDatabaseLocator, TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
@@ -63,6 +63,7 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
         const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: true,
           journal
         })
@@ -76,6 +77,7 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
         expect((yield* beforeCrash.getState()).coordinatorRunning).toBe(false)
 
         const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: false,
           journal
         })
@@ -88,10 +90,66 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
     }
   }))
 
+it.effect("selects the same bounded first intents before and after restart", () =>
+  Effect.gen(function*() {
+    for (const capacity of [1, 2]) {
+      yield* Effect.gen(function*() {
+        const journal = yield* JournalStore
+        const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(capacity),
+          coordinatorRunning: true,
+          journal
+        })
+        yield* beforeCrash.init()
+        expect(yield* beforeCrash.getState()).toMatchObject({
+          admittedModelTaskIds: capacity === 1 ? [0n] : [0n, 2n],
+          frontierModelTaskIds: [0n, 2n],
+          responsibleModelTaskIds: []
+        })
+        for (let step = 0; step < capacity; step++) {
+          yield* beforeCrash.reconstructionStep()
+        }
+        const uninterrupted = yield* beforeCrash.getState()
+        expect(uninterrupted).toMatchObject({
+          admittedModelTaskIds: capacity === 1 ? [0n] : [0n, 2n],
+          frontierModelTaskIds: [0n, 2n],
+          responsibleModelTaskIds: capacity === 1 ? [0n] : [0n, 2n]
+        })
+        yield* beforeCrash.crash()
+
+        const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(capacity),
+          coordinatorRunning: false,
+          journal
+        })
+        yield* afterCrash.restart()
+        const restarted = yield* afterCrash.getState()
+        expect({
+          admittedModelTaskIds: restarted.admittedModelTaskIds,
+          admittedTransitionTags: restarted.admittedTransitionTags,
+          admissionExplanationTags: restarted.admissionExplanationTags,
+          admissionReservedModelTaskIds: restarted.admissionReservedModelTaskIds,
+          frontierModelTaskIds: restarted.frontierModelTaskIds,
+          frontierTransitionTags: restarted.frontierTransitionTags,
+          responsibleModelTaskIds: restarted.responsibleModelTaskIds
+        }).toEqual({
+          admittedModelTaskIds: uninterrupted.admittedModelTaskIds,
+          admittedTransitionTags: uninterrupted.admittedTransitionTags,
+          admissionExplanationTags: uninterrupted.admissionExplanationTags,
+          admissionReservedModelTaskIds: uninterrupted.admissionReservedModelTaskIds,
+          frontierModelTaskIds: uninterrupted.frontierModelTaskIds,
+          frontierTransitionTags: uninterrupted.frontierTransitionTags,
+          responsibleModelTaskIds: uninterrupted.responsibleModelTaskIds
+        })
+      }).pipe(Effect.provide(memoryJournalStoreLayer))
+    }
+  }))
+
 it.effect("records a fresh target-closure observation after restart", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
     const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
     })
@@ -99,6 +157,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
     yield* beforeCrash.crash()
 
     const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: false,
       journal
     })
@@ -111,7 +170,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
       "TrackerGraphOutcomeObserved"
     ])
 
-    const unsupported = yield* afterCrash.commitFirstIntent(2n).pipe(Effect.exit)
+    const unsupported = yield* afterCrash.commitFirstIntent(3n).pipe(Effect.exit)
     expect(Exit.isFailure(unsupported)).toBe(true)
     if (Exit.isFailure(unsupported)) {
       expect(Cause.squash(unsupported.cause)).toMatchObject({
@@ -125,6 +184,7 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
   Effect.gen(function*() {
     const journal = yield* JournalStore
     const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
     })
@@ -159,10 +219,28 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
     expect(state.responsibility.entries).toEqual([])
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
+it.effect("derives no fresh transition when the fresh tracker read reports no eligible task", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(2),
+      coordinatorRunning: true,
+      freshEligibleModelTaskIds: [],
+      journal
+    })
+    yield* controls.init()
+
+    expect(yield* controls.getState()).toMatchObject({
+      admittedModelTaskIds: [],
+      frontierModelTaskIds: []
+    })
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
 it.effect("does not treat a causal predecessor as read coverage", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
     const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
     })
@@ -201,6 +279,7 @@ it.effect("replaces compatible membership knowledge with the fresh observation",
   Effect.gen(function*() {
     const journal = yield* JournalStore
     const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
     })
@@ -229,6 +308,7 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
         const controls = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: true,
           journal
         })
@@ -240,6 +320,7 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
       const state = yield* Effect.gen(function*() {
         const journal = yield* JournalStore
         const controls = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: false,
           journal
         })
@@ -247,5 +328,47 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
         return yield* controls.getState()
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       assertReconstructedPrefix(state, afterClaimIntent ? [0n] : [])
+    }
+  }).pipe(Effect.provide(NodeServices.layer)))
+
+it.effect("reopens bounded first-intent selection from SQLite at capacities one and two", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "dalph-frontier-admission-"
+    })
+    for (const capacity of [1, 2]) {
+      const filename = JournalDatabaseLocator.make(
+        `${directory}/capacity-${capacity}.sqlite`
+      )
+      yield* Effect.gen(function*() {
+        const journal = yield* JournalStore
+        const controls = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(capacity),
+          coordinatorRunning: true,
+          journal
+        })
+        yield* controls.init()
+        for (let step = 0; step < capacity; step++) {
+          yield* controls.reconstructionStep()
+        }
+        yield* controls.crash()
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+
+      const restarted = yield* Effect.gen(function*() {
+        const journal = yield* JournalStore
+        const controls = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(capacity),
+          coordinatorRunning: false,
+          journal
+        })
+        yield* controls.restart()
+        return yield* controls.getState()
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+      expect(restarted).toMatchObject({
+        admittedModelTaskIds: capacity === 1 ? [0n] : [0n, 2n],
+        frontierModelTaskIds: [0n, 2n],
+        responsibleModelTaskIds: capacity === 1 ? [0n] : [0n, 2n]
+      })
     }
   }).pipe(Effect.provide(NodeServices.layer)))

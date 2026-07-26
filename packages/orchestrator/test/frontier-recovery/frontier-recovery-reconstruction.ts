@@ -3,19 +3,13 @@ import { ClaimOwner, ClaimToken, FixtureTarget, OperationId, RunId, TaskId, Trac
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
-  type JournalRecord,
-  type JournalStoreService,
   outcomeRecordKey,
   TaskClaimAcquisitionIntendedEvent,
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "../../src/journal-store.js"
 import { reduceManagedHistory } from "../../src/managed-history.js"
-import type {
-  BestAvailableDurableGraphKnowledge,
-  ReconstructedPauseState,
-  WorkflowResponsibilityState
-} from "../../src/reconstructed-managed-run-state.js"
+import type { WorkflowResponsibilityState } from "../../src/reconstructed-managed-run-state.js"
 import { TaskClaimAcquisition } from "../../src/tracker-mutation.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -27,6 +21,15 @@ import {
   runFrontierRecoveryReconstructionAction,
   type TargetClosureObservationInput
 } from "./frontier-recovery-conformance.js"
+import type {
+  FrontierRecoveryReconstructionProjection,
+  MakeFrontierRecoveryReconstructionControlsOptions
+} from "./frontier-recovery-projection.js"
+import { selectFrontierRecoveryAdmission } from "./frontier-recovery-selection.js"
+export type {
+  FrontierRecoveryReconstructionGraphEvidence,
+  FrontierRecoveryReconstructionProjection
+} from "./frontier-recovery-projection.js"
 
 const runId = RunId.make("frontier-recovery-reconstruction-run")
 const target = FixtureTarget.make("frontier-recovery-reconstruction-target")
@@ -38,6 +41,7 @@ const initialGraphOperationIdentity = 0n
 const minimumRevisionIdentity = 0n
 const firstClaimOperationIdentity = 1n
 const provenAbsenceOperationIdentity = 2n
+const secondClaimOperationIdentity = 3n
 const taskEntries = [
   { branded: TaskId.make("frontier-recovery-task-A"), model: modelTaskA },
   { branded: TaskId.make("frontier-recovery-task-B"), model: modelTaskB },
@@ -45,7 +49,16 @@ const taskEntries = [
   { branded: TaskId.make("frontier-recovery-task-D"), model: modelTaskD }
 ] as const
 const graphOperationId = OperationId.make("frontier-recovery-graph-observation-0")
-const claimOperationId = OperationId.make("frontier-recovery-claim-operation-1")
+const claimOperationEntries = [
+  {
+    branded: OperationId.make("frontier-recovery-claim-operation-1"),
+    model: firstClaimOperationIdentity
+  },
+  {
+    branded: OperationId.make("frontier-recovery-claim-operation-3"),
+    model: secondClaimOperationIdentity
+  }
+] as const
 const graphObservationEntries = [
   initialGraphOperationIdentity,
   provenAbsenceOperationIdentity
@@ -53,11 +66,6 @@ const graphObservationEntries = [
   branded: OperationId.make(`frontier-recovery-graph-observation-${model}`),
   model
 }))
-
-interface MakeFrontierRecoveryReconstructionControlsOptions {
-  readonly coordinatorRunning: boolean
-  readonly journal: JournalStoreService
-}
 
 /** The conformance harness cannot safely continue from this reconstructed prefix. */
 export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass<FrontierRecoveryReconstructionIssue>()(
@@ -68,47 +76,15 @@ export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass
   }
 ) {}
 
-export type FrontierRecoveryReconstructionGraphEvidence =
-  | {
-    readonly disposition: "InitialObservation"
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "CompatibleReplacement"
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "IncomparableMembership"
-    readonly predecessorModelOperationIds: ReadonlyArray<bigint>
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "ProvenAbsence"
-    readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-
-export interface FrontierRecoveryReconstructionProjection {
-  readonly coordinatorRunning: boolean
-  readonly graphEvidence: FrontierRecoveryReconstructionGraphEvidence
-  readonly graphKnowledge: BestAvailableDurableGraphKnowledge
-  readonly knownModelTaskIds: ReadonlyArray<bigint>
-  readonly pause: ReconstructedPauseState
-  readonly responsibility: WorkflowResponsibilityState
-  readonly responsibleModelTaskIds: ReadonlyArray<bigint>
-  readonly workflowHistory: ReadonlyArray<JournalRecord>
-  readonly workflowEventTags: ReadonlyArray<string>
-}
-
 const reconstructionIssue = (
   reason: FrontierRecoveryReconstructionIssue["reason"],
   detail: string
 ) => new FrontierRecoveryReconstructionIssue({ detail, reason })
 
 /**
- * Deterministic public controls for the M2 slice before runnable-frontier
- * derivation. Durable state is always read back through the production journal
- * service and production managed-run reducer.
+ * Deterministic public controls for the M2 reconstructed-run and bounded
+ * frontier slice. Durable state is always read back through the production
+ * journal service and production managed-run reducer.
  */
 export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   "FrontierRecoveryReconstruction.makeControls"
@@ -116,11 +92,24 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   const identityMapping = yield* makeFrontierRecoveryIdentityMapping({
     operations: [
       ...graphObservationEntries,
-      { branded: claimOperationId, model: firstClaimOperationIdentity }
+      ...claimOperationEntries
     ],
     tasks: taskEntries
   })
   let coordinatorRunning = options.coordinatorRunning
+
+  const selectFrontier = Effect.fn(
+    "FrontierRecoveryReconstruction.selectFrontier"
+  )((responsibility: WorkflowResponsibilityState) =>
+    selectFrontierRecoveryAdmission({
+      capacity: options.capacity,
+      eligibleModelTaskIds: options.freshEligibleModelTaskIds
+        ?? [modelTaskA, modelTaskC],
+      identityMapping,
+      responsibility,
+      taskEntries
+    })
+  )
 
   const appendTargetClosureObservation = Effect.fn(
     "FrontierRecoveryReconstruction.appendTargetClosureObservation"
@@ -185,7 +174,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             "a stopped coordinator cannot record claim intent"
           )
         }
-        if (modelTaskId !== modelTaskA) {
+        if (modelTaskId !== modelTaskA && modelTaskId !== modelTaskC) {
           return yield* new FrontierRecoveryConformanceIssue({
             detail: `M2 reconstruction has no first-claim operation mapping for task ${modelTaskId}`,
             reason: "MissingMapping"
@@ -193,7 +182,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         }
         const taskId = yield* identityMapping.taskFromModel(modelTaskId)
         const operationId = yield* identityMapping.operationFromModel(
-          firstClaimOperationIdentity
+          modelTaskId === modelTaskA
+            ? firstClaimOperationIdentity
+            : secondClaimOperationIdentity
         )
         const acquisition = TaskClaimAcquisition.make({
           operationId,
@@ -252,7 +243,25 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       }),
     reconstructionStep: () =>
       Effect.gen(function*() {
-        yield* rawControls.commitFirstIntent(modelTaskA)
+        const records = yield* options.journal.read(runId)
+        const reduced = reduceManagedHistory(runId, records)
+        if (reduced._tag === "InvalidManagedHistory") {
+          return yield* reconstructionIssue(
+            "InvalidManagedHistory",
+            reduced.issues.map(({ detail }) => detail).join("; ")
+          )
+        }
+        const selection = yield* selectFrontier(
+          reduced.managedRun.responsibility
+        )
+        const transition = selection.admission.transitions.find(
+          ({ _tag }) => _tag === "CommitFreshTaskClaimIntent"
+        )
+        if (transition !== undefined) {
+          yield* identityMapping.taskToModel(transition.taskId).pipe(
+            Effect.flatMap(rawControls.commitFirstIntent)
+          )
+        }
       }),
     restart: () =>
       Effect.sync(() => {
@@ -289,6 +298,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       const responsibleModelTaskIds = yield* Effect.forEach(
         [...new Set(responsibleTaskIds)].sort(),
         identityMapping.taskToModel
+      )
+      const selection = yield* selectFrontier(
+        reduced.managedRun.responsibility
       )
       const targetClosure = reduced.managedRun.graphKnowledge.targetClosures[0]
       const graphDisposition = targetClosure
@@ -351,7 +363,13 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           returnedModelTaskIds: taskEntries.map(({ model }) => model)
         } as const
       return {
+        admittedModelTaskIds: selection.admittedModelTaskIds,
+        admittedTransitionTags: selection.admittedTransitionTags,
+        admissionExplanationTags: selection.admissionExplanationTags,
+        admissionReservedModelTaskIds: selection.admissionReservedModelTaskIds,
         coordinatorRunning,
+        frontierModelTaskIds: selection.frontierModelTaskIds,
+        frontierTransitionTags: selection.frontierTransitionTags,
         graphEvidence,
         graphKnowledge: reduced.managedRun.graphKnowledge,
         knownModelTaskIds,

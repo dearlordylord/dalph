@@ -93,7 +93,8 @@ it("never creates responsibility from generated graph membership", () => {
         {
           _tag: "TaskClaimResponsibility",
           acquisition: claim.acquisition,
-          beganAt: JournalPosition.make(3)
+          beganAt: JournalPosition.make(3),
+          taskId: responsibleTaskId
         }
       ])
     }

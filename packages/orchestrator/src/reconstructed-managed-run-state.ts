@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { JournalPosition, OperationId, TaskId, TrackerRevision, TrackerTarget } from "./domain.js"
+import { JournalPosition, OperationId, PlannedTaskAttempt, TaskId, TrackerRevision, TrackerTarget } from "./domain.js"
 import type { RunId } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
@@ -88,36 +88,60 @@ export const BestAvailableDurableGraphKnowledge = Schema.Struct({
 export type BestAvailableDurableGraphKnowledge = typeof BestAvailableDurableGraphKnowledge.Type
 
 /** One exact workflow subject whose obligation remains outstanding. */
-export const WorkflowResponsibilityEntry = Schema.TaggedUnion({
+const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
   TaskClaimResponsibility: {
     acquisition: TaskClaimAcquisition,
-    beganAt: JournalPosition
+    beganAt: JournalPosition,
+    taskId: TaskId
   },
   TaskWorktreeResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.ReconcileTaskWorktree
+    operation: WorkflowOperation.cases.ReconcileTaskWorktree,
+    taskId: TaskId
   },
   TaskWorkSessionResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
+    operation: WorkflowOperation.cases.EstablishTaskWorkSession,
+    taskId: TaskId
   },
   TaskExecutionResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.ExecuteTaskWork
+    operation: WorkflowOperation.cases.ExecuteTaskWork,
+    taskId: TaskId
   },
   ImplementationEvidenceResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.SealImplementationEvidence
+    operation: WorkflowOperation.cases.SealImplementationEvidence,
+    taskId: TaskId
   },
   ImplementationReviewResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.ReviewImplementation
+    operation: WorkflowOperation.cases.ReviewImplementation,
+    plannedAttempt: PlannedTaskAttempt,
+    taskId: TaskId
   },
   ReviewFindingsHandbackResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.HandBackReviewFindings
+    operation: WorkflowOperation.cases.HandBackReviewFindings,
+    taskId: TaskId
   }
 })
+export const WorkflowResponsibilityEntry = WorkflowResponsibilityEntryShape.check(
+  Schema.makeFilter((entry) => {
+    const embeddedTaskId = WorkflowResponsibilityEntryShape.match(entry, {
+      ImplementationEvidenceResponsibility: ({ operation }) => operation.plannedAttempt.taskId,
+      ImplementationReviewResponsibility: ({ plannedAttempt }) => plannedAttempt.taskId,
+      ReviewFindingsHandbackResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
+      TaskClaimResponsibility: ({ acquisition }) => acquisition.taskId,
+      TaskExecutionResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
+      TaskWorkSessionResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
+      TaskWorktreeResponsibility: ({ operation }) => operation.plannedAttempt.taskId
+    })
+    return embeddedTaskId !== entry.taskId
+      ? "responsibility task identity must match its exact operation subject"
+      : undefined
+  })
+)
 export type WorkflowResponsibilityEntry = typeof WorkflowResponsibilityEntry.Type
 
 export const WorkflowResponsibilityState = Schema.Struct({
@@ -154,6 +178,10 @@ export const ReconstructedManagedRunInvariantIssue = Schema.TaggedUnion({
     position: JournalPosition
   },
   ResponsibilityHistoryMismatch: {
+    operationId: OperationId,
+    position: JournalPosition
+  },
+  UnresolvedReviewSubject: {
     operationId: OperationId,
     position: JournalPosition
   }

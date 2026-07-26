@@ -1,0 +1,53 @@
+import type { TaskWorkCapacity } from "../../src/domain.js"
+import type { JournalRecord, JournalStoreService } from "../../src/journal-store.js"
+import type {
+  BestAvailableDurableGraphKnowledge,
+  ReconstructedPauseState,
+  WorkflowResponsibilityState
+} from "../../src/reconstructed-managed-run-state.js"
+
+export type FrontierRecoveryReconstructionGraphEvidence =
+  | {
+    readonly disposition: "InitialObservation"
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "CompatibleReplacement"
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "IncomparableMembership"
+    readonly predecessorModelOperationIds: ReadonlyArray<bigint>
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+  | {
+    readonly disposition: "ProvenAbsence"
+    readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
+    readonly returnedModelTaskIds: ReadonlyArray<bigint>
+  }
+
+export interface FrontierRecoveryReconstructionProjection {
+  readonly admittedModelTaskIds: ReadonlyArray<bigint>
+  readonly admittedTransitionTags: ReadonlyArray<string>
+  readonly admissionExplanationTags: ReadonlyArray<string>
+  readonly admissionReservedModelTaskIds: ReadonlyArray<bigint>
+  readonly coordinatorRunning: boolean
+  readonly frontierModelTaskIds: ReadonlyArray<bigint>
+  readonly frontierTransitionTags: ReadonlyArray<string>
+  readonly graphEvidence: FrontierRecoveryReconstructionGraphEvidence
+  readonly graphKnowledge: BestAvailableDurableGraphKnowledge
+  readonly knownModelTaskIds: ReadonlyArray<bigint>
+  readonly pause: ReconstructedPauseState
+  readonly responsibility: WorkflowResponsibilityState
+  readonly responsibleModelTaskIds: ReadonlyArray<bigint>
+  readonly workflowHistory: ReadonlyArray<JournalRecord>
+  readonly workflowEventTags: ReadonlyArray<string>
+}
+
+export interface MakeFrontierRecoveryReconstructionControlsOptions {
+  readonly capacity: TaskWorkCapacity
+  readonly coordinatorRunning: boolean
+  /** Fresh tracker eligibility supplied to this adapter invocation. */
+  readonly freshEligibleModelTaskIds?: ReadonlyArray<bigint>
+  readonly journal: JournalStoreService
+}

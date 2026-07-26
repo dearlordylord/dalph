@@ -137,11 +137,13 @@ export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue
 } from "./production-application.js"
+export * from "./runnable-frontier.js"
 export {
   journalDatabaseLocatorConfig,
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./sqlite-journal-store.js"
+export * from "./task-admission-controller.js"
 export {
   TaskAttemptPlanAcknowledged,
   TaskAttemptPlanHistoryContradiction,
