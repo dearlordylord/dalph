@@ -184,7 +184,7 @@ const expectReason = (
 describe("ITF to normalized frame boundary", () => {
   it("renders the frame table as semantic HTML", () => {
     const trace = decode(raw)
-    const html = renderObservedDagHtml([trace])
+    const html = renderObservedDagHtml([trace], trace, trace)
     expect(html).toContain("<table>")
     expect(html).toContain("<th>Step</th>")
     expect(html).toContain("<th>What changed</th>")
@@ -274,14 +274,38 @@ describe("ITF to normalized frame boundary", () => {
 
   it("renders one interactive observed graph and no linear path visual", () => {
     const trace = decode(raw)
-    const html = renderObservedDagHtml([trace])
+    const html = renderObservedDagHtml([trace], trace, trace)
 
-    expect(html).toContain("<h1>Observed Quint state graph</h1>")
+    expect(html).toContain("<h1>Quint workflow stories</h1>")
     expect(html).toContain("Observed paths · not exhaustive")
     expect(html).toContain('data-node-id="N0"')
     expect(html).toContain("addEventListener")
     expect(html).not.toContain("Generated path visual")
     expect(html).not.toContain("stateDiagram-v2")
+  })
+
+  it("shows capacity one choosing an existing responsibility before fresh work", () => {
+    const fresh = decode(raw)
+    const responsibilityManifest = Schema.decodeUnknownSync(
+      FixtureManifestSchema
+    )(readJson(resolve(fixtureRoot, "responsibility-first.manifest.json")))
+    const responsibility = decode(
+      Schema.decodeUnknownSync(ItfEnvelopeWire)(
+        readJson(resolve(fixtureRoot, responsibilityManifest.rawItf))
+      ),
+      responsibilityManifest.provenance
+    )
+
+    const html = renderObservedDagHtml(
+      [fresh],
+      fresh,
+      responsibility
+    )
+
+    expect(html).toContain("Story 2 · Admission pressure at capacity one")
+    expect(html).toContain("Task A: Unowned · Task C: Outstanding")
+    expect(html).toContain("<small>Admitted</small><strong>{C}</strong>")
+    expect(html).toContain("<small>CapacityWait</small><strong>{A}</strong>")
   })
 
   it("shows real nondeterministic paths reconverging by exact state", () => {

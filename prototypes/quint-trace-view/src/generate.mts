@@ -18,6 +18,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(packageRoot, "..", "..")
 const manifests = [
   "normal",
+  "responsibility-first",
   "restart",
   "counterexample",
   "story-crash-after-intent",
@@ -101,7 +102,27 @@ for (const name of manifests) {
 const storyTraces = traces.filter(({ provenance }) =>
   provenance.traceKind.startsWith("explore-")
 )
-const dagHtml = renderObservedDagHtml(storyTraces)
+const freshPriorityTrace = traces.find(
+  ({ provenance }) =>
+    provenance.traceKind === "sampled"
+    && provenance.init === "init"
+)
+const responsibilityPriorityTrace = traces.find(
+  ({ provenance }) =>
+    provenance.traceKind === "sampled"
+    && provenance.init === "initCapacityOneResponsibilityFirstProfile"
+)
+if (
+  freshPriorityTrace === undefined
+  || responsibilityPriorityTrace === undefined
+) {
+  throw new Error("capacity-one admission story traces are missing")
+}
+const dagHtml = renderObservedDagHtml(
+  storyTraces,
+  freshPriorityTrace,
+  responsibilityPriorityTrace
+)
 await Promise.all([
   writeFile(resolve(packageRoot, "index.html"), dagHtml),
   writeFile(resolve(packageRoot, "artifacts", "observed-state-dag.html"), dagHtml)

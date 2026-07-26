@@ -533,8 +533,67 @@ const browserDagData = (dag: ObservedStateDag): string =>
     }
   ]))).replaceAll("<", "\\u003c")
 
+const renderAdmissionDecision = (
+  trace: NormalizedTrace,
+  title: string,
+  reason: string
+): string => {
+  const frame = trace.frames[0]
+  if (frame === undefined) throw new Error(`${title} has no Quint frame`)
+  const frontier = taskSet(
+    frame.frontier.map(({ modelTaskId }) => modelTaskId)
+  )
+  const admitted = taskSet(
+    frame.admission.map(({ modelTaskId }) => modelTaskId)
+  )
+  const waiting = taskSet(
+    frame.explanations.map(({ modelTaskId }) => modelTaskId)
+  )
+  const responsibilities = frame.taskStates
+    .filter(({ modelTaskId }) => modelTaskId === "0" || modelTaskId === "2")
+    .map((task) =>
+      `Task ${taskName(task.modelTaskId)}: ${task.responsibility}`
+    )
+    .join(" · ")
+  return `<article class="decision">
+    <h2>${escapeHtml(title)}</h2>
+    <p>${escapeHtml(responsibilities)}</p>
+    <div class="decision-flow">
+      <div><small>Frontier</small><strong>${escapeHtml(frontier)}</strong></div>
+      <span>→</span>
+      <div><small>Admitted</small><strong>${escapeHtml(admitted)}</strong></div>
+      <span>+</span>
+      <div><small>CapacityWait</small><strong>${escapeHtml(waiting)}</strong></div>
+    </div>
+    <p>${escapeHtml(reason)}</p>
+    <details><summary>Exact Quint provenance</summary><p class="provenance">${escapeHtml(JSON.stringify(trace.provenance))}</p></details>
+  </article>`
+}
+
+const renderAdmissionPressure = (
+  freshPriorityTrace: NormalizedTrace,
+  responsibilityPriorityTrace: NormalizedTrace
+): string => `<section class="admission-story">
+  <h2>Story 2 · Admission pressure at capacity one</h2>
+  <p>Both states come from executable Quint profiles. The frontier stays <code>{A, C}</code>; capacity admits one task and gives the other an exact <code>CapacityWait</code> explanation.</p>
+  <div class="decision-grid">
+    ${renderAdmissionDecision(
+      freshPriorityTrace,
+      "Two fresh tasks",
+      "A wins the deterministic fresh-task ordering; C remains in the frontier and waits for released capacity or changed reconstructed state."
+    )}
+    ${renderAdmissionDecision(
+      responsibilityPriorityTrace,
+      "Existing responsibility first",
+      "C already carries Outstanding responsibility, so C is admitted ahead of smaller fresh Task A; A remains in the frontier with CapacityWait."
+    )}
+  </div>
+</section>`
+
 export const renderObservedDagHtml = (
-  traces: ReadonlyArray<NormalizedTrace>
+  traces: ReadonlyArray<NormalizedTrace>,
+  freshPriorityTrace: NormalizedTrace,
+  responsibilityPriorityTrace: NormalizedTrace
 ): string => {
   const dag = buildObservedStateDag(traces)
   const reconvergenceCount = dag.nodes.filter(
@@ -546,11 +605,15 @@ export const renderObservedDagHtml = (
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Observed Quint state graph</title>
+  <title>Quint workflow stories</title>
   <style>
     :root { color-scheme: dark; }
     body { background: #0d1217; color: #e7edf3; font: 15px/1.45 system-ui, sans-serif; margin: 0; padding: 24px; }
     h1, h2 { margin-top: 0; }
+    [hidden] { display: none !important; }
+    .view-switch { display: flex; gap: 8px; margin: 0 0 20px; }
+    .view-switch button { background: #24313d; border: 1px solid #52687a; border-radius: 8px; color: #dce6ee; cursor: pointer; font-weight: 700; padding: 9px 14px; }
+    .view-switch button.active { background: #155f86; border-color: #66c2ff; color: white; }
     .status { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
     .story-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
     .story-filter button { background: #24313d; border: 1px solid #52687a; border-radius: 999px; color: #dce6ee; cursor: pointer; padding: 6px 11px; }
@@ -581,17 +644,31 @@ export const renderObservedDagHtml = (
     #inspector dd { margin: 0; overflow-wrap: anywhere; }
     #inspector table { min-width: 620px; }
     .table-wrap { max-height: 68vh; overflow: auto; }
+    .admission-story { overflow: visible; }
+    .decision-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .decision { background: #111820; border: 1px solid #465564; border-radius: 10px; padding: 18px; }
+    .decision-flow { align-items: center; display: grid; gap: 10px; grid-template-columns: 1fr auto 1fr auto 1fr; margin: 20px 0; text-align: center; }
+    .decision-flow div { background: #202c36; border: 1px solid #52687a; border-radius: 8px; padding: 12px 8px; }
+    .decision-flow small, .decision-flow strong { display: block; }
+    .decision-flow small { color: #91a2b3; margin-bottom: 5px; }
+    .decision-flow strong { color: #fff; font-size: 18px; }
     table { border-collapse: collapse; min-width: 1500px; width: 100%; }
     th, td { border: 1px solid #465564; padding: 8px; text-align: left; vertical-align: top; }
     th { background: #25313c; position: sticky; top: 0; z-index: 1; }
     td code { white-space: pre-wrap; word-break: break-word; }
     details.trace { border-top: 1px solid #34414d; margin-top: 12px; padding-top: 12px; }
     summary { cursor: pointer; font-weight: 700; }
-    @media (max-width: 1000px) { .workspace { grid-template-columns: 1fr; } }
+    @media (max-width: 1000px) { .workspace, .decision-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <h1>Observed Quint state graph</h1>
+  <h1>Quint workflow stories</h1>
+  <nav class="view-switch" aria-label="Choose a modeled story">
+    <button class="active" data-view="reconciliation">1 · Branch-local reconciliation</button>
+    <button data-view="admission">2 · Admission pressure</button>
+  </nav>
+  <div data-view-panel="reconciliation">
+  <h2>Story 1 · Observed state graph</h2>
   <div class="status">
     <span class="badge">Observed paths · not exhaustive</span>
     <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${reconvergenceCount} states with multiple predecessors</span>
@@ -620,12 +697,21 @@ export const renderObservedDagHtml = (
       </section>
     </div>
   </div>
+  </div>
+  <div data-view-panel="admission" hidden>
+    ${renderAdmissionPressure(
+      freshPriorityTrace,
+      responsibilityPriorityTrace
+    )}
+  </div>
   <script>
     const nodes = ${browserDagData(dag)};
     const inspector = document.querySelector("#inspector");
     const nodeElements = [...document.querySelectorAll("[data-node-id]")];
     const graphElements = [...document.querySelectorAll(".dag [data-stories]")];
     const storyButtons = [...document.querySelectorAll("[data-story-filter]")];
+    const viewButtons = [...document.querySelectorAll("[data-view]")];
+    const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
     const escapeText = (value) => String(value)
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
@@ -692,6 +778,22 @@ export const renderObservedDagHtml = (
         });
       });
     });
+    const selectView = (view) => {
+      viewButtons.forEach((button) =>
+        button.classList.toggle("active", button.dataset.view === view)
+      );
+      viewPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.viewPanel !== view;
+      });
+      const url = new URL(window.location.href);
+      url.searchParams.set("story", view);
+      history.replaceState(null, "", url);
+    };
+    viewButtons.forEach((button) =>
+      button.addEventListener("click", () => selectView(button.dataset.view))
+    );
+    const requestedView = new URL(window.location.href).searchParams.get("story");
+    selectView(requestedView === "admission" ? "admission" : "reconciliation");
     selectNode(nodeElements[0]?.dataset.nodeId);
   </script>
 </body>

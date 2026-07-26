@@ -400,7 +400,10 @@ export const retainedReconstructionActions = [
   "reconstructionStep",
   "restart"
 ] as const
-const reconstructionActions = new Set(retainedReconstructionActions)
+const reconstructionActions = new Set([
+  ...retainedReconstructionActions,
+  "initCapacityOneResponsibilityFirstProfile"
+])
 const counterexampleActions = new Set([
   ...reconstructionActions,
   "weakenedCapacityStep"

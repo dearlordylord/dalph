@@ -1,11 +1,14 @@
 # Quint trace explanation view — throwaway prototype
 
-This isolated prototype combines six paths sampled from the real
-`frontierRecovery.reconciliationProfileStep` action into one interactive
-observed state graph. Task A begins `Outstanding`. Three concrete diamonds
-show Task C becoming `Outstanding` before or after A loses authority; each pair
+This isolated prototype has two switchable stories backed by real Quint traces.
+Story 1 combines six paths sampled from
+`frontierRecovery.reconciliationProfileStep` into one interactive observed
+state graph. Task A begins `Outstanding`. Three concrete diamonds show Task C
+becoming `Outstanding` before or after A loses authority; each pair
 reconverges, rereads A, and isolates only A. One exact model state is one node
-regardless of where it occurs in a trace.
+regardless of where it occurs in a trace. Story 2 compares two capacity-one
+states: fresh tasks use deterministic task priority, while an existing
+`Outstanding` responsibility is admitted ahead of fresh work.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
@@ -50,6 +53,7 @@ step, seed, and trace kind.
 | Trace | Raw ITF | Frames | Purpose |
 | --- | --- | ---: | --- |
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
+| Responsibility first | `fixtures/responsibility-first.itf.json` | 1 | Capacity one admits outstanding C while fresh A has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
 | Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action makes A and C carry outstanding workflow responsibility at capacity one; Quint records status `violation`. |
 | Claim C, then A loses claim | `fixtures/explore-claim-c-then-claim-loss.itf.json` | 5 | C becomes outstanding before A loses its claim; A is then isolated. |
@@ -64,8 +68,9 @@ step, seed, and trace kind.
 | Git rewrite | `fixtures/story-git-rewrite.itf.json` | 9 | Existing test isolates A after incompatible target rewrite while C progresses. |
 | External completion | `fixtures/story-external-completion.itf.json` | 8 | Existing test settles A from tracker completion without a duplicate effect. |
 
-Only the six nondeterministic exploration paths feed the interactive graph.
-The sample, restart, counterexample, and acceptance stories remain retained
+Only the six nondeterministic exploration paths feed Story 1's interactive
+graph. The normal sample and responsibility-first state feed Story 2. The
+restart, counterexample, and acceptance stories remain retained
 decoder/conformance evidence.
 
 The sample's `fixtures/normal.mbt-projection.json` was independently captured
@@ -155,6 +160,23 @@ pnpm exec quint run specs/frontierRecovery.qnt \
   --verbosity 0
 ```
 
+Responsibility-first capacity-one state:
+
+```sh
+pnpm quint run specs/frontierRecovery.qnt \
+  --main frontierRecoveryCapacityOne \
+  --init initCapacityOneResponsibilityFirstProfile \
+  --step reconstructionStep \
+  --max-steps 0 \
+  --max-samples 1 \
+  --n-traces 1 \
+  --seed 131137 \
+  --mbt \
+  --backend typescript \
+  --out-itf prototypes/quint-trace-view/fixtures/responsibility-first.itf.json \
+  --verbosity 1
+```
+
 Restart candidates (sequence zero was retained). The copies recreate the exact
 absolute wrapper source recorded in the raw ITF:
 
@@ -203,7 +225,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       23 passed (23)
+Tests       24 passed (24)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -214,7 +236,8 @@ transient dropped connections from the shared Apalache endpoint; a private
 Apalache 0.56.1 server had already returned `[ok] No violation found` for the
 same five exhaustive profiles before the final shared-endpoint run succeeded.
 
-Positive cases prove raw-ITF-to-frame preservation, meaningful branching from
+Positive cases prove raw-ITF-to-frame preservation, the capacity-one
+responsibility-priority comparison, meaningful branching from
 the five existing acceptance tests, equality with the existing
 MBT comparable projection at all three sampled steps, first-divergence
 reporting, agreement with the existing version-3 closed reconstruction action
@@ -234,9 +257,9 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 1,357,366 bytes of raw ITF (81 frames total), the latest warm
-`pnpm check` completed in 2.9 seconds: Vitest reported 575 ms, with the
-remaining time covering TypeScript compilation plus all thirty presentation
+On the retained 1,374,501 bytes of raw ITF (82 frames total), the latest warm
+`pnpm check` completed in 3.3 seconds: Vitest reported 696 ms, with the
+remaining time covering TypeScript compilation plus all thirty-one presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
