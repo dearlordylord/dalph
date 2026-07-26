@@ -11,11 +11,13 @@ its body had last been updated at `2026-07-26T19:54:09Z`.
 ## Completion and owner acceptance
 
 The gaps below are a historical inventory of what was missing at the baseline.
-They were closed locally by `f415c52f9`, `a6233814c`, and `8cdae1abc`. On
-2026-07-26, the issue owner reviewed the following concrete before/after
-example and explicitly accepted the capacity-one evidence. The commits remain
-unpublished to `origin/master`, so this records owner acceptance without
-claiming remote publication or closing the live issue.
+They were closed by `f415c52f9`, `a6233814c`, and `8cdae1abc`. On 2026-07-26,
+the issue owner reviewed the following concrete before/after example and
+explicitly accepted the capacity-one evidence. The acceptance record
+`dfaa54da862bee89a0269b1aa9667a13fb28f4a5` and all three implementation
+commits were pushed to `origin/master` and the remote ref was reread at that
+exact SHA. This proves publication without claiming that the still-open live
+issue was closed.
 
 ### Concrete example
 
