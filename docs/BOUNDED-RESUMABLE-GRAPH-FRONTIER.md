@@ -164,18 +164,19 @@ The activation coordinator exposes trigger signaling, not transition submission.
 Startup, restart, resume, a recorded workflow result, and a controller change
 that may permit admission signal one scoped coordinator. Signals carry no task,
 transition, priority, or order key and may coalesce. One pass reads current
-reconstructed managed-run state and the controller snapshot, derives the
-frontier and bounded admission set, reserves and claims its exact first
-transition, and starts one scoped owned-operation runner. After that handoff is
-established, the coordinator rereads current state and may admit another
-transition without waiting for the earlier runner's final result. Before
-capacity admission, it excludes every exact transition already represented by
-live activation ownership, emits `ActivationInProgress` for that subject, and
-preserves the selector's order for the remainder. Each runner
-executes exactly one operation through the injected workflow interpreter,
-records its exact result, releases activation ownership, and signals the
-coordinator. Capacity exhaustion returns a `CapacityWait`; it does not park a
-transition-owning waiter.
+reconstructed managed-run state, the activation-ownership snapshot, and the
+controller snapshot, then derives the frontier. The coordinator excludes every
+exact transition already represented by live activation ownership, emits
+`ActivationInProgress` for that subject, and preserves the selector's order for
+the remainder. It passes only that filtered frontier to the controller, which
+computes bounded admission and reserves its exact first transition. The
+coordinator claims it and starts one scoped owned-operation runner. After that
+handoff is established, the coordinator rereads current state and may admit
+another transition without waiting for the earlier runner's final result. Each
+runner executes exactly one operation through the injected workflow
+interpreter, records its exact result, releases activation ownership, and
+signals the coordinator. Capacity exhaustion returns a `CapacityWait`; it does
+not park a transition-owning waiter.
 
 The private handoff registers the reserved task-admission position, activation
 ownership, and scoped runner under one interruption mask. Before an
@@ -316,6 +317,16 @@ authority projection, workflow adapter, conformance-test reopening seam,
 checking strategy, lifecycle, and maintainer. M1 remains separate because its detailed
 provider correlation and three-lookup protocol would make the broad model less
 tractable and obscure the focused question.
+
+The activation extension to M2 must make a runtime-observed runner exit after
+intent retain its exact task-admission position until fresh provider evidence
+changes that position. The
+`postIntentExitRetainsPositionUntilFreshEvidence` invariant owns this rule. A
+weakened action that frees the position immediately must produce a
+counterexample, and Quint-connect must execute the positive exit-then-observe
+sequence against the production projection. This makes early capacity release
+after a runtime-observed post-intent runner exit an automatically detectable
+model and MBT failure.
 
 | Model | Canonical safety properties | Required checking profiles |
 | --- | --- | --- |

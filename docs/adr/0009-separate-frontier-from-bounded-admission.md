@@ -47,8 +47,10 @@ and atomically registers one activation owner while starting an
 owned-operation runner for the exact first admitted transition. The coordinator
 derives again after the handoff without waiting for that runner's final result;
 several runners may overlap within capacity N and other resource bounds.
-Before applying capacity, it excludes exact transitions already represented by
-live activation ownership and preserves the selector's order for the remainder.
+Before asking the controller to apply capacity, the activation coordinator
+excludes exact transitions already represented by live activation ownership
+and preserves the selector's order for the remainder. The controller receives
+only that filtered frontier.
 Reservation, ownership registration, and scoped-runner start form one
 interruption-masked handoff. An unsuccessful handoff makes its exact newly
 reserved position available before returning or dying.

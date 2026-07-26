@@ -50,9 +50,13 @@ distributed deployment path.
    recovery scenarios cover all workers stopped, all surviving, and mixed
    survival.
 7. After a live-runtime ownership handoff, the coordinator may derive again.
-   Runtime-observed runner exit releases process-local state and signals the
-   coordinator; abrupt process death guarantees neither finalization nor a
-   signal, so later startup reconstruction is the only recovery trigger.
+   A runtime-observed exit before intent releases the exact ownership and
+   reserved position. An observed exit after intent removes only the dead
+   runner's ownership and retains the position under the `OperationId` recorded
+   in journal intent until fresh provider evidence proves whether it is
+   occupied or available. Both observed exits signal the coordinator; abrupt
+   process death guarantees neither finalization nor a signal, so later startup
+   reconstruction is the only recovery trigger.
 8. Activation ownership, independent coordinator/worker death, and changed
    restart capacity first extend canonical M2. Verification work must measure
    explored states and wall time and use a predefined profile-decomposition
@@ -95,6 +99,16 @@ distributed deployment path.
   ownership entry therefore keeps its immutable selection value only as an
   exclusion correlation while `OperationId` remains the sole post-intent
   boundary identity.
+- A repeated standards review found conflicting responsibility for filtering
+  live owners. The activation coordinator now performs that exclusion and
+  passes the filtered frontier to the controller, leaving capacity accounting
+  as the controller's only responsibility.
+- A repeated spec review found that the summary could release a position after
+  a post-intent runner exit even though the detailed protocol retained it. The
+  summary now distinguishes exits before and after intent. M2 must enforce
+  `postIntentExitRetainsPositionUntilFreshEvidence`, reject an early-release
+  action, and execute the positive exit-then-observe sequence through
+  Quint-connect.
 
 ## Owner, action, and boundary
 
@@ -291,8 +305,7 @@ The following services remain internal to that coordinator:
 ```ts
 interface AdmissionController {
   readonly admitNext: (
-    frontier: RunnableFrontier,
-    ownership: ActivationOwnershipSnapshot
+    frontierWithoutLiveOwners: RunnableFrontier
   ) => Effect.Effect<NextAdmissionDecision>
 
   readonly bindReservedPosition: (
@@ -377,19 +390,22 @@ observation may then change that position to occupied or available.
 one transition and, when required, its exact reserved task-admission position.
 Neither type carries an order key.
 
-Before applying capacity, `admitNext` removes every frontier transition whose
-structural identity or durable `OperationId` already appears in the ownership
-snapshot and returns an exact `ActivationInProgress` explanation for its
-subject. This is a membership constraint, not another scheduling order: it
-preserves the selector's order for every remaining transition. Without this
+Before asking the controller to apply capacity, the activation coordinator
+removes every frontier transition whose structural identity or operation
+identity appears in the ownership snapshot and returns an exact
+`ActivationInProgress` explanation for its subject. This is a membership
+constraint, not another scheduling order: it preserves the selector's order
+for every remaining transition. The controller receives only that filtered
+frontier and remains responsible only for capacity accounting. Without this
 step, a normal derivation between runner handoff and result recording would try
 to readmit the still-owned transition and misuse the duplicate guard as an
 ordinary branch.
 
-After intent, the ownership snapshot contains authoritative `OperationId` plus
-the immutable pre-intent selection correlation. The coordinator may use either
-to exclude an exact owned transition, but only `OperationId` may identify a
-post-intent request, result, retry, reconciliation action, or outcome.
+After intent, the ownership snapshot contains the `OperationId` recorded in
+journal intent plus the immutable pre-intent selection correlation. The
+coordinator may use either to exclude an exact owned transition, but only that
+recorded `OperationId` may identify a post-intent request, result, retry,
+reconciliation action, or outcome.
 
 The accepted controller API removes `awaitAdmission`. Capacity exhaustion is a
 returned `CapacityWait` explanation. A later controller change signals the
@@ -494,6 +510,7 @@ The full invariant set must include:
 - `duplicateOwnershipDoesNotStopIndependentResponsibility`;
 - `postIntentOwnerUsesStableOperationIdentity`;
 - `postIntentSelectionAliasIsCorrelationOnly`;
+- `postIntentExitRetainsPositionUntilFreshEvidence`;
 - `everyAmbiguityCrossingEffectHasIntent`;
 - `newReservedPositionsRespectConfiguredCapacity`;
 - `lowerRestartCapacityDoesNotPreemptObservedUsage`;
@@ -508,6 +525,8 @@ The negative modules must deliberately produce:
 - duplicate registration leaking its newly reserved position or stopping
   independent C;
 - a leaked reservation after interruption before intent;
+- an observed post-intent runner exit that makes its position available before
+  fresh provider evidence;
 - a delayed release for A-17 that removes A-18;
 - a new reservation while observed usage is at or above a lowered limit; and
 - the rejected controller-carried ordering trace admitting stale Z after
@@ -554,8 +573,10 @@ Required readable and generated lanes are:
    state while the runner records intent; the later ownership snapshot still
    excludes the transition through its immutable selection correlation and no
    post-intent request uses that correlation as identity.
-5. Interrupt before ownership, after ownership/before intent, and after intent,
-   with no leaked reservation and correct durable responsibility.
+5. Interrupt before ownership and after ownership/before intent, making the
+   exact pre-intent reserved position available. Then observe a post-intent
+   runner exit without a result, prove that its position remains reserved, and
+   permit a position change only after a fresh provider observation.
 6. A subject-local activation or boundary issue for A while independent C
    remains selectable; only shared history or a shared capability may stop C.
 7. Model-based generated sequences covering derive, reserve, own, intent,

@@ -36,9 +36,11 @@ owned by issues #53/#55.
   interruption-masked handoff. Before an unsuccessful handoff returns or dies,
   make its exact newly reserved position available and remove partial
   ownership.
-- Before applying capacity on a later pass, exclude exact transitions already
+- Before asking the admission controller to apply capacity on a later pass,
+  have the activation coordinator exclude exact transitions already
   represented by the private activation-ownership snapshot and emit
   `ActivationInProgress` without changing the order of remaining transitions.
+  Pass only the filtered frontier to the controller.
 - Remove `awaitAdmission` and its waiter ordering. Return `CapacityWait`, then
   signal rederivation after release, cancellation, or fresh non-consumption.
 - Before Dalph asks the tracker, Git, executor, or task-work provider to change
@@ -90,7 +92,14 @@ Required test lanes:
   runner;
 - capacity-N serialized admission with overlapping owned-operation runners;
 - interruption before ownership, after ownership/before intent, and after
-  intent;
+  intent; the first two make the exact pre-intent position available, while a
+  post-intent exit without a result retains its position until fresh provider
+  evidence;
+- a weakened post-intent-exit action that frees its position before fresh
+  provider evidence and must violate
+  `postIntentExitRetainsPositionUntilFreshEvidence`;
+- a generated post-intent-exit prefix whose production projection retains the
+  exact position, then changes it only after a fresh provider observation;
 - coordinator-only crash while provider workers survive, coordinator/worker
   co-failure, and mixed survival; the deterministic harness must control these
   as separate process-lifetime boundaries even though production deployment is
