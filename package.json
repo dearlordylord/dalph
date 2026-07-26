@@ -27,6 +27,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
     "test:watch": "vitest",
+    "prototype:restart-homomorphism": "node packages/orchestrator/prototypes/restart-selection-homomorphism/cli.ts",
     "check:all": "node scripts/run-quality-gate.mjs"
   },
   "lint-staged": {
