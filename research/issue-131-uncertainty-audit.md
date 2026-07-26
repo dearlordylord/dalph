@@ -27,9 +27,9 @@ non-preemptive live capacity changes after issue 131 establishes the controller.
 ## Workspace placement
 
 The active issue-131 review worktree is `/workspace/typescript/dalph` on branch
-`master`. Before this review bundle is published, both local and
-`origin/master` point to `84b2c9768`. The publication proof below supersedes
-that starting point after commit and push. The former
+`master`. The reviewed substantive bundle was committed and pushed as
+`f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; the publication proof below names
+the final checkpoint verification. The former
 `/workspace/typescript/dalph-master-complexity` worktree is detached at the
 starting commit and contains no local changes.
 
@@ -81,11 +81,11 @@ checks and unchecked issue boxes are not acceptance.
 | Repair native dependency order | **Resolved — externally proven** | GitHub's issue-dependency API was reread on 2026-07-26 and reports [Reconstruct one managed run through distinct reducers](https://github.com/dearlordylord/dalph/issues/130) blocks [Connect reconstructed graph knowledge to the M2 executable adapter](https://github.com/dearlordylord/dalph/issues/144), which blocks [Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131). The incorrect direct #130 → #131 edge was removed. |
 | Persist the #131 selector boundary and #132 activation ownership | **Resolved — externally proven** | On 2026-07-26, the live bodies of [#131](https://github.com/dearlordylord/dalph/issues/131) and [#132](https://github.com/dearlordylord/dalph/issues/132) were updated and reread with the headings `Ticket boundary` and `Activation seam inherited from #131`. This resolves the wording action only: #131 now owns shared selection/controller evidence; #132 owns exact-operation activation, changed restart capacity, one chooser, and repeated derivation. #132 implementation remains open. |
 | Persist pause evidence ownership | **Resolved — externally proven** | On 2026-07-26, the live bodies of [Pause and resume a whole run](https://github.com/dearlordylord/dalph/issues/134) and [Pause a task and its grouping descendants](https://github.com/dearlordylord/dalph/issues/135) were updated and reread with the heading `Evidence ownership`. This resolves the wording action only. Model, memory, and SQLite implementation evidence remains open. |
-| Warn that evidence/review-specific orchestration is transitional | **Persisted plan — implementation open** | On 2026-07-26, [Place evidence and review behind the executor boundary](https://github.com/dearlordylord/dalph/issues/133) was reread with the warning “The current evidence-, review-, and handback-specific orchestration code is transitional migration input” and all six named evidence/review/handback symbols. Local source comments point to #132/#133, but those comments and the actual boundary migrations are not yet committed or accepted. |
-| Persist deterministic recomputation semantics | **Applied locally — proof pending** | `docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md` now states identical-input determinism and deterministic current-input progress when facts/capacity differ. The full gate passed; it still requires the applicable review and a commit. |
-| Add local transitional source comments | **Applied locally — proof pending** | Comments were added in `runnable-frontier.ts`, `reconstructed-managed-run-state.ts`, and `task-admission-controller.ts`. They change no behavior and remain uncommitted. The full gate passed; applicable review and a commit remain required. |
-| Validate the complete local review bundle | **Applied locally — proof pending** | `pnpm check:all` passed on 2026-07-26: build, package boundary, typecheck, lint/format, circularity, complexity, duplication, both Quint model gates including expected counterexamples, 452 tests in 70 files, coverage thresholds, and secret scanning. This is worktree evidence only; it does not replace commit/review proof or issue-owner acceptance. |
-| Persist the owner's responsibility-order decision | **Resolved — externally proven** | The owner accepted Option B on 2026-07-26. The live [#132](https://github.com/dearlordylord/dalph/issues/132) body was updated and reread: whenever a controller-snapshot change can permit admission—including confirmed provider non-consumption or reservation release/cancellation—the coordinator reads current reconstructed managed-run state plus the snapshot and derives again; no dormant waiter supplies a second order. This resolves decision persistence only. Implementation remains open, while local canonical-spec and ADR changes remain proof-pending until reviewed and committed. |
+| Warn that evidence/review-specific orchestration is transitional | **Persisted plan — implementation open** | On 2026-07-26, [Place evidence and review behind the executor boundary](https://github.com/dearlordylord/dalph/issues/133) was reread with the warning “The current evidence-, review-, and handback-specific orchestration code is transitional migration input” and all six named evidence/review/handback symbols. The matching #132/#133 source comments were reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; the actual boundary migrations remain open. |
+| Persist deterministic recomputation semantics | **Resolved — repository proven** | The canonical specification was reviewed in all three passes, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed to `origin/master`, and remotely reread. It states identical-input determinism, deterministic current-input progress, and the complete Option B controller-snapshot trigger. |
+| Add transitional source comments | **Resolved — repository proven** | The #132/#133 comments in `runnable-frontier.ts`, `reconstructed-managed-run-state.ts`, and `task-admission-controller.ts` were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. They change no runtime behavior. |
+| Validate the complete review bundle | **Resolved — repository proven** | `pnpm check:all` passed on the reviewed substantive state on 2026-07-26: build, package boundary, typecheck, lint/format, circularity, complexity, duplication, both Quint model gates including expected counterexamples, 452 tests in 70 files, coverage thresholds, and secret scanning. All three repeated review passes returned clean; commit `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69` was pushed and matched `origin/master`. |
+| Persist the owner's responsibility-order decision | **Resolved — repository proven** | The owner accepted Option B on 2026-07-26. The live [#132](https://github.com/dearlordylord/dalph/issues/132) body was updated and reread: whenever a controller-snapshot change can permit admission—including confirmed provider non-consumption or reservation release/cancellation—the coordinator reads current reconstructed managed-run state plus the snapshot and derives again; no dormant waiter supplies a second order. The canonical specification and ADR 0009 were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. Implementation remains open under #132. |
 | Preserve the unrelated issue-120 research location | **Resolved — externally proven** | The live [#120](https://github.com/dearlordylord/dalph/issues/120) body was updated and reread on 2026-07-26 with its branch, dedicated worktree, repository-relative path, uncommitted status, and scope warning. No research conclusion was accepted by this bookkeeping action. |
 
 No production behavior was implemented during this review.
@@ -93,9 +93,10 @@ No production behavior was implemented during this review.
 ## Final review findings and dispositions
 
 The first independent domain/spec, architecture/connascence, and strict
-standards/code passes found the issues below. Every correction is
-**Applied locally — proof pending** until the repeated passes return clean and
-the publication proof records the pushed commits.
+standards/code passes found the issues below. Every correction was applied;
+each repeated pass returned clean. The corrections and this disposition record
+are **Resolved — repository proven** by pushed commit
+`f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`.
 
 | Finding | Disposition |
 | --- | --- |
@@ -105,7 +106,7 @@ the publication proof records the pushed commits.
 | ADR 0009 made review/handback look like universal capacity vocabulary. | Accepted. It now scopes those names to the current review-capable executor protocol and states the executor-declared resource-use rule owned by #133. |
 | H2 presented candidate handoff phases as accepted observable states. | Accepted. H2 now requires the Wayfinder to validate/rename ephemeral model/controller phases, name their actor/actions and intent relationship, and forbids durable journal/frontier/resource state. |
 | H4's “#132 activation result” prerequisite could mean only the H2 design. | Accepted. H4 now requires the accepted #132 implementation and validation result. |
-| Newly written examples used “Resolved — no work required.” | Accepted. SF7/SF8/SF9/SF11 are proof-pending until their reviewed repository commit is pushed; the taxonomy now includes repository-proven closure. |
+| Newly written examples used “Resolved — no work required.” | Accepted. SF7/SF8/SF9/SF11 were held proof-pending until their reviewed repository commit was pushed; they now cite repository-proven closure. |
 | Workspace and publication provenance used stale relative branch language. | Accepted. The ledger records the exact starting SHA and defers final state to the publication proof. |
 | Historical F7/F14 and U3 wording contradicted current H2/Option B. | Accepted. Those rows now explicitly point to the current accepted disposition rather than issuing stale instructions. |
 | “Pre-implementation” implied #131 had no existing implementation commits. | Accepted. The status now says pre-follow-up-implementation research. |
@@ -657,8 +658,8 @@ No row authorizes production implementation.
    implementation.
 3. The #131/#132 wording action is **Resolved — externally proven**; #132
    behavior remains open.
-4. Deterministic-recomputation wording is **Applied locally — proof pending** in
-   the canonical specification.
+4. Deterministic-recomputation wording is **Resolved — repository proven** in
+   commit `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`.
 5. Native dependencies are **Resolved — externally proven**. Pause and executor
    work remain attached to #133–#135.
 
@@ -674,16 +675,16 @@ This ledger preserves all 25 annotations from the review of this document.
 | SF4 — How to continue the executor-boundary work | **Handoff ready** | The [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md) starts only after #132. No new Wayfinder is needed because the destination and accepted boundary already exist. |
 | SF5 — Update drifted metadata | **Resolved — externally proven** | Native issue dependencies were changed and reread. |
 | SF6 — Perform the exact metadata repair | **Resolved — externally proven** | The incorrect direct edge was removed and the two missing native edges were added. |
-| SF7 — Add a workflow-responsibility example | **Applied locally — proof pending** | The concrete claim-intent/recheck example accurately instantiates the existing canonical definition. It becomes repository-proven only after the reviewed ledger commit is pushed and reread. |
-| SF8 — Add a named-wait example | **Applied locally — proof pending** | The dependency-wait/wake-observation example accurately instantiates the accepted named-wait rule. It becomes repository-proven only after the reviewed ledger commit is pushed and reread. |
-| SF9 — Explain how A-18 precedes A-17's delayed response | **Applied locally — proof pending** | The corrected five-step sequence requires a fresh release observation before A-18 and no longer overclaims the focused test. It becomes repository-proven only after the reviewed ledger commit is pushed; production journey proof remains owned by its implementation ticket. |
-| SF10 — Prevent agents treating evidence/review-specific code as the spec | **Persisted plan — implementation open** | #133's live warning is verified. Local source comments identify evidence sealing, review, handback, and the superseded #132 waiter queue but remain uncommitted. Actual removal/replacement remains the #132/#133 handoffs. |
-| SF11 — Explain two same-operation fibers | **Applied locally — proof pending** | The concurrent-trigger example explains why #132 ownership design remains open. It becomes repository-proven only after the reviewed ledger commit is pushed and reread. |
+| SF7 — Add a workflow-responsibility example | **Resolved — repository proven** | The concrete claim-intent/recheck example accurately instantiates the existing canonical definition and was reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. |
+| SF8 — Add a named-wait example | **Resolved — repository proven** | The dependency-wait/wake-observation example accurately instantiates the accepted named-wait rule and was reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. |
+| SF9 — Explain how A-18 precedes A-17's delayed response | **Resolved — repository proven** | The reviewed five-step sequence requires a fresh release observation before A-18 and no longer overclaims the focused test. It was committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; production journey proof remains owned by its implementation ticket. |
+| SF10 — Prevent agents treating evidence/review-specific code as the spec | **Persisted plan — implementation open** | #133's live warning is verified. Committed source comments identify evidence sealing, review, handback, and the superseded #132 waiter queue. Actual removal/replacement remains the #132/#133 handoffs. |
+| SF11 — Explain two same-operation fibers | **Resolved — repository proven** | The concurrent-trigger example explains why #132 ownership design remains open and was reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. |
 | SF12 — If MBT cannot drive the duplicate, redesign it | **Handoff ready** | The controller audit agrees. The #132 Wayfinder must expose ownership states; later MBT must drive duplicate triggers or prove them unrepresentable. An untestable possible branch is unacceptable. |
 | SF13 — Handoff generated controller testing | **Resolved — no work required** | The routing decision is complete: do not harden the repeatable waiter API because that would cement a seam intended to disappear. Activation/controller MBT belongs in H3 after the H2 design result. |
 | SF14 — Handoff the rigorous test order | **Handoff ready** | Capacity-one formal checking is H1. Activation interleavings, generated command sequences, and readable edge examples belong in H3 after H2. |
 | SF15 — “Later” means this review's continuations | **Handoff ready** | Visual work is now the explicit H5 handoff/sub-agent continuation in this review, not an unspecified future. |
-| SF16 — Research Effect Analyzer with Quint and Dalph | **Applied locally — proof pending** | The cited [evaluation](effect-analyzer-quint-evaluation.md) exists locally and records pinned-source trials against Dalph. It rejects analyzer-as-correctness-gate and source-to-Quint generation, supports one isolated ITF-view prototype, and separates later source-analysis adoption. The research note is not committed; H5 is separately **Handoff ready**. |
+| SF16 — Research Effect Analyzer with Quint and Dalph | **Resolved — repository proven** | The cited [evaluation](effect-analyzer-quint-evaluation.md) records pinned-source trials against Dalph. It rejects analyzer-as-correctness-gate and source-to-Quint generation, supports one isolated ITF-view prototype, and separates later source-analysis adoption. The note was independently reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; H5 remains separately **Handoff ready**. |
 | SF17 — Where capacity-one checking belongs | **Handoff ready** | It is narrow, independently evidenced #131 work in the [capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md); it may start now and should not wait for #132. |
 | SF18 — Where the #131 review-type audit belongs | **Handoff ready** | The audit evidence names the affected symbols in #133. No more discovery sub-agent is needed; replacement belongs to the [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md). |
 | SF19 — Repair dependencies now | **Resolved — externally proven** | Completed and reread through GitHub's native dependency endpoint. |
@@ -691,7 +692,7 @@ This ledger preserves all 25 annotations from the review of this document.
 | SF21 — Changed configured capacity tests | **Persisted plan — implementation open** | The live issue now requires 8→2, 1→2, and 2→1 restart behavior. H2 must update the model because grandfathered occupancy can exceed the new future-admission limit; H3 must implement and test it. |
 | SF22 — Persist “frontier-recovery Quint model” wording | **Resolved — externally proven** | The live #131 body was amended and reread. Existing canonical authority already defines M2 as Model 2 test notation, so no runtime vocabulary changed. |
 | SF23 — Persist the P0 terminology restriction | **Resolved — no work required** | The canonical specification and every relevant live issue already state that P0–P6 are conformance-test cut points only, not stages/states/priorities/events/domain terms. This document supplies the user-facing expansion rule. |
-| SF24 — Show both U3 behaviors before asking | **Resolved — externally proven** | The owner accepted Option B on 2026-07-26 after reviewing both traces. The live #132 issue was updated and reread: whenever a controller-snapshot change can permit admission, the coordinator reads current reconstructed managed-run state plus the snapshot and derives again. This resolves the owner-decision and external-persistence action. Implementation remains open; local canonical specification, ADR 0009, ledger, and H2 changes still require review and commit. |
+| SF24 — Show both U3 behaviors before asking | **Resolved — repository proven** | The owner accepted Option B on 2026-07-26 after reviewing both traces. The live #132 issue was updated and reread: whenever a controller-snapshot change can permit admission, the coordinator reads current reconstructed managed-run state plus the snapshot and derives again. The canonical specification, ADR 0009, ledger, and H2 changes were reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. Implementation remains open under #132. |
 | SF25 — Route U3/U5 and the four later items | **Handoff ready** | See the continuation registry below. No uncertainty is left as an unnamed “later”; the declared handoff results remain open until returned and proven. |
 
 ## Continuation registry
@@ -745,7 +746,8 @@ Research note:
 Prototype handoff:
 [Quint trace explanation view](issue-131-handoffs/quint-trace-view-prototype.md)
 
-The research result is local and uncommitted. It establishes that Effect
+The research result is committed in
+`f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. It establishes that Effect
 Analyzer must not be a correctness oracle and that Quint must not be generated
 from Effect source. The H5 prototype may start independently and is optional
 for #131–#135. Its required return is three trace kinds, decoded normalized
@@ -766,19 +768,45 @@ already own the required work and their live bodies now preserve the exact
 evidence boundaries. Their implementations require the completed #133 and
 control-service prerequisites declared by native dependencies.
 
+## Review bundle publication proof
+
+The substantive review bundle is commit
+`f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`. It contains the canonical
+specification and ADR changes, transitional #132/#133 source comments, Effect
+Analyzer/Quint evaluation, all four handoffs, and this ledger's reviewed
+content.
+
+Proof recorded before this final checkpoint:
+
+1. independent domain/spec, architecture/connascence, and strict
+   standards/code reviews reported their findings;
+2. every reasonable finding was accepted and corrected;
+3. every repeated review returned clean;
+4. `pnpm check:all` passed on the corrected state, including both Quint gates,
+   452 tests in 70 files, coverage thresholds, and secret scanning; and
+5. the substantive commit was pushed and a fresh fetch proved
+   `origin/master` matched it.
+
+The commit containing this final checkpoint is the publication-proof follow-up.
+The live [issue #131](https://github.com/dearlordylord/dalph/issues/131) section
+named `Review bundle publication proof` records its exact SHA and the final
+`origin/master` reread. No production behavior was added by either publication
+commit.
+
 ## Compaction checkpoint
 
 After conversation compaction, a fresh agent should:
 
 1. read this file's **Current control protocol**, **Second feedback ledger**,
    and **Continuation registry** before older status sections;
-2. work from `/workspace/typescript/dalph` on `master`, inspect its uncommitted
-   changes, and never assume local text is committed proof;
-3. read H5's completed local research note and use
+2. work from `/workspace/typescript/dalph` on `master`, require a clean worktree,
+   and verify `HEAD`/`origin/master` match the exact final proof commit recorded
+   in live issue #131 under `Review bundle publication proof`;
+3. read H5's completed committed research note and use
    [the persisted H5 handoff](issue-131-handoffs/quint-trace-view-prototype.md)
    only if running the optional trace prototype;
 4. treat SF24's Option B decision as accepted and do not requery it unless new
    contradictory evidence requires an explicit reconsideration;
-5. run focused documentation/source-comment checks and the appropriate review
-   pass before committing any current local changes; and
+5. start no implementation from historical status rows; use only the
+   continuation registry and each linked handoff's required return; and
 6. never mark behavior resolved from an issue-body update alone.
