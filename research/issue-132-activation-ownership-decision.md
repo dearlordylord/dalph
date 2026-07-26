@@ -363,6 +363,13 @@ post-intent `OperationId` and reconciles it. No runner may send an external
 state-changing request before recording intent, so loss before intent cannot
 hide an external effect.
 
+When the live runtime observes runner exit before intent, the finalizer removes
+ownership, makes the exact reserved position available, and signals
+rederivation. When it observes exit after intent without a recorded result, it
+removes only the dead runner's ownership, retains the position correlated to
+`OperationId`, and signals exact reconciliation. Only a conclusive provider
+observation may then change that position to occupied or available.
+
 `AdmissionAvailabilityChange` is the tagged union
 `AdmissionMayNowBePossible | AdmissionAvailabilityUnchanged`.
 `NextAdmissionDecision` is

@@ -802,7 +802,11 @@ workflow interpreter, record its exact result, and signal the coordinator.
 Several runners may overlap within capacity and other resource bounds. It is
 not the provider-owned task-work invocation that the interpreted operation may
 start or observe. Its finalizer and signal are live-runtime behavior, not
-guarantees after abrupt process death; later startup reconstructs instead.
+guarantees after abrupt process death; later startup reconstructs instead. A
+live-runtime exit before intent makes the exact reserved task-admission position
+available. An exit after intent but before a result retains the position under
+`OperationId` until fresh provider evidence proves whether it is occupied or
+available.
 _Avoid_: Activation coordinator, task executor, task-work invocation, worker process
 
 **Activation in progress**:

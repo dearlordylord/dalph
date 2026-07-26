@@ -185,6 +185,13 @@ classified `DuplicateActivationOwnershipDefect`, not an expected Effect error;
 the coordinator supervisor isolates its exact subject and continues unrelated
 work without starting a runner or external effect.
 
+After an acknowledged handoff, a live-runtime runner exit before intent removes
+ownership and makes the exact reserved position available. An exit after intent
+without a recorded result removes only the dead runner's ownership, retains the
+position under `OperationId`, and signals reconciliation; only fresh provider
+evidence may change it to occupied or available. Abrupt process death guarantees
+neither finalization nor signaling and relies on startup reconstruction.
+
 Selection, reservation, and activation ownership are process-local. Restart
 discards every pre-intent instance and derives again. A recorded intent retains
 its `OperationId` and immutable payload. The controller reconstructs positions
