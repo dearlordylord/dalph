@@ -20,7 +20,8 @@ import {
   TraceDecodeError
 } from "./trace.mjs"
 import {
-  renderSideBySideHtml
+  buildObservedStateDag,
+  renderObservedDagHtml
 } from "./render.mjs"
 
 const fixtureRoot = resolve(import.meta.dirname, "..", "fixtures")
@@ -162,14 +163,59 @@ const expectReason = (
 describe("ITF to normalized frame boundary", () => {
   it("renders the frame table as semantic HTML", () => {
     const trace = decode(raw)
-    const html = renderSideBySideHtml(
-      trace,
-      "<svg></svg>"
-    )
+    const html = renderObservedDagHtml([trace])
     expect(html).toContain("<table>")
     expect(html).toContain("<th>Position</th>")
     expect(html).toContain("<td><code>S0</code></td>")
     expect(html).not.toContain("<section><h2>Frame table</h2><pre>")
+  })
+
+  it("merges identical model states at the same depth into a branching DAG", () => {
+    const sampled = decode(raw)
+    const restartManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
+      readJson(resolve(fixtureRoot, "restart.manifest.json"))
+    )
+    const restart = decode(
+      Schema.decodeUnknownSync(ItfEnvelopeWire)(
+        readJson(resolve(fixtureRoot, restartManifest.rawItf))
+      ),
+      restartManifest.provenance
+    )
+    const counterexampleManifest = Schema.decodeUnknownSync(
+      FixtureManifestSchema
+    )(readJson(resolve(fixtureRoot, "counterexample.manifest.json")))
+    const counterexample = decode(
+      Schema.decodeUnknownSync(ItfEnvelopeWire)(
+        readJson(resolve(fixtureRoot, counterexampleManifest.rawItf))
+      ),
+      counterexampleManifest.provenance
+    )
+
+    const dag = buildObservedStateDag([sampled, restart, counterexample])
+
+    expect(dag.nodes.length).toBeLessThan(
+      sampled.frames.length
+        + restart.frames.length
+        + counterexample.frames.length
+    )
+    expect(dag.nodes.filter((node) => node.depth === 0)).toHaveLength(1)
+    expect(
+      dag.edges.filter((edge) => edge.source === dag.nodes[0]?.id)
+        .map((edge) => edge.action)
+    ).toEqual(["reconstructionStep", "weakenedCapacityStep(task 0)"])
+    expect(dag.edges.some((edge) => edge.traceKinds.length > 1)).toBe(true)
+  })
+
+  it("renders one interactive observed DAG and no linear path visual", () => {
+    const trace = decode(raw)
+    const html = renderObservedDagHtml([trace])
+
+    expect(html).toContain("<h1>Observed Quint state DAG</h1>")
+    expect(html).toContain("Sampled and incomplete")
+    expect(html).toContain('data-node-id="N0"')
+    expect(html).toContain("addEventListener")
+    expect(html).not.toContain("Generated path visual")
+    expect(html).not.toContain("stateDiagram-v2")
   })
 
   it("preserves every displayed value from every sampled ITF state", () => {

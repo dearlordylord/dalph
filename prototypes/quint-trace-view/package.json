@@ -14,8 +14,7 @@
     "check": "pnpm test && pnpm generate"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.99",
-    "effect-analyzer": "2.1.0"
+    "effect": "4.0.0-beta.99"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

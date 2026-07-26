@@ -3,14 +3,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
-  renderSideBySideHtml,
-  renderTable,
-  renderVisuals
+  renderObservedDagHtml,
+  renderTable
 } from "./render.mjs"
 import {
   decodeTrace,
   FixtureManifestSchema,
-  ImplementationFixtureSchema
+  ImplementationFixtureSchema,
+  type NormalizedTrace
 } from "./trace.mjs"
 import { Effect, Schema } from "effect"
 
@@ -26,6 +26,7 @@ const modelSha256 = createHash("sha256")
   .update(await readFile(resolve(repositoryRoot, "specs", "frontierRecovery.qnt")))
   .digest("hex")
 
+const traces: Array<NormalizedTrace> = []
 for (const name of manifests) {
   const manifestPath = resolve(packageRoot, "fixtures", `${name}.manifest.json`)
   const manifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
@@ -58,20 +59,21 @@ for (const name of manifests) {
       implementationFixture?.frames
     )
   )
+  traces.push(trace)
   const table = renderTable(trace)
-  const { mermaid, svg } = renderVisuals(trace)
   const artifactRoot = resolve(packageRoot, "artifacts", name)
   await Promise.all([
     writeFile(`${artifactRoot}.normalized.json`, `${JSON.stringify(trace)}\n`),
-    writeFile(`${artifactRoot}.table.md`, table),
-    writeFile(`${artifactRoot}.visual.mmd`, mermaid),
-    writeFile(`${artifactRoot}.visual.svg`, svg),
-    writeFile(
-      `${artifactRoot}.side-by-side.html`,
-      renderSideBySideHtml(trace, svg)
-    )
+    writeFile(`${artifactRoot}.table.md`, table)
   ])
   process.stdout.write(
     `generated ${basename(artifactRoot)}: ${trace.frames.length} frames\n`
   )
 }
+
+const dagHtml = renderObservedDagHtml(traces)
+await Promise.all([
+  writeFile(resolve(packageRoot, "index.html"), dagHtml),
+  writeFile(resolve(packageRoot, "artifacts", "observed-state-dag.html"), dagHtml)
+])
+process.stdout.write("generated observed-state-dag.html\n")

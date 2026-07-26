@@ -57,7 +57,7 @@ export const ArtifactProvenanceSchema = Schema.Struct({
   modelSha256: ModelSha256,
   projectionVersion: Schema.Literal(PROJECTION_VERSION),
   quintVersion: Schema.Literal("0.32.0"),
-  rendererVersion: Schema.Literal("effect-analyzer@2.1.0"),
+  rendererVersion: Schema.Literal("observed-dag-prototype@1"),
   seed: TraceSeed,
   step: Schema.NonEmptyString,
   traceKind: Schema.Literals(["sampled", "restart", "counterexample"])

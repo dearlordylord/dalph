@@ -1,19 +1,14 @@
 # Quint trace explanation view — throwaway prototype
 
-This isolated prototype answers one question: does a generated path visual
-explain the frontier-recovery Quint traces more clearly than a frame table?
+This isolated prototype combines retained frontier-recovery Quint traces into
+one interactive observed state DAG. Equal exact model states at the same
+exploration depth are merged, so shared prefixes and reconvergence are visible.
+Selecting a node reveals its normalized decision fields and raw ITF state.
 
-**Decision: retain the table format, not the statechart, if Dalph later adopts
-a durable trace view.** The SVG makes action order and the crash/restart
-position easy to scan, but it omits the capacity, frontier, admission,
-reservation, operation identity, and exact capacity-wait explanation that
-explain the decision. Adding those values to graph nodes would make the visual
-denser than the table. The generated HTML keeps both side by side so the
-decision can be inspected.
-
-This is one sampled path, restart path, or counterexample path. It is not “the
-state machine,” model checking, MBT, or proof of correctness. The decoder never
-selects an action or computes a legal transition.
+**This DAG is sampled and incomplete.** Its edges are transitions observed in
+the three retained traces. An absent edge is unknown, not disabled. It is not
+the complete state machine, model checking, MBT, or proof of correctness. The
+decoder never selects an action or computes a legal transition.
 
 ## Run
 
@@ -25,15 +20,14 @@ pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs fifteen decoder/equality/drift/fail-closed tests, compiles the
-prototype, and regenerates byte-identical normalized, table, Mermaid, SVG, and
-side-by-side HTML artifacts.
+`pnpm check` runs the decoder/equality/drift/fail-closed and DAG tests, compiles
+the prototype, and regenerates byte-identical normalized, table, and
+interactive DAG artifacts.
 
 Pinned versions:
 
 - Quint `0.32.0` (the repository root pin);
 - Effect `4.0.0-beta.99`;
-- `effect-analyzer@2.1.0`;
 - TypeScript `5.9.3`;
 - Vitest `4.0.18`; and
 - pnpm `10.29.3`.
@@ -65,11 +59,12 @@ Generated evidence for each trace:
 
 - `artifacts/*.normalized.json`: normalized frames with the raw ITF state
   retained for inspection;
-- `artifacts/*.table.md`: the complete decision-bearing frame table;
-- `artifacts/*.visual.mmd`: MachineJSON rendered through Effect Analyzer;
-- `artifacts/*.visual.svg`: the same path as standalone SVG; and
-- `artifacts/*.side-by-side.html`: table and visual together, followed by
-  expandable raw ITF states.
+- `artifacts/*.table.md`: the complete decision-bearing frame table; and
+- `index.html` and `artifacts/observed-state-dag.html`: the same interactive
+  branching DAG, node inspector, semantic HTML frame tables, and raw ITF state.
+
+The earlier per-trace Mermaid, SVG, and side-by-side linear path artifacts were
+deleted.
 
 ## Exact fixture commands
 
@@ -143,7 +138,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       15 passed (15)
+Tests       17 passed (17)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -172,8 +167,8 @@ Fail-closed cases reject:
 ## Performance observations
 
 On the retained 218,756 bytes of raw ITF (13 frames total), the latest warm
-`pnpm check` completed in 2.86 seconds: Vitest reported 586 ms, with the
-remaining time covering TypeScript compilation plus all 15 presentation
+`pnpm check` completed in 3.3 seconds: Vitest reported 486 ms, with the
+remaining time covering TypeScript compilation plus all eight presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
@@ -229,10 +224,11 @@ implementation projection. It does not decide whether either side is correct.
 
 ## Adoption boundary
 
-If Dalph later adopts a trace explanation artifact, adopt the normalized
-decoder and table as test/research tooling. Do not adopt the generated
-statechart as a durable format: it is not materially clearer for the decision
-being explained. Keep Quint and the existing MBT comparison authoritative.
+If Dalph later adopts a trace explanation artifact, the normalized decoder,
+semantic tables, and observed DAG may be useful as test/research tooling. A
+durable graph must retain the sampled/incomplete label unless an authoritative
+bounded explorer supplies every successor. Keep Quint and the existing MBT
+comparison authoritative.
 
 This result makes no decision about Effect Analyzer source analysis. That
 separate decision still requires all seven Decision B results in
