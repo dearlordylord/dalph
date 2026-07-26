@@ -253,3 +253,9 @@ lockfile or package-local quality configuration. Its retained action inventory
 cannot import production test code during standalone artifact generation
 without coupling the disposable package to Dalph internals, so a focused test
 imports the existing version-3 conformance inventory and fails on drift.
+
+The final standards pass noted that model operation ID `-1` is a sentinel
+rather than a real operation identity. This prototype retains it because it is
+the exact existing Quint/MBT wire value and constrains the schema to `-1` or a
+nonnegative integer. A durable domain model should use a tagged
+`NoOperationYet | ModelOperationId` variant instead.
