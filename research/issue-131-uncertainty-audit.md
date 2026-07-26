@@ -748,10 +748,7 @@ Implementation commits:
 
 ### H2 — Issue #132 activation Wayfinder
 
-Handoff:
-[#132 activation Wayfinder](issue-131-handoffs/issue-132-activation-wayfinder.md)
-
-The design continuation returned the
+The consumed design handoff was retired after the continuation returned the
 [activation ownership decision](issue-132-activation-ownership-decision.md).
 It materializes the accepted single coordinator-loop/rederive behavior,
 admission handoff, restart ownership, changed-capacity model plan, and
