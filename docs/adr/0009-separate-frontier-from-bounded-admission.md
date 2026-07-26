@@ -47,6 +47,11 @@ and atomically registers one activation owner while starting an
 owned-operation runner for the exact first admitted transition. The coordinator
 derives again after the handoff without waiting for that runner's final result;
 several runners may overlap within capacity N and other resource bounds.
+Before applying capacity, it excludes exact transitions already represented by
+live activation ownership and preserves the selector's order for the remainder.
+Reservation, ownership registration, and scoped-runner start form one
+interruption-masked handoff. An unsuccessful handoff makes its exact newly
+reserved position available before returning or dying.
 Trigger callers cannot submit transitions or obtain the owned capability, so
 the public API cannot represent duplicate ownership. This keeps capacity
 accounting in the controller, workflow order in the selector, and execution

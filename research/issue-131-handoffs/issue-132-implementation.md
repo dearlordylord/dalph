@@ -32,6 +32,13 @@ owned by issues #53/#55.
 - Keep admitted and owned transition constructors internal to the activation
   coordinator. Trigger callers must have no API that can submit,
   claim, or execute a transition.
+- Implement reservation, ownership registration, and scoped-runner start as one
+  interruption-masked handoff. Before an unsuccessful handoff returns or dies,
+  make its exact newly reserved position available and remove partial
+  ownership.
+- Before applying capacity on a later pass, exclude exact transitions already
+  represented by the private activation-ownership snapshot and emit
+  `ActivationInProgress` without changing the order of remaining transitions.
 - Remove `awaitAdmission` and its waiter ordering. Return `CapacityWait`, then
   signal rederivation after release, cancellation, or fresh non-consumption.
 - Before Dalph asks the tracker, Git, executor, or task-work provider to change
@@ -67,6 +74,20 @@ state.
 Required test lanes:
 
 - two concurrent triggers for one exact transition;
+- rederivation while one pre-intent and one post-intent runner remain live,
+  proving neither exact transition is readmitted;
+- mixed-time projection where reconstructed state is read before intent while
+  the ownership snapshot is read after intent; immutable selection correlation
+  still excludes the owner, while only `OperationId` identifies post-intent
+  boundary work;
+- a weakened M2 action that omits only owned-transition exclusion and must
+  violate `ownedTransitionIsNotReadmitted`;
+- a weakened duplicate-rejection action that leaks its reserved position or
+  stops independent C and must violate the corresponding exact cleanup or
+  independent-progress invariant;
+- a generated Quint-connect prefix `own → derive before result` whose
+  production projection must return `ActivationInProgress` and exactly one
+  runner;
 - capacity-N serialized admission with overlapping owned-operation runners;
 - interruption before ownership, after ownership/before intent, and after
   intent;

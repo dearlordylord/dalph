@@ -154,6 +154,11 @@ a second transition owner cannot be represented through the public API. When
 the runner records operation intent, the ownership entry and any reserved task
 admission position bind to the durable `OperationId`; every later request,
 result check, retry, reconciliation action, and outcome retains it.
+The live ownership entry retains its immutable selected-transition value only
+as a process-local exclusion correlation until ownership ends, so a pass that
+read pre-intent reconstructed state while intent was being recorded still
+cannot readmit the owner. No post-intent boundary action uses that correlation
+as its identity.
 
 The activation coordinator exposes trigger signaling, not transition submission.
 Startup, restart, resume, a recorded workflow result, and a controller change
@@ -163,11 +168,22 @@ reconstructed managed-run state and the controller snapshot, derives the
 frontier and bounded admission set, reserves and claims its exact first
 transition, and starts one scoped owned-operation runner. After that handoff is
 established, the coordinator rereads current state and may admit another
-transition without waiting for the earlier runner's final result. Each runner
+transition without waiting for the earlier runner's final result. Before
+capacity admission, it excludes every exact transition already represented by
+live activation ownership, emits `ActivationInProgress` for that subject, and
+preserves the selector's order for the remainder. Each runner
 executes exactly one operation through the injected workflow interpreter,
 records its exact result, releases activation ownership, and signals the
 coordinator. Capacity exhaustion returns a `CapacityWait`; it does not park a
 transition-owning waiter.
+
+The private handoff registers the reserved task-admission position, activation
+ownership, and scoped runner under one interruption mask. Before an
+unsuccessful handoff returns or dies, it makes that exact newly reserved
+position available and removes partial ownership. A second registration is a
+classified `DuplicateActivationOwnershipDefect`, not an expected Effect error;
+the coordinator supervisor isolates its exact subject and continues unrelated
+work without starting a runner or external effect.
 
 Selection, reservation, and activation ownership are process-local. Restart
 discards every pre-intent instance and derives again. A recorded intent retains

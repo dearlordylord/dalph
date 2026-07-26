@@ -777,10 +777,13 @@ _Avoid_: Operation identity, task identity, persisted frontier entry, admission 
 The process-local exclusive capability held by one owned-operation runner while
 it records or executes one exact selected workflow transition. The activation
 coordinator creates ownership while starting that runner, keys it by selected
-transition identity before intent and operation identity afterward, and removes
-it after the exact result or interruption rule completes. Trigger callers
-cannot submit a transition or obtain this capability. It is not authority over
-a tracker, Git, executor, provider, or their resources.
+transition identity before intent and by operation identity afterward, and
+removes it after the exact result or interruption rule completes. After intent,
+the live entry retains the immutable selected-transition value only as an
+exclusion correlation; every request, result, retry, and reconciliation action
+uses operation identity. Trigger callers cannot submit a transition or obtain
+this capability. It is not authority over a tracker, Git, executor, provider,
+or their resources.
 _Avoid_: Workflow responsibility, task claim, admission reservation, durable lease
 
 **Activation coordinator**:
@@ -801,6 +804,24 @@ not the provider-owned task-work invocation that the interpreted operation may
 start or observe. Its finalizer and signal are live-runtime behavior, not
 guarantees after abrupt process death; later startup reconstructs instead.
 _Avoid_: Activation coordinator, task executor, task-work invocation, worker process
+
+**Activation in progress**:
+The process-local explanation that one exact frontier transition is already
+represented by a live owned-operation runner. The activation coordinator
+excludes that exact identity from later admission without changing the order of
+remaining transitions. Runtime-observed runner exit removes the ownership;
+abrupt process death discards the explanation and later startup reconstructs
+from durable intent and fresh authority observations.
+_Avoid_: Duplicate activation ownership, persisted running status, capacity waiting
+
+**Duplicate activation ownership defect**:
+The classified implementation defect detected when the private atomic handoff
+attempts to register a second owned-operation runner for one exact transition.
+Before dying, the interruption-masked handoff makes its exact newly reserved
+task-admission position available and creates no runner or external effect. The
+coordinator supervisor isolates the exact subject; this defect is not an
+expected Effect failure.
+_Avoid_: Activation in progress, duplicate-ownership conflict, retryable activation failure
 
 **Task admission position**:
 One process-local unit of configured task-work capacity, reserved while Dalph
