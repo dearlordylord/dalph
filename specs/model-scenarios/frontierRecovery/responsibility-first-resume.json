@@ -1,0 +1,51 @@
+{
+  "scenarioId": "responsibility-first-resume",
+  "model": "frontierRecovery",
+  "modelVersion": 2,
+  "source": {
+    "actionSequence": [
+      "init",
+      "reachInvocation(A)",
+      "commitResponsibleIntent(A)",
+      "requestApplies(A)",
+      "requestTaskPause(A)",
+      "providerInterruptsInvocation(A)",
+      "observeTask(A)",
+      "recordInterruptedInvocation(A)",
+      "requestTaskResume(A)",
+      "observeTask(A)",
+      "commitResponsibleIntent(A)"
+    ],
+    "backend": "quint-rust",
+    "bounds": {
+      "capacity": 2,
+      "deterministicTests": 1
+    },
+    "capacityProfiles": [1, 2],
+    "coverage": ["scenario-2", "scenario-16"],
+    "modelBlobSha": "0dec48bd6b9ec2fa81e592eaf7b613ed362fd04e",
+    "modelCommit": "e7c6e27e6",
+    "profile": "pauseInterruptResumeRereadsBeforeReinvocationTest",
+    "seed": null,
+    "toolVersions": {
+      "quint": "0.32.0",
+      "quintConnect": "2.0.2-effect4.1"
+    },
+    "traceHash": "d900b56c19e127b409b66ffe841826ca62aeeeb71e9f275ef9743991dc9c7cce"
+  },
+  "initialFacts": {
+    "ownedTask": "A",
+    "occupiedIndependentTasks": ["B", "C"],
+    "freshEligibleTask": "D",
+    "taskA": "paused"
+  },
+  "observations": [
+    "provider reports B terminal",
+    "fresh pause and authority facts report A ready"
+  ],
+  "expected": {
+    "firstAdmittedTask": "A",
+    "restartProjectionEqual": true,
+    "unrelatedTaskPreserved": "D"
+  }
+}

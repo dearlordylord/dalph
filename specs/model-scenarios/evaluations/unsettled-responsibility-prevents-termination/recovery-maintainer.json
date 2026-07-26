@@ -1,0 +1,7 @@
+{
+  "evaluator": "recovery-maintainer",
+  "scenarioId": "unsettled-responsibility-prevents-termination",
+  "verdict": "acceptable",
+  "confidence": "high",
+  "reason": "Run finality remains separate from frontier emptiness and requires tracker settlement plus no responsibility."
+}

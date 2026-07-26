@@ -1,0 +1,7 @@
+{
+  "evaluator": "recovery-maintainer",
+  "scenarioId": "responsibility-first-resume",
+  "verdict": "acceptable",
+  "confidence": "high",
+  "reason": "Journal position and normalized task identity determine priority without a persisted scheduling cursor."
+}

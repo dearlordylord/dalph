@@ -1,0 +1,7 @@
+{
+  "evaluator": "lost-or-duplicated-work",
+  "scenarioId": "responsibility-first-resume",
+  "verdict": "acceptable",
+  "confidence": "high",
+  "reason": "The restart projection is identical and a stale terminal observation cannot release a replacement invocation."
+}

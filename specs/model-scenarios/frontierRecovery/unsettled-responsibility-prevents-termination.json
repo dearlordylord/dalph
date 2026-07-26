@@ -1,0 +1,34 @@
+{
+  "scenarioId": "unsettled-responsibility-prevents-termination",
+  "model": "frontierRecovery",
+  "modelVersion": 2,
+  "source": {
+    "actionSequence": ["init", "completeSuccessfulTask(A)"],
+    "backend": "quint-rust",
+    "bounds": {
+      "capacity": 2,
+      "deterministicTests": 1
+    },
+    "capacityProfiles": [1, 2],
+    "coverage": ["scenario-17"],
+    "modelBlobSha": "0dec48bd6b9ec2fa81e592eaf7b613ed362fd04e",
+    "modelCommit": "e7c6e27e6",
+    "profile": "completeProtocolKeepsFinalitiesDistinctTest",
+    "seed": null,
+    "toolVersions": {
+      "quint": "0.32.0",
+      "quintConnect": "2.0.2-effect4.1"
+    },
+    "traceHash": "064c2538f05eb342ceee0bcfe57cecc537fc4d3f982404fe3f17d3ff828a5af9"
+  },
+  "initialFacts": {
+    "freshEligibleTasks": [],
+    "ownedTask": "A",
+    "responsibilityDisposition": "paused-or-waiting-or-isolated"
+  },
+  "expected": {
+    "frontierTransitions": [],
+    "runFinality": "RunMustRemainActive",
+    "reason": "UnsettledResponsibility"
+  }
+}
