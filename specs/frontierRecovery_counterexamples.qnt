@@ -1,7 +1,7 @@
 // Deliberately weakened transition profiles for checking that the safety
 // properties reject the exact bugs they are meant to detect.
 module frontierRecoveryCounterexamples {
-  import frontierRecovery.* from "./frontierRecovery"
+  import frontierRecovery(CAPACITY = 2).* from "./frontierRecovery"
 
   pure def applyEffectWithoutIntent(s: State, task: TaskId): State = {
     val boundary = ClaimBoundary
@@ -73,5 +73,23 @@ module frontierRecoveryCounterexamples {
       restart,
       requestUsingStaleKnowledge(task),
     }
+  }
+}
+
+module frontierRecoveryCapacityCounterexample {
+  import frontierRecovery(CAPACITY = 1).* from "./frontierRecovery"
+
+  // Deliberately omits the configured-position check from
+  // canCommitFirstIntent. With independently eligible A and C, two steps can
+  // reserve both tasks even though this profile has one position.
+  action commitIgnoringConfiguredCapacity(task: TaskId): bool = all {
+    state.coordinator.running,
+    freshTaskIsEligible(state, task),
+    state' = refreshSelectorProjection(applyCommitFirstIntent(state, task)),
+  }
+
+  action weakenedCapacityStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    commitIgnoringConfiguredCapacity(task)
   }
 }

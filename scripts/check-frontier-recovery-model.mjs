@@ -32,7 +32,12 @@ const run = (name, args) => {
   }
 }
 
-const expectInvariantFailure = (name, step, invariant) => {
+const expectInvariantFailure = (
+  name,
+  step,
+  invariant,
+  main = "frontierRecoveryCounterexamples"
+) => {
   process.stdout.write(`\n== ${name} (expected invariant failure) ==\n`)
   const result = spawnSync(
     process.execPath,
@@ -41,6 +46,8 @@ const expectInvariantFailure = (name, step, invariant) => {
       "quint",
       "verify",
       counterexamples,
+      "--main",
+      main,
       "--backend",
       "tlc",
       "--step",
@@ -71,6 +78,13 @@ run("deterministic acceptance scenarios", [
   tests,
   "--main",
   "frontierRecoveryTest"
+])
+run("deterministic capacity-one acceptance scenario", [
+  "quint",
+  "test",
+  tests,
+  "--main",
+  "frontierRecoveryCapacityOneTest"
 ])
 
 const sampledProfiles = [
@@ -118,6 +132,8 @@ for (const profile of sampledProfiles) {
     "quint",
     "run",
     model,
+    "--main",
+    "frontierRecoveryCapacityTwo",
     "--init",
     profile.init,
     "--step",
@@ -136,26 +152,46 @@ for (const profile of sampledProfiles) {
 }
 
 const exhaustiveProfiles = [
-  ["all boundaries", "initAnyBoundaryProfile", "boundaryProfileStep"],
+  [
+    "capacity one with two independently eligible tasks",
+    "frontierRecoveryCapacityOne",
+    "init",
+    "reconstructionStep"
+  ],
+  [
+    "all boundaries",
+    "frontierRecoveryCapacityTwo",
+    "initAnyBoundaryProfile",
+    "boundaryProfileStep"
+  ],
   [
     "crash and restart at all boundaries",
+    "frontierRecoveryCapacityTwo",
     "initAnyBoundaryProfile",
     "crashProfileStep"
   ],
-  ["pause and resume", "initRunningInvocationProfile", "pauseProfileStep"],
+  [
+    "pause and resume",
+    "frontierRecoveryCapacityTwo",
+    "initRunningInvocationProfile",
+    "pauseProfileStep"
+  ],
   [
     "external reconciliation",
+    "frontierRecoveryCapacityTwo",
     "initReconciliationProfile",
     "reconciliationProfileStep"
   ]
 ]
 const invariantExpression = invariants.join(" and ")
 
-for (const [name, init, step] of exhaustiveProfiles) {
+for (const [name, main, init, step] of exhaustiveProfiles) {
   run(`exhaustive ${name}`, [
     "quint",
     "verify",
     model,
+    "--main",
+    main,
     "--backend",
     "tlc",
     "--init",
@@ -183,6 +219,12 @@ expectInvariantFailure(
   "stale knowledge counterexample",
   "staleKnowledgeStep",
   "noStaleAuthorityUse"
+)
+expectInvariantFailure(
+  "configured capacity counterexample",
+  "weakenedCapacityStep",
+  "boundedCapacity",
+  "frontierRecoveryCapacityCounterexample"
 )
 
 process.stdout.write("\nCanonical frontier recovery model checks passed.\n")

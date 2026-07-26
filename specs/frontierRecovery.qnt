@@ -5,6 +5,11 @@
 // one top-level variable only to make every Quint action update one cohesive
 // model value.
 module frontierRecovery {
+  // The process supplies the currently configured task-work limit when it
+  // instantiates a checking or executable-conformance profile. The workflow
+  // journal never supplies or records this projection.
+  const CAPACITY: int
+
   type TaskId = int
 
   type Boundary =
@@ -159,7 +164,6 @@ module frontierRecovery {
       ClaimDeleteBoundary
     )
 
-  pure val CAPACITY: int = 2
   pure val REQUEST_BOUND: int = 2
   pure val READ_BOUND: int = 2
   pure val MAX_AUTHORITY_REVISION: int = 16
@@ -307,10 +311,17 @@ module frontierRecovery {
         },
       }
     })
+    val admitted =
+      if (selected.size() <= CAPACITY)
+        selected
+      else if (selected.contains(A))
+        Set(A)
+      else
+        Set(C)
     {
       capacity: CAPACITY,
       frontierTaskIds: selected,
-      admittedTaskIds: selected,
+      admittedTaskIds: admitted,
       transitionTags: TASKS.mapBy(task =>
         if (workflow.get(task).responsibility == Outstanding)
           "CheckTaskClaim"
@@ -323,8 +334,9 @@ module frontierRecovery {
         else
           -1
       ),
-      explanationTags: Set(),
-      reservationTaskIds: selected,
+      explanationTags:
+        if (selected.size() > admitted.size()) Set("CapacityWait") else Set(),
+      reservationTaskIds: admitted,
       occupiedTaskIds: Set(),
     }
   }
@@ -1256,7 +1268,11 @@ module frontierRecovery {
 
   var state: State
 
-  val boundedCapacity: bool = initialReservedCount(state) <= CAPACITY
+  val boundedCapacity: bool = and {
+    initialReservedCount(state) <= CAPACITY,
+    state.selectorProjection.admittedTaskIds.size() <= CAPACITY,
+    state.selectorProjection.reservationTaskIds.size() <= CAPACITY,
+  }
   val everyEffectHasIntent: bool =
     TASKS.forall(task =>
       BOUNDARIES.forall(boundary =>
@@ -1578,9 +1594,10 @@ module frontierRecovery {
   }
 
   // One selector step records the canonically first admissible intent.
-  // Repeating the ordinary selector admits independent C under capacity two.
-  // The executable adapter also checks the required capacity-one profile
-  // through both journal stores.
+  // Repeating the ordinary selector admits independent C only when the
+  // configured profile has another position. The executable adapter compares
+  // this exported decision with the production selector and controller at
+  // capacities one and two.
   action reconstructionStep: bool =
     if (canCommitFirstIntent(state, A))
       state' = refreshSelectorProjection(applyCommitFirstIntent(state, A))
@@ -1665,4 +1682,12 @@ module frontierRecovery {
       settleExternalCompletion(task),
     }
   }
+}
+
+module frontierRecoveryCapacityOne {
+  import frontierRecovery(CAPACITY = 1).*
+}
+
+module frontierRecoveryCapacityTwo {
+  import frontierRecovery(CAPACITY = 2).*
 }

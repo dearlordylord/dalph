@@ -1,5 +1,5 @@
 module frontierRecoveryTest {
-  import frontierRecovery.* from "./frontierRecovery"
+  import frontierRecovery(CAPACITY = 2).* from "./frontierRecovery"
 
   action applyAndRecordCurrentBoundary(task: TaskId): bool =
     requestApplies(task)
@@ -216,5 +216,31 @@ module frontierRecoveryTest {
       .expect(and {
         state.workflow.get(C).responsibility == Unowned,
         state.workflow.get(A).responsibility == Outstanding,
+      })
+}
+
+module frontierRecoveryCapacityOneTest {
+  import frontierRecovery(CAPACITY = 1).* from "./frontierRecovery"
+
+  run twoEligibleTasksUseOneConfiguredPositionTest =
+    init
+      .expect(and {
+        state.selectorProjection.capacity == 1,
+        state.selectorProjection.frontierTaskIds == Set(A, C),
+        state.selectorProjection.admittedTaskIds == Set(A),
+        state.selectorProjection.reservationTaskIds == Set(A),
+      })
+      .then(reconstructionStep)
+      .then(reconstructionStep)
+      .expect(and {
+        state.workflow.get(A).responsibility == Outstanding,
+        state.workflow.get(C).responsibility == Unowned,
+        state.selectorProjection.frontierTaskIds == Set(A, C),
+        state.selectorProjection.admittedTaskIds == Set(A),
+        state.selectorProjection.operationIds.get(A) == 1,
+        state.selectorProjection.operationIds.get(C) == -1,
+        state.selectorProjection.reservationTaskIds == Set(A),
+        state.selectorProjection.explanationTags == Set("CapacityWait"),
+        initialReservedCount(state) == 1,
       })
 }

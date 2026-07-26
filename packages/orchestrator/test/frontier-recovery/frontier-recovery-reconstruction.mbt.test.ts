@@ -388,71 +388,82 @@ const exactGraphProfileMatches = (
       === JSON.stringify({ entries: [] })
 }
 
-const reconstructionDriver = defineDriver(
-  actionSchema,
-  () => {
-    const services = Effect.runSync(
-      Layer.build(memoryJournalStoreLayer).pipe(Effect.scoped)
-    )
-    const journal = Context.get(services, JournalStore)
-    const controls = Effect.runSync(
-      makeFrontierRecoveryReconstructionControls({
-        capacity: TaskWorkCapacity.make(2),
-        coordinatorRunning: true,
-        journal
-      }).pipe(Effect.orDie)
-    )
-    const controlsRef = Effect.runSync(Ref.make(controls))
-    return {
-      commitFirstIntent: ({ task }) =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.commitFirstIntent(task))
-        ),
-      crash: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.crash())
-        ),
-      getState: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.getState())
-        ),
-      init: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.init())
-        ),
-      observeCompatibleReplacement: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.observeCompatibleReplacement())
-        ),
-      observeIncomparableMembership: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.observeIncomparableMembership())
-        ),
-      observeProvenAbsence: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.observeProvenAbsence())
-        ),
-      reconstructionStep: () =>
-        Ref.get(controlsRef).pipe(
-          Effect.flatMap((current) => current.reconstructionStep())
-        ),
-      restart: () =>
-        Effect.gen(function*() {
-          const freshControls = yield* makeFrontierRecoveryReconstructionControls({
-            capacity: TaskWorkCapacity.make(2),
-            coordinatorRunning: false,
-            journal
+const makeReconstructionDriver = (configuredCapacity: 1 | 2) =>
+  defineDriver(
+    actionSchema,
+    () => {
+      const capacity = TaskWorkCapacity.make(configuredCapacity)
+      const services = Effect.runSync(
+        Layer.build(memoryJournalStoreLayer).pipe(Effect.scoped)
+      )
+      const journal = Context.get(services, JournalStore)
+      const controls = Effect.runSync(
+        makeFrontierRecoveryReconstructionControls({
+          capacity,
+          coordinatorRunning: true,
+          journal
+        }).pipe(Effect.orDie)
+      )
+      const controlsRef = Effect.runSync(Ref.make(controls))
+      return {
+        commitFirstIntent: ({ task }) =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.commitFirstIntent(task))
+          ),
+        crash: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.crash())
+          ),
+        getState: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.getState())
+          ),
+        init: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.init())
+          ),
+        observeCompatibleReplacement: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.observeCompatibleReplacement())
+          ),
+        observeIncomparableMembership: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.observeIncomparableMembership())
+          ),
+        observeProvenAbsence: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.observeProvenAbsence())
+          ),
+        reconstructionStep: () =>
+          Ref.get(controlsRef).pipe(
+            Effect.flatMap((current) => current.reconstructionStep())
+          ),
+        restart: () =>
+          Effect.gen(function*() {
+            const freshControls = yield* makeFrontierRecoveryReconstructionControls({
+              capacity,
+              coordinatorRunning: false,
+              journal
+            })
+            yield* freshControls.restart()
+            yield* Ref.set(controlsRef, freshControls)
+            return yield* freshControls.getState()
           })
-          yield* freshControls.restart()
-          yield* Ref.set(controlsRef, freshControls)
-          return yield* freshControls.getState()
-        })
+      }
     }
-  }
-)
+  )
+
+const normalizeImportedModelState = (raw: unknown): unknown => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw
+  if ("state" in raw) return raw
+  const importedState = Object.entries(raw).find(([key]) => key.endsWith("::state"))
+  return importedState === undefined ? raw : { state: importedState[1] }
+}
 
 const decodeReconstructionModelState = (raw: unknown) =>
-  Schema.decodeUnknownEffect(ModelProjection)(raw).pipe(
+  Schema.decodeUnknownEffect(ModelProjection)(
+    normalizeImportedModelState(raw)
+  ).pipe(
     Effect.map(({ state }) => {
       const responsibleModelTaskIds = sortedBigInts(
         [...state.workflow]
@@ -566,16 +577,26 @@ const reconstructionStateCheck = stateCheck(
   compareReconstructionState
 )
 
-quintIt(it.effect, "replays the M2 reconstruction slice through production reducers", {
-  backend: "typescript",
-  driverFactory: reconstructionDriver,
-  maxSteps: 2,
-  nTraces: 8,
-  seed: "144",
-  spec: "specs/frontierRecovery.qnt",
-  step: "reconstructionStep",
-  stateCheck: reconstructionStateCheck
-}, 30_000)
+for (const configuredCapacity of [1, 2] as const) {
+  quintIt(
+    it.effect,
+    `replays the M2 capacity-${configuredCapacity} reconstruction slice through production reducers`,
+    {
+      backend: "typescript",
+      driverFactory: makeReconstructionDriver(configuredCapacity),
+      main: configuredCapacity === 1
+        ? "frontierRecoveryCapacityOne"
+        : "frontierRecoveryCapacityTwo",
+      maxSteps: 2,
+      nTraces: 8,
+      seed: configuredCapacity === 1 ? "131" : "144",
+      spec: "specs/frontierRecovery.qnt",
+      step: "reconstructionStep",
+      stateCheck: reconstructionStateCheck
+    },
+    60_000
+  )
+}
 
 for (
   const { action: profile, seed } of [
@@ -586,7 +607,8 @@ for (
 ) {
   quintIt(it.effect, `replays M2 ${profile} through the production graph reducer`, {
     backend: "typescript",
-    driverFactory: reconstructionDriver,
+    driverFactory: makeReconstructionDriver(2),
+    main: "frontierRecoveryCapacityTwo",
     maxSteps: 2,
     nTraces: 2,
     seed,
