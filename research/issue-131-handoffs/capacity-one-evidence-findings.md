@@ -8,6 +8,64 @@ not concurrent uncommitted implementation work. On 2026-07-26, the live
 [issue #131](https://github.com/dearlordylord/dalph/issues/131) was open and
 its body had last been updated at `2026-07-26T19:54:09Z`.
 
+## Completion and owner acceptance
+
+The gaps below are a historical inventory of what was missing at the baseline.
+They were closed locally by `f415c52f9`, `a6233814c`, and `8cdae1abc`. On
+2026-07-26, the issue owner reviewed the following concrete before/after
+example and explicitly accepted the capacity-one evidence. The commits remain
+unpublished to `origin/master`, so this records owner acceptance without
+claiming remote publication or closing the live issue.
+
+### Concrete example
+
+The input is configured capacity one with two independently eligible fresh
+tasks, A and C.
+
+At the baseline, the only concrete M2 module fixed `CAPACITY` at two. Its
+selector projection admitted and reserved both A and C and exported no
+capacity explanation:
+
+```text
+configured capacity represented by the model: 2
+frontier:       {A, C}
+admitted:       {A, C}
+reservations:   {A, C}
+explanations:   {}
+```
+
+That model could not ask the production question “what happens when the
+configured capacity is one?” An exhaustive green result therefore supplied no
+evidence that one configured position bounded the selector/controller.
+
+The completed `frontierRecoveryCapacityOne` profile supplies `CAPACITY = 1`.
+For the same eligible tasks, both remain visible in the runnable frontier, but
+only canonical first task A is admitted and reserved. C receives the exact
+reason and wake condition:
+
+```text
+configured capacity represented by the model: 1
+frontier:       {A, C}
+admitted:       {A}
+reservations:   {A}
+explanations:   {
+  taskId: C,
+  tag: CapacityWait,
+  wakeCondition: CapacityReleasedOrReconstructedStateChanged
+}
+```
+
+Two consecutive deliberately invalid `weakenedCapacityStep` actions create the
+counterexample at capacity one. The retained smaller-task guard makes the first
+step reserve A; the second step reserves C because the weakened rule omits only
+the configured-position check. TLC then reports the expected `boundedCapacity`
+violation because two reservations exceed one configured position.
+Quint-connect sends the valid capacity-one state through the production
+selector and admission controller and compares the exact frontier, transition,
+operation, explanation, reservation, and occupied identities. A second
+capacity-one profile checks that an existing responsibility for C is admitted
+before smaller fresh task A.
+
 ## Exact ticket boundary
 
 The live issue assigns #131 three things: the shared production
@@ -44,9 +102,12 @@ The acceptance boundary for this handoff is therefore:
    green, and make the canonical specification and coverage inventory describe
    exactly that evidence.
 
-## Current evidence and gaps
+## Baseline evidence and gaps (closed)
 
-| Evidence | Committed baseline | Gap to close |
+Every “gap” in this table describes missing evidence at `b1ef93917`; it is not
+an open item after the three completion commits named above.
+
+| Evidence | Committed baseline | Baseline gap closed by this handoff |
 | --- | --- | --- |
 | Genuine capacity-one Quint profile | M2 defines `CAPACITY = 2`; A and C are independently eligible, and admission checks compare reservations with that fixed value ([model](../../specs/frontierRecovery.qnt#L162), [eligibility and admission](../../specs/frontierRecovery.qnt#L271)). | Make capacity a checking-profile input and add a named capacity-one profile. The profile must retain both eligible A and C, expose both in the frontier, and admit/reserve only the canonical first task. |
 | Capacity invariant | `boundedCapacity` is `initialReservedCount(state) <= CAPACITY`, but `CAPACITY` is the fixed model constant ([invariant](../../specs/frontierRecovery.qnt#L1259)). | Bind the invariant to the profile's configured limit. Keep that limit a process/configuration projection, not a journal fact. |

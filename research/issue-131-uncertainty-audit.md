@@ -61,6 +61,7 @@ An item may use only these statuses:
 | **Resolved — repository proven** | The reviewed artifact is committed and pushed. Record its exact commit, review result, applicable gate, and remote reread. |
 | **Resolved — no work required** | Existing authoritative text or behavior already settles the question. Cite it and explain why no code, model, issue, or documentation change is needed. |
 | **Applied locally — proof pending** | The document/source change exists only in the worktree. It is not resolved until committed, reviewed as applicable, and verified. |
+| **Accepted locally — publication pending** | The implementation evidence is committed, reviewed, verified, and explicitly accepted by the issue owner, but has not been pushed and remotely reread. Record the local commits, acceptance evidence, reviews, and gate without claiming repository-proven closure. |
 | **Persisted plan — implementation open** | The owning issue/spec now states the obligation, but the behavior is not implemented. Never abbreviate this to “resolved.” |
 | **Handoff ready** | A bounded continuation document exists and declares the exact evidence it must return. |
 | **Research running** | A sub-agent is collecting evidence. No adoption or implementation decision is implied. |
@@ -433,7 +434,7 @@ assistant response.
 
 | ID | Status | Answer and evidence | Fastest next verification |
 | --- | --- | --- | --- |
-| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Implementation proof recorded; owner acceptance pending** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C and separately with existing C responsibility versus fresh A; `frontierRecoveryCapacityCounterexample` proves that omitting only the capacity check violates `boundedCapacity`; and Quint-connect compares the model export—including the waiting task and wake condition—with the production selector/controller at capacities one and two. Full production activation remains #132 scope. | Issue owner reviews the returned commit, exact profiles, review dispositions, and final gate before accepting #131. |
+| F1 — “What is the blocker; is the selector implemented; why not Quint tested?” | **Accepted locally — publication pending** | The pure selector exists and the frontier-recovery Quint adapter calls it ([selector](../packages/orchestrator/src/runnable-frontier.ts#L305-L350), [adapter](../packages/orchestrator/test/frontier-recovery/frontier-recovery-selection.ts#L37-L97)). `frontierRecoveryCapacityOne` now exhaustively checks the full invariant set with independently eligible A and C and separately with existing C responsibility versus fresh A; `frontierRecoveryCapacityCounterexample` proves that omitting only the capacity check violates `boundedCapacity`; and Quint-connect compares the model export—including the waiting task and wake condition—with the production selector/controller at capacities one and two. On 2026-07-26, the issue owner reviewed the [concrete baseline-versus-completed example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and explicitly accepted this evidence. Full production activation remains #132 scope. | Publish the accepted local commits and reread the remote repository state before claiming repository-proven closure. |
 | F2 — Explain stale task observation and propose visuals | **Resolved as explanation; prototype open** | See “Why one reservation needs the operation identity” and the exact-capacity timeline proposal above. | Build the trace-only prototype after acceptance behavior is settled. |
 | F3 — Can the controller be tested rigorously, prioritizing MBT/property/unit? | **Partially resolved** | Yes. Evidence now spans capacity-one/two exhaustive model profiles, model-exported Quint-connect replay, fresh-memory and closed/reopened SQLite examples, and focused units. Arbitrary activation/controller command-sequence generation remains deliberately assigned to H3 after #132 makes ownership states model-visible; adding it here would harden the superseded waiter seam. | Preserve the capacity-one proof; add generated command-sequence invariants under H3 after the accepted #132 design. |
 | F4 — Visual step simulation of convergence recovery | **Resolved as a proposal** | Existing journal/reconstruction/controller projections can drive a stepper. Issue 132 supplies the complete activation seam; issue 133 prevents internal review from becoming universal UI vocabulary. | Prototype a read-only trace viewer against the issue-132 projection, not production code. |
@@ -623,13 +624,13 @@ assistant response.
   #135 adds memory and closed/reopened SQLite lanes; #142 must refuse closure
   while it remains.
 
-## Additional open evidence gaps
+## Additional evidence notes and open gaps
 
 These were discovered during research and are not substitutes for F1–F26 or
 U1–U8:
 
-1. **Capacity-one model evidence (implementation proof recorded; owner
-   acceptance pending):** `CAPACITY` is now supplied by the checking profile.
+1. **Capacity-one model evidence (owner accepted; repository publication
+   pending):** `CAPACITY` is now supplied by the checking profile.
    The gate exhaustively checks `frontierRecoveryCapacityOne` with independently
    eligible A and C and with existing C responsibility versus fresh A. It
    requires the deliberately weakened capacity-one action—which omits only the
@@ -646,9 +647,11 @@ U1–U8:
    did not match the ticket bodies around #130/#144/#131. They were repaired
    and freshly reread during this review; see **Actions completed in this
    review**.
-4. **Acceptance state:** Issue 131 remains open and unchecked; local commits and
-   a successful `pnpm check:all` are implementation evidence, not issue-owner
-   acceptance.
+4. **Acceptance state:** On 2026-07-26, the issue owner reviewed the
+   [concrete capacity-one example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example)
+   and explicitly accepted that evidence. Issue 131 remains open and unchecked,
+   and the accepted local commits have not been published to `origin/master`;
+   those external facts do not negate the recorded owner decision.
 
 ## Historical recommended sequence and current disposition
 
@@ -660,8 +663,8 @@ No row authorizes production implementation.
    design and implementation proof. U5 remains assigned to the #132 Wayfinder,
    which must make duplicate ownership unrepresentable or specify a typed
    fail-closed issue.
-2. Capacity-one evidence is **Handoff ready** under H1. The
-   interrupt-after-grant seam belongs to the H2 design and later H3
+2. Capacity-one evidence is **Accepted locally — publication pending** under H1.
+   The interrupt-after-grant seam belongs to the H2 design and later H3
    implementation.
 3. The #131/#132 wording action is **Resolved — externally proven**; #132
    behavior remains open.
@@ -677,7 +680,7 @@ This ledger preserves all 25 annotations from the review of this document.
 | ID | Status | Disposition and required proof |
 | --- | --- | --- |
 | SF1 — Narrow #131; preserve useful #132 context | **Resolved — externally proven** | #131 and #132 were amended and reread. This closes the wording action only. #132 now records exact-operation dispatch, repeated derivation, changed restart capacity, and one-chooser requirements; its implementation remains open. |
-| SF2 — Handoff the #131 gaps | **Implementation proof recorded; owner acceptance pending** | [Capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) returned `frontierRecoveryCapacityOne`, `frontierRecoveryCapacityTwo`, the weakened `frontierRecoveryCapacityCounterexample`, capacity-one/two Quint-connect replay, passing fresh-memory and closed/reopened SQLite lanes, canonical coverage updates, review dispositions, and the full repository gate. This proof does not accept or close #131. |
+| SF2 — Handoff the #131 gaps | **Accepted locally — publication pending** | [Capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) returned `frontierRecoveryCapacityOne`, `frontierRecoveryCapacityTwo`, the weakened `frontierRecoveryCapacityCounterexample`, capacity-one/two Quint-connect replay, passing fresh-memory and closed/reopened SQLite lanes, canonical coverage updates, review dispositions, and the full repository gate. On 2026-07-26, the issue owner reviewed the [concrete example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and explicitly accepted this evidence. The local commits still require publication proof; #132 activation behavior remains separate. |
 | SF3 — Persist pause ownership like SF1 | **Resolved — externally proven** | #134/#135 were amended and reread. This closes the wording action only; existing #62/#134/#135 tickets remain the implementation continuations. |
 | SF4 — How to continue the executor-boundary work | **Handoff ready** | The [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md) starts only after #132. No new Wayfinder is needed because the destination and accepted boundary already exist. |
 | SF5 — Update drifted metadata | **Resolved — externally proven** | Native issue dependencies were changed and reread. |
@@ -692,7 +695,7 @@ This ledger preserves all 25 annotations from the review of this document.
 | SF14 — Handoff the rigorous test order | **Handoff ready** | Capacity-one formal checking is H1. Activation interleavings, generated command sequences, and readable edge examples belong in H3 after H2. |
 | SF15 — “Later” means this review's continuations | **Handoff ready** | Visual work is now the explicit H5 handoff/sub-agent continuation in this review, not an unspecified future. |
 | SF16 — Research Effect Analyzer with Quint and Dalph | **Resolved — repository proven** | The cited [evaluation](effect-analyzer-quint-evaluation.md) records pinned-source trials against Dalph. It rejects analyzer-as-correctness-gate and source-to-Quint generation, supports one isolated ITF-view prototype, and separates later source-analysis adoption. The note was independently reviewed, committed, pushed, and remotely reread in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`; H5 remains separately **Handoff ready**. |
-| SF17 — Where capacity-one checking belongs | **Implementation proof recorded; owner acceptance pending** | The narrow [capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) is implemented without #132 activation, changed-capacity restart, pause-command, or #133 executor-boundary work. The issue owner still owns acceptance. |
+| SF17 — Where capacity-one checking belongs | **Accepted locally — publication pending** | The narrow [capacity-one evidence handoff](issue-131-handoffs/capacity-one-evidence.md) is implemented without #132 activation, changed-capacity restart, pause-command, or #133 executor-boundary work. On 2026-07-26, the issue owner reviewed the [concrete example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example) and accepted this evidence. |
 | SF18 — Where the #131 review-type audit belongs | **Handoff ready** | The audit evidence names the affected symbols in #133. No more discovery sub-agent is needed; replacement belongs to the [#133 executor-boundary handoff](issue-131-handoffs/issue-133-executor-boundary.md). |
 | SF19 — Repair dependencies now | **Resolved — externally proven** | Completed and reread through GitHub's native dependency endpoint. |
 | SF20 — Preserve the callable activation seam in #132 | **Resolved — externally proven** | The live #132 body was updated and reread. This closes the wording action only: it now forbids broad phase-tag sweeps and requires one exact selected operation/result/rederive step. Implementation remains open. |
@@ -708,12 +711,16 @@ This ledger preserves all 25 annotations from the review of this document.
 
 Handoff: [Capacity-one evidence](issue-131-handoffs/capacity-one-evidence.md)
 
-Implementation proof is recorded; issue-owner acceptance remains pending. The
-returned evidence consists of real capacity-one/two Quint profiles, the
+Implementation proof and issue-owner acceptance are recorded; repository
+publication remains pending. The returned evidence consists of real
+capacity-one/two Quint profiles, the
 weakened-capacity counterexample, sampled production selector/controller
 comparison, fresh-memory and closed/reopened SQLite lanes, canonical coverage
-updates, all three review dispositions, and `pnpm check:all`. This ledger item
-is intentionally not marked resolved by the implementer.
+updates, all three review dispositions, and `pnpm check:all`. On 2026-07-26,
+the issue owner reviewed the
+[concrete baseline-versus-completed example](issue-131-handoffs/capacity-one-evidence-findings.md#concrete-example)
+and explicitly accepted the evidence. Do not claim repository-proven closure
+until the accepted local commits are pushed and remotely reread.
 
 ### H2 — Issue #132 activation Wayfinder
 
@@ -731,11 +738,11 @@ MBT-visible interruption states. Production behavior remains open.
 Handoff:
 [Issue #132 implementation and validation](issue-131-handoffs/issue-132-implementation.md)
 
-H3 is handoff-ready from H2's design but remains blocked until #131 is accepted.
-Its required return includes the production activation API, model actions for
-derive/reserve/ownership/interruption/result/release/reconstruction,
-counterexamples for duplicate ownership and leaked reservation,
-production-facing MBT, generated command sequences, memory/SQLite
+H3 is handoff-ready from H2's design. Capacity-one evidence acceptance is no
+longer its blocker. Its required return includes the production activation API,
+model actions for derive/reserve/ownership/interruption/result/release/
+reconstruction, counterexamples for duplicate ownership and leaked
+reservation, production-facing MBT, generated command sequences, memory/SQLite
 changed-capacity restart, repeated review passes, and the full gate.
 
 ### H4 — Issue #133 executor boundary
