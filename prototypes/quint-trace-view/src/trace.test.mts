@@ -179,8 +179,9 @@ describe("ITF to normalized frame boundary", () => {
     const trace = decode(raw)
     const html = renderObservedDagHtml([trace])
     expect(html).toContain("<table>")
-    expect(html).toContain("<th>Position</th>")
-    expect(html).toContain("<td><code>S0</code></td>")
+    expect(html).toContain("<th>Step</th>")
+    expect(html).toContain("<th>What changed</th>")
+    expect(html).toContain("<td><code>0</code></td>")
     expect(html).not.toContain("<section><h2>Frame table</h2><pre>")
   })
 
@@ -260,11 +261,51 @@ describe("ITF to normalized frame boundary", () => {
     const html = renderObservedDagHtml([trace])
 
     expect(html).toContain("<h1>Observed Quint state DAG</h1>")
-    expect(html).toContain("Sampled and incomplete")
+    expect(html).toContain("Observed paths · not exhaustive")
     expect(html).toContain('data-node-id="N0"')
     expect(html).toContain("addEventListener")
     expect(html).not.toContain("Generated path visual")
     expect(html).not.toContain("stateDiagram-v2")
+  })
+
+  it("builds meaningful branches from existing Quint acceptance tests", () => {
+    const storyNames = [
+      "story-crash-after-intent",
+      "story-pause-independent",
+      "story-claim-loss",
+      "story-git-rewrite",
+      "story-external-completion"
+    ]
+    const stories = storyNames.map((name) => {
+      const storyManifest = Schema.decodeUnknownSync(FixtureManifestSchema)(
+        readJson(resolve(fixtureRoot, `${name}.manifest.json`))
+      )
+      return decode(
+        Schema.decodeUnknownSync(ItfEnvelopeWire)(
+          readJson(resolve(fixtureRoot, storyManifest.rawItf))
+        ),
+        storyManifest.provenance
+      )
+    })
+
+    const dag = buildObservedStateDag(stories)
+    const initial = dag.nodes.find(({ depth }) => depth === 0)
+    const initialActions = dag.edges
+      .filter(({ source }) => source === initial?.id)
+      .map(({ action }) => action)
+      .sort()
+
+    expect(initialActions).toEqual([
+      "commitFirstIntent",
+      "completeClaim",
+      "requestTaskPause"
+    ])
+    expect(
+      dag.edges.flatMap(({ changes }) => changes)
+    ).toContain("admitted tasks: {A, C} → {C}")
+    expect(
+      dag.nodes.flatMap(({ terminalTraceKinds }) => terminalTraceKinds)
+    ).toHaveLength(stories.length)
   })
 
   it("preserves every displayed value from every sampled ITF state", () => {

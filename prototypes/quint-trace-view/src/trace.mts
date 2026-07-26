@@ -2,7 +2,17 @@ import { Effect, Schema } from "effect"
 
 export const PROJECTION_VERSION = 3 as const
 
-export type TraceKind = "sampled" | "restart" | "counterexample"
+export const TraceKindSchema = Schema.Literals([
+  "sampled",
+  "restart",
+  "counterexample",
+  "story-crash-after-intent",
+  "story-pause-independent",
+  "story-claim-loss",
+  "story-git-rewrite",
+  "story-external-completion"
+])
+export type TraceKind = typeof TraceKindSchema.Type
 
 /** Identifies one bounded Quint model task, not a Dalph tracker task. */
 export const ModelTaskId = Schema.Literals(["0", "1", "2", "3"]).pipe(
@@ -58,9 +68,11 @@ export const ArtifactProvenanceSchema = Schema.Struct({
   projectionVersion: Schema.Literal(PROJECTION_VERSION),
   quintVersion: Schema.Literal("0.32.0"),
   rendererVersion: Schema.Literal("observed-dag-prototype@1"),
+  scenarioTest: Schema.optional(Schema.NonEmptyString),
+  scenarioTestSourceSha256: Schema.optional(ModelSha256),
   seed: TraceSeed,
   step: Schema.NonEmptyString,
-  traceKind: Schema.Literals(["sampled", "restart", "counterexample"])
+  traceKind: TraceKindSchema
 })
 export type ArtifactProvenance = typeof ArtifactProvenanceSchema.Type
 
@@ -116,7 +128,29 @@ export interface NormalizedFrame {
   readonly position: TracePosition
   readonly rawItfState: Readonly<Record<string, unknown>>
   readonly reservedModelTaskIds: ReadonlyArray<ModelTaskId>
+  readonly runPaused: boolean
   readonly step: TraceStep
+  readonly taskStates: ReadonlyArray<NormalizedTaskState>
+}
+
+export interface NormalizedTaskState {
+  readonly authorityRevision: AdmissionCapacity
+  readonly baseCompatible: boolean
+  readonly boundary: string
+  readonly claim: string
+  readonly inTarget: boolean
+  readonly invocation: string
+  readonly isolation: string
+  readonly lifecycle: string
+  readonly knowledgeActivation: AdmissionCapacity
+  readonly knowledgeRevision: AdmissionCapacity
+  readonly modelTaskId: ModelTaskId
+  readonly observation: string
+  readonly paused: boolean
+  readonly promoted: boolean
+  readonly responsibility: string
+  readonly settlement: string
+  readonly worktree: string
 }
 
 export interface NormalizedTrace {
@@ -170,6 +204,31 @@ const ExplanationWire = Schema.Struct({
     "CapacityReleasedOrReconstructedStateChanged"
   )
 })
+const TaggedWire = Schema.Struct({
+  tag: Schema.String,
+  value: Schema.Unknown
+})
+const AuthorityStoryWire = Schema.Struct({
+  baseCompatible: Schema.Boolean,
+  claim: TaggedWire,
+  inTarget: Schema.Boolean,
+  invocation: TaggedWire,
+  lifecycle: TaggedWire,
+  promoted: Schema.Boolean,
+  revision: BigIntWire,
+  worktree: TaggedWire
+})
+const KnowledgeStoryWire = Schema.Struct({
+  activation: BigIntWire,
+  durableRevision: BigIntWire,
+  observation: TaggedWire
+})
+const WorkflowStoryWire = Schema.Struct({
+  boundary: TaggedWire,
+  isolation: TaggedWire,
+  responsibility: TaggedWire,
+  settlement: TaggedWire
+})
 export const SelectorProjectionWire = Schema.Struct({
   admittedTaskIds: SetOfBigIntWire,
   capacity: BigIntWire,
@@ -187,8 +246,23 @@ export const SelectorProjectionWire = Schema.Struct({
   })
 })
 export const DisplayedModelStateWire = Schema.Struct({
+  authority: Schema.Struct({
+    "#map": Schema.Array(Schema.Tuple([BigIntWire, AuthorityStoryWire]))
+  }),
+  control: Schema.Struct({
+    runPaused: Schema.Boolean,
+    taskPaused: Schema.Struct({
+      "#map": Schema.Array(Schema.Tuple([BigIntWire, Schema.Boolean]))
+    })
+  }),
   coordinator: Schema.Struct({ running: Schema.Boolean }),
-  selectorProjection: SelectorProjectionWire
+  knowledge: Schema.Struct({
+    "#map": Schema.Array(Schema.Tuple([BigIntWire, KnowledgeStoryWire]))
+  }),
+  selectorProjection: SelectorProjectionWire,
+  workflow: Schema.Struct({
+    "#map": Schema.Array(Schema.Tuple([BigIntWire, WorkflowStoryWire]))
+  })
 })
 const ItfStateWire = Schema.Record(Schema.String, Schema.Unknown)
 export const ItfEnvelopeWire = Schema.Struct({
@@ -216,11 +290,34 @@ const counterexampleActions = new Set([
   ...reconstructionActions,
   "weakenedCapacityStep"
 ])
+const storyActions = new Set([
+  "init",
+  "applyAndRecordCurrentBoundary",
+  "classifyAuthorityConstraint",
+  "commitFirstIntent",
+  "completeClaim",
+  "crash",
+  "externallyCompleteTask",
+  "loseClaim",
+  "observeTask",
+  "recordBoundaryOutcome",
+  "requestApplies",
+  "requestTaskPause",
+  "requestTaskResume",
+  "restart",
+  "rewriteTarget",
+  "settleExternalCompletion"
+])
 const displayedFieldNames = [
   "#meta.index",
   "mbt::actionTaken",
   "mbt::nondetPicks.task",
   "state.coordinator.running",
+  "state.control.runPaused",
+  "state.control.taskPaused",
+  "state.authority.{lifecycle,claim,worktree,invocation,promoted,baseCompatible,inTarget}",
+  "state.knowledge.observation",
+  "state.workflow.{boundary,responsibility,isolation,settlement}",
   "state.selectorProjection.capacity",
   "state.selectorProjection.frontierTaskIds",
   "state.selectorProjection.admittedTaskIds",
@@ -391,7 +488,9 @@ const actionFrom = (
   const action = requiredStateValue(rawState, "mbt::actionTaken")
   const allowed = traceKind === "counterexample"
     ? counterexampleActions
-    : reconstructionActions
+    : traceKind.startsWith("story-")
+      ? storyActions
+      : reconstructionActions
   if (typeof action !== "string" || !allowed.has(action)) {
     throw new TraceDecodeError({
       detail: `unknown ${traceKind} trace action ${String(action)}`,
@@ -484,6 +583,106 @@ const explanationsFrom = (
     }))
     .sort((left, right) => Number(left.modelTaskId) - Number(right.modelTaskId))
 
+const storyTaskStatesFrom = (
+  state: typeof DisplayedModelStateWire.Type
+): ReadonlyArray<NormalizedTaskState> => {
+  const authority = new Map(
+    state.authority["#map"].map(([task, value]) => [
+      exactInteger(task, "task"),
+      value
+    ])
+  )
+  const knowledge = new Map(
+    state.knowledge["#map"].map(([task, value]) => [
+      exactInteger(task, "task"),
+      value
+    ])
+  )
+  const paused = new Map(
+    state.control.taskPaused["#map"].map(([task, value]) => [
+      exactInteger(task, "task"),
+      value
+    ])
+  )
+  const workflow = new Map(
+    state.workflow["#map"].map(([task, value]) => [
+      exactInteger(task, "task"),
+      value
+    ])
+  )
+  const taskIds = ["0", "1", "2", "3"].map((task) =>
+    decodeSync(ModelTaskId, task, `invalid bounded model task ${task}`)
+  )
+  if (
+    authority.size !== taskIds.length
+    || knowledge.size !== taskIds.length
+    || paused.size !== taskIds.length
+    || workflow.size !== taskIds.length
+  ) {
+    throw new TraceDecodeError({
+      detail: "story projection maps must contain each bounded model task",
+      reason: "MalformedIdentity"
+    })
+  }
+  return taskIds.map((modelTaskId) => {
+    const authorityState = authority.get(modelTaskId)
+    const knowledgeState = knowledge.get(modelTaskId)
+    const taskPaused = paused.get(modelTaskId)
+    const workflowState = workflow.get(modelTaskId)
+    if (
+      authorityState === undefined
+      || knowledgeState === undefined
+      || taskPaused === undefined
+      || workflowState === undefined
+    ) {
+      throw new TraceDecodeError({
+        detail: `story projection is missing model task ${modelTaskId}`,
+        reason: "MissingDecisionField"
+      })
+    }
+    return {
+      authorityRevision: exactInteger(
+        decodeSync(
+          BigIntWire,
+          authorityState.revision,
+          `invalid authority revision for model task ${modelTaskId}`
+        ),
+        "value"
+      ),
+      baseCompatible: authorityState.baseCompatible,
+      boundary: workflowState.boundary.tag,
+      claim: authorityState.claim.tag,
+      inTarget: authorityState.inTarget,
+      invocation: authorityState.invocation.tag,
+      isolation: workflowState.isolation.tag,
+      lifecycle: authorityState.lifecycle.tag,
+      knowledgeActivation: exactInteger(
+        decodeSync(
+          BigIntWire,
+          knowledgeState.activation,
+          `invalid knowledge activation for model task ${modelTaskId}`
+        ),
+        "value"
+      ),
+      knowledgeRevision: exactInteger(
+        decodeSync(
+          BigIntWire,
+          knowledgeState.durableRevision,
+          `invalid knowledge revision for model task ${modelTaskId}`
+        ),
+        "value"
+      ),
+      modelTaskId,
+      observation: knowledgeState.observation.tag,
+      paused: taskPaused,
+      promoted: authorityState.promoted,
+      responsibility: workflowState.responsibility.tag,
+      settlement: workflowState.settlement.tag,
+      worktree: authorityState.worktree.tag
+    }
+  })
+}
+
 export const toMbtComparable = (
   frame: Omit<NormalizedFrame, "comparison">
 ): MbtComparableProjection => ({
@@ -562,7 +761,9 @@ const frameFrom = (
     ),
     rawItfState: rawState,
     reservedModelTaskIds: sortedIdentities(selector.reservationTaskIds),
-    step
+    runPaused: state.control.runPaused,
+    step,
+    taskStates: storyTaskStatesFrom(state)
   }
   return {
     ...frame,
@@ -606,15 +807,15 @@ const decodeTraceUnsafe = (
     fidelity: {
       decodedFields: displayedFieldNames,
       projectedAwayFields: [
-        "authority",
+        "authority revisions, blockers, and readability",
         "control epochs",
         "effect identity sets and counters",
-        "full knowledge",
+        "knowledge revisions and reconstructed facts",
         "request identity sets and counters",
-        "workflow fields other than the exported selector projection"
+        "workflow intent, request counters, and attempt outcome"
       ],
       unsupportedInputs: [
-        "actions outside the closed reconstruction/counterexample inventories",
+        "actions outside the retained reconstruction, story, and counterexample inventories",
         "model task identities outside 0..3",
         "non-ITF or non-exact integer encodings",
         "selector projections without task-specific explanations",

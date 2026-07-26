@@ -1,15 +1,17 @@
 # Quint trace explanation view — throwaway prototype
 
-This isolated prototype combines retained frontier-recovery Quint traces into
-one interactive observed state DAG. Equal exact model states at the same
-exploration depth are merged, so shared prefixes and reconvergence are visible.
-Selecting a node reveals its normalized decision fields and raw ITF state.
+This isolated prototype executes five existing acceptance tests from
+`specs/frontierRecovery_test.qnt` and combines their ITF traces into one
+interactive observed state DAG. Equal exact model states at the same
+exploration depth are merged, so shared prefixes, branches, and reconvergence
+are visible. Selecting a node reveals task boundary, responsibility, isolation,
+pause, admission, and the raw ITF state.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
-**This DAG is sampled and incomplete.** Its edges are transitions observed in
-the three retained traces. An absent edge is unknown, not disabled. It is not
-the complete state machine, model checking, MBT, or proof of correctness. The
+**This DAG is observed and incomplete.** Its edges are transitions executed by
+the five named tests. An absent edge is unknown, not disabled. It is not the
+complete state machine, model checking, MBT, or proof of correctness. The
 decoder never selects an action or computes a legal transition.
 
 ## Run
@@ -50,6 +52,15 @@ step, seed, and trace kind.
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
 | Counterexample | `fixtures/counterexample.itf.json` | 3 | Deliberately weakened capacity action makes A and C carry outstanding workflow responsibility at capacity one; Quint records status `violation`. |
+| Crash after intent | `fixtures/story-crash-after-intent.itf.json` | 6 | Existing test proves restart requires a fresh task read before retry. |
+| Pause with independent progress | `fixtures/story-pause-independent.itf.json` | 6 | Existing test pauses A while C remains admitted and records responsibility. |
+| Claim loss | `fixtures/story-claim-loss.itf.json` | 9 | Existing test isolates A after claim loss while C progresses. |
+| Git rewrite | `fixtures/story-git-rewrite.itf.json` | 9 | Existing test isolates A after incompatible target rewrite while C progresses. |
+| External completion | `fixtures/story-external-completion.itf.json` | 8 | Existing test settles A from tracker completion without a duplicate effect. |
+
+Only the five acceptance-test traces feed the interactive DAG. The earlier
+sample, restart, and counterexample remain retained decoder/conformance
+evidence.
 
 The sample's `fixtures/normal.mbt-projection.json` was independently captured
 from the existing version-3 production-backed MBT controls by running `init`
@@ -74,6 +85,34 @@ The retained fixtures were produced from Dalph commit `a6233814c`, which is an
 ancestor of this prototype branch. The exact `specs/frontierRecovery.qnt`
 SHA-256 was
 `2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1`.
+The exact `specs/frontierRecovery_test.qnt` SHA-256 for the story traces was
+`abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185`.
+
+Each story used this command with the manifest's exact `INIT`, `SEED`, and
+`OUTPUT` values:
+
+```sh
+pnpm quint run specs/frontierRecovery_test.qnt \
+  --main frontierRecoveryTest \
+  --init "$INIT" \
+  --step step \
+  --max-steps 0 \
+  --max-samples 1 \
+  --n-traces 1 \
+  --seed "$SEED" \
+  --mbt \
+  --backend typescript \
+  --out-itf "prototypes/quint-trace-view/fixtures/$OUTPUT" \
+  --verbosity 0
+```
+
+| Story | `INIT` | `SEED` | `OUTPUT` |
+| --- | --- | ---: | --- |
+| Crash after intent | `crashAfterIntentRequiresFreshReadTest` | 13101 | `story-crash-after-intent.itf.json` |
+| Pause with independent progress | `taskPauseLeavesIndependentBranchRunnableTest` | 13102 | `story-pause-independent.itf.json` |
+| Claim loss | `claimLossIsolatesOnlyAffectedTaskTest` | 13103 | `story-claim-loss.itf.json` |
+| Git rewrite | `rewrittenTargetIsolatesOnlyAffectedTaskTest` | 13104 | `story-git-rewrite.itf.json` |
+| External completion | `externallyCompletedTaskSettlesWithoutDuplicateEffectTest` | 13105 | `story-external-completion.itf.json` |
 
 Normal sampled trace:
 
@@ -140,7 +179,7 @@ Focused result on 2026-07-26:
 
 ```text
 Test Files  1 passed (1)
-Tests       19 passed (19)
+Tests       20 passed (20)
 ```
 
 The final `pnpm check:all` run passed from the isolated worktree: build, package
@@ -151,7 +190,8 @@ transient dropped connections from the shared Apalache endpoint; a private
 Apalache 0.56.1 server had already returned `[ok] No violation found` for the
 same five exhaustive profiles before the final shared-endpoint run succeeded.
 
-Positive cases prove raw-ITF-to-frame preservation, equality with the existing
+Positive cases prove raw-ITF-to-frame preservation, meaningful branching from
+the five existing acceptance tests, equality with the existing
 MBT comparable projection at all three sampled steps, first-divergence
 reporting, agreement with the existing version-3 closed reconstruction action
 inventory, deterministic normalized bytes, and decoding of all three retained
@@ -168,15 +208,14 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 218,756 bytes of raw ITF (13 frames total), the latest warm
-`pnpm check` completed in 2.5 seconds: Vitest reported 398 ms, with the
-remaining time covering TypeScript compilation plus all eight presentation
+On the retained 855,280 bytes of raw ITF (51 frames total), the latest warm
+`pnpm check` completed in 2.8 seconds: Vitest reported 521 ms, with the
+remaining time covering TypeScript compilation plus all eighteen presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
-The fixture sizes are 50,548 bytes sampled, 117,454 bytes restart, and 50,754
-bytes counterexample. The normalized artifacts intentionally retain each raw
-ITF state, so this prototype favors inspectability over storage efficiency.
+The normalized artifacts intentionally retain each raw ITF state, so this
+prototype favors inspectability over storage efficiency.
 
 ## Fidelity statement
 
@@ -186,19 +225,24 @@ Every displayed value comes from one schema-decoded field:
 - action and picked task from `mbt::actionTaken` and
   `mbt::nondetPicks.task`;
 - coordinator status from `state.coordinator.running`; and
+- task pause from `state.control.taskPaused`;
+- task boundary, responsibility, isolation, and settlement from
+  `state.workflow`;
+- task lifecycle, claim, worktree, invocation, target membership, Git
+  compatibility, promotion, and revision from `state.authority`;
+- task observation and durable knowledge revision from `state.knowledge`; and
 - capacity, frontier, admission, task/operation identities, transition tags,
   explanations, reservations, and occupancy from
   `state.selectorProjection`.
 
 Projected away from the first-screen view:
 
-- task-tracker/Git/provider authority records;
-- control epochs and detailed pause maps;
+- authority fields not named above, including blockers and readability;
+- control epochs;
 - effect identity sets and effect counters;
-- complete durable knowledge and reconstruction graph evidence;
+- complete reconstructed facts and reconstruction graph evidence;
 - request identity sets, freshness counters, and duplicate-effect counters;
-- detailed workflow boundary, intent, request, isolation, outcome, and
-  settlement fields; and
+- workflow intent, request counters, and attempt outcome; and
 - nondeterministic picks other than the selected model task.
 
 Those fields remain in `rawItfState` and in the raw fixture. The decoder does

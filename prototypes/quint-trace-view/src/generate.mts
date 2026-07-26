@@ -16,7 +16,16 @@ import { Effect, Schema } from "effect"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(packageRoot, "..", "..")
-const manifests = ["normal", "restart", "counterexample"]
+const manifests = [
+  "normal",
+  "restart",
+  "counterexample",
+  "story-crash-after-intent",
+  "story-pause-independent",
+  "story-claim-loss",
+  "story-git-rewrite",
+  "story-external-completion"
+]
 await mkdir(resolve(packageRoot, "artifacts"), { recursive: true })
 
 const readJson = async (path: string): Promise<unknown> =>
@@ -24,6 +33,9 @@ const readJson = async (path: string): Promise<unknown> =>
 
 const modelSha256 = createHash("sha256")
   .update(await readFile(resolve(repositoryRoot, "specs", "frontierRecovery.qnt")))
+  .digest("hex")
+const scenarioTestSourceSha256 = createHash("sha256")
+  .update(await readFile(resolve(repositoryRoot, "specs", "frontierRecovery_test.qnt")))
   .digest("hex")
 
 const traces: Array<NormalizedTrace> = []
@@ -35,6 +47,15 @@ for (const name of manifests) {
   if (manifest.provenance.modelSha256 !== modelSha256) {
     throw new Error(
       `model SHA mismatch: expected ${manifest.provenance.modelSha256}, got ${modelSha256}`
+    )
+  }
+  if (
+    manifest.provenance.scenarioTestSourceSha256 !== undefined
+    && manifest.provenance.scenarioTestSourceSha256
+      !== scenarioTestSourceSha256
+  ) {
+    throw new Error(
+      `scenario test SHA mismatch: expected ${manifest.provenance.scenarioTestSourceSha256}, got ${scenarioTestSourceSha256}`
     )
   }
   const raw = await readJson(resolve(packageRoot, "fixtures", manifest.rawItf))
@@ -71,7 +92,10 @@ for (const name of manifests) {
   )
 }
 
-const dagHtml = renderObservedDagHtml(traces)
+const storyTraces = traces.filter(({ provenance }) =>
+  provenance.traceKind.startsWith("story-")
+)
+const dagHtml = renderObservedDagHtml(storyTraces)
 await Promise.all([
   writeFile(resolve(packageRoot, "index.html"), dagHtml),
   writeFile(resolve(packageRoot, "artifacts", "observed-state-dag.html"), dagHtml)
