@@ -145,6 +145,36 @@ the next position. The frontier's responsibility-first order remains the only
 scheduling order, and the controller retains no second ready-work queue or
 task/operation-identity choice.
 
+The selector gives each pre-intent result an exact process-local selected
+transition identity over the run, transition kind, exact subject, and immutable
+decision inputs carried by that transition. The activation coordinator
+atomically claims that identity in its single consumer before execution. A
+second concurrent claim returns a typed duplicate-activation issue and creates
+no execution. When the owner records operation intent, the ownership entry and
+any matching admission reservation bind to the durable `OperationId`; every
+later request, result check, retry, reconciliation action, and outcome retains
+it.
+
+The activation loop exposes trigger signaling, not transition submission.
+Startup, restart, resume, a recorded workflow result, and a controller change
+that may permit admission signal one scoped consumer. Signals carry no task,
+transition, priority, or order key and may coalesce. One pass reads current
+reconstructed managed-run state and the controller snapshot, derives the
+frontier and bounded admission set, reserves and claims its exact first
+transition, executes that one operation through the injected workflow
+interpreter, records its exact result, releases exact activation ownership,
+and signals another pass. The next pass rereads current state before selecting
+another operation. Capacity exhaustion returns a `CapacityWait`; it does not
+park a transition-owning waiter.
+
+Selection, reservation, and activation ownership are process-local. Restart
+discards every pre-intent instance and derives again. A recorded intent retains
+its `OperationId` and immutable payload. The controller reconstructs positions
+from current configuration, durable responsibility, and fresh invocation
+observations. If fresh occupied invocations equal or exceed a lower restart
+limit, Dalph preempts none and creates no new reservation until observed usage
+falls below the limit. Live resizing remains a separate control policy.
+
 Workflow code declares the graph subjects, fact families, completeness, and
 freshness required by a decision. The graph boundary decides whether existing
 knowledge satisfies that request or the task tracker must be read. A successful

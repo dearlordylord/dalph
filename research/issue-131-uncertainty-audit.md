@@ -86,6 +86,7 @@ checks and unchecked issue boxes are not acceptance.
 | Add transitional source comments | **Resolved — repository proven** | The #132/#133 comments in `runnable-frontier.ts`, `reconstructed-managed-run-state.ts`, and `task-admission-controller.ts` were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. They change no runtime behavior. |
 | Validate the complete review bundle | **Resolved — repository proven** | `pnpm check:all` passed on the reviewed substantive state on 2026-07-26: build, package boundary, typecheck, lint/format, circularity, complexity, duplication, both Quint model gates including expected counterexamples, 452 tests in 70 files, coverage thresholds, and secret scanning. All three repeated review passes returned clean; commit `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69` was pushed and matched `origin/master`. |
 | Persist the owner's responsibility-order decision | **Resolved — repository proven** | The owner accepted Option B on 2026-07-26. The live [#132](https://github.com/dearlordylord/dalph/issues/132) body was updated and reread: whenever a controller-snapshot change can permit admission—including confirmed provider non-consumption or reservation release/cancellation—the coordinator reads current reconstructed managed-run state plus the snapshot and derives again; no dormant waiter supplies a second order. The canonical specification and ADR 0009 were reviewed, committed in `f6118dbe3186d7f2e106355f35f9ca1e7cd3fd69`, pushed, and remotely reread. Implementation remains open under #132. |
+| Design issue #132 activation ownership | **Applied locally — proof pending** | The [activation ownership decision](issue-132-activation-ownership-decision.md) defines the single trigger-driven coordinator loop, exact pre-/post-intent identities, atomic ownership API, accepted ephemeral presentation states, rejected controller order, restart capacity rules, M2 actions/invariants/counterexamples, and required in-memory/SQLite lanes. The [implementation handoff](issue-131-handoffs/issue-132-implementation.md) preserves those acceptance scenarios. Production behavior remains open. |
 | Preserve the unrelated issue-120 research location | **Resolved — externally proven** | The live [#120](https://github.com/dearlordylord/dalph/issues/120) body was updated and reread on 2026-07-26 with its branch, dedicated worktree, repository-relative path, uncommitted status, and scope warning. No research conclusion was accepted by this bookkeeping action. |
 
 No production behavior was implemented during this review.
@@ -719,20 +720,23 @@ is intentionally not marked resolved by the implementer.
 Handoff:
 [#132 activation Wayfinder](issue-131-handoffs/issue-132-activation-wayfinder.md)
 
-May start as a decision continuation, but #132 implementation remains blocked
-until #131 is accepted. Its result must materialize the accepted single
-coordinator-loop/rederive behavior, admission handoff, restart ownership,
-changed-capacity model, and MBT-visible interruption states. The result must
-update the existing Wayfinder/ticket decision record and this ledger.
+The design continuation returned the
+[activation ownership decision](issue-132-activation-ownership-decision.md).
+It materializes the accepted single coordinator-loop/rederive behavior,
+admission handoff, restart ownership, changed-capacity model plan, and
+MBT-visible interruption states. Production behavior remains open.
 
 ### H3 — Issue #132 implementation and validation
 
-Not yet generated: its scope depends materially on H2. Generate it only from
-H2's accepted design. Required return will include model actions for enqueue,
-grant, ownership, interruption before/after grant, release, and reconstruction;
-counterexamples for duplicate ownership/leaked reservation; production-facing
-MBT; property command sequences; memory/SQLite changed-capacity restart; review
-passes; and the full gate.
+Handoff:
+[Issue #132 implementation and validation](issue-131-handoffs/issue-132-implementation.md)
+
+H3 is handoff-ready from H2's design but remains blocked until #131 is accepted.
+Its required return includes the production activation API, model actions for
+derive/reserve/ownership/interruption/result/release/reconstruction,
+counterexamples for duplicate ownership and leaked reservation,
+production-facing MBT, generated command sequences, memory/SQLite
+changed-capacity restart, repeated review passes, and the full gate.
 
 ### H4 — Issue #133 executor boundary
 

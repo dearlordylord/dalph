@@ -1,5 +1,10 @@
 # Handoff: Wayfind issue #132 activation ownership
 
+Status: returned as the
+[issue 132 activation ownership decision](../issue-132-activation-ownership-decision.md).
+Production implementation remains open under the
+[bounded implementation handoff](issue-132-implementation.md).
+
 Use the `wayfinder`, `domain-modeling`, `grilling`, `quint-modeling`, and
 `effect` skills. This is a design/decision continuation, not production
 implementation.

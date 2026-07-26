@@ -762,6 +762,24 @@ workflow responsibility until Dalph records the selected transition's exact
 operation intent.
 _Avoid_: Runnable frontier, persisted queue, task claim, task execution admitted
 
+**Selected transition identity**:
+The exact process-local identity of one workflow transition returned by the
+selector before its operation intent is recorded. It combines the run,
+transition kind, exact subject, and immutable decision inputs carried by that
+transition. It creates no workflow responsibility and may be recreated or
+replaced by a later derivation. After intent, the durable operation identity
+replaces it for requests, checks, retries, reconciliation, and outcomes.
+_Avoid_: Operation identity, task identity, persisted frontier entry, admission position
+
+**Activation ownership**:
+The process-local exclusive capability held by one coordinator fiber while it
+records or executes one exact selected workflow transition. The coordinator
+creates ownership atomically before execution, keys it by selected transition
+identity before intent and operation identity afterward, and removes it after
+the exact result or interruption rule completes. It is not authority over a
+tracker, Git, executor, provider, or their resources.
+_Avoid_: Workflow responsibility, task claim, admission reservation, durable lease
+
 **Task admission position**:
 One process-local unit of configured task-work capacity, reserved while Dalph
 prepares a freshly committed task or occupied while a task-work invocation
