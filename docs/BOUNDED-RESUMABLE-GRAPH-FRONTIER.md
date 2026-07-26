@@ -123,6 +123,28 @@ After intent exists, every request, result check, retry, and outcome retains
 that exact identity and immutable payload. The orchestrator checks the request's
 destination before retrying after an outcome that may be ambiguous.
 
+Identical durable history, fresh external observations, and current configured
+capacity produce the same exact next operation or explanation. When fresh facts
+or configured capacity differ after restart, Dalph does not reproduce a lost
+in-memory frontier or manufacture the previous global execution sequence. It
+derives deterministically from the current inputs, preserves every outstanding
+workflow responsibility, does not preempt freshly observed work merely because
+the configured limit decreased, and keeps each reachable responsibility
+selectable or exactly explained until its obligation completes or is durably
+relinquished.
+
+When the process-local capacity controller's snapshot changes so future
+admission may be possible—including after it records fresh provider evidence
+of non-consumption or releases/cancels a reservation—the Dalph coordinator
+reads the current reconstructed managed-run state and controller snapshot and
+derives the runnable frontier and admission set again. It asks a
+workflow-selected external boundary for fresh facts only when current durable
+knowledge does not satisfy the decision; this controller change alone does not
+cause complete restart reconstruction. No dormant `awaitAdmission` fiber owns
+the next position. The frontier's responsibility-first order remains the only
+scheduling order, and the controller retains no second ready-work queue or
+task/operation-identity choice.
+
 Workflow code declares the graph subjects, fact families, completeness, and
 freshness required by a decision. The graph boundary decides whether existing
 knowledge satisfies that request or the task tracker must be read. A successful

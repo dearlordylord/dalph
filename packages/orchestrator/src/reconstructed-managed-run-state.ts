@@ -88,7 +88,14 @@ export const BestAvailableDurableGraphKnowledge = Schema.Struct({
 })
 export type BestAvailableDurableGraphKnowledge = typeof BestAvailableDurableGraphKnowledge.Type
 
-/** One exact workflow subject whose obligation remains outstanding. */
+/**
+ * One exact workflow subject whose obligation remains outstanding.
+ *
+ * Issue #133 moves evidence sealing, review strategy, and handback behind the
+ * executor boundary. The evidence-, review-, and handback-specific variants
+ * below describe only the current fixed executor protocol; they are not
+ * generic orchestrator domain types.
+ */
 const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
   TaskClaimResponsibility: {
     acquisition: TaskClaimAcquisition,

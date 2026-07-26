@@ -19,9 +19,26 @@ External response and completion timing may change the state seen by a later
 decision, but the admission set is deterministic for one exact derived state.
 
 One process-local capacity controller reserves positions for freshly committed
-task preparation and occupies positions for implementation, review, handback,
-and resumed task-work invocations. Capacity waits, reservations, and frontier
-values are recomputed after restart and are never journal authority.
+task preparation. Under the current review-capable executor protocol, it
+occupies positions for outer invocations currently named implementation,
+review, handback, and resumed task work. The durable rule is that capacity
+follows resource use declared by the selected executor's outer invocation;
+issue #133 removes those current protocol names from generic orchestration.
+Capacity waits, reservations, and frontier values are recomputed after restart
+and are never journal authority.
+
+When the process-local controller's snapshot changes so future admission may be
+possible—including after it records fresh provider evidence of non-consumption
+or releases/cancels a reservation—the Dalph coordinator reads the current
+reconstructed managed-run state and controller snapshot and derives the
+frontier and admission set again. It performs a workflow-selected external
+boundary read only when the decision's required knowledge is unavailable; this
+controller change alone does not require complete restart reconstruction. A
+dormant `awaitAdmission` fiber does not own the next position. The controller
+retains no second ready-work order and cannot replace the frontier's
+responsibility-first choice with task- or operation-identity ordering. Fresh
+facts may change the newly derived choice; exact recreation of the lost
+pre-crash frontier is not required.
 
 Tracker read and mutation results update durable graph knowledge rather than
 enqueueing downstream tasks. The default read assembles the complete bounded

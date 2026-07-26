@@ -5,6 +5,12 @@ import {
   type WorkflowResponsibilityState
 } from "./reconstructed-managed-run-state.js"
 
+/**
+ * Issue #133 replaces the evidence-sealing-, review-, and handback-specific
+ * variants below with executor-declared outer transitions. They preserve only
+ * the current fixed executor protocol and are not universal Dalph
+ * orchestration vocabulary.
+ */
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: {
     readonly operationId: OperationId

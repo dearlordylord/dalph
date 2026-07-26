@@ -59,6 +59,10 @@ export interface MakeTaskAdmissionControllerInput {
   readonly reconstructedReservedTaskIds: ReadonlyArray<TaskId>
 }
 
+/**
+ * Issue #133 replaces review-name-based capacity classification with capacity
+ * use declared by an executor's outer invocation protocol.
+ */
 const requiresAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
@@ -78,6 +82,13 @@ interface TaskAdmissionControllerState {
   readonly reservations: ReadonlyArray<TaskAdmissionReservation>
 }
 
+/**
+ * Issue #132 replaces this task/operation-sorted dormant-waiter queue with
+ * coordinator rederivation from the current reconstructed managed-run state
+ * and controller snapshot whenever a snapshot change can permit admission.
+ * This queue is superseded implementation, not the accepted
+ * responsibility-order rule.
+ */
 interface WaitingAdmission {
   readonly deferred: Deferred.Deferred<void>
   readonly transition: RunnableFrontierTransition
