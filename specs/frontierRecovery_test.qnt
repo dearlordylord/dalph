@@ -7,7 +7,7 @@ module frontierRecoveryTest {
       .then(recordBoundaryOutcome(task))
 
   action completeClaim(task: TaskId): bool =
-    commitFirstIntent(task)
+    orchestratorCommitsFreshTaskClaimIntent(task)
       .then(applyAndRecordCurrentBoundary(task))
 
   action completeResponsibleBoundary(task: TaskId): bool =
@@ -36,7 +36,7 @@ module frontierRecoveryTest {
 
   run deterministicFirstAdmissionTest =
     init
-      .then(commitFirstIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .expect(and {
         state.workflow.get(A).responsibility == Outstanding,
         state.workflow.get(C).responsibility == Unowned,
@@ -44,8 +44,8 @@ module frontierRecoveryTest {
 
   run secondIndependentAdmissionTest =
     init
-      .then(commitFirstIntent(A))
-      .then(commitFirstIntent(C))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(C))
       .expect(initialReservedCount(state) == CAPACITY)
 
   run completeProtocolKeepsFinalitiesDistinctTest =
@@ -62,7 +62,7 @@ module frontierRecoveryTest {
 
   run absentRequestRetriesSameOperationTest =
     init
-      .then(commitFirstIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .then(requestChangesNothing(A))
       .then(observeTask(A))
       .then(authorizeRetry(A))
@@ -77,7 +77,7 @@ module frontierRecoveryTest {
 
   run crashAfterIntentRequiresFreshReadTest =
     init
-      .then(commitFirstIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .then(crash)
       .then(restart)
       .expect(not(canApplyRequestEffect(state, A)))
@@ -95,11 +95,11 @@ module frontierRecoveryTest {
         not(isGroupingPaused(state, C)),
         isGroupingPaused(state, D),
       })
-      .then(commitFirstIntent(C))
+      .then(orchestratorCommitsFreshTaskClaimIntent(C))
       .then(requestTaskResume(A))
       .expect(not(canCommitFirstIntent(state, D)))
       .then(observeTask(D))
-      .then(commitFirstIntent(D))
+      .then(orchestratorCommitsFreshTaskClaimIntent(D))
       .expect(and {
         state.workflow.get(C).responsibility == Outstanding,
         state.workflow.get(A).responsibility == Unowned,
@@ -119,7 +119,7 @@ module frontierRecoveryTest {
         not(canCommitFirstIntent(state, C)),
       })
       .then(observeTask(A))
-      .then(commitFirstIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .expect(state.workflow.get(A).responsibility == Outstanding)
 
   run pauseInterruptResumeRereadsBeforeReinvocationTest =
@@ -147,7 +147,7 @@ module frontierRecoveryTest {
       .then(loseClaim(A))
       .then(observeTask(A))
       .then(classifyAuthorityConstraint(A))
-      .then(commitFirstIntent(C))
+      .then(orchestratorCommitsFreshTaskClaimIntent(C))
       .expect(and {
         state.workflow.get(A).isolation == ClaimAuthorityIsolated,
         state.workflow.get(C).responsibility == Outstanding,
@@ -177,7 +177,7 @@ module frontierRecoveryTest {
       .then(rewriteTarget(A))
       .then(observeTask(A))
       .then(classifyAuthorityConstraint(A))
-      .then(commitFirstIntent(C))
+      .then(orchestratorCommitsFreshTaskClaimIntent(C))
       .expect(and {
         state.workflow.get(A).isolation == GitLineageIsolated,
         state.workflow.get(C).responsibility == Outstanding,
@@ -212,7 +212,7 @@ module frontierRecoveryTest {
       .then(addBlockerToC)
       .then(observeTask(C))
       .expect(not(canCommitFirstIntent(state, C)))
-      .then(commitFirstIntent(A))
+      .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .expect(and {
         state.workflow.get(C).responsibility == Unowned,
         state.workflow.get(A).responsibility == Outstanding,
@@ -230,8 +230,8 @@ module frontierRecoveryCapacityOneTest {
         state.selectorProjection.admittedTaskIds == Set(A),
         state.selectorProjection.reservationTaskIds == Set(A),
       })
-      .then(reconstructionStep)
-      .then(reconstructionStep)
+      .then(orchestratorCommitsNextFreshTaskClaimIntent)
+      .then(orchestratorCommitsNextFreshTaskClaimIntent)
       .expect(and {
         state.workflow.get(A).responsibility == Outstanding,
         state.workflow.get(C).responsibility == Unowned,

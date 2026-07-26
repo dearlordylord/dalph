@@ -3,6 +3,8 @@ import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
 import { OperationId, TaskId } from "../../src/domain.js"
 import {
+  FrontierRecoveryModelOperationId,
+  FrontierRecoveryModelTaskId,
   frontierRecoveryReconstructionActions,
   frontierRecoveryReconstructionConformanceVersion,
   makeFrontierRecoveryIdentityMapping,
@@ -14,14 +16,14 @@ const taskB = TaskId.make("frontier-recovery-task-B")
 const operationOne = OperationId.make("frontier-recovery-operation-1")
 
 it("defines the versioned closed M2 reconstruction action map", () => {
-  expect(frontierRecoveryReconstructionConformanceVersion).toBe(3)
+  expect(frontierRecoveryReconstructionConformanceVersion).toBe(4)
   expect(frontierRecoveryReconstructionActions).toEqual([
     "init",
-    "reconstructionStep",
-    "commitFirstIntent",
-    "observeProvenAbsence",
-    "observeIncomparableMembership",
-    "observeCompatibleReplacement",
+    "orchestratorCommitsNextFreshTaskClaimIntent",
+    "orchestratorCommitsFreshTaskClaimIntent",
+    "taskTrackerReportsProvenAbsenceInTargetClosure",
+    "taskTrackerReportsIncomparableTargetClosureMembership",
+    "taskTrackerReportsCompatibleTargetClosureReplacement",
     "crash",
     "restart"
   ])
@@ -31,14 +33,14 @@ it.effect("rejects unknown M2 reconstruction actions before invoking a control",
   Effect.gen(function*() {
     let invocations = 0
     const controls = {
-      commitFirstIntent: () => Effect.sync(() => invocations += 1),
       crash: () => Effect.sync(() => invocations += 1),
       init: () => Effect.sync(() => invocations += 1),
-      observeCompatibleReplacement: () => Effect.sync(() => invocations += 1),
-      observeIncomparableMembership: () => Effect.sync(() => invocations += 1),
-      observeProvenAbsence: () => Effect.sync(() => invocations += 1),
-      reconstructionStep: () => Effect.sync(() => invocations += 1),
-      restart: () => Effect.sync(() => invocations += 1)
+      orchestratorCommitsFreshTaskClaimIntent: () => Effect.sync(() => invocations += 1),
+      orchestratorCommitsNextFreshTaskClaimIntent: () => Effect.sync(() => invocations += 1),
+      restart: () => Effect.sync(() => invocations += 1),
+      taskTrackerReportsCompatibleTargetClosureReplacement: () => Effect.sync(() => invocations += 1),
+      taskTrackerReportsIncomparableTargetClosureMembership: () => Effect.sync(() => invocations += 1),
+      taskTrackerReportsProvenAbsenceInTargetClosure: () => Effect.sync(() => invocations += 1)
     }
     const exit = yield* runFrontierRecoveryReconstructionAction(
       { _tag: "assignExpectedState" },
@@ -58,19 +60,32 @@ it.effect("rejects unknown M2 reconstruction actions before invoking a control",
 it.effect("round-trips bounded M2 task and operation identities", () =>
   Effect.gen(function*() {
     const mapping = yield* makeFrontierRecoveryIdentityMapping({
-      operations: [{ branded: operationOne, model: 1n }],
+      operations: [{
+        branded: operationOne,
+        model: FrontierRecoveryModelOperationId.make(1n)
+      }],
       tasks: [
-        { branded: taskA, model: 0n },
-        { branded: taskB, model: 1n }
+        { branded: taskA, model: FrontierRecoveryModelTaskId.make(0n) },
+        { branded: taskB, model: FrontierRecoveryModelTaskId.make(1n) }
       ]
     })
 
-    expect(yield* mapping.taskFromModel(0n)).toBe(taskA)
+    expect(
+      yield* mapping.taskFromModel(
+        FrontierRecoveryModelTaskId.make(0n)
+      )
+    ).toBe(taskA)
     expect(yield* mapping.taskToModel(taskB)).toBe(1n)
-    expect(yield* mapping.operationFromModel(1n)).toBe(operationOne)
+    expect(
+      yield* mapping.operationFromModel(
+        FrontierRecoveryModelOperationId.make(1n)
+      )
+    ).toBe(operationOne)
     expect(yield* mapping.operationToModel(operationOne)).toBe(1n)
 
-    const unknown = yield* mapping.taskFromModel(99n).pipe(Effect.exit)
+    const unknown = yield* mapping.taskFromModel(
+      FrontierRecoveryModelTaskId.make(99n)
+    ).pipe(Effect.exit)
     expect(Exit.isFailure(unknown)).toBe(true)
     if (Exit.isFailure(unknown)) {
       expect(Cause.squash(unknown.cause)).toMatchObject({
@@ -90,28 +105,40 @@ it.effect("rejects missing, duplicate, and lossy M2 identity mappings", () =>
       {
         expectedReason: "DuplicateModelIdentity",
         input: {
-          operations: [{ branded: operationOne, model: 1n }],
+          operations: [{
+            branded: operationOne,
+            model: FrontierRecoveryModelOperationId.make(1n)
+          }],
           tasks: [
-            { branded: taskA, model: 0n },
-            { branded: taskB, model: 0n }
+            { branded: taskA, model: FrontierRecoveryModelTaskId.make(0n) },
+            { branded: taskB, model: FrontierRecoveryModelTaskId.make(0n) }
           ]
         }
       },
       {
         expectedReason: "DuplicateBrandedIdentity",
         input: {
-          operations: [{ branded: operationOne, model: 1n }],
+          operations: [{
+            branded: operationOne,
+            model: FrontierRecoveryModelOperationId.make(1n)
+          }],
           tasks: [
-            { branded: taskA, model: 0n },
-            { branded: taskA, model: 1n }
+            { branded: taskA, model: FrontierRecoveryModelTaskId.make(0n) },
+            { branded: taskA, model: FrontierRecoveryModelTaskId.make(1n) }
           ]
         }
       },
       {
         expectedReason: "LossyProjection",
         input: {
-          operations: [{ branded: operationOne, model: -1n }],
-          tasks: [{ branded: taskA, model: 0n }]
+          operations: [{
+            branded: operationOne,
+            model: FrontierRecoveryModelOperationId.make(-1n)
+          }],
+          tasks: [{
+            branded: taskA,
+            model: FrontierRecoveryModelTaskId.make(0n)
+          }]
         }
       }
     ] as const

@@ -68,7 +68,7 @@ module frontierRecoveryCounterexamples {
   action staleKnowledgeStep: bool = {
     nondet task = TASKS.oneOf()
     any {
-      commitFirstIntent(task),
+      orchestratorCommitsFreshTaskClaimIntent(task),
       crash,
       restart,
       requestUsingStaleKnowledge(task),

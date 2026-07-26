@@ -124,6 +124,27 @@ const sampledProfiles = [
     step: "reconciliationProfileStep",
     steps: "10",
     witnesses: ["isolationReached", "branchProgressDuringIsolationReached"]
+  },
+  {
+    init: "init",
+    name: "tracker proven-absence read witness",
+    step: "taskTrackerReportsProvenAbsenceInTargetClosure",
+    steps: "1",
+    witnesses: ["taskTrackerProvenAbsenceReadReached"]
+  },
+  {
+    init: "init",
+    name: "tracker incomparable-membership read witness",
+    step: "taskTrackerReportsIncomparableTargetClosureMembership",
+    steps: "1",
+    witnesses: ["taskTrackerIncomparableMembershipReadReached"]
+  },
+  {
+    init: "init",
+    name: "tracker compatible-replacement read witness",
+    step: "taskTrackerReportsCompatibleTargetClosureReplacement",
+    steps: "1",
+    witnesses: ["taskTrackerCompatibleReplacementReadReached"]
   }
 ]
 
@@ -156,13 +177,13 @@ const exhaustiveProfiles = [
     "capacity one with two independently eligible tasks",
     "frontierRecoveryCapacityOne",
     "init",
-    "reconstructionStep"
+    "orchestratorCommitsNextFreshTaskClaimIntent"
   ],
   [
     "capacity one prioritizes existing responsibility over a smaller fresh task",
     "frontierRecoveryCapacityOne",
     "initCapacityOneResponsibilityFirstProfile",
-    "reconstructionStep"
+    "orchestratorCommitsNextFreshTaskClaimIntent"
   ],
   [
     "all boundaries",

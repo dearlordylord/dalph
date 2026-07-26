@@ -5,6 +5,7 @@ import { expect } from "vitest"
 import { JournalDatabaseLocator, TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
+import { FrontierRecoveryModelTaskId } from "./frontier-recovery-conformance.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const assertReconstructedPrefix = (
@@ -69,7 +70,11 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
         })
         yield* beforeCrash.init()
         assertReconstructedPrefix(yield* beforeCrash.getState(), [])
-        if (afterClaimIntent) yield* beforeCrash.commitFirstIntent(0n)
+        if (afterClaimIntent) {
+          yield* beforeCrash.orchestratorCommitsFreshTaskClaimIntent(
+            FrontierRecoveryModelTaskId.make(0n)
+          )
+        }
         if (afterClaimIntent) {
           assertReconstructedPrefix(yield* beforeCrash.getState(), [0n])
         }
@@ -107,7 +112,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
           responsibleModelTaskIds: []
         })
         for (let step = 0; step < capacity; step++) {
-          yield* beforeCrash.reconstructionStep()
+          yield* beforeCrash.orchestratorCommitsNextFreshTaskClaimIntent()
         }
         const uninterrupted = yield* beforeCrash.getState()
         expect(uninterrupted).toMatchObject({
@@ -162,7 +167,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
       journal
     })
     yield* afterCrash.restart()
-    yield* afterCrash.observeCompatibleReplacement()
+    yield* afterCrash.taskTrackerReportsCompatibleTargetClosureReplacement()
     expect((yield* afterCrash.getState()).workflowEventTags).toEqual([
       "TrackerGraphObservationIntentRecorded",
       "TrackerGraphOutcomeObserved",
@@ -170,7 +175,9 @@ it.effect("records a fresh target-closure observation after restart", () =>
       "TrackerGraphOutcomeObserved"
     ])
 
-    const unsupported = yield* afterCrash.commitFirstIntent(3n).pipe(Effect.exit)
+    const unsupported = yield* afterCrash.orchestratorCommitsFreshTaskClaimIntent(
+      FrontierRecoveryModelTaskId.make(3n)
+    ).pipe(Effect.exit)
     expect(Exit.isFailure(unsupported)).toBe(true)
     if (Exit.isFailure(unsupported)) {
       expect(Cause.squash(unsupported.cause)).toMatchObject({
@@ -189,7 +196,7 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
       journal
     })
     yield* controls.init()
-    yield* controls.observeProvenAbsence()
+    yield* controls.taskTrackerReportsProvenAbsenceInTargetClosure()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures).toEqual([
@@ -245,7 +252,7 @@ it.effect("does not treat a causal predecessor as read coverage", () =>
       journal
     })
     yield* controls.init()
-    yield* controls.observeIncomparableMembership()
+    yield* controls.taskTrackerReportsIncomparableTargetClosureMembership()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures[0]).toMatchObject({
@@ -284,7 +291,7 @@ it.effect("replaces compatible membership knowledge with the fresh observation",
       journal
     })
     yield* controls.init()
-    yield* controls.observeCompatibleReplacement()
+    yield* controls.taskTrackerReportsCompatibleTargetClosureReplacement()
 
     expect((yield* controls.getState()).graphKnowledge.targetClosures).toEqual([
       expect.objectContaining({
@@ -313,7 +320,11 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
           journal
         })
         yield* controls.init()
-        if (afterClaimIntent) yield* controls.commitFirstIntent(0n)
+        if (afterClaimIntent) {
+          yield* controls.orchestratorCommitsFreshTaskClaimIntent(
+            FrontierRecoveryModelTaskId.make(0n)
+          )
+        }
         yield* controls.crash()
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
 
@@ -350,7 +361,7 @@ it.effect("reopens bounded first-intent selection from SQLite at capacities one 
         })
         yield* controls.init()
         for (let step = 0; step < capacity; step++) {
-          yield* controls.reconstructionStep()
+          yield* controls.orchestratorCommitsNextFreshTaskClaimIntent()
         }
         yield* controls.crash()
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))

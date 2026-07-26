@@ -1,3 +1,4 @@
+import { Schema } from "effect"
 import type { TaskWorkCapacity } from "../../src/domain.js"
 import type { JournalRecord, JournalStoreService } from "../../src/journal-store.js"
 import type {
@@ -6,25 +7,35 @@ import type {
   WorkflowResponsibilityState
 } from "../../src/reconstructed-managed-run-state.js"
 
+interface FrontierRecoveryTargetClosureReadEvidence {
+  readonly completeness: "Complete"
+  readonly consistency: "PotentiallyMixedTime"
+  readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
+  readonly factFamily: "TargetMembership"
+  readonly freshness: "FreshAtReadBoundary"
+  readonly modelOperationId: bigint
+  readonly modelPredecessorOperationIds: ReadonlyArray<bigint>
+  readonly modelRevision: bigint
+  readonly readShape: "TargetClosureMembership"
+  readonly returnedModelTaskIds: ReadonlyArray<bigint>
+}
+
 export type FrontierRecoveryReconstructionGraphEvidence =
-  | {
-    readonly disposition: "InitialObservation"
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "CompatibleReplacement"
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "IncomparableMembership"
-    readonly predecessorModelOperationIds: ReadonlyArray<bigint>
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
-  | {
-    readonly disposition: "ProvenAbsence"
-    readonly explicitlyCoveredModelTaskIds: ReadonlyArray<bigint>
-    readonly returnedModelTaskIds: ReadonlyArray<bigint>
-  }
+  & FrontierRecoveryTargetClosureReadEvidence
+  & (
+    | {
+      readonly observationProfile: "InitialObservation"
+    }
+    | {
+      readonly observationProfile: "CompatibleReplacement"
+    }
+    | {
+      readonly observationProfile: "IncomparableMembership"
+    }
+    | {
+      readonly observationProfile: "ProvenAbsence"
+    }
+  )
 
 export interface FrontierRecoveryAdmissionExplanation {
   readonly modelTaskId: bigint
@@ -61,3 +72,12 @@ export interface MakeFrontierRecoveryReconstructionControlsOptions {
   readonly freshEligibleModelTaskIds?: ReadonlyArray<bigint>
   readonly journal: JournalStoreService
 }
+
+/** The conformance harness cannot safely continue from this reconstructed prefix. */
+export class FrontierRecoveryReconstructionIssue extends Schema.TaggedErrorClass<FrontierRecoveryReconstructionIssue>()(
+  "FrontierRecoveryReconstructionIssue",
+  {
+    detail: Schema.String,
+    reason: Schema.Literals(["CoordinatorStopped", "InvalidManagedHistory"])
+  }
+) {}

@@ -2,20 +2,40 @@ import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
-// eslint-disable-next-line no-magic-numbers -- Version two adds bounded frontier and admission selection.
-export const frontierRecoveryReconstructionConformanceVersion = 3 as const
+// eslint-disable-next-line no-magic-numbers -- Version four names actors and brands model identities.
+export const frontierRecoveryReconstructionConformanceVersion = 4 as const
 const minimumModelIdentity = 0n
+
+/** Identifies one bounded M2 task, not a production task or model operation. */
+export const FrontierRecoveryModelTaskId = Schema.BigInt.pipe(
+  Schema.brand("FrontierRecoveryModelTaskId")
+)
+export type FrontierRecoveryModelTaskId = typeof FrontierRecoveryModelTaskId.Type
+
+/** Identifies one bounded M2 workflow operation, not a task or revision. */
+export const FrontierRecoveryModelOperationId = Schema.BigInt.pipe(
+  Schema.brand("FrontierRecoveryModelOperationId")
+)
+export type FrontierRecoveryModelOperationId = typeof FrontierRecoveryModelOperationId.Type
+
+/** Orders tracker observations inside M2; it is not a task or operation identity. */
+export const FrontierRecoveryModelRevision = Schema.BigInt.pipe(
+  Schema.brand("FrontierRecoveryModelRevision")
+)
+export type FrontierRecoveryModelRevision = typeof FrontierRecoveryModelRevision.Type
 
 /**
  * Closed M2 action inventory for reconstructed-run and bounded-frontier selection.
  */
 const frontierRecoveryReconstructionActionFields = {
   init: {},
-  reconstructionStep: {},
-  commitFirstIntent: { task: Schema.BigInt },
-  observeProvenAbsence: {},
-  observeIncomparableMembership: {},
-  observeCompatibleReplacement: {},
+  orchestratorCommitsNextFreshTaskClaimIntent: {},
+  orchestratorCommitsFreshTaskClaimIntent: {
+    task: FrontierRecoveryModelTaskId
+  },
+  taskTrackerReportsProvenAbsenceInTargetClosure: {},
+  taskTrackerReportsIncomparableTargetClosureMembership: {},
+  taskTrackerReportsCompatibleTargetClosureReplacement: {},
   crash: {},
   restart: {}
 } as const
@@ -35,22 +55,22 @@ export type FrontierRecoveryReconstructionActionFields = {
 }
 
 export interface TargetClosureObservationInput {
-  readonly explicitlyCoveredTasks: ReadonlyArray<bigint>
-  readonly operation: bigint
-  readonly predecessorOperations: ReadonlyArray<bigint>
-  readonly revision: bigint
-  readonly tasks: ReadonlyArray<bigint>
+  readonly explicitlyCoveredTasks: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly operation: FrontierRecoveryModelOperationId
+  readonly predecessorOperations: ReadonlyArray<FrontierRecoveryModelOperationId>
+  readonly revision: FrontierRecoveryModelRevision
+  readonly tasks: ReadonlyArray<FrontierRecoveryModelTaskId>
 }
 
 export interface FrontierRecoveryReconstructionControls<A, E, R> {
-  readonly commitFirstIntent: (task: bigint) => Effect.Effect<A, E, R>
+  readonly orchestratorCommitsFreshTaskClaimIntent: (task: FrontierRecoveryModelTaskId) => Effect.Effect<A, E, R>
+  readonly orchestratorCommitsNextFreshTaskClaimIntent: () => Effect.Effect<A, E, R>
   readonly crash: () => Effect.Effect<A, E, R>
   readonly init: () => Effect.Effect<A, E, R>
-  readonly observeCompatibleReplacement: () => Effect.Effect<A, E, R>
-  readonly observeIncomparableMembership: () => Effect.Effect<A, E, R>
-  readonly observeProvenAbsence: () => Effect.Effect<A, E, R>
-  readonly reconstructionStep: () => Effect.Effect<A, E, R>
   readonly restart: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReportsCompatibleTargetClosureReplacement: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReportsIncomparableTargetClosureMembership: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReportsProvenAbsenceInTargetClosure: () => Effect.Effect<A, E, R>
 }
 
 /** A model action or identity cannot cross the M2 conformance boundary. */
@@ -87,32 +107,38 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
   )
   return yield* Match.value(action).pipe(
     Match.tags({
-      commitFirstIntent: ({ task }) => controls.commitFirstIntent(task),
       crash: controls.crash,
       init: controls.init,
-      observeCompatibleReplacement: controls.observeCompatibleReplacement,
-      observeIncomparableMembership: controls.observeIncomparableMembership,
-      observeProvenAbsence: controls.observeProvenAbsence,
-      reconstructionStep: controls.reconstructionStep,
-      restart: controls.restart
+      orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
+      orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
+      restart: controls.restart,
+      taskTrackerReportsCompatibleTargetClosureReplacement:
+        controls.taskTrackerReportsCompatibleTargetClosureReplacement,
+      taskTrackerReportsIncomparableTargetClosureMembership:
+        controls.taskTrackerReportsIncomparableTargetClosureMembership,
+      taskTrackerReportsProvenAbsenceInTargetClosure: controls.taskTrackerReportsProvenAbsenceInTargetClosure
     }),
     Match.exhaustive
   )
 })
 
-interface IdentityEntry<A> {
+interface IdentityEntry<A, M extends bigint> {
   readonly branded: A
-  readonly model: bigint
+  readonly model: M
 }
 
 interface FrontierRecoveryIdentityMappingInput {
-  readonly operations: ReadonlyArray<IdentityEntry<OperationId>>
-  readonly tasks: ReadonlyArray<IdentityEntry<TaskId>>
+  readonly operations: ReadonlyArray<
+    IdentityEntry<OperationId, FrontierRecoveryModelOperationId>
+  >
+  readonly tasks: ReadonlyArray<
+    IdentityEntry<TaskId, FrontierRecoveryModelTaskId>
+  >
 }
 
-const duplicate = <A>(
-  entries: ReadonlyArray<IdentityEntry<A>>,
-  select: (entry: IdentityEntry<A>) => A | bigint
+const duplicate = <A, M extends bigint>(
+  entries: ReadonlyArray<IdentityEntry<A, M>>,
+  select: (entry: IdentityEntry<A, M>) => A | M
 ): boolean => {
   const values = entries.map(select)
   return new Set(values).size !== values.length
@@ -123,9 +149,9 @@ const mappingIssue = (
   detail: string
 ) => new FrontierRecoveryConformanceIssue({ detail, reason })
 
-const requireMapped = <A>(
-  values: ReadonlyMap<bigint, A>,
-  model: bigint,
+const requireMapped = <A, M extends bigint>(
+  values: ReadonlyMap<M, A>,
+  model: M,
   kind: "operation" | "task"
 ): Effect.Effect<A, FrontierRecoveryConformanceIssue> => {
   const value = values.get(model)
@@ -134,11 +160,14 @@ const requireMapped = <A>(
     : Effect.succeed(value)
 }
 
-const requireModel = <A>(
-  values: ReadonlyMap<A, bigint>,
+const requireModel = <A, M extends bigint>(
+  values: ReadonlyMap<A, M>,
   branded: A,
   kind: "operation" | "task"
-): Effect.Effect<bigint, FrontierRecoveryConformanceIssue> => {
+): Effect.Effect<
+  M,
+  FrontierRecoveryConformanceIssue
+> => {
   const value = values.get(branded)
   return value === undefined
     ? Effect.fail(mappingIssue("UnknownModelIdentity", `unmapped Dalph ${kind} identity ${String(branded)}`))
@@ -190,9 +219,10 @@ export const makeFrontierRecoveryIdentityMapping = Effect.fn(
   const taskModels = new Map(input.tasks.map(({ branded, model }) => [branded, model]))
 
   return {
-    operationFromModel: (model: bigint) => requireMapped(operationsByModel, model, "operation"),
+    operationFromModel: (model: FrontierRecoveryModelOperationId) =>
+      requireMapped(operationsByModel, model, "operation"),
     operationToModel: (branded: OperationId) => requireModel(operationModels, branded, "operation"),
-    taskFromModel: (model: bigint) => requireMapped(tasksByModel, model, "task"),
+    taskFromModel: (model: FrontierRecoveryModelTaskId) => requireMapped(tasksByModel, model, "task"),
     taskToModel: (branded: TaskId) => requireModel(taskModels, branded, "task")
   } as const
 })

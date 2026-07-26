@@ -2,43 +2,50 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, ITFSet, ITFVariant, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { TaskWorkCapacity } from "../../src/domain.js"
-import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
-import type { FrontierRecoveryReconstructionActionFields } from "./frontier-recovery-conformance.js"
+import { OperationId, TaskWorkCapacity } from "../../src/domain.js"
+import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
+import { intentRecordKey, JournalStore, memoryJournalStoreLayer, outcomeRecordKey } from "../../src/journal-store.js"
+import {
+  FrontierRecoveryModelTaskId,
+  type FrontierRecoveryReconstructionActionFields
+} from "./frontier-recovery-conformance.js"
 import {
   type FrontierRecoveryReconstructionProjection,
   makeFrontierRecoveryReconstructionControls
 } from "./frontier-recovery-reconstruction.js"
 
 const actionSchema = {
-  commitFirstIntent: { task: ITFBigInt },
   crash: {},
   init: {},
   initCapacityOneResponsibilityFirstProfile: {},
-  observeCompatibleReplacement: {},
-  observeIncomparableMembership: {},
-  observeProvenAbsence: {},
-  reconstructionStep: {},
-  restart: {}
+  orchestratorCommitsFreshTaskClaimIntent: { task: ITFBigInt },
+  orchestratorCommitsNextFreshTaskClaimIntent: {},
+  restart: {},
+  taskTrackerReportsCompatibleTargetClosureReplacement: {},
+  taskTrackerReportsIncomparableTargetClosureMembership: {},
+  taskTrackerReportsProvenAbsenceInTargetClosure: {}
 } satisfies FrontierRecoveryReconstructionActionFields & {
   readonly initCapacityOneResponsibilityFirstProfile: Record<never, never>
 }
 
+const ModelTargetClosureReadEvidence = {
+  completeness: Schema.Literal("Complete"),
+  consistency: Schema.Literal("PotentiallyMixedTime"),
+  explicitlyCoveredTaskIds: ITFSet(ITFBigInt),
+  factFamily: Schema.Literal("TargetMembership"),
+  freshness: Schema.Literal("FreshAtReadBoundary"),
+  operationId: ITFBigInt,
+  predecessorOperationIds: ITFSet(ITFBigInt),
+  readShape: Schema.Literal("TargetClosureMembership"),
+  revision: ITFBigInt,
+  returnedTaskIds: ITFSet(ITFBigInt)
+} as const
+
 const ModelReconstructionGraphEvidence = ITFVariant({
-  CompatibleReplacementGraphObservation: Schema.Struct({
-    returnedTaskIds: ITFSet(ITFBigInt)
-  }),
-  IncomparableMembershipGraphObservation: Schema.Struct({
-    predecessorOperationIds: ITFSet(ITFBigInt),
-    returnedTaskIds: ITFSet(ITFBigInt)
-  }),
-  InitialReconstructionGraphObservation: Schema.Struct({
-    returnedTaskIds: ITFSet(ITFBigInt)
-  }),
-  ProvenAbsenceGraphObservation: Schema.Struct({
-    explicitlyCoveredTaskIds: ITFSet(ITFBigInt),
-    returnedTaskIds: ITFSet(ITFBigInt)
-  })
+  CompatibleReplacementGraphObservation: Schema.Struct(ModelTargetClosureReadEvidence),
+  IncomparableMembershipGraphObservation: Schema.Struct(ModelTargetClosureReadEvidence),
+  InitialReconstructionGraphObservation: Schema.Struct(ModelTargetClosureReadEvidence),
+  ProvenAbsenceGraphObservation: Schema.Struct(ModelTargetClosureReadEvidence)
 })
 
 const ModelAdmissionExplanation = Schema.Struct({
@@ -129,36 +136,40 @@ type ReconstructionComparable =
 const modelGraphEvidenceFrom = (
   value: typeof ModelReconstructionGraphEvidence.Type
 ): FrontierRecoveryReconstructionProjection["graphEvidence"] => {
-  const returnedModelTaskIds = sortedBigInts(value.value.returnedTaskIds)
-  return value.tag === "ProvenAbsenceGraphObservation"
-    ? {
-      disposition: "ProvenAbsence",
-      explicitlyCoveredModelTaskIds: sortedBigInts(
-        value.value.explicitlyCoveredTaskIds
-      ),
-      returnedModelTaskIds
-    }
+  const observationProfile = value.tag === "ProvenAbsenceGraphObservation"
+    ? "ProvenAbsence" as const
     : value.tag === "IncomparableMembershipGraphObservation"
-    ? {
-      disposition: "IncomparableMembership",
-      predecessorModelOperationIds: sortedBigInts(
-        value.value.predecessorOperationIds
-      ),
-      returnedModelTaskIds
-    }
+    ? "IncomparableMembership" as const
     : value.tag === "CompatibleReplacementGraphObservation"
-    ? { disposition: "CompatibleReplacement", returnedModelTaskIds }
-    : { disposition: "InitialObservation", returnedModelTaskIds }
+    ? "CompatibleReplacement" as const
+    : "InitialObservation" as const
+  return {
+    completeness: value.value.completeness,
+    consistency: value.value.consistency,
+    explicitlyCoveredModelTaskIds: sortedBigInts(
+      value.value.explicitlyCoveredTaskIds
+    ),
+    factFamily: value.value.factFamily,
+    freshness: value.value.freshness,
+    modelOperationId: value.value.operationId,
+    modelPredecessorOperationIds: sortedBigInts(
+      value.value.predecessorOperationIds
+    ),
+    modelRevision: value.value.revision,
+    observationProfile,
+    readShape: value.value.readShape,
+    returnedModelTaskIds: sortedBigInts(value.value.returnedTaskIds)
+  }
 }
 
 const graphProfileFrom = (
   evidence: FrontierRecoveryReconstructionProjection["graphEvidence"]
 ): GraphProfile | undefined =>
-  evidence.disposition === "ProvenAbsence"
+  evidence.observationProfile === "ProvenAbsence"
     ? "ProvenAbsence"
-    : evidence.disposition === "IncomparableMembership"
+    : evidence.observationProfile === "IncomparableMembership"
     ? "IncomparableMembership"
-    : evidence.disposition === "CompatibleReplacement"
+    : evidence.observationProfile === "CompatibleReplacement"
     ? "CompatibleReplacement"
     : undefined
 
@@ -166,27 +177,12 @@ const graphEvidenceMatches = (
   left: FrontierRecoveryReconstructionProjection["graphEvidence"],
   right: FrontierRecoveryReconstructionProjection["graphEvidence"]
 ): boolean =>
-  left.disposition === right.disposition
-  && left.returnedModelTaskIds.join(",")
-    === right.returnedModelTaskIds.join(",")
-  && (
-    left.disposition !== "ProvenAbsence"
-    || (
-      right.disposition === "ProvenAbsence"
-      && left.explicitlyCoveredModelTaskIds.join(",")
-        === right.explicitlyCoveredModelTaskIds.join(",")
-    )
-  )
-  && (
-    left.disposition !== "IncomparableMembership"
-    || (
-      right.disposition === "IncomparableMembership"
-      && left.predecessorModelOperationIds.join(",")
-        === right.predecessorModelOperationIds.join(",")
-    )
-  )
+  JSON.stringify(left, (_, value) => typeof value === "bigint" ? value.toString() : value)
+    === JSON.stringify(right, (_, value) => typeof value === "bigint" ? value.toString() : value)
 
-const exactGraphProfileMatches = (
+// This oracle derives an expected projection from M2 output and compares it
+// after production reducers run. It never writes or substitutes production state.
+const modelEvidenceMatchesExactProductionProjection = (
   profile: GraphProfile | undefined,
   graphEvidence: FrontierRecoveryReconstructionProjection["graphEvidence"],
   responsibleModelTaskIds: ReadonlyArray<bigint>,
@@ -216,16 +212,15 @@ const exactGraphProfileMatches = (
   ]
   const modelTaskName = (task: bigint): string => `frontier-recovery-task-${["A", "B", "C", "D"][Number(task)]}`
   const tasks = graphEvidence.returnedModelTaskIds.map(modelTaskName)
-  const explicitlyCoveredTaskIds = graphEvidence.disposition
-      === "ProvenAbsence"
-    ? graphEvidence.explicitlyCoveredModelTaskIds.map(modelTaskName)
-    : []
-  const predecessorOperationIds = graphEvidence.disposition
-      === "IncomparableMembership"
-    ? graphEvidence.predecessorModelOperationIds.map((operation) => `frontier-recovery-graph-observation-${operation}`)
-    : []
+  const explicitlyCoveredTaskIds = graphEvidence.explicitlyCoveredModelTaskIds.map(modelTaskName)
+  const predecessorOperationIds = graphEvidence.modelPredecessorOperationIds.map(
+    (operation) => `frontier-recovery-graph-observation-${operation}`
+  )
   const target = "frontier-recovery-reconstruction-target"
   const runId = "frontier-recovery-reconstruction-run"
+  const initialGraphOperationId = OperationId.make(
+    "frontier-recovery-graph-observation-0"
+  )
   const operationZero = {
     _tag: "ReadTrackerGraph",
     operationId: "frontier-recovery-graph-observation-0",
@@ -241,9 +236,9 @@ const exactGraphProfileMatches = (
       event: {
         _tag: "TrackerGraphObservationIntentRecorded",
         operation: operationZero,
-        version: 4
+        version: workflowJournalEventVersion
       },
-      key: "operation:frontier-recovery-graph-observation-0:intent",
+      key: intentRecordKey(initialGraphOperationId),
       position: 1,
       runId
     },
@@ -256,9 +251,9 @@ const exactGraphProfileMatches = (
           revision: "frontier-recovery-revision-0",
           taskIds: allTasks
         },
-        version: 4
+        version: workflowJournalEventVersion
       },
-      key: "operation:frontier-recovery-graph-observation-0:outcome",
+      key: outcomeRecordKey(initialGraphOperationId),
       position: 2,
       runId
     }
@@ -282,6 +277,7 @@ const exactGraphProfileMatches = (
       const taskName = modelTaskName(modelTask)
       const operationIdentity = modelTask === 0n ? 1 : 3
       const operationId = `frontier-recovery-claim-operation-${operationIdentity}`
+      const brandedOperationId = OperationId.make(operationId)
       const acquisition = {
         operationId,
         owner: "frontier-recovery-owner",
@@ -300,9 +296,9 @@ const exactGraphProfileMatches = (
                 "frontier-recovery-graph-observation-0"
               ]
             },
-            version: 4
+            version: workflowJournalEventVersion
           },
-          key: `operation:${operationId}:intent`,
+          key: intentRecordKey(brandedOperationId),
           position: index + 3,
           runId
         }
@@ -330,55 +326,58 @@ const exactGraphProfileMatches = (
   }
   const operationTwo = {
     _tag: "ReadTrackerGraph",
-    operationId: "frontier-recovery-graph-observation-2",
+    operationId: `frontier-recovery-graph-observation-${graphEvidence.modelOperationId}`,
     predecessorOperationIds,
     readShape: {
-      _tag: "TargetClosureMembership",
+      _tag: graphEvidence.readShape,
       explicitlyCoveredTaskIds
     },
     target
   }
+  const replacementGraphOperationId = OperationId.make(
+    operationTwo.operationId
+  )
   const expectedHistory = [
     ...initialHistory,
     {
       event: {
         _tag: "TrackerGraphObservationIntentRecorded",
         operation: operationTwo,
-        version: 4
+        version: workflowJournalEventVersion
       },
-      key: "operation:frontier-recovery-graph-observation-2:intent",
+      key: intentRecordKey(replacementGraphOperationId),
       position: 3,
       runId
     },
     {
       event: {
         _tag: "TrackerGraphOutcomeObserved",
-        operationId: "frontier-recovery-graph-observation-2",
+        operationId: `frontier-recovery-graph-observation-${graphEvidence.modelOperationId}`,
         outcome: {
           _tag: "TrackerGraphObserved",
-          revision: "frontier-recovery-revision-1",
+          revision: `frontier-recovery-revision-${graphEvidence.modelRevision}`,
           taskIds: tasks
         },
-        version: 4
+        version: workflowJournalEventVersion
       },
-      key: "operation:frontier-recovery-graph-observation-2:outcome",
+      key: outcomeRecordKey(replacementGraphOperationId),
       position: 4,
       runId
     }
   ]
   const observationTwo = {
     _tag: "TaskTrackerTargetClosureObserved",
-    completeness: "Complete",
-    consistency: "PotentiallyMixedTime",
+    completeness: graphEvidence.completeness,
+    consistency: graphEvidence.consistency,
     explicitlyCoveredTaskIds,
-    factFamilies: ["TargetMembership"],
-    freshness: "FreshAtReadBoundary",
+    factFamilies: [graphEvidence.factFamily],
+    freshness: graphEvidence.freshness,
     observedAt: 4,
-    operationId: "frontier-recovery-graph-observation-2",
-    provenAbsentTaskIds: profile === "ProvenAbsence"
-      ? ["frontier-recovery-task-B"]
-      : [],
-    revision: "frontier-recovery-revision-1",
+    operationId: `frontier-recovery-graph-observation-${graphEvidence.modelOperationId}`,
+    provenAbsentTaskIds: explicitlyCoveredTaskIds.filter(
+      (taskId) => !tasks.includes(taskId)
+    ),
+    revision: `frontier-recovery-revision-${graphEvidence.modelRevision}`,
     target,
     taskIds: tasks
   }
@@ -426,15 +425,23 @@ const makeReconstructionDriver = (
               Effect.andThen(
                 initiallyResponsibleTask === undefined
                   ? Effect.void
-                  : current.commitFirstIntent(BigInt(initiallyResponsibleTask))
+                  : current.orchestratorCommitsFreshTaskClaimIntent(
+                    FrontierRecoveryModelTaskId.make(
+                      BigInt(initiallyResponsibleTask)
+                    )
+                  )
               )
             )
           )
         )
       return {
-        commitFirstIntent: ({ task }) =>
+        orchestratorCommitsFreshTaskClaimIntent: ({ task }) =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.commitFirstIntent(task))
+            Effect.flatMap((current) =>
+              current.orchestratorCommitsFreshTaskClaimIntent(
+                FrontierRecoveryModelTaskId.make(task)
+              )
+            )
           ),
         crash: () =>
           Ref.get(controlsRef).pipe(
@@ -446,21 +453,21 @@ const makeReconstructionDriver = (
           ),
         init: initialize,
         initCapacityOneResponsibilityFirstProfile: initialize,
-        observeCompatibleReplacement: () =>
+        taskTrackerReportsCompatibleTargetClosureReplacement: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.observeCompatibleReplacement())
+            Effect.flatMap((current) => current.taskTrackerReportsCompatibleTargetClosureReplacement())
           ),
-        observeIncomparableMembership: () =>
+        taskTrackerReportsIncomparableTargetClosureMembership: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.observeIncomparableMembership())
+            Effect.flatMap((current) => current.taskTrackerReportsIncomparableTargetClosureMembership())
           ),
-        observeProvenAbsence: () =>
+        taskTrackerReportsProvenAbsenceInTargetClosure: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.observeProvenAbsence())
+            Effect.flatMap((current) => current.taskTrackerReportsProvenAbsenceInTargetClosure())
           ),
-        reconstructionStep: () =>
+        orchestratorCommitsNextFreshTaskClaimIntent: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.reconstructionStep())
+            Effect.flatMap((current) => current.orchestratorCommitsNextFreshTaskClaimIntent())
           ),
         restart: () =>
           Effect.gen(function*() {
@@ -529,7 +536,9 @@ const decodeReconstructionModelState = (raw: unknown) =>
         frontierModelTaskIds,
         frontierTransitionTags: frontierModelTaskIds.map(transitionTagFor),
         graphEvidence,
-        knownModelTaskIds: sortedBigInts(state.knowledge.keys()),
+        knownModelTaskIds: graphProfile === "ProvenAbsence"
+          ? graphEvidence.returnedModelTaskIds
+          : sortedBigInts(state.knowledge.keys()),
         occupiedModelTaskIds: sortedBigInts(selector.occupiedTaskIds),
         pause: {
           run: {
@@ -611,7 +620,7 @@ const compareReconstructionState = (
   && JSON.stringify(model.pause) === JSON.stringify(implementation.pause)
   && model.workflowEventTags.join(",")
     === implementation.workflowEventTags.join(",")
-  && exactGraphProfileMatches(
+  && modelEvidenceMatchesExactProductionProjection(
     graphProfileFrom(model.graphEvidence),
     model.graphEvidence,
     model.responsibleModelTaskIds,
@@ -637,7 +646,7 @@ for (const configuredCapacity of [1, 2] as const) {
       nTraces: 8,
       seed: configuredCapacity === 1 ? "131" : "144",
       spec: "specs/frontierRecovery.qnt",
-      step: "reconstructionStep",
+      step: "orchestratorCommitsNextFreshTaskClaimIntent",
       stateCheck: reconstructionStateCheck
     },
     60_000
@@ -656,17 +665,29 @@ quintIt(
     nTraces: 8,
     seed: "132",
     spec: "specs/frontierRecovery.qnt",
-    step: "reconstructionStep",
+    step: "orchestratorCommitsNextFreshTaskClaimIntent",
     stateCheck: reconstructionStateCheck
   },
   60_000
 )
 
 for (
-  const { action: profile, seed } of [
-    { action: "observeProvenAbsence", seed: "145" },
-    { action: "observeIncomparableMembership", seed: "146" },
-    { action: "observeCompatibleReplacement", seed: "147" }
+  const { action: profile, seed, witness } of [
+    {
+      action: "taskTrackerReportsProvenAbsenceInTargetClosure",
+      seed: "145",
+      witness: "taskTrackerProvenAbsenceReadReached"
+    },
+    {
+      action: "taskTrackerReportsIncomparableTargetClosureMembership",
+      seed: "146",
+      witness: "taskTrackerIncomparableMembershipReadReached"
+    },
+    {
+      action: "taskTrackerReportsCompatibleTargetClosureReplacement",
+      seed: "147",
+      witness: "taskTrackerCompatibleReplacementReadReached"
+    }
   ] as const
 ) {
   quintIt(it.effect, `replays M2 ${profile} through the production graph reducer`, {
@@ -678,6 +699,7 @@ for (
     seed,
     spec: "specs/frontierRecovery.qnt",
     step: profile,
-    stateCheck: reconstructionStateCheck
+    stateCheck: reconstructionStateCheck,
+    witnesses: [witness]
   }, 30_000)
 }

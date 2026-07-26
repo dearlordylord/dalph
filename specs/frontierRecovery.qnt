@@ -47,17 +47,51 @@ module frontierRecovery {
   // knowledge and each variant carries only evidence valid for that read.
   type ReconstructionGraphEvidence =
     | InitialReconstructionGraphObservation({
+        completeness: str,
+        consistency: str,
+        explicitlyCoveredTaskIds: Set[TaskId],
+        factFamily: str,
+        freshness: str,
+        operationId: int,
+        predecessorOperationIds: Set[int],
+        readShape: str,
+        revision: int,
         returnedTaskIds: Set[TaskId],
       })
     | CompatibleReplacementGraphObservation({
+        completeness: str,
+        consistency: str,
+        explicitlyCoveredTaskIds: Set[TaskId],
+        factFamily: str,
+        freshness: str,
+        operationId: int,
+        predecessorOperationIds: Set[int],
+        readShape: str,
+        revision: int,
         returnedTaskIds: Set[TaskId],
       })
     | IncomparableMembershipGraphObservation({
+        completeness: str,
+        consistency: str,
+        explicitlyCoveredTaskIds: Set[TaskId],
+        factFamily: str,
+        freshness: str,
+        operationId: int,
         predecessorOperationIds: Set[int],
+        readShape: str,
+        revision: int,
         returnedTaskIds: Set[TaskId],
       })
     | ProvenAbsenceGraphObservation({
+        completeness: str,
+        consistency: str,
         explicitlyCoveredTaskIds: Set[TaskId],
+        factFamily: str,
+        freshness: str,
+        operationId: int,
+        predecessorOperationIds: Set[int],
+        readShape: str,
+        revision: int,
         returnedTaskIds: Set[TaskId],
       })
 
@@ -240,6 +274,15 @@ module frontierRecovery {
     duplicateEffectViolations: 0,
     reconstructionGraphEvidence:
       InitialReconstructionGraphObservation({
+        completeness: "Complete",
+        consistency: "PotentiallyMixedTime",
+        explicitlyCoveredTaskIds: Set(),
+        factFamily: "TargetMembership",
+        freshness: "FreshAtReadBoundary",
+        operationId: 0,
+        predecessorOperationIds: Set(),
+        readShape: "TargetClosureMembership",
+        revision: 0,
         returnedTaskIds: TASKS,
       }),
     selectorProjection: computeSelectorProjection(
@@ -1356,6 +1399,21 @@ module frontierRecovery {
   val branchProgressDuringIsolationReached: bool =
     state.workflow.get(A).isolation != NotIsolated
       and state.workflow.get(C).responsibility == Outstanding
+  val taskTrackerProvenAbsenceReadReached: bool =
+    match state.reconstructionGraphEvidence {
+      | ProvenAbsenceGraphObservation(_) => true
+      | _ => false
+    }
+  val taskTrackerIncomparableMembershipReadReached: bool =
+    match state.reconstructionGraphEvidence {
+      | IncomparableMembershipGraphObservation(_) => true
+      | _ => false
+    }
+  val taskTrackerCompatibleReplacementReadReached: bool =
+    match state.reconstructionGraphEvidence {
+      | CompatibleReplacementGraphObservation(_) => true
+      | _ => false
+    }
 
   action init: bool = state' = initialState
 
@@ -1373,7 +1431,7 @@ module frontierRecovery {
   action initCapacityOneResponsibilityFirstProfile: bool =
     state' = capacityOneResponsibilityFirstState
 
-  action commitFirstIntent(task: TaskId): bool = all {
+  action orchestratorCommitsFreshTaskClaimIntent(task: TaskId): bool = all {
     canCommitFirstIntent(state, task),
     state' = refreshSelectorProjection(applyCommitFirstIntent(state, task)),
   }
@@ -1548,7 +1606,7 @@ module frontierRecovery {
   // protocol. The initializer chooses any one of the eight concrete
   // ambiguity-crossing boundaries, and this step operates only on task A.
   action boundaryProfileStep: bool = any {
-    commitFirstIntent(A),
+    orchestratorCommitsFreshTaskClaimIntent(A),
     commitResponsibleIntent(A),
     requestApplies(A),
     requestChangesNothing(A),
@@ -1562,7 +1620,7 @@ module frontierRecovery {
   // Exhaustive crash profile for every ambiguity-crossing boundary. Restart
   // invalidates the activation carried by every pre-crash observation.
   action crashProfileStep: bool = any {
-    commitFirstIntent(A),
+    orchestratorCommitsFreshTaskClaimIntent(A),
     commitResponsibleIntent(A),
     requestApplies(A),
     requestChangesNothing(A),
@@ -1583,7 +1641,7 @@ module frontierRecovery {
     observeTask(A),
     recordInterruptedInvocation(A),
     commitResponsibleIntent(A),
-    commitFirstIntent(C),
+    orchestratorCommitsFreshTaskClaimIntent(C),
   }
 
   // Exhaustive branch-local external-change profile. A may lose its claim,
@@ -1599,7 +1657,7 @@ module frontierRecovery {
     classifyAuthorityConstraint(A),
     repairIsolatedAuthority(A),
     clearIsolation(A),
-    commitFirstIntent(C),
+    orchestratorCommitsFreshTaskClaimIntent(C),
   }
 
   // Construction profile: only ordinary successful workflow actions.
@@ -1608,7 +1666,7 @@ module frontierRecovery {
   action progressStep: bool = {
     nondet task = TASKS.oneOf()
     any {
-      commitFirstIntent(task),
+      orchestratorCommitsFreshTaskClaimIntent(task),
       commitResponsibleIntent(task),
       requestApplies(task),
       observeTask(task),
@@ -1622,7 +1680,7 @@ module frontierRecovery {
   // configured profile has another position. The executable adapter compares
   // this exported decision with the production selector and controller at
   // capacities one and two.
-  action reconstructionStep: bool =
+  action orchestratorCommitsNextFreshTaskClaimIntent: bool =
     if (canCommitFirstIntent(state, A))
       state' = refreshSelectorProjection(applyCommitFirstIntent(state, A))
     else if (canCommitFirstIntent(state, C))
@@ -1631,50 +1689,66 @@ module frontierRecovery {
       state' = refreshSelectorProjection(state)
 
   // Named bounded tracker-read profiles used by the M2 reconstruction
-  // conformance adapter. Each observes a distinct model subject so the sampled
-  // state identifies which production evidence profile must be compared.
-  action observeProvenAbsence: bool =
-    all {
-      canObserveTask(state, B),
-      state' = refreshSelectorProjection({
-        ...applyObserveTask(state, B),
-        reconstructionGraphEvidence:
-          ProvenAbsenceGraphObservation({
-          explicitlyCoveredTaskIds: Set(B),
-          returnedTaskIds: Set(A, C, D),
-        }),
+  // conformance adapter. Each exports one distinct normalized read result so
+  // the sampled state identifies which production evidence must be compared.
+  action taskTrackerReportsProvenAbsenceInTargetClosure: bool =
+    state' = refreshSelectorProjection({
+      ...state,
+      reconstructionGraphEvidence:
+        ProvenAbsenceGraphObservation({
+        completeness: "Complete",
+        consistency: "PotentiallyMixedTime",
+        explicitlyCoveredTaskIds: Set(B),
+        factFamily: "TargetMembership",
+        freshness: "FreshAtReadBoundary",
+        operationId: 2,
+        predecessorOperationIds: Set(),
+        readShape: "TargetClosureMembership",
+        revision: 1,
+        returnedTaskIds: Set(A, C, D),
       }),
-    }
+    })
 
-  action observeIncomparableMembership: bool =
-    all {
-      canObserveTask(state, C),
-      state' = refreshSelectorProjection({
-        ...applyObserveTask(state, C),
-        reconstructionGraphEvidence:
-          IncomparableMembershipGraphObservation({
-          predecessorOperationIds: Set(0),
-          returnedTaskIds: Set(A, C, D),
-        }),
+  action taskTrackerReportsIncomparableTargetClosureMembership: bool =
+    state' = refreshSelectorProjection({
+      ...state,
+      reconstructionGraphEvidence:
+        IncomparableMembershipGraphObservation({
+        completeness: "Complete",
+        consistency: "PotentiallyMixedTime",
+        explicitlyCoveredTaskIds: Set(),
+        factFamily: "TargetMembership",
+        freshness: "FreshAtReadBoundary",
+        operationId: 2,
+        predecessorOperationIds: Set(0),
+        readShape: "TargetClosureMembership",
+        revision: 1,
+        returnedTaskIds: Set(A, C, D),
       }),
-    }
+    })
 
-  action observeCompatibleReplacement: bool =
-    all {
-      canObserveTask(state, D),
-      state' = refreshSelectorProjection({
-        ...applyObserveTask(state, D),
-        reconstructionGraphEvidence:
-          CompatibleReplacementGraphObservation({
-          returnedTaskIds: TASKS,
-        }),
+  action taskTrackerReportsCompatibleTargetClosureReplacement: bool =
+    state' = refreshSelectorProjection({
+      ...state,
+      reconstructionGraphEvidence:
+        CompatibleReplacementGraphObservation({
+        completeness: "Complete",
+        consistency: "PotentiallyMixedTime",
+        explicitlyCoveredTaskIds: Set(),
+        factFamily: "TargetMembership",
+        freshness: "FreshAtReadBoundary",
+        operationId: 2,
+        predecessorOperationIds: Set(),
+        readShape: "TargetClosureMembership",
+        revision: 1,
+        returnedTaskIds: TASKS,
       }),
-    }
+    })
 
   action step: bool = {
     nondet task = TASKS.oneOf()
     any {
-      commitFirstIntent(task),
+      orchestratorCommitsFreshTaskClaimIntent(task),
       commitResponsibleIntent(task),
       requestApplies(task),
       requestChangesNothing(task),
