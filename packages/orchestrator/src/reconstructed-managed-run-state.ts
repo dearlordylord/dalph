@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { JournalPosition, OperationId, PlannedTaskAttempt, TaskId, TrackerRevision, TrackerTarget } from "./domain.js"
 import type { RunId } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
+import { samePlannedTaskAttempt } from "./planned-task-attempt.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
@@ -137,9 +138,17 @@ export const WorkflowResponsibilityEntry = WorkflowResponsibilityEntryShape.chec
       TaskWorkSessionResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
       TaskWorktreeResponsibility: ({ operation }) => operation.plannedAttempt.taskId
     })
-    return embeddedTaskId !== entry.taskId
-      ? "responsibility task identity must match its exact operation subject"
-      : undefined
+    if (embeddedTaskId !== entry.taskId) {
+      return "responsibility task identity must match its exact operation subject"
+    }
+    if (
+      entry._tag === "ImplementationReviewResponsibility"
+      && entry.operation.request._tag === "AuthorizedImplementationReview"
+      && !samePlannedTaskAttempt(entry.plannedAttempt, entry.operation.request.plannedAttempt)
+    ) {
+      return "review responsibility attempt must match its exact operation subject"
+    }
+    return undefined
   })
 )
 export type WorkflowResponsibilityEntry = typeof WorkflowResponsibilityEntry.Type

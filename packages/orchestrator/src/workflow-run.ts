@@ -221,7 +221,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             operation: executionOperation,
             outcome: executionOutcome
           }))
-          yield* admissionController.releaseReservation(taskForAttempt.id)
+          yield* admissionController.releaseReservation(
+            taskForAttempt.id,
+            executionOperation.request.operationId
+          )
           if (activeClaim === undefined) {
             return yield* new TaskWorktreeExecutionModeContradiction({
               operationId: executionOperation.request.operationId
@@ -270,7 +273,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             operation: executionOperation,
             outcome: executionOutcome
           }))
-          yield* admissionController.releaseReservation(taskForAttempt.id)
+          yield* admissionController.releaseReservation(taskForAttempt.id, null)
           const evidenceOperation = makeImplementationEvidenceSealingOperation({
             operationId: yield* allocator.allocate(),
             execution: {
@@ -343,7 +346,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     )
     yield* Effect.forEach(
       admittedTasks,
-      ({ id }) => admissionController.releaseReservation(id),
+      ({ id }) => admissionController.releaseReservation(id, null),
       { discard: true }
     )
     remainingTasks = remainingTasks.filter(({ id }) => !admittedTaskIds.has(id))

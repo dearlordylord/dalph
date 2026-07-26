@@ -1,7 +1,7 @@
-/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
+/* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
-import { RunId } from "./domain.js"
+import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
 import { recoverImplementationConvergences } from "./implementation-convergence-recovery.js"
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
@@ -356,7 +356,11 @@ export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeM
  * an independent reconciliation fact from another boundary.
  */
 export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.recoverExactRunAfterCoordinatorDeath")(
-  function*(runId: RunId, discoveredRecords?: ReadonlyArray<JournalRecord>) {
+  function*(
+    runId: RunId,
+    discoveredRecords?: ReadonlyArray<JournalRecord>,
+    capacity: TaskWorkCapacity = defaultTaskWorkCapacity
+  ) {
     const journal = yield* JournalStore
     const initialReduction = reduceManagedHistory(runId, discoveredRecords ?? (yield* journal.read(runId)))
     if (initialReduction._tag === "InvalidManagedHistory") {
@@ -380,7 +384,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.
       collect("TaskRunner")(recoverTaskWorkSessionEstablishments(runId)),
       collect("TaskExecutor")(recoverTaskExecutions(runId)),
       collect("Evidence")(recoverImplementationEvidenceSealings(runId)),
-      collect("Reviewer")(recoverImplementationConvergences(runId))
+      collect("Reviewer")(recoverImplementationConvergences(runId, capacity))
     ] as const
     for (const phase of phases) {
       const issues = yield* phase

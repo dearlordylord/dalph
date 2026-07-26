@@ -23,8 +23,9 @@ import {
   TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
-import { EvidenceDigest, EvidenceReference } from "./implementation-evidence.js"
+import { EvidenceDigest, EvidenceReference, SealedImplementationEvidence } from "./implementation-evidence.js"
 import {
+  AuthorizedImplementationReviewRequest,
   ImplementationReviewDisposition,
   ImplementationReviewRequest,
   ReviewFindingsHandbackRequest,
@@ -219,6 +220,49 @@ it("rejects a responsibility whose routing task disagrees with its operation", (
   ).toThrow("responsibility task identity must match its exact operation subject")
 })
 
+it("rejects a review responsibility that combines two attempts for one task", () => {
+  const alternateAttempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("different-review-attempt")
+  })
+  const operation = makeImplementationReviewOperation(
+    AuthorizedImplementationReviewRequest.make({
+      evidenceSealingOperationId: OperationId.make("review-evidence-operation"),
+      findingHistory: [],
+      implementationEvidence: SealedImplementationEvidence.make({
+        manifest: {
+          diff: evidenceReference,
+          implementationOutput: evidenceReference,
+          plannedBaseSha: plannedAttempt.baseSha,
+          predecessorOperationId: OperationId.make("review-execution-operation"),
+          runId: plannedAttempt.runId,
+          stage: "Implementation",
+          taskId
+        },
+        manifestReference: evidenceReference
+      }),
+      implementerInvocationId: OperationId.make("review-execution-operation"),
+      implementerSessionId: sessionId,
+      operationId: OperationId.make("authorized-review-responsibility"),
+      plannedAttempt,
+      predecessorEvidenceReference: evidenceReference,
+      reviewerSessionId: ReviewerSessionId.make("authorized-responsibility-reviewer"),
+      round,
+      roundLimit
+    })
+  )
+
+  expect(() =>
+    Schema.decodeUnknownSync(WorkflowResponsibilityEntry)({
+      _tag: "ImplementationReviewResponsibility",
+      beganAt: JournalPosition.make(6),
+      operation,
+      plannedAttempt: alternateAttempt,
+      taskId
+    })
+  ).toThrow("review responsibility attempt must match its exact operation subject")
+})
+
 it("derives missing-claim reconciliation and exact fact issues", () => {
   const responsibility = responsibilities()[0]
   const state = WorkflowResponsibilityState.make({
@@ -366,7 +410,7 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
       }
     ])
 
-    yield* controller.releaseReservation(taskA)
+    yield* controller.releaseReservation(taskA, null)
     expect(
       (yield* controller.admit({
         explanations: [],
@@ -476,7 +520,10 @@ it.effect("waits for an exact later invocation position without accepting a stal
     })
     const waiting = yield* controller.awaitAdmission(transition).pipe(Effect.forkScoped)
     yield* Effect.yieldNow
-    yield* controller.releaseReservation(taskA)
+    yield* controller.releaseReservation(
+      taskA,
+      OperationId.make("waiting-A-execution")
+    )
     yield* Fiber.join(waiting)
     expect(yield* controller.snapshot()).toEqual({
       capacity: 1,
@@ -484,3 +531,108 @@ it.effect("waits for an exact later invocation position without accepting a stal
       reservedTaskIds: [taskB]
     })
   })))
+
+it.effect("removes an interrupted capacity waiter before a later release", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskA = TaskId.make("interrupt-wait-A")
+    const taskB = TaskId.make("interrupt-wait-B")
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedTaskIds: []
+    })
+    yield* controller.admit({
+      explanations: [],
+      transitions: [
+        RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskA })
+      ]
+    })
+    const waiting = yield* controller.awaitAdmission(
+      RunnableFrontierTransition.ContinueImplementationReview({
+        operationId: OperationId.make("interrupt-wait-B-review"),
+        taskId: taskB
+      })
+    ).pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+
+    yield* Fiber.interrupt(waiting)
+    yield* controller.releaseReservation(taskA, null)
+
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([])
+  })))
+
+it.effect("drains blocked waiters in canonical task and operation order", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskA = TaskId.make("drain-A")
+    const taskB = TaskId.make("drain-B")
+    const taskC = TaskId.make("drain-C")
+    const operationBFirst = OperationId.make("drain-B-1")
+    const operationBSecond = OperationId.make("drain-B-2")
+    const operationC = OperationId.make("drain-C-1")
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedTaskIds: [taskA]
+    })
+    const waitC = yield* controller.awaitAdmission(
+      RunnableFrontierTransition.ContinueImplementationReview({
+        operationId: operationC,
+        taskId: taskC
+      })
+    ).pipe(Effect.forkScoped)
+    const waitBSecond = yield* controller.awaitAdmission(
+      RunnableFrontierTransition.ContinueImplementationReview({
+        operationId: operationBSecond,
+        taskId: taskB
+      })
+    ).pipe(Effect.forkScoped)
+    const waitBFirst = yield* controller.awaitAdmission(
+      RunnableFrontierTransition.ContinueImplementationReview({
+        operationId: operationBFirst,
+        taskId: taskB
+      })
+    ).pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+
+    yield* controller.releaseReservation(taskA, null)
+    yield* Fiber.join(waitBFirst)
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskB])
+
+    yield* Fiber.interrupt(waitBSecond)
+    yield* controller.releaseReservation(taskB, operationBFirst)
+    yield* Fiber.join(waitC)
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
+  })))
+
+it.effect("reserves at most one exact operation for a task in one admission decision", () =>
+  Effect.gen(function*() {
+    const taskId = TaskId.make("same-task")
+    const first = RunnableFrontierTransition.ContinueImplementationReview({
+      operationId: OperationId.make("same-task-review"),
+      taskId
+    })
+    const second = RunnableFrontierTransition.ContinueReviewFindingsHandback({
+      operationId: OperationId.make("same-task-handback"),
+      taskId
+    })
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      freshOccupiedInvocations: [],
+      reconstructedReservedTaskIds: []
+    })
+
+    expect(
+      (yield* controller.admit({
+        explanations: [],
+        transitions: [first, second]
+      })).transitions
+    ).toEqual([first])
+
+    yield* controller.releaseReservation(taskId, first.operationId)
+    expect(
+      (yield* controller.admit({
+        explanations: [],
+        transitions: [second]
+      })).transitions
+    ).toEqual([second])
+  }))

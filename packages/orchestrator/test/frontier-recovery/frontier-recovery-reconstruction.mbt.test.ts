@@ -50,6 +50,16 @@ const ModelProjection = Schema.Struct({
       Schema.Struct({ observation: Schema.Unknown })
     ),
     reconstructionGraphEvidence: ModelReconstructionGraphEvidence,
+    selectorProjection: Schema.Struct({
+      admittedTaskIds: ITFSet(ITFBigInt),
+      capacity: ITFBigInt,
+      explanationTags: ITFSet(Schema.String),
+      frontierTaskIds: ITFSet(ITFBigInt),
+      occupiedTaskIds: ITFSet(ITFBigInt),
+      operationIds: ITFMap(ITFBigInt, ITFBigInt),
+      reservationTaskIds: ITFSet(ITFBigInt),
+      transitionTags: ITFMap(ITFBigInt, Schema.String)
+    }),
     workflow: ITFMap(
       ITFBigInt,
       Schema.Struct({ responsibility: Schema.Unknown })
@@ -76,15 +86,19 @@ type GraphProfile =
 type ReconstructionComparable =
   & Pick<
     FrontierRecoveryReconstructionProjection,
+    | "admissionCapacity"
+    | "admittedModelOperationIds"
     | "admittedModelTaskIds"
     | "admittedTransitionTags"
     | "admissionExplanationTags"
     | "admissionReservedModelTaskIds"
     | "coordinatorRunning"
+    | "frontierModelOperationIds"
     | "frontierModelTaskIds"
     | "frontierTransitionTags"
     | "graphEvidence"
     | "knownModelTaskIds"
+    | "occupiedModelTaskIds"
     | "responsibleModelTaskIds"
     | "workflowEventTags"
   >
@@ -449,21 +463,27 @@ const decodeReconstructionModelState = (raw: unknown) =>
         state.reconstructionGraphEvidence
       )
       const graphProfile = graphProfileFrom(graphEvidence)
-      const transitionTags: ReadonlyArray<string> = [0n, 2n].map((taskId) =>
-        responsibleModelTaskIds.includes(taskId)
-          ? "CheckTaskClaim"
-          : "CommitFreshTaskClaimIntent"
-      )
+      const selector = state.selectorProjection
+      const frontierModelTaskIds = sortedBigInts(selector.frontierTaskIds)
+      const admittedModelTaskIds = sortedBigInts(selector.admittedTaskIds)
+      const transitionTagFor = (taskId: bigint): string =>
+        selector.transitionTags.get(taskId) ?? "MissingModelTransition"
       return {
-        admittedModelTaskIds: [0n, 2n],
-        admittedTransitionTags: transitionTags,
-        admissionExplanationTags: [] as ReadonlyArray<string>,
-        admissionReservedModelTaskIds: [0n, 2n],
+        admissionCapacity: selector.capacity,
+        admittedModelOperationIds: admittedModelTaskIds.map((taskId) => selector.operationIds.get(taskId) ?? -2n),
+        admittedModelTaskIds,
+        admittedTransitionTags: admittedModelTaskIds.map(transitionTagFor),
+        admissionExplanationTags: [...selector.explanationTags].sort(),
+        admissionReservedModelTaskIds: sortedBigInts(
+          selector.reservationTaskIds
+        ),
         coordinatorRunning: state.coordinator.running,
-        frontierModelTaskIds: [0n, 2n],
-        frontierTransitionTags: transitionTags,
+        frontierModelOperationIds: frontierModelTaskIds.map((taskId) => selector.operationIds.get(taskId) ?? -2n),
+        frontierModelTaskIds,
+        frontierTransitionTags: frontierModelTaskIds.map(transitionTagFor),
         graphEvidence,
         knownModelTaskIds: sortedBigInts(state.knowledge.keys()),
+        occupiedModelTaskIds: sortedBigInts(selector.occupiedTaskIds),
         pause: {
           run: {
             _tag: state.control.runPaused
@@ -506,6 +526,9 @@ const compareReconstructionState = (
   implementation.graphKnowledge !== undefined
   && implementation.responsibility !== undefined
   && implementation.workflowHistory !== undefined
+  && model.admissionCapacity === implementation.admissionCapacity
+  && model.admittedModelOperationIds.join(",")
+    === implementation.admittedModelOperationIds.join(",")
   && model.coordinatorRunning === implementation.coordinatorRunning
   && model.admittedModelTaskIds.join(",")
     === implementation.admittedModelTaskIds.join(",")
@@ -517,10 +540,14 @@ const compareReconstructionState = (
     === implementation.admissionReservedModelTaskIds.join(",")
   && model.frontierModelTaskIds.join(",")
     === implementation.frontierModelTaskIds.join(",")
+  && model.frontierModelOperationIds.join(",")
+    === implementation.frontierModelOperationIds.join(",")
   && model.frontierTransitionTags.join(",")
     === implementation.frontierTransitionTags.join(",")
   && model.knownModelTaskIds.join(",")
     === implementation.knownModelTaskIds.join(",")
+  && model.occupiedModelTaskIds.join(",")
+    === implementation.occupiedModelTaskIds.join(",")
   && model.responsibleModelTaskIds.join(",")
     === implementation.responsibleModelTaskIds.join(",")
   && graphEvidenceMatches(model.graphEvidence, implementation.graphEvidence)

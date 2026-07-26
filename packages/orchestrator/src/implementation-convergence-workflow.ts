@@ -76,10 +76,19 @@ const withTaskAdmission = <A, E, R>(
     ? effect
     : Effect.gen(function*() {
       yield* controller.awaitAdmission(transition)
-      return yield* effect.pipe(
-        Effect.ensuring(controller.releaseReservation(transition.taskId))
-      )
+      return yield* effect
     })
+
+const releaseTaskAdmission = (
+  controller: TaskAdmissionController | undefined,
+  transition: RunnableFrontierTransition
+): Effect.Effect<void> =>
+  controller === undefined
+    ? Effect.void
+    : controller.releaseReservation(
+      transition.taskId,
+      "operationId" in transition ? transition.operationId : null
+    )
 
 const priorEvidence = (
   review: SealedImplementationReview | undefined
@@ -202,19 +211,20 @@ export const runLiveImplementationConvergence = Effect.fn(
       if (!recoveringReviewOperation) {
         yield* options.emit(OperationSelected.make({ operation: actualReviewOperation }))
       }
+      const reviewTransition = FrontierTransition.ContinueImplementationReview({
+        operationId: reviewOperationId,
+        taskId: options.task.id
+      })
       const reviewResult = yield* Effect.result(withTaskAdmission(
         options.admissionController,
-        FrontierTransition.ContinueImplementationReview({
-          operationId: reviewOperationId,
-          taskId: options.task.id
-        }),
+        reviewTransition,
         options.interpreter.reviewImplementation(actualReviewOperation)
       ))
       if (reviewResult._tag === "Failure") {
         if (!(reviewResult.failure instanceof ImplementationReviewInvocationFailure)) {
           return yield* Effect.fail(reviewResult.failure)
         }
-        return yield* recordDisposition(
+        const disposition = yield* recordDisposition(
           ImplementationConvergenceDisposition.cases.ReviewTechnicalRetryExhausted.make({
             failure: reviewResult.failure,
             request: reviewRequest,
@@ -222,6 +232,8 @@ export const runLiveImplementationConvergence = Effect.fn(
           }),
           reviewRequest.operationId
         )
+        yield* releaseTaskAdmission(options.admissionController, reviewTransition)
+        return disposition
       }
       const returnedReview = reviewResult.success
       if (returnedReview._tag !== "SealedImplementationReview") {
@@ -231,6 +243,7 @@ export const runLiveImplementationConvergence = Effect.fn(
       yield* options.emit(
         ImplementationReviewCompletedTrace.make({ operation: actualReviewOperation, review: returnedReview })
       )
+      yield* releaseTaskAdmission(options.admissionController, reviewTransition)
     }
     const completedReview = review
     if (completedReview.manifest.disposition._tag === "Accepted") {
@@ -268,19 +281,20 @@ export const runLiveImplementationConvergence = Effect.fn(
       if (!recoveringHandbackOperation) {
         yield* options.emit(OperationSelected.make({ operation: handbackOperation }))
       }
+      const handbackTransition = FrontierTransition.ContinueReviewFindingsHandback({
+        operationId: handbackOperationId,
+        taskId: options.task.id
+      })
       const handbackResult = yield* Effect.result(withTaskAdmission(
         options.admissionController,
-        FrontierTransition.ContinueReviewFindingsHandback({
-          operationId: handbackOperationId,
-          taskId: options.task.id
-        }),
+        handbackTransition,
         options.interpreter.handBackReviewFindings(handbackOperation)
       ))
       if (handbackResult._tag === "Failure") {
         if (!(handbackResult.failure instanceof ReviewFindingsHandbackFailure)) {
           return yield* Effect.fail(handbackResult.failure)
         }
-        return yield* recordDisposition(
+        const disposition = yield* recordDisposition(
           ImplementationConvergenceDisposition.cases.HandbackTechnicalRetryExhausted.make({
             failure: handbackResult.failure,
             request: handbackRequest,
@@ -288,11 +302,14 @@ export const runLiveImplementationConvergence = Effect.fn(
           }),
           handbackRequest.operationId
         )
+        yield* releaseTaskAdmission(options.admissionController, handbackTransition)
+        return disposition
       }
       yield* options.emit(ReviewFindingsHandedBackTrace.make({
         acknowledgement: handbackResult.success,
         operation: handbackOperation
       }))
+      yield* releaseTaskAdmission(options.admissionController, handbackTransition)
     }
 
     const executionOperation = makeTaskExecutionOperation({
@@ -308,15 +325,17 @@ export const runLiveImplementationConvergence = Effect.fn(
     })
     yield* options.emit(OperationSelected.make({ operation: executionOperation }))
     yield* options.emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
+    const executionTransition = FrontierTransition.ContinueTaskExecution({
+      operationId: executionOperation.request.operationId,
+      taskId: options.task.id
+    })
     const execution = yield* withTaskAdmission(
       options.admissionController,
-      FrontierTransition.ContinueTaskExecution({
-        operationId: executionOperation.request.operationId,
-        taskId: options.task.id
-      }),
+      executionTransition,
       options.interpreter.executeTaskWork(executionOperation)
     )
     yield* options.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: execution }))
+    yield* releaseTaskAdmission(options.admissionController, executionTransition)
     previousReview = completedReview
     executionOutcome = execution.outcome
     round += 1

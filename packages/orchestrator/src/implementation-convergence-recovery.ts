@@ -1,10 +1,12 @@
 import { Effect, Ref } from "effect"
-import { OperationId, type RunId } from "./domain.js"
+import { defaultTaskWorkCapacity, OperationId, type RunId, type TaskWorkCapacity } from "./domain.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore } from "./journal-store.js"
+import { RunnableFrontierTransition } from "./runnable-frontier.js"
+import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { OperationSelected } from "./tracker-workflow-trace.js"
@@ -19,10 +21,15 @@ const sameAttemptId = (
 /** Continues every non-terminal implementation attempt from its last exact durable stage. */
 export const recoverImplementationConvergences = Effect.fn(
   "WorkflowRecovery.recoverImplementationConvergences"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, capacity: TaskWorkCapacity = defaultTaskWorkCapacity) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
+  const admissionController = yield* makeTaskAdmissionController({
+    capacity,
+    freshOccupiedInvocations: [],
+    reconstructedReservedTaskIds: []
+  })
   const initialRecords = yield* journal.read(runId)
   const attempts = initialRecords.flatMap(({ event }) =>
     event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
@@ -166,8 +173,17 @@ export const recoverImplementationConvergences = Effect.fn(
       })
       yield* trace.emit(OperationSelected.make({ operation: executionOperation }))
       yield* trace.emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
+      const executionTransition = RunnableFrontierTransition.ContinueTaskExecution({
+        operationId: executionOperation.request.operationId,
+        taskId: latestExecution.operation.request.task.id
+      })
+      yield* admissionController.awaitAdmission(executionTransition)
       const result = yield* interpreter.executeTaskWork(executionOperation)
       yield* trace.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: result }))
+      yield* admissionController.releaseReservation(
+        executionTransition.taskId,
+        executionTransition.operationId
+      )
       latestExecution = { operation: executionOperation, outcome: result.outcome, position: Number.MAX_SAFE_INTEGER }
     }
 
@@ -199,6 +215,7 @@ export const recoverImplementationConvergences = Effect.fn(
       : Number(pendingReview.manifest.round)
 
     yield* runLiveImplementationConvergence({
+      admissionController,
       allocator,
       emit: trace.emit,
       initialExecutionOutcome: currentExecution.outcome,

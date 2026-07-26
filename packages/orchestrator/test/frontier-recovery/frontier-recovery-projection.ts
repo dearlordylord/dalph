@@ -27,16 +27,20 @@ export type FrontierRecoveryReconstructionGraphEvidence =
   }
 
 export interface FrontierRecoveryReconstructionProjection {
+  readonly admissionCapacity: bigint
+  readonly admittedModelOperationIds: ReadonlyArray<bigint>
   readonly admittedModelTaskIds: ReadonlyArray<bigint>
   readonly admittedTransitionTags: ReadonlyArray<string>
   readonly admissionExplanationTags: ReadonlyArray<string>
   readonly admissionReservedModelTaskIds: ReadonlyArray<bigint>
   readonly coordinatorRunning: boolean
   readonly frontierModelTaskIds: ReadonlyArray<bigint>
+  readonly frontierModelOperationIds: ReadonlyArray<bigint>
   readonly frontierTransitionTags: ReadonlyArray<string>
   readonly graphEvidence: FrontierRecoveryReconstructionGraphEvidence
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly knownModelTaskIds: ReadonlyArray<bigint>
+  readonly occupiedModelTaskIds: ReadonlyArray<bigint>
   readonly pause: ReconstructedPauseState
   readonly responsibility: WorkflowResponsibilityState
   readonly responsibleModelTaskIds: ReadonlyArray<bigint>

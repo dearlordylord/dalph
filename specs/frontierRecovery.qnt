@@ -112,6 +112,19 @@ module frontierRecovery {
     crashCount: int,
   }
 
+  // Exact scheduler result exported for the M2 executable adapter. Operation
+  // id -1 denotes a fresh claim transition, which has no durable operation yet.
+  type SelectorProjection = {
+    capacity: int,
+    frontierTaskIds: Set[TaskId],
+    admittedTaskIds: Set[TaskId],
+    transitionTags: TaskId -> str,
+    operationIds: TaskId -> int,
+    explanationTags: Set[str],
+    reservationTaskIds: Set[TaskId],
+    occupiedTaskIds: Set[TaskId],
+  }
+
   type State = {
     authority: TaskId -> Authority,
     knowledge: TaskId -> Knowledge,
@@ -126,6 +139,7 @@ module frontierRecovery {
     requestFreshnessViolations: int,
     duplicateEffectViolations: int,
     reconstructionGraphEvidence: ReconstructionGraphEvidence,
+    selectorProjection: SelectorProjection,
   }
 
   pure val A: TaskId = 0
@@ -182,9 +196,9 @@ module frontierRecovery {
     }
   }
 
-  pure def initialWorkflow(_task: TaskId): Workflow = {
+  pure def initialWorkflow(task: TaskId): Workflow = {
     boundary: ClaimBoundary,
-    operationId: 1,
+    operationId: if (task == C) 3 else 1,
     intentCommitted: false,
     requestAuthorized: false,
     observationRequired: false,
@@ -220,6 +234,11 @@ module frontierRecovery {
       InitialReconstructionGraphObservation({
         returnedTaskIds: TASKS,
       }),
+    selectorProjection: computeSelectorProjection(
+      TASKS.mapBy(initialWorkflow),
+      TASKS.mapBy(initialKnowledge),
+      initialControl
+    ),
   }
 
   pure def isGroupingPaused(s: State, task: TaskId): bool =
@@ -264,6 +283,56 @@ module frontierRecovery {
       not(s.control.runPaused),
       not(isGroupingPaused(s, task)),
     }
+  }
+
+  pure def computeSelectorProjection(
+    workflow: TaskId -> Workflow,
+    knowledge: TaskId -> Knowledge,
+    control: Control
+  ): SelectorProjection = {
+    val profileTasks = Set(A, C)
+    val selected = profileTasks.filter(task => {
+      val w = workflow.get(task)
+      val k = knowledge.get(task)
+      or {
+        w.responsibility == Outstanding,
+        and {
+          w.responsibility == Unowned,
+          k.fact.lifecycle == Open,
+          k.fact.claim == Unclaimed,
+          k.fact.inTarget,
+          k.observation == UsableObservation,
+          not(control.runPaused),
+          not(control.taskPaused.get(task)),
+        },
+      }
+    })
+    {
+      capacity: CAPACITY,
+      frontierTaskIds: selected,
+      admittedTaskIds: selected,
+      transitionTags: TASKS.mapBy(task =>
+        if (workflow.get(task).responsibility == Outstanding)
+          "CheckTaskClaim"
+        else
+          "CommitFreshTaskClaimIntent"
+      ),
+      operationIds: TASKS.mapBy(task =>
+        if (workflow.get(task).responsibility == Outstanding)
+          workflow.get(task).operationId
+        else
+          -1
+      ),
+      explanationTags: Set(),
+      reservationTaskIds: selected,
+      occupiedTaskIds: Set(),
+    }
+  }
+
+  pure def refreshSelectorProjection(s: State): State = {
+    ...s,
+    selectorProjection:
+      computeSelectorProjection(s.workflow, s.knowledge, s.control),
   }
 
   pure def initialReservedCount(s: State): int =
@@ -1266,7 +1335,7 @@ module frontierRecovery {
 
   action commitFirstIntent(task: TaskId): bool = all {
     canCommitFirstIntent(state, task),
-    state' = applyCommitFirstIntent(state, task),
+    state' = refreshSelectorProjection(applyCommitFirstIntent(state, task)),
   }
 
   action commitResponsibleIntent(task: TaskId): bool = all {
@@ -1286,7 +1355,7 @@ module frontierRecovery {
 
   action observeTask(task: TaskId): bool = all {
     canObserveTask(state, task),
-    state' = applyObserveTask(state, task),
+    state' = refreshSelectorProjection(applyObserveTask(state, task)),
   }
 
   action authorizeRetry(task: TaskId): bool = all {
@@ -1306,12 +1375,12 @@ module frontierRecovery {
 
   action crash: bool = all {
     canCrash(state),
-    state' = applyCrash(state),
+    state' = refreshSelectorProjection(applyCrash(state)),
   }
 
   action restart: bool = all {
     canRestart(state),
-    state' = applyRestart(state),
+    state' = refreshSelectorProjection(applyRestart(state)),
   }
 
   action requestRunPause: bool = all {
@@ -1514,11 +1583,11 @@ module frontierRecovery {
   // through both journal stores.
   action reconstructionStep: bool =
     if (canCommitFirstIntent(state, A))
-      state' = applyCommitFirstIntent(state, A)
+      state' = refreshSelectorProjection(applyCommitFirstIntent(state, A))
     else if (canCommitFirstIntent(state, C))
-      state' = applyCommitFirstIntent(state, C)
+      state' = refreshSelectorProjection(applyCommitFirstIntent(state, C))
     else
-      state' = state
+      state' = refreshSelectorProjection(state)
 
   // Named bounded tracker-read profiles used by the M2 reconstruction
   // conformance adapter. Each observes a distinct model subject so the sampled
@@ -1526,39 +1595,39 @@ module frontierRecovery {
   action observeProvenAbsence: bool =
     all {
       canObserveTask(state, B),
-      state' = {
+      state' = refreshSelectorProjection({
         ...applyObserveTask(state, B),
         reconstructionGraphEvidence:
           ProvenAbsenceGraphObservation({
           explicitlyCoveredTaskIds: Set(B),
           returnedTaskIds: Set(A, C, D),
         }),
-      },
+      }),
     }
 
   action observeIncomparableMembership: bool =
     all {
       canObserveTask(state, C),
-      state' = {
+      state' = refreshSelectorProjection({
         ...applyObserveTask(state, C),
         reconstructionGraphEvidence:
           IncomparableMembershipGraphObservation({
           predecessorOperationIds: Set(0),
           returnedTaskIds: Set(A, C, D),
         }),
-      },
+      }),
     }
 
   action observeCompatibleReplacement: bool =
     all {
       canObserveTask(state, D),
-      state' = {
+      state' = refreshSelectorProjection({
         ...applyObserveTask(state, D),
         reconstructionGraphEvidence:
           CompatibleReplacementGraphObservation({
           returnedTaskIds: TASKS,
         }),
-      },
+      }),
     }
 
   action step: bool = {

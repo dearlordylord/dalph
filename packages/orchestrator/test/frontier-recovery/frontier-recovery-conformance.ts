@@ -3,7 +3,7 @@ import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
 // eslint-disable-next-line no-magic-numbers -- Version two adds bounded frontier and admission selection.
-export const frontierRecoveryReconstructionConformanceVersion = 2 as const
+export const frontierRecoveryReconstructionConformanceVersion = 3 as const
 const minimumModelIdentity = 0n
 
 /**

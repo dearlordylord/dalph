@@ -363,16 +363,20 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           returnedModelTaskIds: taskEntries.map(({ model }) => model)
         } as const
       return {
+        admissionCapacity: selection.admissionCapacity,
+        admittedModelOperationIds: selection.admittedModelOperationIds,
         admittedModelTaskIds: selection.admittedModelTaskIds,
         admittedTransitionTags: selection.admittedTransitionTags,
         admissionExplanationTags: selection.admissionExplanationTags,
         admissionReservedModelTaskIds: selection.admissionReservedModelTaskIds,
         coordinatorRunning,
+        frontierModelOperationIds: selection.frontierModelOperationIds,
         frontierModelTaskIds: selection.frontierModelTaskIds,
         frontierTransitionTags: selection.frontierTransitionTags,
         graphEvidence,
         graphKnowledge: reduced.managedRun.graphKnowledge,
         knownModelTaskIds,
+        occupiedModelTaskIds: selection.occupiedModelTaskIds,
         pause: reduced.managedRun.pause,
         responsibility: reduced.managedRun.responsibility,
         responsibleModelTaskIds,

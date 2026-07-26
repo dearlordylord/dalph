@@ -1,4 +1,4 @@
-import { Effect, Ref } from "effect"
+import { Deferred, Effect, Ref, Semaphore } from "effect"
 import type { OperationId, ProviderObservationId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { FrontierExplanation, type RunnableFrontier, type RunnableFrontierTransition } from "./runnable-frontier.js"
 
@@ -46,7 +46,10 @@ export interface TaskAdmissionController {
   readonly awaitAdmission: (
     transition: RunnableFrontierTransition
   ) => Effect.Effect<void>
-  readonly releaseReservation: (taskId: TaskId) => Effect.Effect<void>
+  readonly releaseReservation: (
+    taskId: TaskId,
+    operationId: OperationId | null
+  ) => Effect.Effect<void>
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
 }
 
@@ -75,6 +78,11 @@ interface TaskAdmissionControllerState {
   readonly reservations: ReadonlyArray<TaskAdmissionReservation>
 }
 
+interface WaitingAdmission {
+  readonly deferred: Deferred.Deferred<void>
+  readonly transition: RunnableFrontierTransition
+}
+
 const transitionOperationId = (
   transition: RunnableFrontierTransition
 ): OperationId | null => "operationId" in transition ? transition.operationId : null
@@ -91,42 +99,31 @@ export const makeTaskAdmissionController = Effect.fn(
       .map((taskId) => ({ operationId: null, taskId }))
       .sort()
   })
+  const waitingAdmissions = yield* Ref.make<ReadonlyArray<WaitingAdmission>>([])
+  const arbitration = yield* Semaphore.make(1)
 
   const admit = Effect.fn("TaskAdmissionController.admit")(
     (frontier: RunnableFrontier) =>
       Ref.modify(state, (current) => {
-        const available = Math.max(
-          0,
-          current.capacity - current.occupied.length - current.reservations.length
-        )
-        let positionsRemaining = available
+        let reservations = [...current.reservations]
         const transitions = frontier.transitions.filter((transition) => {
           if (!requiresAdmissionPosition(transition)) return true
-          const reservation = current.reservations.find(({ taskId }) => taskId === transition.taskId)
-          if (reservation !== undefined) {
-            return reservation.operationId === null
-              || reservation.operationId === transitionOperationId(transition)
-          }
+          const operationId = transitionOperationId(transition)
+          if (
+            reservations.some((reservation) =>
+              reservation.taskId === transition.taskId
+              && reservation.operationId === operationId
+            )
+          ) return true
+          if (reservations.some(({ taskId }) => taskId === transition.taskId)) return false
           if (current.occupied.some(({ taskId }) => taskId === transition.taskId)) return false
-          if (positionsRemaining === 0) return false
-          positionsRemaining -= 1
+          if (current.occupied.length + reservations.length >= current.capacity) return false
+          reservations = [...reservations, { operationId, taskId: transition.taskId }]
           return true
         })
-        const newReservations = transitions
-          .filter((transition) =>
-            requiresAdmissionPosition(transition)
-            && !current.reservations.some(({ taskId }) => taskId === transition.taskId)
-            && !current.occupied.some(({ taskId }) => taskId === transition.taskId)
-          )
-          .map((transition) => ({
-            operationId: transitionOperationId(transition),
-            taskId: transition.taskId
-          }))
         const next = {
           ...current,
-          reservations: [...current.reservations, ...newReservations].sort((left, right) =>
-            left.taskId.localeCompare(right.taskId)
-          )
+          reservations: reservations.toSorted((left, right) => left.taskId.localeCompare(right.taskId))
         }
         const capacityWaits = frontier.transitions
           .filter((transition) =>
@@ -146,21 +143,55 @@ export const makeTaskAdmissionController = Effect.fn(
       })
   )
 
+  const drainWaitingAdmissions = arbitration.withPermit(Effect.gen(function*() {
+    const waiting = [...(yield* Ref.get(waitingAdmissions))].sort((left, right) =>
+      `${left.transition.taskId}\u0000${String(transitionOperationId(left.transition))}`
+        .localeCompare(
+          `${right.transition.taskId}\u0000${String(transitionOperationId(right.transition))}`
+        )
+    )
+    if (waiting.length === 0) return
+    const admission = yield* admit({
+      explanations: [],
+      transitions: waiting.map(({ transition }) => transition)
+    })
+    const admitted = waiting.filter(({ transition }) => admission.transitions.includes(transition))
+    if (admitted.length === 0) return
+    const admittedDeferreds = new Set(admitted.map(({ deferred }) => deferred))
+    yield* Ref.update(
+      waitingAdmissions,
+      (current) => current.filter(({ deferred }) => !admittedDeferreds.has(deferred))
+    )
+    yield* Effect.forEach(
+      admitted,
+      ({ deferred }) => Deferred.succeed(deferred, undefined),
+      { discard: true }
+    )
+  }))
+
   const awaitAdmission = (
     transition: RunnableFrontierTransition
   ): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      admit({
-        explanations: [],
-        transitions: [transition]
+    Effect.gen(function*() {
+      const deferred = yield* Deferred.make<void>()
+      return yield* Effect.gen(function*() {
+        yield* Ref.update(waitingAdmissions, (current) => [
+          ...current,
+          { deferred, transition }
+        ])
+        yield* drainWaitingAdmissions
+        yield* Deferred.await(deferred)
       }).pipe(
-        Effect.flatMap((admission) =>
-          admission.transitions.includes(transition)
-            ? Effect.void
-            : Effect.flatMap(Effect.yieldNow, () => awaitAdmission(transition))
+        Effect.onInterrupt(() =>
+          arbitration.withPermit(
+            Ref.update(
+              waitingAdmissions,
+              (current) => current.filter((waiting) => waiting.deferred !== deferred)
+            )
+          )
         )
       )
-    )
+    })
 
   return {
     admit,
@@ -190,22 +221,30 @@ export const makeTaskAdmissionController = Effect.fn(
             taskId !== observation.taskId || operationId !== observation.operationId
           )
         }
-      }),
+      }).pipe(
+        Effect.andThen(drainWaitingAdmissions)
+      ),
     bindReservation: (taskId, operationId) =>
       Ref.update(state, (current) => ({
         ...current,
         reservations: current.reservations.map((reservation) =>
-          reservation.taskId === taskId
+          reservation.taskId === taskId && reservation.operationId === null
             ? { operationId, taskId }
             : reservation
         )
-      })),
+      })).pipe(
+        Effect.andThen(drainWaitingAdmissions)
+      ),
     awaitAdmission,
-    releaseReservation: (taskId) =>
+    releaseReservation: (taskId, operationId) =>
       Ref.update(state, (current) => ({
         ...current,
-        reservations: current.reservations.filter((reservation) => reservation.taskId !== taskId)
-      })),
+        reservations: current.reservations.filter((reservation) =>
+          reservation.taskId !== taskId || reservation.operationId !== operationId
+        )
+      })).pipe(
+        Effect.andThen(drainWaitingAdmissions)
+      ),
     snapshot: () =>
       Ref.get(state).pipe(
         Effect.map((current) => ({

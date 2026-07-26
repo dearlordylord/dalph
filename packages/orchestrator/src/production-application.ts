@@ -2,7 +2,13 @@
 import { NodeServices } from "@effect/platform-node"
 import { Effect, Layer, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
-import { EvidenceStoreLocator, type GitCommonDirectoryTarget, type RunId } from "./domain.js"
+import {
+  defaultTaskWorkCapacity,
+  EvidenceStoreLocator,
+  type GitCommonDirectoryTarget,
+  type RunId,
+  type TaskWorkCapacity
+} from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
 import { GitWorktree, runGitWorktreeReconciliation } from "./git-worktree.js"
 import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
@@ -84,7 +90,8 @@ export const productionWorkflowInterpreterLayer = <
     ImplementationReviewer | ReviewFindingsHandback,
     ReviewError,
     ReviewRequirements
-  >
+  >,
+  capacity: TaskWorkCapacity = defaultTaskWorkCapacity
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const taskRunnerLayer = coordinatorOwnedTaskRunnerLayer(
@@ -190,7 +197,8 @@ export const productionWorkflowInterpreterLayer = <
         ) continue
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
           history.runId,
-          history.records
+          history.records,
+          capacity
         ).pipe(Effect.provide(interpreterLayerFor(history.runId)))
         issues.push(...runIssues)
       }
