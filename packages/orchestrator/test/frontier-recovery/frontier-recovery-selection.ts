@@ -10,10 +10,13 @@ import { makeTaskAdmissionController } from "../../src/task-admission-controller
 import {
   FrontierRecoveryConformanceIssue,
   FrontierRecoveryModelCapacity,
-  FrontierRecoveryModelOperationId,
+  type FrontierRecoveryModelOperationId,
   type FrontierRecoveryModelTaskId
 } from "./frontier-recovery-conformance.js"
-import type { FrontierRecoveryAdmissionExplanation } from "./frontier-recovery-projection.js"
+import type {
+  FrontierRecoveryAdmissionExplanation,
+  FrontierRecoveryTransitionOperation
+} from "./frontier-recovery-projection.js"
 
 interface FrontierRecoveryTaskEntry {
   readonly branded: TaskId
@@ -36,11 +39,6 @@ interface SelectFrontierRecoveryAdmissionInput {
   readonly responsibility: WorkflowResponsibilityState
   readonly taskEntries: ReadonlyArray<FrontierRecoveryTaskEntry>
 }
-
-// Model identity for a fresh transition that has no durable operation yet.
-// Negative one is the closed M2 sentinel for a fresh transition without a durable operation.
-// eslint-disable-next-line no-magic-numbers
-const freshOperationIdentity = FrontierRecoveryModelOperationId.make(-1n)
 
 /** Applies the production selector to one bounded M2 authority projection. */
 export const selectFrontierRecoveryAdmission = Effect.fn(
@@ -70,8 +68,17 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
   const controllerSnapshot = yield* controller.snapshot()
   const operationToModel = (transition: RunnableFrontierTransition) =>
     "operationId" in transition
-      ? input.identityMapping.operationToModel(transition.operationId)
-      : Effect.succeed(freshOperationIdentity)
+      ? input.identityMapping.operationToModel(transition.operationId).pipe(
+        Effect.map((modelOperationId) => ({
+          _tag: "DurableTransitionOperation" as const,
+          modelOperationId
+        }))
+      )
+      : Effect.succeed(
+        {
+          _tag: "FreshTransitionWithoutOperation" as const
+        } satisfies FrontierRecoveryTransitionOperation
+      )
   const projectTransitions = (
     transitions: ReadonlyArray<RunnableFrontierTransition>
   ) =>
@@ -79,13 +86,13 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
       transitions.toSorted((left, right) => left.taskId.localeCompare(right.taskId)),
       (transition) =>
         Effect.all({
-          modelOperationId: operationToModel(transition),
+          transitionOperation: operationToModel(transition),
           modelTaskId: input.identityMapping.taskToModel(transition.taskId)
         }).pipe(
-          Effect.map(({ modelOperationId, modelTaskId }) => ({
-            modelOperationId,
+          Effect.map(({ modelTaskId, transitionOperation }) => ({
             modelTaskId,
-            tag: transition._tag
+            tag: transition._tag,
+            transitionOperation
           }))
         )
     )
@@ -115,7 +122,9 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     ),
     admittedModelTaskIds: admittedTransitions.map(({ modelTaskId }) => modelTaskId),
     admittedTransitionTags: admittedTransitions.map(({ tag }) => tag),
-    admittedModelOperationIds: admittedTransitions.map(({ modelOperationId }) => modelOperationId),
+    admittedTransitionOperations: admittedTransitions.map(
+      ({ transitionOperation }) => transitionOperation
+    ),
     admissionExplanations,
     admissionReservedModelTaskIds: yield* Effect.forEach(
       controllerSnapshot.reservedTaskIds,
@@ -123,7 +132,9 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     ),
     admission,
     frontierModelTaskIds: frontierTransitions.map(({ modelTaskId }) => modelTaskId),
-    frontierModelOperationIds: frontierTransitions.map(({ modelOperationId }) => modelOperationId),
+    frontierTransitionOperations: frontierTransitions.map(
+      ({ transitionOperation }) => transitionOperation
+    ),
     frontierTransitionTags: frontierTransitions.map(({ tag }) => tag),
     occupiedModelTaskIds: yield* Effect.forEach(
       controllerSnapshot.occupied.map(({ taskId }) => taskId),

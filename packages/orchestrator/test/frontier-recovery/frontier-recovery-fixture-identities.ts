@@ -24,6 +24,7 @@ export const firstClaimOperationIdentity = FrontierRecoveryModelOperationId.make
 export const targetClosureReplacementOperationIdentity = FrontierRecoveryModelOperationId.make(2n)
 export const secondClaimOperationIdentity = FrontierRecoveryModelOperationId.make(3n)
 export const initialModelRevision = FrontierRecoveryModelRevision.make(0n)
+export const minimumModelRevision = initialModelRevision
 export const replacementModelRevision = FrontierRecoveryModelRevision.make(1n)
 /* eslint-enable no-magic-numbers */
 

@@ -23,9 +23,9 @@ it("defines the versioned closed M2 reconstruction action map", () => {
     "init",
     "orchestratorCommitsNextFreshTaskClaimIntent",
     "orchestratorCommitsFreshTaskClaimIntent",
-    "taskTrackerReportsProvenAbsenceInTargetClosure",
-    "taskTrackerReportsIncomparableTargetClosureMembership",
-    "taskTrackerReportsCompatibleTargetClosureReplacement",
+    "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
+    "taskTrackerReturnsTargetClosureReadWithPredecessor",
+    "taskTrackerReturnsTargetClosureReadAtNextRevision",
     "crash",
     "restart"
   ])
@@ -40,9 +40,9 @@ it.effect("rejects unknown M2 reconstruction actions before invoking a control",
       orchestratorCommitsFreshTaskClaimIntent: () => Effect.sync(() => invocations += 1),
       orchestratorCommitsNextFreshTaskClaimIntent: () => Effect.sync(() => invocations += 1),
       restart: () => Effect.sync(() => invocations += 1),
-      taskTrackerReportsCompatibleTargetClosureReplacement: () => Effect.sync(() => invocations += 1),
-      taskTrackerReportsIncomparableTargetClosureMembership: () => Effect.sync(() => invocations += 1),
-      taskTrackerReportsProvenAbsenceInTargetClosure: () => Effect.sync(() => invocations += 1)
+      taskTrackerReturnsTargetClosureReadAtNextRevision: () => Effect.sync(() => invocations += 1),
+      taskTrackerReturnsTargetClosureReadWithPredecessor: () => Effect.sync(() => invocations += 1),
+      taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () => Effect.sync(() => invocations += 1)
     }
     const exit = yield* runFrontierRecoveryReconstructionAction(
       { _tag: "assignExpectedState" },

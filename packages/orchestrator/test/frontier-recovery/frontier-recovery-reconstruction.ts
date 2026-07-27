@@ -31,6 +31,7 @@ import {
   initialGraphOperationId as graphOperationId,
   initialGraphOperationIdentity,
   initialModelRevision,
+  minimumModelRevision,
   modelRevisionFromTracker,
   modelTaskA,
   modelTaskB,
@@ -41,31 +42,14 @@ import {
   targetClosureReplacementOperationIdentity,
   trackerRevisionFromModel
 } from "./frontier-recovery-fixture-identities.js"
+import { projectFrontierRecoveryExactManagedState } from "./frontier-recovery-normalized-projections.js"
 import type {
   FrontierRecoveryReconstructionProjection,
   MakeFrontierRecoveryReconstructionControlsOptions
 } from "./frontier-recovery-projection.js"
-import { FrontierRecoveryReconstructionIssue } from "./frontier-recovery-projection.js"
+import { frontierRecoveryReconstructionIssue } from "./frontier-recovery-projection.js"
 import { selectFrontierRecoveryAdmission } from "./frontier-recovery-selection.js"
-export type {
-  FrontierRecoveryReconstructionGraphEvidence,
-  FrontierRecoveryReconstructionProjection
-} from "./frontier-recovery-projection.js"
 
-// Revisions are non-negative ordinals in this bounded conformance model.
-
-const minimumRevisionIdentity = 0n
-
-const reconstructionIssue = (
-  reason: FrontierRecoveryReconstructionIssue["reason"],
-  detail: string
-) => new FrontierRecoveryReconstructionIssue({ detail, reason })
-
-/**
- * Deterministic public controls for the M2 reconstructed-run and bounded
- * frontier slice. Durable state is always read back through the production
- * journal service and production managed-run reducer.
- */
 export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   "FrontierRecoveryReconstruction.makeControls"
 )(function*(options: MakeFrontierRecoveryReconstructionControlsOptions) {
@@ -95,7 +79,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     "FrontierRecoveryReconstruction.appendTargetClosureObservation"
   )(function*(input: TargetClosureObservationInput) {
     if (!coordinatorRunning) {
-      return yield* reconstructionIssue(
+      return yield* frontierRecoveryReconstructionIssue(
         "CoordinatorStopped",
         "a stopped coordinator cannot record a tracker graph observation"
       )
@@ -106,7 +90,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         !== input.explicitlyCoveredTasks.length
       || new Set(input.predecessorOperations).size
         !== input.predecessorOperations.length
-      || input.revision < minimumRevisionIdentity
+      || input.revision < minimumModelRevision
     ) {
       return yield* new FrontierRecoveryConformanceIssue({
         detail: "M2 target-closure observations require unique identities and a non-negative revision",
@@ -149,7 +133,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     orchestratorCommitsFreshTaskClaimIntent: (modelTaskId: FrontierRecoveryModelTaskId) =>
       Effect.gen(function*() {
         if (!coordinatorRunning) {
-          return yield* reconstructionIssue(
+          return yield* frontierRecoveryReconstructionIssue(
             "CoordinatorStopped",
             "a stopped coordinator cannot record claim intent"
           )
@@ -197,7 +181,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         revision: initialModelRevision,
         tasks: taskEntries.map(({ model }) => model)
       }),
-    taskTrackerReportsCompatibleTargetClosureReplacement: () =>
+    taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
       appendTargetClosureObservation({
         explicitlyCoveredTasks: [],
         operation: targetClosureReplacementOperationIdentity,
@@ -205,7 +189,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         revision: replacementModelRevision,
         tasks: taskEntries.map(({ model }) => model)
       }),
-    taskTrackerReportsIncomparableTargetClosureMembership: () =>
+    taskTrackerReturnsTargetClosureReadWithPredecessor: () =>
       appendTargetClosureObservation({
         explicitlyCoveredTasks: [],
         operation: targetClosureReplacementOperationIdentity,
@@ -213,7 +197,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         revision: replacementModelRevision,
         tasks: [modelTaskA, modelTaskC, modelTaskD]
       }),
-    taskTrackerReportsProvenAbsenceInTargetClosure: () =>
+    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () =>
       appendTargetClosureObservation({
         explicitlyCoveredTasks: [modelTaskB],
         operation: targetClosureReplacementOperationIdentity,
@@ -226,7 +210,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         const records = yield* options.journal.read(runId)
         const reduced = reduceManagedHistory(runId, records)
         if (reduced._tag === "InvalidManagedHistory") {
-          return yield* reconstructionIssue(
+          return yield* frontierRecoveryReconstructionIssue(
             "InvalidManagedHistory",
             reduced.issues.map(({ detail }) => detail).join("; ")
           )
@@ -256,7 +240,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       const records = yield* options.journal.read(runId)
       const reduced = reduceManagedHistory(runId, records)
       if (reduced._tag === "InvalidManagedHistory") {
-        return yield* reconstructionIssue(
+        return yield* frontierRecoveryReconstructionIssue(
           "InvalidManagedHistory",
           reduced.issues.map(({ detail }) => detail).join("; ")
         )
@@ -283,6 +267,18 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       )
       const selection = yield* selectFrontier(
         reduced.managedRun.responsibility
+      )
+      const projectionMapping = {
+        operationToModel: identityMapping.operationToModel,
+        revisionToModel: modelRevisionFromTracker,
+        taskToModel: identityMapping.taskToModel
+      }
+      const exactManagedState = yield* projectFrontierRecoveryExactManagedState(
+        reduced.managedRun.graphKnowledge,
+        reduced.managedRun.workflowHistory.records,
+        reduced.managedRun.responsibility,
+        target,
+        projectionMapping
       )
       const targetClosure = reduced.managedRun.graphKnowledge.targetClosures[0]
       const graphObservationProfile = targetClosure
@@ -370,23 +366,26 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         }
       return {
         admissionCapacity: selection.admissionCapacity,
-        admittedModelOperationIds: selection.admittedModelOperationIds,
+        admittedTransitionOperations: selection.admittedTransitionOperations,
         admittedModelTaskIds: selection.admittedModelTaskIds,
         admittedTransitionTags: selection.admittedTransitionTags,
         admissionExplanations: selection.admissionExplanations,
         admissionReservedModelTaskIds: selection.admissionReservedModelTaskIds,
         coordinatorRunning,
-        frontierModelOperationIds: selection.frontierModelOperationIds,
+        frontierTransitionOperations: selection.frontierTransitionOperations,
         frontierModelTaskIds: selection.frontierModelTaskIds,
         frontierTransitionTags: selection.frontierTransitionTags,
         graphEvidence,
         graphKnowledge: reduced.managedRun.graphKnowledge,
+        graphKnowledgeProjection: exactManagedState.graphKnowledgeProjection,
         knownModelTaskIds,
         occupiedModelTaskIds: selection.occupiedModelTaskIds,
         pause: reduced.managedRun.pause,
         responsibility: reduced.managedRun.responsibility,
+        responsibilityProjection: exactManagedState.responsibilityProjection,
         responsibleModelTaskIds,
         workflowHistory: reduced.managedRun.workflowHistory.records,
+        workflowHistoryProjection: exactManagedState.workflowHistoryProjection,
         workflowEventTags: reduced.managedRun.workflowHistory.records.map(
           ({ event }) => event._tag
         )
@@ -403,19 +402,19 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     crash: () => runFrontierRecoveryReconstructionAction({ _tag: "crash" }, rawControls),
     getState,
     init: () => runFrontierRecoveryReconstructionAction({ _tag: "init" }, rawControls),
-    taskTrackerReportsCompatibleTargetClosureReplacement: () =>
+    taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
       runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReportsCompatibleTargetClosureReplacement" },
+        { _tag: "taskTrackerReturnsTargetClosureReadAtNextRevision" },
         rawControls
       ),
-    taskTrackerReportsIncomparableTargetClosureMembership: () =>
+    taskTrackerReturnsTargetClosureReadWithPredecessor: () =>
       runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReportsIncomparableTargetClosureMembership" },
+        { _tag: "taskTrackerReturnsTargetClosureReadWithPredecessor" },
         rawControls
       ),
-    taskTrackerReportsProvenAbsenceInTargetClosure: () =>
+    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () =>
       runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReportsProvenAbsenceInTargetClosure" },
+        { _tag: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage" },
         rawControls
       ),
     orchestratorCommitsNextFreshTaskClaimIntent: () =>

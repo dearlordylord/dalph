@@ -167,7 +167,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
       journal
     })
     yield* afterCrash.restart()
-    yield* afterCrash.taskTrackerReportsCompatibleTargetClosureReplacement()
+    yield* afterCrash.taskTrackerReturnsTargetClosureReadAtNextRevision()
     expect((yield* afterCrash.getState()).workflowEventTags).toEqual([
       "TrackerGraphObservationIntentRecorded",
       "TrackerGraphOutcomeObserved",
@@ -196,7 +196,7 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
       journal
     })
     yield* controls.init()
-    yield* controls.taskTrackerReportsProvenAbsenceInTargetClosure()
+    yield* controls.taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures).toEqual([
@@ -252,7 +252,7 @@ it.effect("does not treat a causal predecessor as read coverage", () =>
       journal
     })
     yield* controls.init()
-    yield* controls.taskTrackerReportsIncomparableTargetClosureMembership()
+    yield* controls.taskTrackerReturnsTargetClosureReadWithPredecessor()
 
     const state = yield* controls.getState()
     expect(state.graphKnowledge.targetClosures[0]).toMatchObject({
@@ -291,7 +291,7 @@ it.effect("replaces compatible membership knowledge with the fresh observation",
       journal
     })
     yield* controls.init()
-    yield* controls.taskTrackerReportsCompatibleTargetClosureReplacement()
+    yield* controls.taskTrackerReturnsTargetClosureReadAtNextRevision()
 
     expect((yield* controls.getState()).graphKnowledge.targetClosures).toEqual([
       expect.objectContaining({

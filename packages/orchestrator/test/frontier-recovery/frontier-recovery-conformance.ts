@@ -30,6 +30,12 @@ export const FrontierRecoveryModelCapacity = Schema.BigInt.pipe(
 )
 export type FrontierRecoveryModelCapacity = typeof FrontierRecoveryModelCapacity.Type
 
+/** Records one ordered journal position in the bounded M2 history. */
+export const FrontierRecoveryModelJournalPosition = Schema.BigInt.pipe(
+  Schema.brand("FrontierRecoveryModelJournalPosition")
+)
+export type FrontierRecoveryModelJournalPosition = typeof FrontierRecoveryModelJournalPosition.Type
+
 /**
  * Closed M2 action inventory for reconstructed-run and bounded-frontier selection.
  */
@@ -39,9 +45,9 @@ const frontierRecoveryReconstructionActionFields = {
   orchestratorCommitsFreshTaskClaimIntent: {
     task: FrontierRecoveryModelTaskId
   },
-  taskTrackerReportsProvenAbsenceInTargetClosure: {},
-  taskTrackerReportsIncomparableTargetClosureMembership: {},
-  taskTrackerReportsCompatibleTargetClosureReplacement: {},
+  taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {},
+  taskTrackerReturnsTargetClosureReadWithPredecessor: {},
+  taskTrackerReturnsTargetClosureReadAtNextRevision: {},
   crash: {},
   restart: {}
 } as const
@@ -74,9 +80,9 @@ export interface FrontierRecoveryReconstructionControls<A, E, R> {
   readonly crash: () => Effect.Effect<A, E, R>
   readonly init: () => Effect.Effect<A, E, R>
   readonly restart: () => Effect.Effect<A, E, R>
-  readonly taskTrackerReportsCompatibleTargetClosureReplacement: () => Effect.Effect<A, E, R>
-  readonly taskTrackerReportsIncomparableTargetClosureMembership: () => Effect.Effect<A, E, R>
-  readonly taskTrackerReportsProvenAbsenceInTargetClosure: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReturnsTargetClosureReadAtNextRevision: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReturnsTargetClosureReadWithPredecessor: () => Effect.Effect<A, E, R>
+  readonly taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () => Effect.Effect<A, E, R>
 }
 
 /** A model action or identity cannot cross the M2 conformance boundary. */
@@ -118,11 +124,10 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
       orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
       restart: controls.restart,
-      taskTrackerReportsCompatibleTargetClosureReplacement:
-        controls.taskTrackerReportsCompatibleTargetClosureReplacement,
-      taskTrackerReportsIncomparableTargetClosureMembership:
-        controls.taskTrackerReportsIncomparableTargetClosureMembership,
-      taskTrackerReportsProvenAbsenceInTargetClosure: controls.taskTrackerReportsProvenAbsenceInTargetClosure
+      taskTrackerReturnsTargetClosureReadAtNextRevision: controls.taskTrackerReturnsTargetClosureReadAtNextRevision,
+      taskTrackerReturnsTargetClosureReadWithPredecessor: controls.taskTrackerReturnsTargetClosureReadWithPredecessor,
+      taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage:
+        controls.taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage
     }),
     Match.exhaustive
   )

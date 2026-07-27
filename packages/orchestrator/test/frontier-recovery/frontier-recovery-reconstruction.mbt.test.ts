@@ -1,20 +1,20 @@
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, ITFMap, ITFSet, ITFVariant, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, ITFMap, ITFSet, ITFTuple, ITFVariant, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import {
+  FrontierRecoveryConformanceIssue,
   FrontierRecoveryModelCapacity,
+  FrontierRecoveryModelJournalPosition,
   FrontierRecoveryModelOperationId,
   FrontierRecoveryModelRevision,
   FrontierRecoveryModelTaskId,
   type FrontierRecoveryReconstructionActionFields
 } from "./frontier-recovery-conformance.js"
-import {
-  type FrontierRecoveryReconstructionProjection,
-  makeFrontierRecoveryReconstructionControls
-} from "./frontier-recovery-reconstruction.js"
+import type { FrontierRecoveryReconstructionProjection } from "./frontier-recovery-projection.js"
+import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const actionSchema = {
   crash: {},
@@ -25,22 +25,44 @@ const actionSchema = {
   orchestratorCommitsFreshTaskClaimIntent: { task: ITFBigInt },
   orchestratorCommitsNextFreshTaskClaimIntent: {},
   restart: {},
-  taskTrackerReportsCompatibleTargetClosureReplacement: {},
-  taskTrackerReportsIncomparableTargetClosureMembership: {},
-  taskTrackerReportsProvenAbsenceInTargetClosure: {}
+  taskTrackerReturnsTargetClosureReadAtNextRevision: {},
+  taskTrackerReturnsTargetClosureReadWithPredecessor: {},
+  taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {}
 } satisfies FrontierRecoveryReconstructionActionFields & {
   readonly initCapacityOneResponsibilityFirstProfile: Record<never, never>
   readonly initStoppedCoordinator: Record<never, never>
   readonly orchestratorCommitsFirstFreshTaskClaimIntent: Record<never, never>
 }
 
+const ModelComplete = ITFVariant({
+  Complete: ITFTuple()
+})
+const ModelPotentiallyMixedTime = ITFVariant({
+  PotentiallyMixedTime: ITFTuple()
+})
+const ModelTargetMembership = ITFVariant({
+  TargetMembership: ITFTuple()
+})
+const ModelFreshAtReadBoundary = ITFVariant({
+  FreshAtReadBoundary: ITFTuple()
+})
+const ModelTargetClosureMembership = ITFVariant({
+  TargetClosureMembership: ITFTuple()
+})
+const ModelFrontierRecoveryTargetClosure = ITFVariant({
+  FrontierRecoveryTargetClosure: ITFTuple()
+})
+const ModelFrontierRecoveryClaimOwner = ITFVariant({
+  FrontierRecoveryClaimOwner: ITFTuple()
+})
+
 const ModelTargetClosureReadEvidence = {
-  completeness: Schema.Literal("Complete"),
-  consistency: Schema.Literal("PotentiallyMixedTime"),
-  factFamily: Schema.Literal("TargetMembership"),
-  freshness: Schema.Literal("FreshAtReadBoundary"),
+  completeness: ModelComplete,
+  consistency: ModelPotentiallyMixedTime,
+  factFamily: ModelTargetMembership,
+  freshness: ModelFreshAtReadBoundary,
   operationId: ITFBigInt,
-  readShape: Schema.Literal("TargetClosureMembership"),
+  readShape: ModelTargetClosureMembership,
   revision: ITFBigInt,
   returnedTaskIds: ITFSet(ITFBigInt)
 } as const
@@ -66,6 +88,68 @@ const ModelAdmissionExplanation = Schema.Struct({
   )
 })
 
+const ModelTransitionOperation = ITFVariant({
+  DurableTransitionOperation: Schema.Struct({ operationId: ITFBigInt }),
+  FreshTransitionWithoutOperation: ITFTuple()
+})
+
+const ModelTargetClosureObservation = Schema.Struct({
+  completeness: ModelComplete,
+  consistency: ModelPotentiallyMixedTime,
+  explicitlyCoveredTaskIds: ITFSet(ITFBigInt),
+  factFamily: ModelTargetMembership,
+  freshness: ModelFreshAtReadBoundary,
+  observedAt: ITFBigInt,
+  provenAbsentTaskIds: ITFSet(ITFBigInt),
+  read: Schema.Struct(ModelTargetClosureReadEvidence),
+  target: ModelFrontierRecoveryTargetClosure
+})
+
+const ModelGraphKnowledge = ITFVariant({
+  ReconstructedTargetClosureConflict: Schema.Struct({
+    observations: Schema.Array(ModelTargetClosureObservation)
+  }),
+  ReconstructedTargetClosureObserved: ModelTargetClosureObservation
+})
+
+const ModelClaimToken = ITFVariant({
+  FrontierRecoveryClaimToken: Schema.Struct({ taskId: ITFBigInt })
+})
+
+const ModelWorkflowRecord = ITFVariant({
+  ReconstructionClaimIntent: Schema.Struct({
+    operationId: ITFBigInt,
+    owner: ModelFrontierRecoveryClaimOwner,
+    position: ITFBigInt,
+    predecessorOperationIds: ITFSet(ITFBigInt),
+    taskId: ITFBigInt,
+    token: ModelClaimToken
+  }),
+  ReconstructionGraphObservationIntent: Schema.Struct({
+    explicitlyCoveredTaskIds: ITFSet(ITFBigInt),
+    operationId: ITFBigInt,
+    position: ITFBigInt,
+    predecessorOperationIds: ITFSet(ITFBigInt)
+  }),
+  ReconstructionGraphOutcome: Schema.Struct({
+    operationId: ITFBigInt,
+    position: ITFBigInt,
+    returnedTaskIds: ITFSet(ITFBigInt),
+    revision: ITFBigInt
+  })
+})
+
+const ModelResponsibility = ITFVariant({
+  NoReconstructionResponsibility: ITFTuple(),
+  ReconstructionClaimResponsibility: Schema.Struct({
+    beganAt: ITFBigInt,
+    operationId: ITFBigInt,
+    owner: ModelFrontierRecoveryClaimOwner,
+    taskId: ITFBigInt,
+    token: ModelClaimToken
+  })
+})
+
 const ModelProjection = Schema.Struct({
   state: Schema.Struct({
     control: Schema.Struct({
@@ -78,14 +162,17 @@ const ModelProjection = Schema.Struct({
       Schema.Struct({ observation: Schema.Unknown })
     ),
     reconstructionGraphEvidence: ModelReconstructionGraphEvidence,
+    reconstructionGraphKnowledge: ModelGraphKnowledge,
+    reconstructionResponsibility: ITFMap(ITFBigInt, Schema.Unknown),
+    reconstructionWorkflowHistory: Schema.Array(ModelWorkflowRecord),
     selectorProjection: Schema.Struct({
       admittedTaskIds: ITFSet(ITFBigInt),
       capacity: ITFBigInt,
       explanations: ITFSet(ModelAdmissionExplanation),
       frontierTaskIds: ITFSet(ITFBigInt),
       occupiedTaskIds: ITFSet(ITFBigInt),
-      operationIds: ITFMap(ITFBigInt, ITFBigInt),
       reservationTaskIds: ITFSet(ITFBigInt),
+      transitionOperations: ITFMap(ITFBigInt, Schema.Unknown),
       transitionTags: ITFMap(ITFBigInt, Schema.String)
     }),
     workflow: ITFMap(
@@ -94,14 +181,6 @@ const ModelProjection = Schema.Struct({
     )
   })
 })
-
-const variantTag = (value: unknown): string => {
-  if (typeof value === "string") return value
-  if (typeof value === "object" && value !== null && "tag" in value) {
-    return String(value.tag)
-  }
-  return String(value)
-}
 
 const sortedBigInts = <Value extends bigint>(
   values: Iterable<Value>
@@ -112,27 +191,26 @@ type GraphProfile =
   | "IncomparableMembership"
   | "ProvenAbsence"
 
-// Negative two can never be a mapped operation and makes a missing model export fail comparison.
-
-const missingModelOperationId = FrontierRecoveryModelOperationId.make(-2n)
-
 type ReconstructionComparable =
   & Pick<
     FrontierRecoveryReconstructionProjection,
     | "admissionCapacity"
-    | "admittedModelOperationIds"
+    | "admittedTransitionOperations"
     | "admittedModelTaskIds"
     | "admittedTransitionTags"
     | "admissionExplanations"
     | "admissionReservedModelTaskIds"
     | "coordinatorRunning"
-    | "frontierModelOperationIds"
+    | "frontierTransitionOperations"
     | "frontierModelTaskIds"
     | "frontierTransitionTags"
     | "graphEvidence"
+    | "graphKnowledgeProjection"
     | "knownModelTaskIds"
     | "occupiedModelTaskIds"
     | "responsibleModelTaskIds"
+    | "responsibilityProjection"
+    | "workflowHistoryProjection"
     | "workflowEventTags"
   >
   & {
@@ -142,6 +220,30 @@ type ReconstructionComparable =
     }
   }
 
+const reconstructionComparableFrom = (
+  state: FrontierRecoveryReconstructionProjection
+): ReconstructionComparable => ({
+  admissionCapacity: state.admissionCapacity,
+  admittedModelTaskIds: state.admittedModelTaskIds,
+  admittedTransitionOperations: state.admittedTransitionOperations,
+  admittedTransitionTags: state.admittedTransitionTags,
+  admissionExplanations: state.admissionExplanations,
+  admissionReservedModelTaskIds: state.admissionReservedModelTaskIds,
+  coordinatorRunning: state.coordinatorRunning,
+  frontierModelTaskIds: state.frontierModelTaskIds,
+  frontierTransitionOperations: state.frontierTransitionOperations,
+  frontierTransitionTags: state.frontierTransitionTags,
+  graphEvidence: state.graphEvidence,
+  graphKnowledgeProjection: state.graphKnowledgeProjection,
+  knownModelTaskIds: state.knownModelTaskIds,
+  occupiedModelTaskIds: state.occupiedModelTaskIds,
+  pause: state.pause,
+  responsibleModelTaskIds: state.responsibleModelTaskIds,
+  responsibilityProjection: state.responsibilityProjection,
+  workflowEventTags: state.workflowEventTags,
+  workflowHistoryProjection: state.workflowHistoryProjection
+})
+
 const modelGraphEvidenceFrom = (
   value: typeof ModelReconstructionGraphEvidence.Type
 ): FrontierRecoveryReconstructionProjection["graphEvidence"] => {
@@ -150,15 +252,15 @@ const modelGraphEvidenceFrom = (
     ? value.value.read
     : value.value
   const common = {
-    completeness: read.completeness,
-    consistency: read.consistency,
-    factFamily: read.factFamily,
-    freshness: read.freshness,
+    completeness: "Complete" as const,
+    consistency: "PotentiallyMixedTime" as const,
+    factFamily: "TargetMembership" as const,
+    freshness: "FreshAtReadBoundary" as const,
     modelOperationId: FrontierRecoveryModelOperationId.make(
       read.operationId
     ),
     modelRevision: FrontierRecoveryModelRevision.make(read.revision),
-    readShape: read.readShape,
+    readShape: "TargetClosureMembership" as const,
     returnedModelTaskIds: sortedBigInts(read.returnedTaskIds).map(
       (task) => FrontierRecoveryModelTaskId.make(task)
     )
@@ -206,6 +308,23 @@ const graphEvidenceMatches = (
 ): boolean =>
   JSON.stringify(left, (_, value) => typeof value === "bigint" ? value.toString() : value)
     === JSON.stringify(right, (_, value) => typeof value === "bigint" ? value.toString() : value)
+
+const canonicalProjection = (value: unknown): unknown =>
+  typeof value === "bigint"
+    ? value.toString()
+    : Array.isArray(value)
+    ? value.map(canonicalProjection)
+    : typeof value === "object" && value !== null
+    ? Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalProjection(entry)])
+    )
+    : value
+
+const normalizedProjectionMatches = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(canonicalProjection(left))
+    === JSON.stringify(canonicalProjection(right))
 
 const makeReconstructionDriver = (
   configuredCapacity: 1 | 2,
@@ -271,22 +390,23 @@ const makeReconstructionDriver = (
           ),
         getState: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.getState())
+            Effect.flatMap((current) => current.getState()),
+            Effect.map(reconstructionComparableFrom)
           ),
         init: initialize,
         initCapacityOneResponsibilityFirstProfile: initialize,
         initStoppedCoordinator: initialize,
-        taskTrackerReportsCompatibleTargetClosureReplacement: () =>
+        taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.taskTrackerReportsCompatibleTargetClosureReplacement())
+            Effect.flatMap((current) => current.taskTrackerReturnsTargetClosureReadAtNextRevision())
           ),
-        taskTrackerReportsIncomparableTargetClosureMembership: () =>
+        taskTrackerReturnsTargetClosureReadWithPredecessor: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.taskTrackerReportsIncomparableTargetClosureMembership())
+            Effect.flatMap((current) => current.taskTrackerReturnsTargetClosureReadWithPredecessor())
           ),
-        taskTrackerReportsProvenAbsenceInTargetClosure: () =>
+        taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.taskTrackerReportsProvenAbsenceInTargetClosure())
+            Effect.flatMap((current) => current.taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage())
           ),
         orchestratorCommitsNextFreshTaskClaimIntent: () =>
           Ref.get(controlsRef).pipe(
@@ -314,103 +434,283 @@ const normalizeImportedModelState = (raw: unknown): unknown => {
   return importedState === undefined ? raw : { state: importedState[1] }
 }
 
-const decodeReconstructionModelState = (raw: unknown) =>
+const modelGraphObservationProjection = (
+  observation: typeof ModelTargetClosureObservation.Type
+) => ({
+  completeness: "Complete" as const,
+  consistency: "PotentiallyMixedTime" as const,
+  explicitlyCoveredModelTaskIds: sortedBigInts(
+    observation.explicitlyCoveredTaskIds
+  ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+  factFamily: "TargetMembership" as const,
+  freshness: "FreshAtReadBoundary" as const,
+  modelObservedAt: FrontierRecoveryModelJournalPosition.make(
+    observation.observedAt
+  ),
+  modelOperationId: FrontierRecoveryModelOperationId.make(
+    observation.read.operationId
+  ),
+  modelRevision: FrontierRecoveryModelRevision.make(
+    observation.read.revision
+  ),
+  provenAbsentModelTaskIds: sortedBigInts(
+    observation.provenAbsentTaskIds
+  ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+  returnedModelTaskIds: sortedBigInts(
+    observation.read.returnedTaskIds
+  ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+  target: "FrontierRecoveryTargetClosure" as const
+})
+
+const modelGraphKnowledgeProjection = (
+  knowledge: typeof ModelGraphKnowledge.Type
+) =>
+  knowledge.tag === "ReconstructedTargetClosureObserved"
+    ? {
+      _tag: "TargetClosureObserved" as const,
+      observation: modelGraphObservationProjection(knowledge.value)
+    }
+    : {
+      _tag: "TargetClosureConflict" as const,
+      observations: knowledge.value.observations.map(
+        modelGraphObservationProjection
+      )
+    }
+
+const modelWorkflowHistoryProjection = (
+  history: ReadonlyArray<typeof ModelWorkflowRecord.Type>
+): FrontierRecoveryReconstructionProjection["workflowHistoryProjection"] =>
+  history.map((record) => {
+    const modelOperationId = FrontierRecoveryModelOperationId.make(
+      record.value.operationId
+    )
+    const modelPosition = FrontierRecoveryModelJournalPosition.make(
+      record.value.position
+    )
+    if (record.tag === "ReconstructionGraphObservationIntent") {
+      return {
+        _tag: "GraphObservationIntent" as const,
+        explicitlyCoveredModelTaskIds: sortedBigInts(
+          record.value.explicitlyCoveredTaskIds
+        ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+        modelOperationId,
+        modelPosition,
+        modelPredecessorOperationIds: sortedBigInts(
+          record.value.predecessorOperationIds
+        ).map((operation) => FrontierRecoveryModelOperationId.make(operation))
+      }
+    }
+    if (record.tag === "ReconstructionGraphOutcome") {
+      return {
+        _tag: "GraphOutcome" as const,
+        modelOperationId,
+        modelPosition,
+        modelRevision: FrontierRecoveryModelRevision.make(
+          record.value.revision
+        ),
+        returnedModelTaskIds: sortedBigInts(
+          record.value.returnedTaskIds
+        ).map((task) => FrontierRecoveryModelTaskId.make(task))
+      }
+    }
+    const modelTaskId = FrontierRecoveryModelTaskId.make(record.value.taskId)
+    return {
+      _tag: "ClaimIntent" as const,
+      modelOperationId,
+      modelPosition,
+      modelPredecessorOperationIds: sortedBigInts(
+        record.value.predecessorOperationIds
+      ).map((operation) => FrontierRecoveryModelOperationId.make(operation)),
+      modelTaskId,
+      owner: "FrontierRecoveryClaimOwner" as const,
+      token: { modelTaskId }
+    }
+  })
+
+const modelResponsibilityProjection = (
+  responsibility: ReadonlyMap<bigint, typeof ModelResponsibility.Type>
+): FrontierRecoveryReconstructionProjection["responsibilityProjection"] =>
+  [...responsibility.entries()]
+    .flatMap(([, entry]) => {
+      if (entry.tag === "NoReconstructionResponsibility") return []
+      const modelTaskId = FrontierRecoveryModelTaskId.make(
+        entry.value.taskId
+      )
+      return [{
+        beganAt: FrontierRecoveryModelJournalPosition.make(
+          entry.value.beganAt
+        ),
+        modelOperationId: FrontierRecoveryModelOperationId.make(
+          entry.value.operationId
+        ),
+        modelTaskId,
+        owner: "FrontierRecoveryClaimOwner" as const,
+        token: { modelTaskId }
+      }]
+    })
+    .sort((left, right) =>
+      left.modelTaskId < right.modelTaskId
+        ? -1
+        : left.modelTaskId > right.modelTaskId
+        ? 1
+        : 0
+    )
+
+const decodeReconstructionModelState = (
+  raw: unknown
+): Effect.Effect<ReconstructionComparable> =>
   Schema.decodeUnknownEffect(ModelProjection)(
     normalizeImportedModelState(raw)
   ).pipe(
-    Effect.map(({ state }) => {
-      const responsibleModelTaskIds = sortedBigInts(
-        [...state.workflow]
-          .filter(([, workflow]) => variantTag(workflow.responsibility) === "Outstanding")
-          .map(([task]) => task)
-      ).map((task) => FrontierRecoveryModelTaskId.make(task))
-      const graphEvidence = modelGraphEvidenceFrom(
-        state.reconstructionGraphEvidence
-      )
-      const graphProfile = graphProfileFrom(graphEvidence)
-      const selector = state.selectorProjection
-      const frontierModelTaskIds = sortedBigInts(
-        selector.frontierTaskIds
-      ).map((task) => FrontierRecoveryModelTaskId.make(task))
-      const admittedModelTaskIds = sortedBigInts(
-        selector.admittedTaskIds
-      ).map((task) => FrontierRecoveryModelTaskId.make(task))
-      const transitionTagFor = (taskId: bigint): string =>
-        selector.transitionTags.get(taskId) ?? "MissingModelTransition"
-      return {
-        admissionCapacity: FrontierRecoveryModelCapacity.make(
-          selector.capacity
-        ),
-        admittedModelOperationIds: admittedModelTaskIds.map((taskId) =>
-          FrontierRecoveryModelOperationId.make(
-            selector.operationIds.get(taskId) ?? missingModelOperationId
+    Effect.flatMap(({ state }) =>
+      Effect.gen(function*() {
+        const reconstructionResponsibility = new Map(
+          yield* Effect.forEach(
+            [...state.reconstructionResponsibility],
+            ([task, value]) =>
+              Schema.decodeUnknownEffect(ModelResponsibility)(value).pipe(
+                Effect.map((decoded) => [task, decoded] as const)
+              )
           )
-        ),
-        admittedModelTaskIds,
-        admittedTransitionTags: admittedModelTaskIds.map(transitionTagFor),
-        admissionExplanations: [...selector.explanations]
-          .map(({ tag, taskId, wakeCondition }) => ({
-            modelTaskId: FrontierRecoveryModelTaskId.make(taskId),
-            tag,
-            wakeCondition
-          }))
-          .sort((left, right) =>
-            left.modelTaskId < right.modelTaskId
-              ? -1
-              : left.modelTaskId > right.modelTaskId
-              ? 1
-              : 0
+        )
+        const responsibleModelTaskIds = sortedBigInts(
+          [...reconstructionResponsibility]
+            .filter(([, responsibility]) => responsibility.tag === "ReconstructionClaimResponsibility")
+            .map(([task]) => task)
+        ).map((task) => FrontierRecoveryModelTaskId.make(task))
+        const graphEvidence = modelGraphEvidenceFrom(
+          state.reconstructionGraphEvidence
+        )
+        const graphProfile = graphProfileFrom(graphEvidence)
+        const selector = state.selectorProjection
+        const transitionOperationFor = (
+          taskId: FrontierRecoveryModelTaskId
+        ) =>
+          Effect.gen(function*() {
+            const operation = selector.transitionOperations.get(taskId)
+            if (operation === undefined) {
+              return yield* new FrontierRecoveryConformanceIssue({
+                detail: `M2 selector projection omitted transition operation for task ${taskId}`,
+                reason: "MissingMapping"
+              })
+            }
+            const decoded = yield* Schema.decodeUnknownEffect(
+              ModelTransitionOperation
+            )(operation)
+            return decoded.tag === "DurableTransitionOperation"
+              ? {
+                _tag: "DurableTransitionOperation" as const,
+                modelOperationId: FrontierRecoveryModelOperationId.make(
+                  decoded.value.operationId
+                )
+              }
+              : { _tag: "FreshTransitionWithoutOperation" as const }
+          })
+        const frontierModelTaskIds = sortedBigInts(
+          selector.frontierTaskIds
+        ).map((task) => FrontierRecoveryModelTaskId.make(task))
+        const admittedModelTaskIds = sortedBigInts(
+          selector.admittedTaskIds
+        ).map((task) => FrontierRecoveryModelTaskId.make(task))
+        const transitionTagFor = (taskId: bigint) => {
+          const tag = selector.transitionTags.get(taskId)
+          return tag === undefined
+            ? Effect.fail(
+              new FrontierRecoveryConformanceIssue({
+                detail: `M2 selector projection omitted transition tag for task ${taskId}`,
+                reason: "MissingMapping"
+              })
+            )
+            : Effect.succeed(tag)
+        }
+        return {
+          admissionCapacity: FrontierRecoveryModelCapacity.make(
+            selector.capacity
           ),
-        admissionReservedModelTaskIds: sortedBigInts(
-          selector.reservationTaskIds
-        ).map((task) => FrontierRecoveryModelTaskId.make(task)),
-        coordinatorRunning: state.coordinator.running,
-        frontierModelOperationIds: frontierModelTaskIds.map((taskId) =>
-          FrontierRecoveryModelOperationId.make(
-            selector.operationIds.get(taskId) ?? missingModelOperationId
-          )
-        ),
-        frontierModelTaskIds,
-        frontierTransitionTags: frontierModelTaskIds.map(transitionTagFor),
-        graphEvidence,
-        knownModelTaskIds: graphProfile === "ProvenAbsence"
-          ? graphEvidence.returnedModelTaskIds
-          : sortedBigInts(state.knowledge.keys()).map((task) => FrontierRecoveryModelTaskId.make(task)),
-        occupiedModelTaskIds: sortedBigInts(
-          selector.occupiedTaskIds
-        ).map((task) => FrontierRecoveryModelTaskId.make(task)),
-        pause: {
-          run: {
-            _tag: state.control.runPaused
-              ? "RunPaused" as const
-              : "RunUnpaused" as const
+          admittedTransitionOperations: yield* Effect.forEach(
+            admittedModelTaskIds,
+            transitionOperationFor
+          ),
+          admittedModelTaskIds,
+          admittedTransitionTags: yield* Effect.forEach(
+            admittedModelTaskIds,
+            transitionTagFor
+          ),
+          admissionExplanations: [...selector.explanations]
+            .map(({ tag, taskId, wakeCondition }) => ({
+              modelTaskId: FrontierRecoveryModelTaskId.make(taskId),
+              tag,
+              wakeCondition
+            }))
+            .sort((left, right) =>
+              left.modelTaskId < right.modelTaskId
+                ? -1
+                : left.modelTaskId > right.modelTaskId
+                ? 1
+                : 0
+            ),
+          admissionReservedModelTaskIds: sortedBigInts(
+            selector.reservationTaskIds
+          ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+          coordinatorRunning: state.coordinator.running,
+          frontierTransitionOperations: yield* Effect.forEach(
+            frontierModelTaskIds,
+            transitionOperationFor
+          ),
+          frontierModelTaskIds,
+          frontierTransitionTags: yield* Effect.forEach(
+            frontierModelTaskIds,
+            transitionTagFor
+          ),
+          graphEvidence,
+          graphKnowledgeProjection: modelGraphKnowledgeProjection(
+            state.reconstructionGraphKnowledge
+          ),
+          knownModelTaskIds: graphProfile === "ProvenAbsence"
+            ? graphEvidence.returnedModelTaskIds
+            : sortedBigInts(state.knowledge.keys()).map((task) => FrontierRecoveryModelTaskId.make(task)),
+          occupiedModelTaskIds: sortedBigInts(
+            selector.occupiedTaskIds
+          ).map((task) => FrontierRecoveryModelTaskId.make(task)),
+          pause: {
+            run: {
+              _tag: state.control.runPaused
+                ? "RunPaused" as const
+                : "RunUnpaused" as const
+            },
+            tasks: {
+              _tag: [...state.control.taskPaused.values()].some(Boolean)
+                ? "SomeTaskPauses" as const
+                : "NoTaskPauses" as const
+            }
           },
-          tasks: {
-            _tag: [...state.control.taskPaused.values()].some(Boolean)
-              ? "SomeTaskPauses" as const
-              : "NoTaskPauses" as const
-          }
-        },
-        responsibleModelTaskIds,
-        workflowEventTags: graphProfile !== undefined
-          ? [
-            "TrackerGraphObservationIntentRecorded",
-            "TrackerGraphOutcomeObserved",
-            "TrackerGraphObservationIntentRecorded",
-            "TrackerGraphOutcomeObserved"
-          ]
-          : responsibleModelTaskIds.length === 0
-          ? [
-            "TrackerGraphObservationIntentRecorded",
-            "TrackerGraphOutcomeObserved"
-          ]
-          : [
-            "TrackerGraphObservationIntentRecorded",
-            "TrackerGraphOutcomeObserved",
-            ...responsibleModelTaskIds.map(() => "TaskClaimAcquisitionIntended" as const)
-          ]
-      }
-    }),
+          responsibleModelTaskIds,
+          responsibilityProjection: modelResponsibilityProjection(
+            reconstructionResponsibility
+          ),
+          workflowHistoryProjection: modelWorkflowHistoryProjection(
+            state.reconstructionWorkflowHistory
+          ),
+          workflowEventTags: graphProfile !== undefined
+            ? [
+              "TrackerGraphObservationIntentRecorded",
+              "TrackerGraphOutcomeObserved",
+              "TrackerGraphObservationIntentRecorded",
+              "TrackerGraphOutcomeObserved"
+            ]
+            : responsibleModelTaskIds.length === 0
+            ? [
+              "TrackerGraphObservationIntentRecorded",
+              "TrackerGraphOutcomeObserved"
+            ]
+            : [
+              "TrackerGraphObservationIntentRecorded",
+              "TrackerGraphOutcomeObserved",
+              ...responsibleModelTaskIds.map(() => "TaskClaimAcquisitionIntended" as const)
+            ]
+        } satisfies ReconstructionComparable
+      })
+    ),
     Effect.orDie
   )
 
@@ -429,8 +729,10 @@ const compareReconstructionState = (
   implementation: ReconstructionComparable
 ): boolean =>
   model.admissionCapacity === implementation.admissionCapacity
-  && model.admittedModelOperationIds.join(",")
-    === implementation.admittedModelOperationIds.join(",")
+  && JSON.stringify(model.admittedTransitionOperations, (_, value) =>
+      typeof value === "bigint" ? value.toString() : value)
+    === JSON.stringify(implementation.admittedTransitionOperations, (_, value) =>
+      typeof value === "bigint" ? value.toString() : value)
   && model.coordinatorRunning === implementation.coordinatorRunning
   && model.admittedModelTaskIds.join(",")
     === implementation.admittedModelTaskIds.join(",")
@@ -442,8 +744,10 @@ const compareReconstructionState = (
     === implementation.admissionReservedModelTaskIds.join(",")
   && model.frontierModelTaskIds.join(",")
     === implementation.frontierModelTaskIds.join(",")
-  && model.frontierModelOperationIds.join(",")
-    === implementation.frontierModelOperationIds.join(",")
+  && JSON.stringify(model.frontierTransitionOperations, (_, value) =>
+      typeof value === "bigint" ? value.toString() : value)
+    === JSON.stringify(implementation.frontierTransitionOperations, (_, value) =>
+      typeof value === "bigint" ? value.toString() : value)
   && model.frontierTransitionTags.join(",")
     === implementation.frontierTransitionTags.join(",")
   && model.knownModelTaskIds.join(",")
@@ -453,7 +757,19 @@ const compareReconstructionState = (
   && model.responsibleModelTaskIds.join(",")
     === implementation.responsibleModelTaskIds.join(",")
   && graphEvidenceMatches(model.graphEvidence, implementation.graphEvidence)
+  && normalizedProjectionMatches(
+    model.graphKnowledgeProjection,
+    implementation.graphKnowledgeProjection
+  )
   && JSON.stringify(model.pause) === JSON.stringify(implementation.pause)
+  && normalizedProjectionMatches(
+    model.responsibilityProjection,
+    implementation.responsibilityProjection
+  )
+  && normalizedProjectionMatches(
+    model.workflowHistoryProjection,
+    implementation.workflowHistoryProjection
+  )
   && model.workflowEventTags.join(",")
     === implementation.workflowEventTags.join(",")
 
@@ -504,17 +820,17 @@ quintIt(
 for (
   const { action: profile, seed, witness } of [
     {
-      action: "taskTrackerReportsProvenAbsenceInTargetClosure",
+      action: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
       seed: "145",
       witness: "taskTrackerProvenAbsenceReadReached"
     },
     {
-      action: "taskTrackerReportsIncomparableTargetClosureMembership",
+      action: "taskTrackerReturnsTargetClosureReadWithPredecessor",
       seed: "146",
       witness: "taskTrackerIncomparableMembershipReadReached"
     },
     {
-      action: "taskTrackerReportsCompatibleTargetClosureReplacement",
+      action: "taskTrackerReturnsTargetClosureReadAtNextRevision",
       seed: "147",
       witness: "taskTrackerCompatibleReplacementReadReached"
     }

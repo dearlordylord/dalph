@@ -42,14 +42,20 @@ module frontierRecovery {
 
   type AttemptOutcome = AttemptPending | AttemptAccepted | AttemptWorktreeLost | AttemptAbandoned
   type TaskSettlement = TaskUnsettled | TrackerCompleted | ResponsibilityRelinquished
+  type TargetClosureCompleteness = Complete(())
+  type TargetClosureConsistency = PotentiallyMixedTime(())
+  type TargetClosureFactFamily = TargetMembership(())
+  type TargetClosureFreshness = FreshAtReadBoundary(())
+  type TargetClosureReadShape = TargetClosureMembership(())
+  type ReconstructionTarget = FrontierRecoveryTargetClosure(())
   // Evidence shared by every normalized target-closure membership read.
   type TargetClosureReadEvidence = {
-    completeness: str,
-    consistency: str,
-    factFamily: str,
-    freshness: str,
+    completeness: TargetClosureCompleteness,
+    consistency: TargetClosureConsistency,
+    factFamily: TargetClosureFactFamily,
+    freshness: TargetClosureFreshness,
     operationId: int,
-    readShape: str,
+    readShape: TargetClosureReadShape,
     revision: int,
     returnedTaskIds: Set[TaskId],
   }
@@ -66,6 +72,59 @@ module frontierRecovery {
     | ProvenAbsenceGraphObservation({
         read: TargetClosureReadEvidence,
         explicitlyCoveredTaskIds: Set[TaskId],
+      })
+
+  type ReconstructedTargetClosureObservation = {
+    completeness: TargetClosureCompleteness,
+    consistency: TargetClosureConsistency,
+    factFamily: TargetClosureFactFamily,
+    freshness: TargetClosureFreshness,
+    observedAt: int,
+    read: TargetClosureReadEvidence,
+    explicitlyCoveredTaskIds: Set[TaskId],
+    provenAbsentTaskIds: Set[TaskId],
+    target: ReconstructionTarget,
+  }
+
+  type ReconstructionGraphKnowledge =
+    | ReconstructedTargetClosureObserved(ReconstructedTargetClosureObservation)
+    | ReconstructedTargetClosureConflict({
+        observations: List[ReconstructedTargetClosureObservation],
+      })
+
+  type ReconstructionClaimOwner = FrontierRecoveryClaimOwner(())
+  type ReconstructionClaimToken = FrontierRecoveryClaimToken({ taskId: TaskId })
+
+  type ReconstructionWorkflowRecord =
+    | ReconstructionGraphObservationIntent({
+        position: int,
+        operationId: int,
+        predecessorOperationIds: Set[int],
+        explicitlyCoveredTaskIds: Set[TaskId],
+      })
+    | ReconstructionGraphOutcome({
+        position: int,
+        operationId: int,
+        revision: int,
+        returnedTaskIds: Set[TaskId],
+      })
+    | ReconstructionClaimIntent({
+        position: int,
+        operationId: int,
+        taskId: TaskId,
+        predecessorOperationIds: Set[int],
+        owner: ReconstructionClaimOwner,
+        token: ReconstructionClaimToken,
+      })
+
+  type ReconstructionResponsibility =
+    | NoReconstructionResponsibility
+    | ReconstructionClaimResponsibility({
+        beganAt: int,
+        operationId: int,
+        taskId: TaskId,
+        owner: ReconstructionClaimOwner,
+        token: ReconstructionClaimToken,
       })
 
   // Facts currently owned by the task tracker, Git, or executor provider.
@@ -124,14 +183,17 @@ module frontierRecovery {
     crashCount: int,
   }
 
-  // Exact scheduler result exported for the M2 executable adapter. Operation
-  // id -1 denotes a fresh claim transition, which has no durable operation yet.
+  type TransitionOperation =
+    | FreshTransitionWithoutOperation(())
+    | DurableTransitionOperation({ operationId: int })
+
+  // Exact scheduler result exported for the M2 executable adapter.
   type SelectorProjection = {
     capacity: int,
     frontierTaskIds: Set[TaskId],
     admittedTaskIds: Set[TaskId],
     transitionTags: TaskId -> str,
-    operationIds: TaskId -> int,
+    transitionOperations: TaskId -> TransitionOperation,
     explanations: Set[{
       taskId: TaskId,
       tag: str,
@@ -155,6 +217,9 @@ module frontierRecovery {
     requestFreshnessViolations: int,
     duplicateEffectViolations: int,
     reconstructionGraphEvidence: ReconstructionGraphEvidence,
+    reconstructionGraphKnowledge: ReconstructionGraphKnowledge,
+    reconstructionWorkflowHistory: List[ReconstructionWorkflowRecord],
+    reconstructionResponsibility: TaskId -> ReconstructionResponsibility,
     selectorProjection: SelectorProjection,
   }
 
@@ -232,6 +297,29 @@ module frontierRecovery {
     taskControlEpoch: TASKS.mapBy(_ => 0),
   }
 
+  pure val initialTargetClosureRead: TargetClosureReadEvidence = {
+    completeness: Complete(()),
+    consistency: PotentiallyMixedTime(()),
+    factFamily: TargetMembership(()),
+    freshness: FreshAtReadBoundary(()),
+    operationId: 0,
+    readShape: TargetClosureMembership(()),
+    revision: 0,
+    returnedTaskIds: TASKS,
+  }
+
+  pure val initialTargetClosureObservation: ReconstructedTargetClosureObservation = {
+    completeness: Complete(()),
+    consistency: PotentiallyMixedTime(()),
+    factFamily: TargetMembership(()),
+    freshness: FreshAtReadBoundary(()),
+    observedAt: 2,
+    read: initialTargetClosureRead,
+    explicitlyCoveredTaskIds: Set(),
+    provenAbsentTaskIds: Set(),
+    target: FrontierRecoveryTargetClosure(()),
+  }
+
   pure def initialState: State = {
     authority: TASKS.mapBy(initialAuthority),
     knowledge: TASKS.mapBy(initialKnowledge),
@@ -246,16 +334,25 @@ module frontierRecovery {
     requestFreshnessViolations: 0,
     duplicateEffectViolations: 0,
     reconstructionGraphEvidence:
-      InitialReconstructionGraphObservation({
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
-        factFamily: "TargetMembership",
-        freshness: "FreshAtReadBoundary",
+      InitialReconstructionGraphObservation(initialTargetClosureRead),
+    reconstructionGraphKnowledge:
+      ReconstructedTargetClosureObserved(initialTargetClosureObservation),
+    reconstructionWorkflowHistory: List(
+      ReconstructionGraphObservationIntent({
+        position: 1,
         operationId: 0,
-        readShape: "TargetClosureMembership",
+        predecessorOperationIds: Set(),
+        explicitlyCoveredTaskIds: Set(),
+      }),
+      ReconstructionGraphOutcome({
+        position: 2,
+        operationId: 0,
         revision: 0,
         returnedTaskIds: TASKS,
-      }),
+      })
+    ),
+    reconstructionResponsibility:
+      TASKS.mapBy(_ => NoReconstructionResponsibility),
     selectorProjection: computeSelectorProjection(
       TASKS.mapBy(initialWorkflow),
       TASKS.mapBy(initialKnowledge),
@@ -354,12 +451,14 @@ module frontierRecovery {
         else
           "CommitFreshTaskClaimIntent"
       ),
-      operationIds: TASKS.mapBy(task =>
+      transitionOperations: TASKS.mapBy(task => {
         if (workflow.get(task).responsibility == Outstanding)
-          workflow.get(task).operationId
+          DurableTransitionOperation({
+            operationId: workflow.get(task).operationId,
+          })
         else
-          -1
-      ),
+          FreshTransitionWithoutOperation(())
+      }),
       explanations: waiting.map(task => {
         taskId: task,
         tag: "CapacityWait",
@@ -421,13 +520,40 @@ module frontierRecovery {
 
   pure def applyCommitFirstIntent(s: State, task: TaskId): State = {
     val current = s.workflow.get(task)
+    val position = s.reconstructionWorkflowHistory.length() + 1
+    val token = FrontierRecoveryClaimToken({ taskId: task })
     val updated = {
       ...current,
       intentCommitted: true,
       requestAuthorized: true,
       responsibility: Outstanding,
     }
-    val withWorkflow = {...s, workflow: s.workflow.put(task, updated)}
+    val withWorkflow = {
+      ...s,
+      workflow: s.workflow.put(task, updated),
+      reconstructionWorkflowHistory:
+        s.reconstructionWorkflowHistory.append(
+          ReconstructionClaimIntent({
+            position: position,
+            operationId: current.operationId,
+            taskId: task,
+            predecessorOperationIds: Set(0),
+            owner: FrontierRecoveryClaimOwner(()),
+            token: token,
+          })
+        ),
+      reconstructionResponsibility:
+        s.reconstructionResponsibility.put(
+          task,
+          ReconstructionClaimResponsibility({
+            beganAt: position,
+            operationId: current.operationId,
+            taskId: task,
+            owner: FrontierRecoveryClaimOwner(()),
+            token: token,
+          })
+        ),
+    }
     recordsIntent(withWorkflow, task, ClaimBoundary, current.operationId)
   }
 
@@ -1669,62 +1795,160 @@ module frontierRecovery {
     else
       state' = refreshSelectorProjection(state)
 
+  pure def applyReconstructionTargetClosureRead(
+    s: State,
+    read: TargetClosureReadEvidence,
+    predecessorOperationIds: Set[int],
+    explicitlyCoveredTaskIds: Set[TaskId],
+    graphEvidence: ReconstructionGraphEvidence,
+    graphKnowledge: ReconstructionGraphKnowledge
+  ): State = {
+    val intentPosition = s.reconstructionWorkflowHistory.length() + 1
+    val outcomePosition = intentPosition + 1
+    val alreadyRecorded = s.reconstructionWorkflowHistory.select(record =>
+      match record {
+        | ReconstructionGraphObservationIntent(intent) =>
+            intent.operationId == read.operationId
+        | _ => false
+      }
+    ).length() > 0
+    if (alreadyRecorded)
+      s
+    else
+      {
+        ...s,
+        reconstructionGraphEvidence: graphEvidence,
+        reconstructionGraphKnowledge: graphKnowledge,
+        reconstructionWorkflowHistory:
+          s.reconstructionWorkflowHistory.concat(List(
+            ReconstructionGraphObservationIntent({
+              position: intentPosition,
+              operationId: read.operationId,
+              predecessorOperationIds: predecessorOperationIds,
+              explicitlyCoveredTaskIds: explicitlyCoveredTaskIds,
+            }),
+            ReconstructionGraphOutcome({
+              position: outcomePosition,
+              operationId: read.operationId,
+              revision: read.revision,
+              returnedTaskIds: read.returnedTaskIds,
+            })
+          )),
+      }
+  }
+
   // Named bounded tracker-read profiles used by the M2 reconstruction
   // conformance adapter. Each exports one distinct normalized read result so
   // the sampled state identifies which production evidence must be compared.
-  action taskTrackerReportsProvenAbsenceInTargetClosure: bool =
-    state' = refreshSelectorProjection({
-      ...state,
-      reconstructionGraphEvidence:
+  action taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: bool = {
+    val read = {
+          completeness: Complete(()),
+          consistency: PotentiallyMixedTime(()),
+          factFamily: TargetMembership(()),
+          freshness: FreshAtReadBoundary(()),
+          operationId: 2,
+          readShape: TargetClosureMembership(()),
+          revision: 1,
+          returnedTaskIds: Set(A, C, D),
+        }
+    val observation = {
+      completeness: Complete(()),
+      consistency: PotentiallyMixedTime(()),
+      factFamily: TargetMembership(()),
+      freshness: FreshAtReadBoundary(()),
+      observedAt: state.reconstructionWorkflowHistory.length() + 2,
+      read: read,
+      explicitlyCoveredTaskIds: Set(B),
+      provenAbsentTaskIds: Set(B),
+      target: FrontierRecoveryTargetClosure(()),
+    }
+    state' = refreshSelectorProjection(
+      applyReconstructionTargetClosureRead(
+        state,
+        read,
+        Set(),
+        Set(B),
         ProvenAbsenceGraphObservation({
-        explicitlyCoveredTaskIds: Set(B),
-        read: {
-          completeness: "Complete",
-          consistency: "PotentiallyMixedTime",
-          factFamily: "TargetMembership",
-          freshness: "FreshAtReadBoundary",
+          explicitlyCoveredTaskIds: Set(B),
+          read: read,
+        }),
+        ReconstructedTargetClosureObserved(observation)
+      )
+    )
+  }
+
+  action taskTrackerReturnsTargetClosureReadWithPredecessor: bool = {
+    val read = {
+          completeness: Complete(()),
+          consistency: PotentiallyMixedTime(()),
+          factFamily: TargetMembership(()),
+          freshness: FreshAtReadBoundary(()),
           operationId: 2,
-          readShape: "TargetClosureMembership",
+          readShape: TargetClosureMembership(()),
           revision: 1,
           returnedTaskIds: Set(A, C, D),
-        },
-      }),
-    })
-
-  action taskTrackerReportsIncomparableTargetClosureMembership: bool =
-    state' = refreshSelectorProjection({
-      ...state,
-      reconstructionGraphEvidence:
+        }
+    val observation = {
+      completeness: Complete(()),
+      consistency: PotentiallyMixedTime(()),
+      factFamily: TargetMembership(()),
+      freshness: FreshAtReadBoundary(()),
+      observedAt: state.reconstructionWorkflowHistory.length() + 2,
+      read: read,
+      explicitlyCoveredTaskIds: Set(),
+      provenAbsentTaskIds: Set(),
+      target: FrontierRecoveryTargetClosure(()),
+    }
+    state' = refreshSelectorProjection(
+      applyReconstructionTargetClosureRead(
+        state,
+        read,
+        Set(0),
+        Set(),
         IncomparableMembershipGraphObservation({
-        predecessorOperationIds: Set(0),
-        read: {
-          completeness: "Complete",
-          consistency: "PotentiallyMixedTime",
-          factFamily: "TargetMembership",
-          freshness: "FreshAtReadBoundary",
-          operationId: 2,
-          readShape: "TargetClosureMembership",
-          revision: 1,
-          returnedTaskIds: Set(A, C, D),
-        },
-      }),
-    })
+          predecessorOperationIds: Set(0),
+          read: read,
+        }),
+        ReconstructedTargetClosureConflict({
+          observations: List(initialTargetClosureObservation, observation),
+        })
+      )
+    )
+  }
 
-  action taskTrackerReportsCompatibleTargetClosureReplacement: bool =
-    state' = refreshSelectorProjection({
-      ...state,
-      reconstructionGraphEvidence:
-        CompatibleReplacementGraphObservation({
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
-        factFamily: "TargetMembership",
-        freshness: "FreshAtReadBoundary",
+  action taskTrackerReturnsTargetClosureReadAtNextRevision: bool = {
+    val read = {
+        completeness: Complete(()),
+        consistency: PotentiallyMixedTime(()),
+        factFamily: TargetMembership(()),
+        freshness: FreshAtReadBoundary(()),
         operationId: 2,
-        readShape: "TargetClosureMembership",
+        readShape: TargetClosureMembership(()),
         revision: 1,
         returnedTaskIds: TASKS,
-      }),
-    })
+      }
+    val observation = {
+      completeness: Complete(()),
+      consistency: PotentiallyMixedTime(()),
+      factFamily: TargetMembership(()),
+      freshness: FreshAtReadBoundary(()),
+      observedAt: state.reconstructionWorkflowHistory.length() + 2,
+      read: read,
+      explicitlyCoveredTaskIds: Set(),
+      provenAbsentTaskIds: Set(),
+      target: FrontierRecoveryTargetClosure(()),
+    }
+    state' = refreshSelectorProjection(
+      applyReconstructionTargetClosureRead(
+        state,
+        read,
+        Set(),
+        Set(),
+        CompatibleReplacementGraphObservation(read),
+        ReconstructedTargetClosureObserved(observation)
+      )
+    )
+  }
 
   action step: bool = {
     nondet task = TASKS.oneOf()
