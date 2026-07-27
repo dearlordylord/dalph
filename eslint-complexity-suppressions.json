@@ -4,6 +4,11 @@
       "count": 1
     }
   },
+  "packages/orchestrator/src/fresh-implementation-convergence-stages.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
   "packages/orchestrator/src/github-tracker-graph-reader.ts": {
     "complexity": {
       "count": 3
@@ -15,11 +20,6 @@
     }
   },
   "packages/orchestrator/src/implementation-convergence-recovery.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/implementation-convergence-workflow.ts": {
     "complexity": {
       "count": 1
     }
