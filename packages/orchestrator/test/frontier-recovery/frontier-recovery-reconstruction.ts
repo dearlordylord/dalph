@@ -729,6 +729,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       const ownerByKey = ownershipSnapshot.owners
       return {
         activation: {
+          activationInProgressModelTaskIds: yield* projectTaskIds(
+            [...ownershipSnapshot.owners.values()].map(
+              ({ transition }) => transition.taskId
+            )
+          ),
           derivedModelTaskIds: yield* projectTaskIds(
             activationDerived.transitions.map(({ taskId }) => taskId)
           ),

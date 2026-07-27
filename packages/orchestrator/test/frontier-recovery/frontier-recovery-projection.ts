@@ -121,6 +121,9 @@ export type FrontierRecoveryTransitionOperation =
   }
 
 export interface FrontierRecoveryActivationProjection {
+  readonly activationInProgressModelTaskIds: ReadonlyArray<
+    FrontierRecoveryModelTaskId
+  >
   readonly derivedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly freshlyObservedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly isolatedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>

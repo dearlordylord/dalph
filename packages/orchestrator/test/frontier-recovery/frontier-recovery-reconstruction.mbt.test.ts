@@ -149,6 +149,7 @@ const ModelActivationPosition = ITFVariant({
 })
 
 const ModelActivation = Schema.Struct({
+  activationInProgress: ITFSet(ITFBigInt),
   configuredCapacity: ITFBigInt,
   derivedTransitions: ITFSet(ITFBigInt),
   duplicateReservationLeaks: ITFSet(ITFBigInt),
@@ -788,6 +789,9 @@ const decodeReconstructionModelState = (
         }
         return {
           activation: {
+            activationInProgressModelTaskIds: modelTaskIds(
+              state.activation.activationInProgress
+            ),
             derivedModelTaskIds: modelTaskIds(
               state.activation.derivedTransitions
             ),

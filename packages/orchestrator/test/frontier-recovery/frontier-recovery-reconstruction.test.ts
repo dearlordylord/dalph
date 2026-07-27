@@ -106,6 +106,27 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
     }
   }))
 
+it.effect("projects one ActivationInProgress explanation and runner after own then derive", () =>
+  Effect.gen(function*() {
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(2),
+      coordinatorRunning: true,
+      journal: yield* JournalStore
+    })
+    const task = FrontierRecoveryModelTaskId.make(0n)
+    yield* controls.init()
+    yield* controls.activation({ _tag: "deriveActivationPass" })
+    yield* controls.activation({ _tag: "reserveTaskAdmissionPosition", task })
+    yield* controls.activation({ _tag: "claimActivationOwnership", task })
+    yield* controls.activation({ _tag: "deriveActivationPass" })
+
+    expect((yield* controls.getState()).activation).toMatchObject({
+      activationInProgressModelTaskIds: [task],
+      runnerModelTaskIds: [task],
+      selectedModelTaskIds: [FrontierRecoveryModelTaskId.make(2n)]
+    })
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
 it.effect("selects the same bounded first intents before and after restart", () =>
   Effect.gen(function*() {
     for (const capacity of [1, 2]) {
