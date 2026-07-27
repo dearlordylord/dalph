@@ -23,6 +23,10 @@ const manifests = [
   "counterexample",
   "story-crash-after-intent",
   "story-pause-independent",
+  "story-pause-resume",
+  "story-success",
+  "story-lost-worktree",
+  "story-blocker",
   "story-claim-loss",
   "story-git-rewrite",
   "story-external-completion",
@@ -99,9 +103,6 @@ for (const name of manifests) {
   )
 }
 
-const storyTraces = traces.filter(({ provenance }) =>
-  provenance.traceKind.startsWith("explore-")
-)
 const freshPriorityTrace = traces.find(
   ({ provenance }) =>
     provenance.traceKind === "sampled"
@@ -119,10 +120,10 @@ if (
   throw new Error("capacity-one admission story traces are missing")
 }
 const dagHtml = renderObservedDagHtml(
-  storyTraces,
+  traces,
   freshPriorityTrace,
   responsibilityPriorityTrace
-)
+).replace(/[ \t]+$/gm, "")
 await Promise.all([
   writeFile(resolve(packageRoot, "index.html"), dagHtml),
   writeFile(resolve(packageRoot, "artifacts", "observed-state-dag.html"), dagHtml)

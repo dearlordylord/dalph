@@ -8,6 +8,10 @@ export const TraceKindSchema = Schema.Literals([
   "counterexample",
   "story-crash-after-intent",
   "story-pause-independent",
+  "story-pause-resume",
+  "story-success",
+  "story-lost-worktree",
+  "story-blocker",
   "story-claim-loss",
   "story-git-rewrite",
   "story-external-completion",
@@ -118,6 +122,22 @@ export const ArtifactProvenanceSchema = Schema.Union([
   storyProvenance(
     "story-pause-independent",
     "taskPauseLeavesIndependentBranchRunnableTest"
+  ),
+  storyProvenance(
+    "story-pause-resume",
+    "pauseInterruptResumeRereadsBeforeReinvocationTest"
+  ),
+  storyProvenance(
+    "story-success",
+    "completeProtocolKeepsFinalitiesDistinctTest"
+  ),
+  storyProvenance(
+    "story-lost-worktree",
+    "lostWorktreeRecordsAttemptOutcomeTest"
+  ),
+  storyProvenance(
+    "story-blocker",
+    "newBlockerWaitsWithoutStoppingUnrelatedTaskTest"
   ),
   storyProvenance(
     "story-claim-loss",
@@ -410,19 +430,29 @@ const counterexampleActions = new Set([
 ])
 const storyActions = new Set([
   "advanceTargetCompatibly",
+  "acceptInvocation",
+  "addBlockerToC",
   "init",
   "applyAndRecordCurrentBoundary",
   "authorityBecomesConflicting",
   "authorityBecomesUnreadable",
   "classifyAuthorityConstraint",
   "commitFirstIntent",
+  "commitResponsibleIntent",
   "completeClaim",
+  "completeResponsibleBoundary",
+  "completeSuccessfulTask",
   "crash",
   "externallyCompleteTask",
   "loseClaim",
+  "loseWorktree",
   "initReconciliationProfile",
   "observeTask",
   "recordBoundaryOutcome",
+  "recordInterruptedInvocation",
+  "providerAcceptsInvocation",
+  "providerInterruptsInvocation",
+  "reachInvocation",
   "requestApplies",
   "requestRunPause",
   "requestTaskPause",

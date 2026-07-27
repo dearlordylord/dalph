@@ -1,0 +1,17 @@
+{
+  "provenance": {
+    "dalphRevision": "12c683601935ad5552548b54a910a66133dd5fc6",
+    "init": "newBlockerWaitsWithoutStoppingUnrelatedTaskTest",
+    "modelRevision": "12c683601935ad5552548b54a910a66133dd5fc6",
+    "modelSha256": "2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1",
+    "projectionVersion": 3,
+    "quintVersion": "0.32.0",
+    "rendererVersion": "observed-dag-prototype@1",
+    "scenarioTest": "newBlockerWaitsWithoutStoppingUnrelatedTaskTest",
+    "scenarioTestSourceSha256": "abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185",
+    "seed": "13109",
+    "step": "step",
+    "traceKind": "story-blocker"
+  },
+  "rawItf": "story-blocker.itf.json"
+}

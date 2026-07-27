@@ -91,18 +91,28 @@ const storySource = (traceKind: TraceKind): string => {
 const actionName = (action: string): string => {
   const names: Readonly<Record<string, string>> = {
     advanceTargetCompatibly: "advance target compatibly",
+    acceptInvocation: "complete executor invocation",
+    addBlockerToC: "tracker adds a blocker to Task C",
     applyAndRecordCurrentBoundary: "apply claim request",
     authorityBecomesConflicting: "mark Task A authority conflicting",
     authorityBecomesUnreadable: "mark authority unreadable",
     classifyAuthorityConstraint: "isolate Task A",
-    commitFirstIntent: "claim Task C",
+    commitFirstIntent: "record first claim intent",
+    commitResponsibleIntent: "record the next owned-work intent",
     completeClaim: "complete claim protocol",
+    completeResponsibleBoundary: "complete the current authority boundary",
+    completeSuccessfulTask: "run the successful task protocol",
     crash: "coordinator crashes",
     externallyCompleteTask: "tracker completes task",
     loseClaim: "Task A claim disappears",
-    observeTask: "reread Task A authority",
+    loseWorktree: "Task A worktree disappears",
+    observeTask: "reread task authority",
     recordBoundaryOutcome: "record observed outcome",
-    requestApplies: "retry request applies",
+    recordInterruptedInvocation: "record confirmed interruption",
+    providerAcceptsInvocation: "provider accepts invocation",
+    providerInterruptsInvocation: "provider confirms interruption",
+    reachInvocation: "reach the invocation boundary",
+    requestApplies: "authority request applies",
     requestTaskPause: "pause task",
     requestTaskResume: "resume task",
     restart: "coordinator restarts",
@@ -533,6 +543,79 @@ const browserDagData = (dag: ObservedStateDag): string =>
     }
   ]))).replaceAll("<", "\\u003c")
 
+const taskFrom = (
+  frame: NormalizedFrame,
+  modelTaskId: string
+): NormalizedFrame["taskStates"][number] => {
+  const task = frame.taskStates.find(
+    (candidate) => candidate.modelTaskId === modelTaskId
+  )
+  if (task === undefined) {
+    throw new Error(`${frame.position} has no Task ${taskName(modelTaskId)}`)
+  }
+  return task
+}
+
+const traceWithKind = (
+  traces: ReadonlyArray<NormalizedTrace>,
+  traceKind: TraceKind,
+  fallback: NormalizedTrace
+): NormalizedTrace =>
+  traces.find((trace) => trace.provenance.traceKind === traceKind) ?? fallback
+
+const renderEvidence = (trace: NormalizedTrace): string =>
+  `<details class="evidence"><summary>Real Quint evidence · ${trace.frames.length} frames</summary>
+    <p class="provenance">${escapeHtml(storySource(trace.provenance.traceKind))}</p>
+    <p class="provenance">${escapeHtml(JSON.stringify(trace.provenance))}</p>
+    ${renderHtmlTable(trace)}
+  </details>`
+
+const renderMilestones = (
+  trace: NormalizedTrace,
+  actions: ReadonlyArray<string>,
+  explanations: Readonly<Record<string, string>>,
+  minimumStep = 0
+): string => {
+  const chosen = trace.frames
+    .map((frame, index) => ({ frame, index }))
+    .filter(({ frame, index }) =>
+      index === 0
+        || (frame.step >= minimumStep && actions.includes(frame.action))
+    )
+  return `<div class="milestones">${chosen.map(({ frame, index }, position) => {
+    const taskA = taskFrom(frame, "0")
+    const taskC = taskFrom(frame, "2")
+    const previous = trace.frames[index - 1]
+    const changes = previous === undefined
+      ? ["Initial state supplied by the named Quint scenario"]
+      : transitionChanges(previous, frame)
+    const admitted = taskSet(
+      frame.admission.map(({ modelTaskId }) => modelTaskId)
+    )
+    const wait = taskSet(
+      frame.explanations.map(({ modelTaskId }) => modelTaskId)
+    )
+    const taskATransition = frame.frontier.find(
+      ({ modelTaskId }) => modelTaskId === "0"
+    )
+    return `<article class="milestone">
+      <header><span>${position + 1}</span><div><small>${frame.position} · ${escapeHtml(frame.action)}</small><h3>${escapeHtml(actionName(frame.action))}</h3></div></header>
+      <p class="why">${escapeHtml(explanations[frame.action] ?? "Observe the exact modeled state change.")}</p>
+      <dl>
+        <dt>Coordinator</dt><dd>${escapeHtml(frame.coordinatorStatus)}</dd>
+        <dt>Task A obligation</dt><dd>${escapeHtml(`${taskA.responsibility} · ${taskA.boundary.replace("Boundary", "")}`)}</dd>
+        <dt>Task A authority</dt><dd>${escapeHtml(`${taskA.claim} · ${taskA.worktree} worktree · ${taskA.invocation}`)}</dd>
+        <dt>Task A control</dt><dd>${taskA.paused ? "Paused" : "Active"}${taskA.isolation === "NotIsolated" ? "" : ` · ${escapeHtml(taskA.isolation)}`}</dd>
+        ${taskATransition === undefined ? "" : `<dt>Task A transition</dt><dd>${escapeHtml(`${taskATransition.transitionTag} · operation ${taskATransition.modelOperationId}`)}</dd>`}
+        <dt>Task C obligation</dt><dd>${escapeHtml(taskC.responsibility)}</dd>
+        <dt>${frame.coordinatorStatus === "Crashed" ? "Derived projection (inactive)" : "Frontier → admitted"}</dt><dd>${escapeHtml(`${taskSet(frame.frontier.map(({ modelTaskId }) => modelTaskId))} → ${admitted}`)}</dd>
+        ${frame.explanations.length === 0 ? "" : `<dt>CapacityWait</dt><dd>${escapeHtml(wait)}</dd>`}
+      </dl>
+      <p class="changes">${escapeHtml(changes.join(" · ") || "No displayed decision field changed")}</p>
+    </article>`
+  }).join("")}</div>`
+}
+
 const renderAdmissionDecision = (
   trace: NormalizedTrace,
   title: string,
@@ -540,66 +623,89 @@ const renderAdmissionDecision = (
 ): string => {
   const frame = trace.frames[0]
   if (frame === undefined) throw new Error(`${title} has no Quint frame`)
-  const frontier = taskSet(
-    frame.frontier.map(({ modelTaskId }) => modelTaskId)
-  )
-  const admitted = taskSet(
-    frame.admission.map(({ modelTaskId }) => modelTaskId)
-  )
-  const waiting = taskSet(
-    frame.explanations.map(({ modelTaskId }) => modelTaskId)
-  )
-  const responsibilities = frame.taskStates
-    .filter(({ modelTaskId }) => modelTaskId === "0" || modelTaskId === "2")
-    .map((task) =>
-      `Task ${taskName(task.modelTaskId)}: ${task.responsibility}`
-    )
+  const responsibilities = ["0", "2"]
+    .map((id) => {
+      const task = taskFrom(frame, id)
+      return `Task ${taskName(id)}: ${task.responsibility}`
+    })
     .join(" · ")
   return `<article class="decision">
-    <h2>${escapeHtml(title)}</h2>
+    <h3>${escapeHtml(title)}</h3>
     <p>${escapeHtml(responsibilities)}</p>
     <div class="decision-flow">
-      <div><small>Frontier</small><strong>${escapeHtml(frontier)}</strong></div>
+      <div><small>Frontier</small><strong>${escapeHtml(taskSet(frame.frontier.map(({ modelTaskId }) => modelTaskId)))}</strong></div>
       <span>→</span>
-      <div><small>Admitted</small><strong>${escapeHtml(admitted)}</strong></div>
+      <div><small>Admitted</small><strong>${escapeHtml(taskSet(frame.admission.map(({ modelTaskId }) => modelTaskId)))}</strong></div>
       <span>+</span>
-      <div><small>CapacityWait</small><strong>${escapeHtml(waiting)}</strong></div>
+      <div><small>CapacityWait</small><strong>${escapeHtml(taskSet(frame.explanations.map(({ modelTaskId }) => modelTaskId)))}</strong></div>
     </div>
     <p>${escapeHtml(reason)}</p>
-    <details><summary>Exact Quint provenance</summary><p class="provenance">${escapeHtml(JSON.stringify(trace.provenance))}</p></details>
   </article>`
 }
 
-const renderAdmissionPressure = (
-  freshPriorityTrace: NormalizedTrace,
-  responsibilityPriorityTrace: NormalizedTrace
-): string => `<section class="admission-story">
-  <h2>Story 2 · Admission pressure at capacity one</h2>
-  <p>Both states come from executable Quint profiles. The frontier stays <code>{A, C}</code>; capacity admits one task and gives the other an exact <code>CapacityWait</code> explanation.</p>
-  <div class="decision-grid">
-    ${renderAdmissionDecision(
-      freshPriorityTrace,
-      "Two fresh tasks",
-      "A wins the deterministic fresh-task ordering; C remains in the frontier and waits for released capacity or changed reconstructed state."
-    )}
-    ${renderAdmissionDecision(
-      responsibilityPriorityTrace,
-      "Existing responsibility first",
-      "C already carries Outstanding responsibility, so C is admitted ahead of smaller fresh Task A; A remains in the frontier with CapacityWait."
-    )}
-  </div>
-</section>`
+const renderConstraintCard = (
+  trace: NormalizedTrace,
+  title: string,
+  subjectId: string,
+  consequence: string
+): string => {
+  const frame = trace.frames.at(-1)
+  if (frame === undefined) throw new Error(`${title} has no terminal frame`)
+  const subject = taskFrom(frame, subjectId)
+  const other = taskFrom(frame, subjectId === "0" ? "2" : "0")
+  return `<article class="constraint">
+    <small>${escapeHtml(trace.provenance.traceKind)}</small>
+    <h3>${escapeHtml(title)}</h3>
+    <p><strong>Exact subject:</strong> Task ${escapeHtml(taskName(subjectId))}</p>
+    <p><strong>Result:</strong> ${escapeHtml(`${subject.responsibility} · ${subject.isolation}`)}</p>
+    <p><strong>Independent task:</strong> ${escapeHtml(`${taskName(other.modelTaskId)} · ${other.responsibility}`)}</p>
+    <p>${escapeHtml(consequence)}</p>
+  </article>`
+}
 
 export const renderObservedDagHtml = (
   traces: ReadonlyArray<NormalizedTrace>,
   freshPriorityTrace: NormalizedTrace,
   responsibilityPriorityTrace: NormalizedTrace
 ): string => {
-  const dag = buildObservedStateDag(traces)
+  const crash = traceWithKind(
+    traces,
+    "story-crash-after-intent",
+    freshPriorityTrace
+  )
+  const pause = traceWithKind(traces, "story-pause-resume", freshPriorityTrace)
+  const externalCompletion = traceWithKind(
+    traces,
+    "story-external-completion",
+    freshPriorityTrace
+  )
+  const success = traceWithKind(traces, "story-success", freshPriorityTrace)
+  const claimLoss = traceWithKind(
+    traces,
+    "story-claim-loss",
+    freshPriorityTrace
+  )
+  const gitRewrite = traceWithKind(
+    traces,
+    "story-git-rewrite",
+    freshPriorityTrace
+  )
+  const lostWorktree = traceWithKind(
+    traces,
+    "story-lost-worktree",
+    freshPriorityTrace
+  )
+  const blocker = traceWithKind(traces, "story-blocker", freshPriorityTrace)
+  const exploration = traces.filter(
+    ({ provenance }) => provenance.traceKind.startsWith("explore-")
+  )
+  const dag = buildObservedStateDag(
+    exploration.length === 0 ? [freshPriorityTrace] : exploration
+  )
   const reconvergenceCount = dag.nodes.filter(
     ({ id }) => predecessorCount(dag, id) > 1
   ).length
-  const provenance = traces.map(({ provenance: item }) => item)
+  const storyKeys = ["crash", "pause", "completion", "success", "changes"]
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -608,12 +714,20 @@ export const renderObservedDagHtml = (
   <title>Quint workflow stories</title>
   <style>
     :root { color-scheme: dark; }
-    body { background: #0d1217; color: #e7edf3; font: 15px/1.45 system-ui, sans-serif; margin: 0; padding: 24px; }
-    h1, h2 { margin-top: 0; }
+    body { background: #0b1015; color: #e7edf3; font: 15px/1.45 system-ui, sans-serif; margin: 0; padding: 28px 28px 96px; }
+    h1, h2, h3 { margin-top: 0; }
+    h1 { font-size: clamp(28px, 4vw, 44px); margin-bottom: 6px; }
+    h2 { font-size: 26px; }
+    h3 { margin-bottom: 8px; }
+    code { color: #9fd9ff; }
     [hidden] { display: none !important; }
-    .view-switch { display: flex; gap: 8px; margin: 0 0 20px; }
-    .view-switch button { background: #24313d; border: 1px solid #52687a; border-radius: 8px; color: #dce6ee; cursor: pointer; font-weight: 700; padding: 9px 14px; }
+    .lede { color: #aebdca; font-size: 17px; margin: 0 0 22px; max-width: 920px; }
+    .view-switch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; position: sticky; top: 0; z-index: 4; background: linear-gradient(#0b1015 78%, transparent); padding: 12px 0 18px; }
+    .view-switch button { background: #1d2933; border: 1px solid #465d70; border-radius: 8px; color: #dce6ee; cursor: pointer; font-weight: 700; padding: 9px 13px; }
     .view-switch button.active { background: #155f86; border-color: #66c2ff; color: white; }
+    .question { border-left: 4px solid #66c2ff; color: #d9e9f5; font-size: 18px; margin: 18px 0; padding: 6px 14px; }
+    .verdict { background: #123d34; border: 1px solid #2f9b7c; border-radius: 10px; color: #aef0db; font-weight: 700; padding: 12px 15px; }
+    .gap { background: #3a2a13; border: 1px solid #a97832; border-radius: 10px; color: #ffdba3; margin: 18px 0; padding: 14px 16px; }
     .status { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
     .story-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
     .story-filter button { background: #24313d; border: 1px solid #52687a; border-radius: 999px; color: #dce6ee; cursor: pointer; padding: 6px 11px; }
@@ -623,6 +737,19 @@ export const renderObservedDagHtml = (
     .workspace { display: grid; gap: 18px; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); margin: 20px 0; }
     .side-column { display: grid; gap: 18px; min-width: 0; }
     section { background: #171f27; border: 1px solid #34414d; border-radius: 10px; padding: 16px; overflow: auto; }
+    .story { margin: 0 auto; max-width: 1500px; overflow: visible; padding: 24px; }
+    .milestones { display: grid; gap: 14px; grid-auto-columns: minmax(290px, 360px); grid-auto-flow: column; overflow-x: auto; padding: 4px 2px 18px; scroll-snap-type: x proximity; }
+    .milestone { background: #101820; border: 1px solid #405262; border-radius: 12px; min-height: 410px; padding: 16px; scroll-snap-align: start; }
+    .milestone header { align-items: center; display: flex; gap: 10px; }
+    .milestone header > span { align-items: center; background: #155f86; border-radius: 50%; display: flex; flex: 0 0 32px; font-weight: 800; height: 32px; justify-content: center; }
+    .milestone header small, .constraint small { color: #8ca0b2; font-family: ui-monospace, monospace; }
+    .milestone header h3 { margin: 2px 0 0; }
+    .milestone .why { color: #c7d4de; min-height: 62px; }
+    .milestone dl { display: grid; gap: 5px 9px; grid-template-columns: max-content 1fr; }
+    .milestone dt { color: #8ca0b2; }
+    .milestone dd { margin: 0; overflow-wrap: anywhere; }
+    .changes { border-top: 1px solid #34414d; color: #92c9ec; font-size: 13px; margin-top: 15px; padding-top: 12px; }
+    .evidence { border-top: 1px solid #34414d; margin-top: 20px; padding-top: 14px; }
     .dag-scroll { min-height: 430px; overflow: auto; }
     .dag .edge path { fill: none; stroke: #77899a; stroke-width: 2; }
     .dag .edge text { fill: #b8c4cf; font-size: 11px; paint-order: stroke; stroke: #0d1217; stroke-width: 4px; }
@@ -644,7 +771,6 @@ export const renderObservedDagHtml = (
     #inspector dd { margin: 0; overflow-wrap: anywhere; }
     #inspector table { min-width: 620px; }
     .table-wrap { max-height: 68vh; overflow: auto; }
-    .admission-story { overflow: visible; }
     .decision-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .decision { background: #111820; border: 1px solid #465564; border-radius: 10px; padding: 18px; }
     .decision-flow { align-items: center; display: grid; gap: 10px; grid-template-columns: 1fr auto 1fr auto 1fr; margin: 20px 0; text-align: center; }
@@ -652,149 +778,223 @@ export const renderObservedDagHtml = (
     .decision-flow small, .decision-flow strong { display: block; }
     .decision-flow small { color: #91a2b3; margin-bottom: 5px; }
     .decision-flow strong { color: #fff; font-size: 18px; }
+    .constraint-grid { display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(220px, 1fr)); }
+    .constraint { background: #101820; border: 1px solid #465564; border-radius: 10px; padding: 16px; }
+    .prototype-switcher { align-items: center; backdrop-filter: blur(12px); background: #101820ee; border: 1px solid #607488; border-radius: 999px; bottom: 18px; box-shadow: 0 8px 35px #0009; display: flex; gap: 8px; left: 50%; padding: 7px; position: fixed; transform: translateX(-50%); z-index: 10; }
+    .prototype-switcher button { background: #253542; border: 0; border-radius: 50%; color: white; cursor: pointer; font-size: 20px; height: 38px; width: 38px; }
+    .prototype-switcher output { font-weight: 700; min-width: 230px; text-align: center; }
     table { border-collapse: collapse; min-width: 1500px; width: 100%; }
     th, td { border: 1px solid #465564; padding: 8px; text-align: left; vertical-align: top; }
     th { background: #25313c; position: sticky; top: 0; z-index: 1; }
     td code { white-space: pre-wrap; word-break: break-word; }
     details.trace { border-top: 1px solid #34414d; margin-top: 12px; padding-top: 12px; }
     summary { cursor: pointer; font-weight: 700; }
-    @media (max-width: 1000px) { .workspace, .decision-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 1000px) { .workspace, .decision-grid, .constraint-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <h1>Quint workflow stories</h1>
+  <p class="lede">Five questions answered by executable traces from the checked-in Dalph frontier-recovery model. Each view separates external authority, durable responsibility, process-local coordination, and the selector’s decision.</p>
   <nav class="view-switch" aria-label="Choose a modeled story">
-    <button class="active" data-view="reconciliation">1 · Branch-local reconciliation</button>
-    <button data-view="admission">2 · Admission pressure</button>
+    <button class="active" data-view="crash">1 · Crash safety</button>
+    <button data-view="pause">2 · Pause and capacity</button>
+    <button data-view="completion">3 · External completion</button>
+    <button data-view="success">4 · Successful task</button>
+    <button data-view="changes">5 · External changes</button>
   </nav>
-  <div data-view-panel="reconciliation">
-  <h2>Story 1 · Observed state graph</h2>
-  <div class="status">
-    <span class="badge">Observed paths · not exhaustive</span>
-    <span>${dag.nodes.length} exact states · ${dag.edges.length} observed transitions · ${reconvergenceCount} states with multiple predecessors</span>
-  </div>
-  <p>These paths were sampled from the real nondeterministic <code>reconciliationProfileStep</code> action in <code>specs/frontierRecovery.qnt</code>. Task A starts <code>Outstanding</code>; Task C can be claimed before or after A loses authority. Each pair reconverges, rereads A, then isolates only A while C remains <code>Outstanding</code>.</p>
-  <p>Equal full Quint model states are one node, regardless of trace position. An absent edge is unknown, not disabled.</p>
-  <p><strong>Reading admission:</strong> <code>{A, C}</code> means Tasks A and C are admitted; it is not a numeric count. These are executable Quint-model traces from checked-in code, not fabricated UI fixtures and not production TypeScript runtime logs.</p>
-  <nav class="story-filter" aria-label="Highlight one real acceptance story">
-    <button class="active" data-story-filter="all">All branches</button>
-    ${traces.map(({ provenance: { traceKind } }) => `<button data-story-filter="${traceKind}" title="${escapeHtml(storySource(traceKind))}">${escapeHtml(storyName(traceKind))}</button>`).join("\n")}
-  </nav>
-  <details><summary>Exact source provenance</summary><p class="provenance">${escapeHtml(JSON.stringify(provenance))}</p></details>
-  <div class="workspace">
-    <section>
-      <h2>Branching and reconvergence</h2>
-      ${renderDagSvg(dag)}
-    </section>
-    <div class="side-column">
-      <section>
-        <h2>Frame tables</h2>
-        ${traces.map((trace, index) => `<details class="trace"${index === 0 ? " open" : ""}><summary>${escapeHtml(storyName(trace.provenance.traceKind))} · ${escapeHtml(storySource(trace.provenance.traceKind))} · ${trace.frames.length} frames</summary>${renderHtmlTable(trace)}</details>`).join("\n")}
-      </section>
-      <section id="inspector">
-        <h2>Selected state</h2>
-        <p>Click a node to inspect its normalized values and raw ITF state.</p>
-      </section>
-    </div>
-  </div>
-  </div>
-  <div data-view-panel="admission" hidden>
-    ${renderAdmissionPressure(
-      freshPriorityTrace,
-      responsibilityPriorityTrace
+  <div class="story" data-view-panel="crash">
+    <h2>Story 1 · A crash cannot erase an obligation</h2>
+    <p class="question">Dalph recorded intent to claim Task A, then the coordinator died. May restart blindly repeat the request?</p>
+    <p class="verdict">No. The outstanding responsibility and operation survive; restart invalidates old knowledge, requires a fresh authority read, and only then permits the same request.</p>
+    ${renderMilestones(
+      crash,
+      ["commitFirstIntent", "crash", "restart", "observeTask", "requestApplies"],
+      {
+        init: "A is fresh work. No durable workflow obligation exists yet.",
+        commitFirstIntent: "The journal now creates an Outstanding obligation before crossing the claim boundary.",
+        crash: "Only the process-local coordinator stops. Durable intent and responsibility remain.",
+        restart: "A new activation starts. Pre-crash authority knowledge is no longer usable.",
+        observeTask: "Dalph rereads the tracker-owned claim fact for this exact task and operation.",
+        requestApplies: "After the fresh check, the same operation may safely reach the authority boundary."
+      }
     )}
+    ${renderEvidence(crash)}
   </div>
+
+  <div class="story" data-view-panel="pause" hidden>
+    <h2>Story 2 · Pause preserves work but invalidates permission to continue</h2>
+    <p class="question">Task A is running when the user pauses it. What survives, and what must happen before it runs again?</p>
+    <p class="verdict">A keeps its claim, worktree, session, and Outstanding responsibility. Its invocation is interrupted; resume alone is insufficient—a fresh read must precede the next invocation intent.</p>
+    ${renderMilestones(
+      pause,
+      [
+        "recordBoundaryOutcome",
+        "requestApplies",
+        "requestTaskPause",
+        "providerInterruptsInvocation",
+        "observeTask",
+        "recordInterruptedInvocation",
+        "requestTaskResume",
+        "commitResponsibleIntent"
+      ],
+      {
+        init: "The scenario begins before Task A has any owned work.",
+        recordBoundaryOutcome: "An earlier authority boundary is confirmed; the durable workflow advances.",
+        requestApplies: "The executor invocation is now externally running.",
+        requestTaskPause: "The user changes desired control state; ownership is preserved.",
+        providerInterruptsInvocation: "The provider reports the running invocation interrupted.",
+        observeTask: "Fresh provider and authority facts replace knowledge invalidated by the control change.",
+        recordInterruptedInvocation: "Dalph records the known interruption without abandoning the attempt.",
+        requestTaskResume: "Resume removes the pause request but does not authorize stale work.",
+        commitResponsibleIntent: "Only after the post-resume reread may the existing responsibility continue."
+      },
+      12
+    )}
+    <h2>Capacity-one ordering</h2>
+    <div class="decision-grid">
+      ${renderAdmissionDecision(
+        freshPriorityTrace,
+        "No existing responsibility",
+        "Fresh A wins canonical task order; fresh C receives CapacityWait."
+      )}
+      ${renderAdmissionDecision(
+        responsibilityPriorityTrace,
+        "C already has responsibility",
+        "Outstanding C is admitted before fresh A, despite A's smaller identity."
+      )}
+    </div>
+    <p class="gap"><strong>Model gap:</strong> the current Quint selector always exports an empty occupied-task set. This trace proves pause/interruption and responsibility-first ordering separately; it does not yet show one end-to-end occupied-position handoff to another task.</p>
+    ${renderEvidence(pause)}
+  </div>
+
+  <div class="story" data-view-panel="completion" hidden>
+    <h2>Story 3 · The tracker completes a task while Dalph still owns work</h2>
+    <p class="question">Task A completes externally after Dalph claimed it. Should Dalph integrate or complete it again?</p>
+    <p class="verdict">No. A fresh tracker observation settles the existing responsibility directly; the model records zero Dalph completion-boundary effects.</p>
+    ${renderMilestones(
+      externalCompletion,
+      ["completeClaim", "recordBoundaryOutcome", "externallyCompleteTask", "observeTask", "settleExternalCompletion"],
+      {
+        init: "Task A is open, unclaimed, and unowned.",
+        completeClaim: "The scenario establishes Dalph's exact claim responsibility.",
+        recordBoundaryOutcome: "The claim boundary is confirmed and the workflow moves toward worktree creation.",
+        externallyCompleteTask: "The task tracker—not Dalph—changes A to Completed.",
+        observeTask: "Dalph learns that external fact through a fresh authoritative read.",
+        settleExternalCompletion: "The outstanding responsibility becomes Settled without executing Dalph's completion request."
+      }
+    )}
+    <p class="gap"><strong>Model boundary:</strong> this trace proves no duplicate modeled completion effect. WIP preservation and dependent-task release are specified but not represented end-to-end in this Quint trace.</p>
+    ${renderEvidence(externalCompletion)}
+  </div>
+
+  <div class="story" data-view-panel="success" hidden>
+    <h2>Story 4 · One successful task crosses eight distinct boundaries</h2>
+    <p class="question">What must become authoritative before Dalph may call the task settled?</p>
+    <p class="verdict">Claim, worktree, session, invocation, promotion, completion claim, tracker completion, and claim deletion each use their own intent → request → observation → outcome cycle.</p>
+    ${renderMilestones(
+      success,
+      ["recordBoundaryOutcome", "providerAcceptsInvocation"],
+      {
+        init: "No task responsibility exists.",
+        recordBoundaryOutcome: "Fresh authority evidence confirms exactly one boundary and advances to the next.",
+        providerAcceptsInvocation: "The provider reports the exact invocation accepted; Dalph still must observe and record that result."
+      }
+    )}
+    ${renderEvidence(success)}
+  </div>
+
+  <div class="story" data-view-panel="changes" hidden>
+    <h2>Story 5 · External changes have different consequences</h2>
+    <p class="question">If the outside world changes while Task A is owned, which exact obligation stops—and does independent Task C continue?</p>
+    <div class="constraint-grid">
+      ${renderConstraintCard(
+        claimLoss,
+        "Claim becomes foreign",
+        "0",
+        "A is isolated behind claim authority. C becomes Outstanding."
+      )}
+      ${renderConstraintCard(
+        gitRewrite,
+        "Target history is rewritten",
+        "0",
+        "A is isolated behind Git lineage. C becomes Outstanding."
+      )}
+      ${renderConstraintCard(
+        lostWorktree,
+        "Planned worktree disappears",
+        "0",
+        "A records worktree-loss isolation and retains its Outstanding responsibility."
+      )}
+      ${renderConstraintCard(
+        blocker,
+        "A new blocker appears on C",
+        "2",
+        "C remains Unowned while independent A becomes Outstanding."
+      )}
+    </div>
+    <p class="gap"><strong>Not executable in this model:</strong> task-edit continue/restart/stop choices, lifecycle close/reopen, target-membership removal/return, Git compare-and-set promotion races, and executor-internal restoration.</p>
+    <details><summary>Observed reconciliation interleavings · secondary diagnostic</summary>
+      <div class="status"><span class="badge">Observed paths · not exhaustive</span><span>${dag.nodes.length} exact states · ${dag.edges.length} transitions · ${reconvergenceCount} reconvergences</span></div>
+      ${renderDagSvg(dag)}
+    </details>
+    ${renderEvidence(claimLoss)}
+    ${renderEvidence(gitRewrite)}
+    ${renderEvidence(lostWorktree)}
+    ${renderEvidence(blocker)}
+  </div>
+
+  <div class="prototype-switcher" aria-label="Prototype story switcher">
+    <button type="button" data-cycle="-1" aria-label="Previous story">←</button>
+    <output>1 · Crash safety</output>
+    <button type="button" data-cycle="1" aria-label="Next story">→</button>
+  </div>
+
   <script>
-    const nodes = ${browserDagData(dag)};
-    const inspector = document.querySelector("#inspector");
-    const nodeElements = [...document.querySelectorAll("[data-node-id]")];
-    const graphElements = [...document.querySelectorAll(".dag [data-stories]")];
-    const storyButtons = [...document.querySelectorAll("[data-story-filter]")];
+    const storyKeys = ${JSON.stringify(storyKeys)};
+    const storyLabels = {
+      crash: "1 · Crash safety",
+      pause: "2 · Pause and capacity",
+      completion: "3 · External completion",
+      success: "4 · Successful task",
+      changes: "5 · External changes"
+    };
     const viewButtons = [...document.querySelectorAll("[data-view]")];
     const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
-    const escapeText = (value) => String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-    const selectNode = (id) => {
-      const node = nodes[id];
-      if (!node || !inspector) return;
-      nodeElements.forEach((element) =>
-        element.classList.toggle("selected", element.dataset.nodeId === id)
-      );
-      const occurrence = node.occurrences[0];
-      const seenIn = node.occurrences
-        .map((item) => item.story + " · " + item.position)
-        .join(", ");
-      const incoming = node.incoming
-        .map((edge) => "<strong>from " + escapeText(edge.source) + " via " + escapeText(edge.action) + "</strong><br>" + edge.changes.map(escapeText).join("<br>"))
-        .join("<hr>");
-      const taskRows = occurrence.taskStates.map((task) => \`
-        <tr>
-          <td>Task \${escapeText(["A", "B", "C", "D"][Number(task.modelTaskId)])}</td>
-          <td>\${escapeText(task.boundary.replace("Boundary", ""))}</td>
-          <td>\${escapeText(task.readability)} r\${escapeText(task.authorityRevision)}</td>
-          <td>\${escapeText(task.responsibility)}</td>
-          <td>\${escapeText(task.isolation)}</td>
-          <td>\${task.paused ? "yes" : "no"}</td>
-        </tr>
-      \`).join("");
-      inspector.innerHTML = \`
-        <h2>\${escapeText(id)}</h2>
-        <dl>
-          <dt>seen in</dt><dd>\${escapeText(seenIn)}</dd>
-          <dt>arrived via</dt><dd>\${incoming || "initial state"}</dd>
-          <dt>coordinator</dt><dd>\${escapeText(occurrence.coordinator)}</dd>
-          <dt>admitted tasks</dt><dd>\${escapeText(occurrence.admittedTasks)}</dd>
-        </dl>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Task</th><th>Boundary</th><th>Authority</th><th>Responsibility</th><th>Isolation</th><th>Paused</th></tr></thead>
-          <tbody>\${taskRows}</tbody>
-        </table></div>
-        <details><summary>Raw ITF state</summary><pre>\${escapeText(JSON.stringify(occurrence.rawItfState, null, 2))}</pre></details>
-      \`;
-    };
-    nodeElements.forEach((element) => {
-      element.addEventListener("click", () => selectNode(element.dataset.nodeId));
-      element.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          selectNode(element.dataset.nodeId);
-        }
-      });
-    });
-    storyButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        const selectedStory = button.dataset.storyFilter;
-        storyButtons.forEach((candidate) =>
-          candidate.classList.toggle("active", candidate === button)
-        );
-        graphElements.forEach((element) => {
-          const stories = (element.dataset.stories || "").split(" ");
-          element.classList.toggle(
-            "dimmed",
-            selectedStory !== "all" && !stories.includes(selectedStory)
-          );
-        });
-      });
-    });
+    const storyOutput = document.querySelector(".prototype-switcher output");
     const selectView = (view) => {
+      const selected = storyKeys.includes(view) ? view : storyKeys[0];
       viewButtons.forEach((button) =>
-        button.classList.toggle("active", button.dataset.view === view)
+        button.classList.toggle("active", button.dataset.view === selected)
       );
       viewPanels.forEach((panel) => {
-        panel.hidden = panel.dataset.viewPanel !== view;
+        panel.hidden = panel.dataset.viewPanel !== selected;
       });
+      if (storyOutput) storyOutput.value = storyLabels[selected];
       const url = new URL(window.location.href);
-      url.searchParams.set("story", view);
+      url.searchParams.set("story", selected);
       history.replaceState(null, "", url);
+    };
+    const cycle = (direction) => {
+      const current = new URL(window.location.href).searchParams.get("story");
+      const index = Math.max(0, storyKeys.indexOf(current));
+      selectView(storyKeys[(index + direction + storyKeys.length) % storyKeys.length]);
     };
     viewButtons.forEach((button) =>
       button.addEventListener("click", () => selectView(button.dataset.view))
     );
-    const requestedView = new URL(window.location.href).searchParams.get("story");
-    selectView(requestedView === "admission" ? "admission" : "reconciliation");
-    selectNode(nodeElements[0]?.dataset.nodeId);
+    document.querySelectorAll("[data-cycle]").forEach((button) =>
+      button.addEventListener("click", () => cycle(Number(button.dataset.cycle)))
+    );
+    document.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && (target.matches("input, textarea, [contenteditable]") || target.isContentEditable)
+      ) return;
+      if (event.key === "ArrowLeft") cycle(-1);
+      if (event.key === "ArrowRight") cycle(1);
+    });
+    selectView(new URL(window.location.href).searchParams.get("story"));
   </script>
 </body>
 </html>

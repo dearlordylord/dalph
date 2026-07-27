@@ -1,21 +1,21 @@
 # Quint trace explanation view — throwaway prototype
 
-This isolated prototype has two switchable stories backed by real Quint traces.
-Story 1 combines six paths sampled from
-`frontierRecovery.reconciliationProfileStep` into one interactive observed
-state graph. Task A begins `Outstanding`. Three concrete diamonds show Task C
-becoming `Outstanding` before or after A loses authority; each pair
-reconverges, rereads A, and isolates only A. One exact model state is one node
-regardless of where it occurs in a trace. Story 2 compares two capacity-one
-states: fresh tasks use deterministic task priority, while an existing
-`Outstanding` responsibility is admitted ahead of fresh work.
+This isolated prototype presents five switchable stories backed by real Quint
+traces: crash-safe retry, pause/interruption and capacity, external completion,
+one complete successful task, and branch-local external changes. Each story
+starts with a user question, gives the modeled answer, and exposes curated
+milestones plus the complete decoded trace.
+
+The earlier reconciliation DAG remains only as a secondary diagnostic in Story
+5. One exact model state is one node regardless of trace position.
 ITF set and map entries are canonicalized as unordered values before equality;
 tuple and sequence order remains significant.
 
-**This graph is observed and incomplete.** Its edges are transitions executed
-by six retained samples. An absent edge is unknown, not disabled. It is not the
-complete state machine, model checking, MBT, or proof of correctness. The
-decoder never selects an action or computes a legal transition.
+**Every story is bounded evidence, not the complete state machine.** The
+storyboards show transitions executed by named deterministic Quint scenarios.
+The secondary graph contains six retained samples; an absent edge is unknown,
+not disabled. The viewer never selects an action or computes a legal
+transition.
 
 ## Run
 
@@ -27,9 +27,9 @@ pnpm install --ignore-workspace --lockfile=false
 pnpm check
 ```
 
-`pnpm check` runs the decoder/equality/drift/fail-closed and graph tests, compiles
-the prototype, and regenerates byte-identical normalized, table, and
-interactive graph artifacts.
+`pnpm check` runs the decoder/equality/drift/fail-closed and graph tests,
+compiles the prototype, and regenerates byte-identical normalized, table, and
+interactive story artifacts.
 
 Pinned versions:
 
@@ -64,14 +64,19 @@ step, seed, and trace kind.
 | Conflict A, then claim C | `fixtures/explore-authority-conflict-then-claim-c.itf.json` | 5 | Same final state with the independent claim after the conflict. |
 | Crash after intent | `fixtures/story-crash-after-intent.itf.json` | 6 | Existing test proves restart requires a fresh task read before retry. |
 | Pause with independent progress | `fixtures/story-pause-independent.itf.json` | 6 | Existing test pauses A while C remains admitted and records responsibility. |
+| Pause, interrupt, resume | `fixtures/story-pause-resume.itf.json` | 22 | Running A is paused, interrupted, reread, and resumed without abandoning responsibility. |
+| Successful task | `fixtures/story-success.itf.json` | 34 | A crosses all eight claim-through-completion boundaries and settles. |
+| Lost worktree | `fixtures/story-lost-worktree.itf.json` | 16 | A records exact worktree-loss isolation while retaining responsibility. |
+| New blocker | `fixtures/story-blocker.itf.json` | 4 | C waits on a new blocker while independent A becomes outstanding. |
 | Claim loss | `fixtures/story-claim-loss.itf.json` | 9 | Existing test isolates A after claim loss while C progresses. |
 | Git rewrite | `fixtures/story-git-rewrite.itf.json` | 9 | Existing test isolates A after incompatible target rewrite while C progresses. |
 | External completion | `fixtures/story-external-completion.itf.json` | 8 | Existing test settles A from tracker completion without a duplicate effect. |
 
-Only the six nondeterministic exploration paths feed Story 1's interactive
-graph. The normal sample and responsibility-first state feed Story 2. The
-restart, counterexample, and acceptance stories remain retained
-decoder/conformance evidence.
+The crash, pause/resume, completion, success, and constraint traces feed the
+five visible stories. The normal sample and responsibility-first state supply
+Story 2's capacity comparison. Only the six nondeterministic exploration paths
+feed Story 5's secondary graph. The restart and counterexample traces remain
+retained decoder/conformance evidence.
 
 The sample's `fixtures/normal.mbt-projection.json` was independently captured
 from the existing version-3 production-backed MBT controls by running `init`
@@ -85,7 +90,8 @@ Generated evidence for each trace:
   retained for inspection;
 - `artifacts/*.table.md`: the complete decision-bearing frame table; and
 - `index.html` and `artifacts/observed-state-dag.html`: the same interactive
-  branching graph, node inspector, semantic HTML frame tables, and raw ITF state.
+  five-story view, semantic HTML frame tables, raw ITF state, and secondary
+  observed graph.
 
 The earlier per-trace Mermaid, SVG, and side-by-side linear path artifacts were
 deleted.
@@ -142,6 +148,10 @@ pnpm quint run specs/frontierRecovery_test.qnt \
 | Claim loss | `claimLossIsolatesOnlyAffectedTaskTest` | 13103 | `story-claim-loss.itf.json` |
 | Git rewrite | `rewrittenTargetIsolatesOnlyAffectedTaskTest` | 13104 | `story-git-rewrite.itf.json` |
 | External completion | `externallyCompletedTaskSettlesWithoutDuplicateEffectTest` | 13105 | `story-external-completion.itf.json` |
+| Pause, interrupt, resume | `pauseInterruptResumeRereadsBeforeReinvocationTest` | 13106 | `story-pause-resume.itf.json` |
+| Successful task | `completeProtocolKeepsFinalitiesDistinctTest` | 13107 | `story-success.itf.json` |
+| Lost worktree | `lostWorktreeRecordsAttemptOutcomeTest` | 13108 | `story-lost-worktree.itf.json` |
+| New blocker | `newBlockerWaitsWithoutStoppingUnrelatedTaskTest` | 13109 | `story-blocker.itf.json` |
 
 Normal sampled trace:
 
@@ -228,17 +238,12 @@ Test Files  1 passed (1)
 Tests       24 passed (24)
 ```
 
-The final `pnpm check:all` run passed from the isolated worktree: build, package
-boundaries, typecheck, lint/format, cycle, complexity, duplication, deterministic
-and exhaustive Quint checks, 454 production tests with coverage thresholds,
-and the secret scan all completed successfully. Earlier attempts encountered
-transient dropped connections from the shared Apalache endpoint; a private
-Apalache 0.56.1 server had already returned `[ok] No violation found` for the
-same five exhaustive profiles before the final shared-endpoint run succeeded.
+This throwaway story revision uses the focused prototype check. It does not add
+a production gate or rerun the full repository review workflow.
 
 Positive cases prove raw-ITF-to-frame preservation, the capacity-one
-responsibility-priority comparison, meaningful branching from
-the five existing acceptance tests, equality with the existing
+responsibility-priority comparison, retained deterministic acceptance stories,
+meaningful branching from the reconciliation samples, equality with the existing
 MBT comparable projection at all three sampled steps, first-divergence
 reporting, agreement with the existing version-3 closed reconstruction action
 inventory, deterministic normalized bytes, and decoding of all three retained
@@ -257,9 +262,9 @@ Fail-closed cases reject:
 
 ## Performance observations
 
-On the retained 1,374,501 bytes of raw ITF (82 frames total), the latest warm
-`pnpm check` completed in 3.3 seconds: Vitest reported 696 ms, with the
-remaining time covering TypeScript compilation plus all thirty-one presentation
+On the retained 2,654,976 bytes of raw ITF (158 frames total), the latest warm
+`pnpm check` completed in 3.3 seconds: Vitest reported 514 ms, with the
+remaining time covering TypeScript compilation plus all thirty-nine presentation
 artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 

@@ -272,11 +272,16 @@ describe("ITF to normalized frame boundary", () => {
     ])
   })
 
-  it("renders one interactive observed graph and no linear path visual", () => {
+  it("renders five interactive stories and demotes the observed graph", () => {
     const trace = decode(raw)
     const html = renderObservedDagHtml([trace], trace, trace)
 
     expect(html).toContain("<h1>Quint workflow stories</h1>")
+    expect(html).toContain('data-view-panel="crash"')
+    expect(html).toContain('data-view-panel="pause"')
+    expect(html).toContain('data-view-panel="completion"')
+    expect(html).toContain('data-view-panel="success"')
+    expect(html).toContain('data-view-panel="changes"')
     expect(html).toContain("Observed paths · not exhaustive")
     expect(html).toContain('data-node-id="N0"')
     expect(html).toContain("addEventListener")
@@ -302,7 +307,9 @@ describe("ITF to normalized frame boundary", () => {
       responsibility
     )
 
-    expect(html).toContain("Story 2 · Admission pressure at capacity one")
+    expect(html).toContain(
+      "Story 2 · Pause preserves work but invalidates permission to continue"
+    )
     expect(html).toContain("Task A: Unowned · Task C: Outstanding")
     expect(html).toContain("<small>Admitted</small><strong>{C}</strong>")
     expect(html).toContain("<small>CapacityWait</small><strong>{A}</strong>")
