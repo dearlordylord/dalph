@@ -40,6 +40,7 @@ import {
   TaskLifecycle,
   taskRevisionFor,
   TaskRunner,
+  TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   TaskWorkStartRequest,
@@ -54,6 +55,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  providerObservationRequestRecordKey,
   TaskExecutionIntentRecorded,
   TaskExecutionOutcomeObservedEvent,
   TaskExecutionReported,
@@ -65,8 +67,12 @@ import {
   TaskExecutionRequestReturned,
   taskExecutionRequestReturnedRecordKey,
   TaskWorkSessionEstablishedEvent,
-  TaskWorkSessionEstablishmentIntentRecorded
+  TaskWorkSessionEstablishmentIntentRecorded,
+  TaskWorkSessionLookupRequested,
+  TaskWorkSessionReported,
+  taskWorkSessionReportedRecordKey
 } from "./journal-store.js"
+import { activateRecoveredResponsibilities, observeRecoveredAdmissionCapacity } from "./managed-activation.js"
 import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
 
 const runId = RunId.make("journaled-execution-run")
@@ -152,6 +158,37 @@ const seedEstablishedSession = Effect.fn("Test.seedEstablishedSession")(function
     runId,
     intentRecordKey(establishment.request.operationId),
     TaskWorkSessionEstablishmentIntentRecorded.make({ operation: establishment, version: 4 })
+  )
+  const observationId = ProviderObservationId.make(
+    `established:${establishment.request.operationId}`
+  )
+  yield* journal.append(
+    runId,
+    providerObservationRequestRecordKey(observationId),
+    TaskWorkSessionLookupRequested.make({
+      lookup: {
+        operationId: establishment.request.operationId,
+        plannedAttempt
+      },
+      observationId,
+      version: 4
+    })
+  )
+  yield* journal.append(
+    runId,
+    taskWorkSessionReportedRecordKey(
+      establishment.request.operationId,
+      observationId
+    ),
+    TaskWorkSessionReported.make({
+      operationId: establishment.request.operationId,
+      report: MatchingTaskWorkSessionReported.make({
+        observationId,
+        sessionId: establishedSessionId,
+        work: { _tag: "NoProviderWorkReported" }
+      }),
+      version: 4
+    })
   )
   yield* journal.append(
     runId,
@@ -324,6 +361,70 @@ it.effect("does not expose an interruptible cut between durable intent and activ
     )).toBe(true)
     expect(yield* Ref.get(requests)).toBe(0)
   }).pipe(Effect.scoped, Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("reconciles a surviving provider invocation through managed activation", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    yield* seedEstablishedSession()
+    yield* journal.append(
+      runId,
+      intentRecordKey(operation.request.operationId),
+      TaskExecutionIntentRecorded.make({ operation, version: 4 })
+    )
+    const observations = yield* Ref.make(0)
+    const running = RunningTaskExecutionReported.make({
+      observationId: ProviderObservationId.make("restart-running-observation"),
+      operationId: operation.request.operationId,
+      processId: WorkerProcessId.make(321),
+      sessionId
+    })
+    const stopped = FailedTaskExecutionReported.make({
+      exitCode: FailedProcessExitCode.make(17),
+      observationId: ProviderObservationId.make("restart-stopped-observation"),
+      operationId: operation.request.operationId,
+      partialOutput: "surviving worker stopped after restart",
+      processId: running.processId,
+      sessionId,
+      wipPreserved: true
+    })
+    const executor = TaskExecutor.of({
+      requestTaskExecution: () => Effect.die("a surviving invocation must be observed, not requested again"),
+      observeTaskExecution: () =>
+        Ref.getAndUpdate(observations, (count) => count + 1).pipe(
+          Effect.map((count) => count === 0 ? running : stopped)
+        )
+    })
+    const interpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledLayerFor(executor))
+    )
+    const program = Effect.gen(function*() {
+      const evidence = yield* observeRecoveredAdmissionCapacity(runId)
+      expect(evidence.freshOccupiedInvocations).toEqual([{
+        observationId: running.observationId,
+        operationId: operation.request.operationId,
+        taskId: task.id
+      }])
+      yield* activateRecoveredResponsibilities(
+        runId,
+        TaskWorkCapacity.make(1),
+        evidence
+      )
+    }).pipe(
+      Effect.provideService(TaskExecutor, executor),
+      Effect.provideService(WorkflowInterpreter, interpreter),
+      Effect.provideService(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      )
+    )
+    yield* program
+
+    expect(yield* Ref.get(observations)).toBe(2)
+    expect((yield* journal.read(runId)).some(({ event }) =>
+      event._tag === "TaskExecutionOutcomeObserved"
+      && event.outcome.outcome.operationId === operation.request.operationId
+    )).toBe(true)
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects execution before any adapter effect when durable session evidence is missing", () =>
   Effect.gen(function*() {
