@@ -27,6 +27,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
     "test:watch": "vitest",
+    "check:ci": "node scripts/run-quality-gate.mjs --without-quint",
     "check:all": "node scripts/run-quality-gate.mjs"
   },
   "lint-staged": {

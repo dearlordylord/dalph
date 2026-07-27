@@ -8,7 +8,7 @@ changes.
 
 The root `package.json` `engines.node` field is the canonical declaration of the
 supported Node range; CI derives its minimum-version matrix from that range and
-runs the complete gate on each entry. Before adding a supported Node major,
+runs the hosted gate on each entry. Before adding a supported Node major,
 verify a frozen install and the production exclusive-coordinator-lock behavior
 described in `ARCHITECTURE.md`. The native lock dependency must either ship a matching prebuilt binary
 or the repository must explicitly accept and provide its source-build toolchain;
@@ -72,7 +72,11 @@ requires a setting that cannot correctly be shared.
 - `pnpm test` runs the deterministic Vitest suite.
 - `pnpm test:coverage` enforces the configured line, function, branch, and statement coverage bar.
 - `pnpm check:secrets` scans Git history with gitleaks.
-- `pnpm check:all` runs the complete bounded gate used by CI.
+- `pnpm check:ci` runs the hosted CI gate. During the single-executor v1
+  proof-of-concept phase it excludes the Quint recovery models, which remain
+  available through `pnpm check:quint` and `pnpm check:all`.
+- `pnpm check:all` runs the complete bounded local gate, including the Quint
+  recovery models.
 
 Duplication is a production-code gate. Tests are excluded because scenario and
 adapter contract setup intentionally repeats shapes across independent cases;

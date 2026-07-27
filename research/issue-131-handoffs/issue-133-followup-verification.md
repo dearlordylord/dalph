@@ -9,23 +9,21 @@ integrated with the code and explicitly identifies larger follow-up work.
 
 ### Declared outer resource use
 
-“Capacity follows declared outer resource use” means the selected executor
-attaches either `UsesTaskWorkCapacity({ positions: 1 })` or
-`DoesNotUseTaskWorkCapacity` to each opaque outer invocation. The admission
-controller reads that field. It does not infer consumption from an operation
-identifier or from an internal purpose such as execution, evidence, review, or
-handback.
+The executor supplies a typed declaration saying whether one opaque invocation
+uses one task-work position. The admission controller reads only that
+declaration; there is no text classification.
 
-The focused test `keeps two tasks within capacity as opaque invocation purposes
-change` exercises two tasks at capacity two. Two opaque invocations that
-declare capacity use reserve the two positions. Later invocations whose
-identifiers deliberately contain misleading execution/review/evidence/handback
-words but declare no capacity use are admitted without adding or releasing a
-position. This is automatable and passes.
+The zero-position variant preserves a choice that predates issue #133:
+evidence sealing and terminal-disposition recording are bounded local
+Git/journal/store operations, not coding-agent or reviewer work. Before #133,
+those transitions carried `requiresTaskAdmission: false`. Issue #133 moved that
+existing choice behind the selected executor adapter; it did not derive the
+variant from a new user-facing executor use case.
 
-The existing Quint invariant `declaredExecutorResourceUseIsProjected` and
-expected weakened counterexample `projectCapacityFromOperationName` cover the
-same distinction in the model.
+The focused admission test proves that the typed declaration determines whether
+the controller reserves a position. The existing Quint invariant
+`declaredExecutorResourceUseIsProjected` proves that the controller-facing
+projection preserves the executor-supplied declaration.
 
 ### High-cardinality reconstruction
 
@@ -40,9 +38,8 @@ returns equal values; the frontier has no transitions; a settled tracker target
 permits run termination; and an admission controller rebuilt from the resulting
 transitions has zero reservations.
 
-This supports retaining completed responsibilities as an audit-preserving
-choice at hundreds-of-invocations scale. It is not a performance benchmark and
-does not establish a practical upper bound.
+This proves deterministic reconstruction for this 512-entry fixture. It is not
+a performance benchmark and does not establish a practical upper bound.
 
 ### Executor retry deadline watcher
 
@@ -122,11 +119,11 @@ or vocabulary constraint. “Gap” means the lane is applicable but absent.
 | Generic frontier, admission, reconstruction, and activation use only outer executor concepts | Frontier/admission/reconstruction tests exercise only outer responsibility, invocation, wait, and settlement types | N/A | M2 projects outer invocation/resource-use values | Behavior covered; import direction is only protected by review and scans, not ESLint |
 | Selected executor owns review, restoration, and artifacts | Implementation-convergence workflow and recovery suites exercise the selected protocol | Technical-retry policy/deadline rows reopen, but not a complete selected-executor convergence run | Intentionally outside generic M2 internal vocabulary | Memory covered; full SQLite selected-protocol reopening is a justified gap |
 | Orchestrator sees correlation, wait, interruption/continuation, capacity use, and outcomes | `executor-boundary.test.ts`, property tests, runnable-transition recovery, and activation tests | Stable retry deadlines reopen | M2 outer projection and activation replay | Covered, except live mutation of a blocked deadline |
-| Capacity follows declared outer resource use, not names | New two-task opaque-purpose test plus generated boundary property | Generic capacity reconstruction has SQLite lanes; selected-executor resource-use reconstruction does not | `declaredExecutorResourceUseIsProjected`; weakened name-based counterexample | Core rule covered; selected-executor SQLite lane is an applicable small gap |
+| Capacity follows the executor-supplied typed resource declaration | Focused admission test plus generated boundary property | Generic capacity reconstruction has SQLite lanes; selected-executor resource-use reconstruction does not | `declaredExecutorResourceUseIsProjected` | Core rule covered; selected-executor SQLite lane is an applicable small gap |
 | Same-session handback, fresh reviewer, retry scope, non-convergence, and evidence remain behind adapter | Selected convergence, journal, recovery, retry, and evidence suites | Retry rows and remaining-duration behavior reopen | N/A: internal protocol must not leak into generic M2 | Strong memory coverage; externally completed reviewer restart and full SQLite protocol replay are gaps |
 | Transitional symbols/comments disappear | Compile/lint plus repository scans | N/A | N/A | Covered as a source constraint |
 | Specification, M2, adapter, scenarios, and applicable reopening lanes change together | Executable adapter and readable unit/integration scenarios exist | Retry reopening exists; no issue-133-specific full protocol reopen | Quint invariant and counterexample exist | Mostly covered; matrix exposes the two SQLite gaps above |
-| Full gate and three review passes | Recorded in issue #133 completion evidence | Same gate | Same gate | Already completed; not rerun by this bounded prototype |
+| Full gate and three review passes | Recorded in issue #133 completion evidence and rerun after integrating this follow-up | Same gate | Same gate | Complete local gate passed; the temporary hosted gate was verified separately after excluding Quint |
 
 ## Structural import-boundary finding
 
@@ -152,10 +149,10 @@ the injected outer interface is sufficient.
 
 ## Integrated and deferred work
 
-The two-task capacity test remains beside the executor outer-boundary tests.
-The 512-invocation reconstruction scenario has its own focused test file
-because it exercises reconstruction, projection, frontier finality, and
-admission together.
+The resource-declaration test remains beside the executor outer-boundary tests.
+The 512-invocation reconstruction scenario has its own focused test file because
+it exercises reconstruction, projection, frontier finality, and admission
+together.
 
 The current architecture is not ready to install a second executor without
 editing source. `managed-history.ts` and `managed-activation.ts` select the
@@ -171,6 +168,19 @@ The deadline watcher repair also remains deferred: it requires a journal or
 activation-change notification that can race a blocked deadline sleep, not a
 test-only polling interval.
 
+## Durable follow-up owners
+
+- Issue [#127](https://github.com/dearlordylord/dalph/issues/127) retains the
+  executor-composition seam and import-direction rule, explicitly deferred
+  until a v1 proof of concept works with one selected executor.
+- Issue [#154](https://github.com/dearlordylord/dalph/issues/154) owns waking a
+  recovered executor retry when its durable schedule changes.
+- Tracking issue [#27](https://github.com/dearlordylord/dalph/issues/27)
+  records the reviewer-completes-during-downtime and complete SQLite reopening
+  scenarios for the next concrete review-capable executor leaf.
+- Issue [#153](https://github.com/dearlordylord/dalph/issues/153) owns restoring
+  Quint recovery models to hosted CI after the v1 proof of concept.
+
 ## Focused commands
 
 ```text
@@ -179,7 +189,7 @@ pnpm vitest run \
   packages/orchestrator/src/executor-boundary-reconstruction.test.ts
 ```
 
-Result: two files passed, five tests passed.
+Result after the integrated follow-up: two files passed, four tests passed.
 
 The deadline watcher needs a separately scoped implementation change with
 notification-backed TestClock tests before its characterization becomes an

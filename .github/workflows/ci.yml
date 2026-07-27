@@ -71,5 +71,8 @@ jobs:
       - name: Install gitleaks
         run: bash scripts/install-gitleaks.sh
 
-      - name: Run comprehensive quality gate
-        run: pnpm check:all
+      # Quint remains available through pnpm check:quint and pnpm check:all,
+      # but is deferred from hosted CI until the single-executor v1 proof of
+      # concept is working and the recovery-model runtime has adequate margin.
+      - name: Run CI quality gate
+        run: pnpm check:ci

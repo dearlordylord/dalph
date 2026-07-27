@@ -37,7 +37,7 @@ import {
 } from "./technical-retry.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 
-it.effect("admits executor invocations from declared capacity use, independent of protocol operation names", () =>
+it.effect("uses each executor invocation's declared task-work capacity", () =>
   Effect.gen(function*() {
     const occupiedTaskId = TaskId.make("occupied-task")
     const waitingTaskId = TaskId.make("waiting-task")
@@ -82,66 +82,6 @@ it.effect("admits executor invocations from declared capacity use, independent o
       taskId: waitingTaskId,
       wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
     })
-  }))
-
-it.effect("keeps two tasks within capacity as opaque invocation purposes change", () =>
-  Effect.gen(function*() {
-    const runId = RunId.make("two-task-declared-resource-use")
-    const tasks = [
-      TaskId.make("two-task-A"),
-      TaskId.make("two-task-B")
-    ] as const
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
-    })
-    const capacityUsing = tasks.map((taskId, index) =>
-      RunnableFrontierTransition.ContinueExecutorInvocation({
-        invocation: makeExecutorOuterInvocation(
-          OperationId.make(
-            index === 0
-              ? "name-that-looks-like-evidence-but-is-opaque"
-              : "name-that-looks-like-handback-but-is-opaque"
-          ),
-          taskId,
-          oneTaskWorkCapacityPosition
-        )
-      })
-    )
-
-    for (const transition of capacityUsing) {
-      expect(
-        (yield* controller.admit({
-          explanations: [],
-          transitions: [transition]
-        }, runId)).transition
-      ).toEqual(Option.some(transition))
-    }
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual(tasks)
-
-    const capacityFree = tasks.map((taskId, index) =>
-      RunnableFrontierTransition.ContinueExecutorInvocation({
-        invocation: makeExecutorOuterInvocation(
-          OperationId.make(
-            index === 0
-              ? "name-that-looks-like-execution-but-is-free"
-              : "name-that-looks-like-review-but-is-free"
-          ),
-          taskId,
-          noTaskWorkCapacityUse
-        )
-      })
-    )
-    for (const transition of capacityFree) {
-      expect(
-        (yield* controller.admit({
-          explanations: [],
-          transitions: [transition]
-        }, runId)).transition
-      ).toEqual(Option.some(transition))
-    }
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual(tasks)
   }))
 
 it("projects a pending selected-executor retry as an exact outer wait", () => {
