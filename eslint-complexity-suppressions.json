@@ -64,11 +64,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/production-application.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/task-dag.ts": {
     "complexity": {
       "count": 2
