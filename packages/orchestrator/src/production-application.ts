@@ -6,6 +6,7 @@ import {
   defaultTaskWorkCapacity,
   EvidenceStoreLocator,
   type GitCommonDirectoryTarget,
+  type OperationId,
   type RunId,
   type TaskWorkCapacity
 } from "./domain.js"
@@ -14,8 +15,9 @@ import { GitWorktree, runGitWorktreeReconciliation } from "./git-worktree.js"
 import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
 import type { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
 import { unavailableImplementationReviewLayer } from "./implementation-review.js"
+import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { JournalBoundaryDecodeIssue } from "./journal-recovery-model.js"
-import { JournalStore } from "./journal-store.js"
+import { JournalStore, TaskExecutionReported, taskExecutionReportedRecordKey } from "./journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
   coordinatorOwnedEvidenceStoreLayer,
@@ -35,7 +37,7 @@ import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManaged
 import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
-import type { TaskExecutor } from "./task-execution.js"
+import type { TaskExecutionReport, TaskExecutor } from "./task-execution.js"
 import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
 import { makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.js"
@@ -185,6 +187,30 @@ export const productionWorkflowInterpreterLayer = <
       yield* CoordinatorOwnership
       const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
+      const recordExecutionReports = Effect.fn(
+        "ProductionApplication.recordStartupExecutionReports"
+      )(function*(
+        reportRunId: RunId,
+        reports: ReadonlyArray<{
+          readonly operationId: OperationId
+          readonly report: TaskExecutionReport
+        }>
+      ) {
+        for (const { operationId, report } of reports) {
+          yield* journal.append(
+            reportRunId,
+            taskExecutionReportedRecordKey(
+              operationId,
+              report.observationId
+            ),
+            TaskExecutionReported.make({
+              operationId,
+              report,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+      })
       const scan = yield* journal.scan()
       const issues = new Array<StartupRecoveryIssue>(...scan.issues)
       const currentCapacityEvidence = yield* Ref.make<
@@ -193,6 +219,12 @@ export const productionWorkflowInterpreterLayer = <
         freshOccupiedInvocations: [],
         freshlyReleasedOperationIds: new Set()
       })
+      const currentExecutionReports = yield* Ref.make<
+        ReadonlyArray<{
+          readonly operationId: OperationId
+          readonly report: TaskExecutionReport
+        }>
+      >([])
       for (const history of scan.runs) {
         const reduction = reduceManagedHistory(history.runId, history.records)
         if (reduction._tag === "InvalidManagedHistory") issues.push(...reduction.issues)
@@ -217,8 +249,16 @@ export const productionWorkflowInterpreterLayer = <
             currentCapacityEvidence,
             observation.capacityEvidence
           )
+          yield* Ref.set(
+            currentExecutionReports,
+            observation.unresolvedExecutionReports
+          )
           continue
         }
+        yield* recordExecutionReports(
+          history.runId,
+          observation.unresolvedExecutionReports
+        )
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
           history.runId,
           history.records,
@@ -228,6 +268,10 @@ export const productionWorkflowInterpreterLayer = <
         issues.push(...runIssues)
       }
       if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
+      yield* recordExecutionReports(
+        runId,
+        yield* Ref.get(currentExecutionReports)
+      )
       const recovery = yield* makeManagedRecoveryActivation(
         runId,
         yield* Ref.get(currentCapacityEvidence)

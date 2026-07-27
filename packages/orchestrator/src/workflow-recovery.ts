@@ -1,7 +1,7 @@
 /* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
-import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
+import { defaultTaskWorkCapacity, type OperationId, RunId, type TaskWorkCapacity } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
@@ -9,7 +9,7 @@ import { type JournalRecord, JournalStore } from "./journal-store.js"
 import { activateRecoveredResponsibilities, type RecoveredAdmissionCapacityEvidence } from "./managed-activation.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { NonterminalRecoveryStageTag } from "./managed-run-recovery-stage.js"
-import { TaskExecutor } from "./task-execution.js"
+import { type TaskExecutionReport, TaskExecutor } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
 import { TrackerMutation } from "./tracker-mutation.js"
@@ -175,6 +175,10 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
       >
     >()
     const freshOccupiedInvocations = new Array<RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"][number]>()
+    const unresolvedExecutionReports = new Array<{
+      readonly operationId: OperationId
+      readonly report: TaskExecutionReport
+    }>()
     const freshlyReleasedOperationIds = new Set<
       RecoveredAdmissionCapacityEvidence["freshlyReleasedOperationIds"] extends ReadonlySet<infer Item> ? Item : never
     >()
@@ -263,6 +267,10 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
                 sessionId: session.sessionId
               }).pipe(Effect.flatMap((observed) => {
                 if (durable?._tag !== "TaskExecutionOutcomeObserved") {
+                  unresolvedExecutionReports.push({
+                    operationId: event.operation.request.operationId,
+                    report: observed
+                  })
                   if (observed._tag === "RunningTaskExecutionReported") {
                     freshOccupiedInvocations.push({
                       observationId: observed.observationId,
@@ -376,7 +384,8 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
         freshOccupiedInvocations,
         freshlyReleasedOperationIds
       },
-      issues
+      issues,
+      unresolvedExecutionReports
     } satisfies {
       readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
       readonly issues: ReadonlyArray<
@@ -384,6 +393,10 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
         | RecoveryOwnershipIssue
         | RecoveryReconciliationIssue
       >
+      readonly unresolvedExecutionReports: ReadonlyArray<{
+        readonly operationId: OperationId
+        readonly report: TaskExecutionReport
+      }>
     }
   }
 )
