@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -20,8 +20,13 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
-import { deriveRunFinalityDecision, deriveRunnableFrontier, ResponsibilityDisposition } from "./runnable-frontier.js"
-import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import {
+  deriveRunFinalityDecision,
+  deriveRunnableFrontier,
+  ResponsibilityDisposition,
+  type RunnableFrontierTransition
+} from "./runnable-frontier.js"
+import { makeTaskAdmissionController, type NextAdmissionDecision } from "./task-admission-controller.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { makeTaskExecutionOperation } from "./workflow-operation.js"
@@ -35,6 +40,10 @@ const freshTask = (taskId: TaskId) => ({
   taskId,
   taskRevision: TaskRevision.make(`revision:${taskId}`)
 })
+
+const admittedTransitions = (
+  decision: NextAdmissionDecision
+): ReadonlyArray<RunnableFrontierTransition> => Option.toArray(decision.transition)
 
 const executionResponsibilityFor = (
   taskId: TaskId,
@@ -94,7 +103,7 @@ it.effect("admits only the canonical first fresh task when one position is avail
       taskA,
       taskB
     ])
-    expect(admission.transitions).toEqual([
+    expect(admittedTransitions(admission)).toEqual([
       {
         _tag: "CommitFreshTaskClaimIntent",
         ...freshTask(taskA)
@@ -183,11 +192,13 @@ it.effect("gives a resumed responsibility the next released position before fres
         })),
         reconstructedReservedPositions: []
       })
-      expect((yield* controller.admit(pausedFrontier, frontierRunId)).transitions).toEqual([])
+      expect(
+        admittedTransitions(yield* controller.admit(pausedFrontier, frontierRunId))
+      ).toEqual([])
       const whileBusy = yield* controller.admit(resumedFrontier, frontierRunId)
       const restartedWhileBusy = yield* restartedController.admit(resumedFrontier, frontierRunId)
       expect(restartedWhileBusy).toEqual(whileBusy)
-      expect(whileBusy.transitions).toEqual([])
+      expect(admittedTransitions(whileBusy)).toEqual([])
       expect(whileBusy.explanations).toContainEqual({
         _tag: "CapacityWait",
         taskId: taskA,
@@ -208,7 +219,7 @@ it.effect("gives a resumed responsibility the next released position before fres
       })
       const afterInterruption = yield* controller.admit(resumedFrontier, frontierRunId)
       expect(yield* restartedController.admit(resumedFrontier, frontierRunId)).toEqual(afterInterruption)
-      expect(afterInterruption.transitions).toEqual([
+      expect(admittedTransitions(afterInterruption)).toEqual([
         {
           _tag: "ContinueTaskExecution",
           operationId: "execute-task-A",
@@ -248,7 +259,9 @@ it.effect("continues independent work for each local constraint at capacities on
           freshOccupiedInvocations: [],
           reconstructedReservedPositions: []
         })
-        expect((yield* controller.admit(frontier, frontierRunId)).transitions).toEqual([
+        expect(
+          admittedTransitions(yield* controller.admit(frontier, frontierRunId))
+        ).toEqual([
           { _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }
         ])
       }

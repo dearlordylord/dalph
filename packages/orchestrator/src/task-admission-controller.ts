@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Exact admission correlations and their atomic state transitions remain one domain owner. */
-import { Data, Effect, Ref, Schema } from "effect"
+import { Data, Effect, Option, Ref, Schema } from "effect"
 import {
   OperationId as OperationIdSchema,
   SelectedTransitionIdentity as SelectedTransitionIdentitySchema
@@ -74,16 +74,17 @@ export interface TaskAdmissionControllerSnapshot {
   readonly reservedTaskIds: ReadonlyArray<TaskId>
 }
 
-interface TaskAdmission {
+/** The controller reserves at most one exact transition for this admission pass. */
+export interface NextAdmissionDecision {
   readonly explanations: ReadonlyArray<FrontierExplanation>
-  readonly transitions: ReadonlyArray<RunnableFrontierTransition>
+  readonly transition: Option.Option<RunnableFrontierTransition>
 }
 
 export interface TaskAdmissionController {
   readonly admit: (
     frontier: RunnableFrontier,
     runId: RunId
-  ) => Effect.Effect<TaskAdmission>
+  ) => Effect.Effect<NextAdmissionDecision>
   readonly applyFreshInvocationObservation: (
     observation: FreshInvocationCapacityObservation
   ) => Effect.Effect<AdmissionAvailabilityChange>
@@ -295,10 +296,13 @@ export const makeTaskAdmissionController = Effect.fn(
           ]
         }
 
-        return [{
-          explanations,
-          transitions: admitted === undefined ? [] : [admitted]
-        }, next] as const
+        return [
+          {
+            explanations,
+            transition: Option.fromUndefinedOr(admitted)
+          },
+          next
+        ] as const
       })
   )
 

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -35,7 +35,7 @@ import {
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition, RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity } from "./selected-transition.js"
-import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import { makeTaskAdmissionController, type NextAdmissionDecision } from "./task-admission-controller.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
@@ -54,6 +54,10 @@ const freshTransition = (taskId: TaskId) =>
     taskId,
     taskRevision: TaskRevision.make(`revision:${taskId}`)
   })
+
+const admittedTransitions = (
+  decision: NextAdmissionDecision
+): ReadonlyArray<RunnableFrontierTransition> => Option.toArray(decision.transition)
 
 const taskId = TaskId.make("responsibility-task")
 const task = {
@@ -396,14 +400,14 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
         })
       ]
     }, RunId.make("capacity-rebuild-run"))
-    expect(admission.transitions).toEqual([
-      {
+    expect(admission).toEqual({
+      explanations: [],
+      transition: Option.some({
         _tag: "ContinueTaskExecution",
         operationId: "capacity-B-invocation",
         taskId: taskB
-      }
-    ])
-    expect(admission.explanations).toEqual([])
+      })
+    })
     expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA])
 
     yield* controller.releaseTaskAdmissionPosition(
@@ -411,12 +415,14 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
     )
     const capacityRunId = RunId.make("capacity-run")
     expect(
-      (yield* controller.admit({
-        explanations: [],
-        transitions: [
-          freshTransition(taskC)
-        ]
-      }, capacityRunId)).transitions
+      admittedTransitions(
+        yield* controller.admit({
+          explanations: [],
+          transitions: [
+            freshTransition(taskC)
+          ]
+        }, capacityRunId)
+      )
     ).toHaveLength(1)
     const selectedReservation = (yield* controller.snapshot())
       .reservedPositions.find(({ taskId }) => taskId === taskC)
@@ -509,7 +515,7 @@ it.effect("uses current restart capacity without preempting freshly observed inv
           },
           RunId.make(`${scenario.label}-run`)
         )
-        admissions += admission.transitions.length
+        admissions += Option.isSome(admission.transition) ? 1 : 0
       }
       const snapshot = yield* controller.snapshot()
       expect(snapshot.occupied, scenario.label).toHaveLength(scenario.occupied)
@@ -543,7 +549,7 @@ it.effect("returns capacity waiting and signals when exact release may permit ad
         taskId: taskB,
         wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
       }],
-      transitions: []
+      transition: Option.none()
     })
 
     expect(
@@ -653,18 +659,22 @@ it.effect("reserves at most one exact operation for a task in one admission deci
     })
 
     expect(
-      (yield* controller.admit({
-        explanations: [],
-        transitions: [first, second]
-      }, RunId.make("same-task-run"))).transitions
+      admittedTransitions(
+        yield* controller.admit({
+          explanations: [],
+          transitions: [first, second]
+        }, RunId.make("same-task-run"))
+      )
     ).toEqual([first])
 
     yield* controller.releaseTaskAdmissionPosition(first.operationId)
     expect(
-      (yield* controller.admit({
-        explanations: [],
-        transitions: [second]
-      }, RunId.make("same-task-run"))).transitions
+      admittedTransitions(
+        yield* controller.admit({
+          explanations: [],
+          transitions: [second]
+        }, RunId.make("same-task-run"))
+      )
     ).toEqual([second])
   }))
 
@@ -694,16 +704,20 @@ it.effect("correlates both operation-backed and pre-intent reservations exactly"
       taskId
     })
     expect(
-      (yield* operationController.admit(
-        { explanations: [], transitions: [exactOperation] },
-        runId
-      )).transitions
+      admittedTransitions(
+        yield* operationController.admit(
+          { explanations: [], transitions: [exactOperation] },
+          runId
+        )
+      )
     ).toEqual([exactOperation])
     expect(
-      (yield* operationController.admit(
-        { explanations: [], transitions: [differentOperation] },
-        runId
-      )).transitions
+      admittedTransitions(
+        yield* operationController.admit(
+          { explanations: [], transitions: [differentOperation] },
+          runId
+        )
+      )
     ).toEqual([])
 
     const selectedController = yield* makeTaskAdmissionController({
@@ -724,15 +738,19 @@ it.effect("correlates both operation-backed and pre-intent reservations exactly"
       runId
     )
     expect(
-      (yield* selectedController.admit(
-        { explanations: [], transitions: [selected] },
-        runId
-      )).transitions
+      admittedTransitions(
+        yield* selectedController.admit(
+          { explanations: [], transitions: [selected] },
+          runId
+        )
+      )
     ).toEqual([selected])
     expect(
-      (yield* selectedController.admit(
-        { explanations: [], transitions: [differentSelection] },
-        runId
-      )).transitions
+      admittedTransitions(
+        yield* selectedController.admit(
+          { explanations: [], transitions: [differentSelection] },
+          runId
+        )
+      )
     ).toEqual([])
   }))

@@ -437,8 +437,8 @@ export const makeActivationCoordinator = Effect.fn(
       frontier,
       input.runId
     )
-    const transition = admission.transitions[0]
-    if (transition === undefined) return undefined
+    if (Option.isNone(admission.transition)) return undefined
+    const transition = admission.transition.value
     const selected = makeSelectedTransitionIdentity(input.runId, transition)
     return {
       key: selectedTransitionKey(selected),

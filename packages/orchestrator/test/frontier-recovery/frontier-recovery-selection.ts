@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { TaskRevision } from "../../src/domain.js"
 import type { OperationId, TaskId, TaskWorkCapacity } from "../../src/domain.js"
 import type { WorkflowResponsibilityState } from "../../src/reconstructed-managed-run-state.js"
@@ -85,11 +85,11 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
       },
       frontierRecoveryRunId
     )
-    const admitted = pass.transitions[0]
-    if (admitted === undefined) {
+    if (Option.isNone(pass.transition)) {
       passAdmissionExplanations = [...pass.explanations]
       break
     }
+    const admitted = pass.transition.value
     admittedProductionTransitions = [...admittedProductionTransitions, admitted]
     remainingTransitions = remainingTransitions.filter(
       (transition) => transition !== admitted
