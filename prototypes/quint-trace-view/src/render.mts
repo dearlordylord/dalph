@@ -16,13 +16,14 @@ export const renderTable = (trace: NormalizedTrace): string => {
     `<!-- provenance: ${provenanceText(trace.provenance)} -->`,
     `# ${trace.provenance.traceKind} trace`,
     "",
-    "| Position | Action / picked task | Coordinator | Capacity | Frontier | Admission | Occupied | Reserved | Explanations | Comparison |",
-    "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |"
+    "| Position | Action / picked task | Coordinator | Activation | Capacity | Frontier | Admission | Occupied | Reserved | Explanations | Comparison |",
+    "| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |"
   ]
   const rows = trace.frames.map((frame) => [
     frame.position,
     `${frame.action}${frame.pickedModelTaskId === undefined ? "" : ` / ${frame.pickedModelTaskId}`}`,
     frame.coordinatorStatus,
+    compact(frame.activation),
     frame.capacity,
     compact(frame.frontier),
     compact(frame.admission),
@@ -47,6 +48,13 @@ const taskName = (modelTaskId: string): string =>
 const taskSet = (modelTaskIds: ReadonlyArray<string>): string =>
   `{${modelTaskIds.map(taskName).join(", ") || "none"}}`
 
+const transitionOperationText = (
+  operation: NormalizedFrame["frontier"][number]["transitionOperation"]
+): string =>
+  operation._tag === "FreshTransitionWithoutOperation"
+    ? "pre-intent selection"
+    : `operation ${operation.modelOperationId}`
+
 const storyName = (traceKind: TraceKind): string => {
   if (traceKind === "explore-claim-c-then-claim-loss")
     return "Claim C → A loses claim"
@@ -68,23 +76,24 @@ const storyName = (traceKind: TraceKind): string => {
   if (traceKind === "story-external-completion")
     return "External completion settles A"
   if (traceKind === "counterexample") return "Capacity counterexample"
+  if (traceKind === "activation") return "Activation ownership sample"
   if (traceKind === "restart") return "Restart sample"
   return "Selector sample"
 }
 
 const storySource = (traceKind: TraceKind): string => {
   if (traceKind.startsWith("explore-"))
-    return "frontierRecovery.qnt:1589 · sampled reconciliation profile"
+    return "frontierRecovery.qnt:2398 · sampled reconciliation profile"
   if (traceKind === "story-crash-after-intent")
-    return "frontierRecovery_test.qnt:78"
+    return "frontierRecovery_test.qnt:149"
   if (traceKind === "story-pause-independent")
-    return "frontierRecovery_test.qnt:88"
+    return "frontierRecovery_test.qnt:159"
   if (traceKind === "story-claim-loss")
-    return "frontierRecovery_test.qnt:144"
+    return "frontierRecovery_test.qnt:215"
   if (traceKind === "story-git-rewrite")
-    return "frontierRecovery_test.qnt:174"
+    return "frontierRecovery_test.qnt:245"
   if (traceKind === "story-external-completion")
-    return "frontierRecovery_test.qnt:198"
+    return "frontierRecovery_test.qnt:269"
   return "retained generated trace"
 }
 
@@ -107,6 +116,8 @@ const actionName = (action: string): string => {
     loseClaim: "Task A claim disappears",
     loseWorktree: "Task A worktree disappears",
     observeTask: "reread task authority",
+    orchestratorCommitsFreshTaskClaimIntent: "record first claim intent",
+    orchestratorCommitsNextFreshTaskClaimIntent: "record the next selected fresh claim intent",
     recordBoundaryOutcome: "record observed outcome",
     recordInterruptedInvocation: "record confirmed interruption",
     providerAcceptsInvocation: "provider accepts invocation",
@@ -116,6 +127,9 @@ const actionName = (action: string): string => {
     requestTaskPause: "pause task",
     requestTaskResume: "resume task",
     restart: "coordinator restarts",
+    taskTrackerReturnsTargetClosureReadAtNextRevision: "observe a newer compatible target closure",
+    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: "observe explicit target absence",
+    taskTrackerReturnsTargetClosureReadWithPredecessor: "observe a causally later target closure",
     rewriteTarget: "rewrite Task A target",
     settleExternalCompletion: "settle external completion"
   }
@@ -529,6 +543,7 @@ const browserDagData = (dag: ObservedStateDag): string =>
         ),
         comparison: frame.comparison,
         coordinator: frame.coordinatorStatus,
+        activation: frame.activation,
         explanations: frame.explanations,
         frontier: frame.frontier,
         occupied: frame.occupiedModelTaskIds,
@@ -606,7 +621,7 @@ const renderMilestones = (
         <dt>Task A obligation</dt><dd>${escapeHtml(`${taskA.responsibility} · ${taskA.boundary.replace("Boundary", "")}`)}</dd>
         <dt>Task A authority</dt><dd>${escapeHtml(`${taskA.claim} · ${taskA.worktree} worktree · ${taskA.invocation}`)}</dd>
         <dt>Task A control</dt><dd>${taskA.paused ? "Paused" : "Active"}${taskA.isolation === "NotIsolated" ? "" : ` · ${escapeHtml(taskA.isolation)}`}</dd>
-        ${taskATransition === undefined ? "" : `<dt>Task A transition</dt><dd>${escapeHtml(`${taskATransition.transitionTag} · operation ${taskATransition.modelOperationId}`)}</dd>`}
+        ${taskATransition === undefined ? "" : `<dt>Task A transition</dt><dd>${escapeHtml(`${taskATransition.transitionTag} · ${transitionOperationText(taskATransition.transitionOperation)} · ${taskATransition.executorResourceUse}`)}</dd>`}
         <dt>Task C obligation</dt><dd>${escapeHtml(taskC.responsibility)}</dd>
         <dt>${frame.coordinatorStatus === "Crashed" ? "Derived projection (inactive)" : "Frontier → admitted"}</dt><dd>${escapeHtml(`${taskSet(frame.frontier.map(({ modelTaskId }) => modelTaskId))} → ${admitted}`)}</dd>
         ${frame.explanations.length === 0 ? "" : `<dt>CapacityWait</dt><dd>${escapeHtml(wait)}</dd>`}

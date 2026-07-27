@@ -7,6 +7,7 @@ import {
   OperationId,
   RunId,
   TaskId,
+  TaskRevision,
   TaskWorkCapacity,
   TrackerRevision
 } from "../../../packages/orchestrator/src/domain.ts"
@@ -23,7 +24,10 @@ import { reduceManagedHistory } from "../../../packages/orchestrator/src/managed
 import {
   deriveRunFinalityDecision,
   deriveRunnableFrontier,
-  ResponsibilityDisposition
+  ResponsibilityDisposition,
+  runnableTransitionTaskId,
+  type FrontierExplanation as ProductionFrontierExplanation,
+  type RunnableFrontierTransition
 } from "../../../packages/orchestrator/src/runnable-frontier.ts"
 import { makeTaskAdmissionController } from "../../../packages/orchestrator/src/task-admission-controller.ts"
 import { TaskClaimAcquisition } from "../../../packages/orchestrator/src/tracker-mutation.ts"
@@ -323,9 +327,9 @@ const dispositionFor = (fact: FreshFact) => {
   }
 }
 
-const decision = (transition: { readonly _tag: string; readonly taskId: TaskId }) => ({
+const decision = (transition: RunnableFrontierTransition) => ({
   tag: transition._tag,
-  task: taskName(transition.taskId)
+  task: taskName(runnableTransitionTaskId(transition))
 })
 
 const move = (
@@ -343,11 +347,12 @@ const move = (
 })
 
 const frontierMove = (
-  transition: { readonly _tag: string; readonly taskId: TaskId },
-  admitted: ReadonlyArray<{ readonly _tag: string; readonly taskId: TaskId }>,
+  transition: RunnableFrontierTransition,
+  admitted: ReadonlyArray<RunnableFrontierTransition>,
   coordinatorRunning: boolean
 ): LabMove => {
-  const task = taskName(transition.taskId)
+  const transitionTaskId = runnableTransitionTaskId(transition)
+  const task = taskName(transitionTaskId)
   if (transition._tag !== "CommitFreshTaskClaimIntent") {
     return move(
       `frontier:${transition._tag}:${task}`,
@@ -356,13 +361,14 @@ const frontierMove = (
       { _tag: "Task", task },
       {
         _tag: "DriverMissing",
-        owningIssue: "#132",
+        owningIssue: "unowned prototype gap",
         reason: "ProductionTransitionNotDriven"
       }
     )
   }
   const isAdmitted = admitted.some((candidate) =>
-    candidate._tag === transition._tag && candidate.taskId === transition.taskId
+    candidate._tag === transition._tag
+    && runnableTransitionTaskId(candidate) === transitionTaskId
   )
   const availability: LabMoveAvailability = !coordinatorRunning
     ? { _tag: "Waiting", reason: "CoordinatorStopped" }
@@ -507,8 +513,8 @@ const invalidSnapshot = (
 })
 
 /**
- * Narrow temporary adapter around current production reconstruction and selection.
- * Issue #132 can replace this one-pass boundary without changing Lab moves or presentation.
+ * Narrow adapter around current production reconstruction and selection.
+ * Issue #132 changed only this boundary; Lab moves and presentation stay independent.
  */
 const reconstructThroughProduction = (
   input: LabInput
@@ -539,12 +545,20 @@ const reconstructThroughProduction = (
     const eligibleTaskIds = [taskIds.A, taskIds.C].filter((taskId) =>
       latestObservation?.taskIds.includes(taskId) ?? false
     )
-    const responsibilityFacts = run.responsibility.entries.map((responsibility) => ({
-      disposition: dispositionFor(freshFacts.get(taskName(responsibility.taskId)) ?? "Ready"),
-      responsibility
-    }))
+    const responsibilityFacts = run.responsibility.entries.map((responsibility) => {
+      const responsibilityTaskId = responsibility._tag === "ExecutorInvocationResponsibility"
+        ? responsibility.invocation.correlation.taskId
+        : responsibility.taskId
+      return {
+        disposition: dispositionFor(freshFacts.get(taskName(responsibilityTaskId)) ?? "Ready"),
+        responsibility
+      }
+    })
     const frontier = deriveRunnableFrontier({
-      freshEligibleTaskIds: eligibleTaskIds,
+      freshEligibleTasks: eligibleTaskIds.map((taskId) => ({
+        taskId,
+        taskRevision: TaskRevision.make(`reducer-lab:${taskName(taskId)}`)
+      })),
       responsibility: run.responsibility,
       responsibilityFacts
     })
@@ -554,30 +568,55 @@ const reconstructThroughProduction = (
     const controller = yield* (makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(capacity),
       freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: run.responsibility.entries.map(({ taskId }) => taskId)
+      reconstructedReservedPositions: run.responsibility.entries.flatMap((entry) =>
+        entry._tag === "TaskClaimResponsibility"
+          ? [{
+            operationId: entry.acquisition.operationId,
+            taskId: entry.taskId
+          }]
+          : []
+      )
     }) as unknown as Effect.Effect<{
-      readonly admit: (frontier: unknown) => Effect.Effect<{
-        readonly explanations: ReadonlyArray<{
-          readonly _tag: string
-          readonly taskId?: TaskId
-        }>
-        readonly transitions: ReadonlyArray<{
-          readonly _tag: string
-          readonly taskId: TaskId
-        }>
+      readonly admit: (frontier: unknown, runId: RunId) => Effect.Effect<{
+        readonly explanations: ReadonlyArray<ProductionFrontierExplanation>
+        readonly transition:
+          | { readonly _tag: "None" }
+          | {
+            readonly _tag: "Some"
+            readonly value: RunnableFrontierTransition
+          }
       }>
       readonly snapshot: () => Effect.Effect<{
         readonly reservedTaskIds: ReadonlyArray<TaskId>
       }>
     }>)
-    const preview = yield* controller.admit(frontier)
+    let remainingTransitions = [...frontier.transitions]
+    let admittedPreview: ReadonlyArray<RunnableFrontierTransition> = []
+    let admissionExplanations: ReadonlyArray<ProductionFrontierExplanation> = [...frontier.explanations]
+    for (;;) {
+      const pass = yield* controller.admit({
+        explanations: frontier.explanations,
+        transitions: remainingTransitions
+      }, runId)
+      admissionExplanations = [...pass.explanations]
+      if (pass.transition._tag === "None") break
+      const admittedTransition = pass.transition.value
+      admittedPreview = [...admittedPreview, admittedTransition]
+      remainingTransitions = remainingTransitions.filter(
+        (transition) => transition !== admittedTransition
+      )
+    }
     const admissionSnapshot = yield* controller.snapshot()
-    const admitted = coordinatorRunning ? preview.transitions : []
+    const admitted = coordinatorRunning ? admittedPreview : []
     const finality = deriveRunFinalityDecision(frontier, run.responsibility, false)
     const responsibilities = run.responsibility.entries.map((entry) => ({
       beganAt: entry.beganAt,
       kind: entry._tag,
-      task: taskName(entry.taskId)
+      task: taskName(
+        entry._tag === "ExecutorInvocationResponsibility"
+          ? entry.invocation.correlation.taskId
+          : entry.taskId
+      )
     }))
 
     return {
@@ -585,7 +624,7 @@ const reconstructThroughProduction = (
       capacity,
       coordinatorRunning,
       errors: [],
-      explanations: preview.explanations.map((explanation) => ({
+      explanations: admissionExplanations.map((explanation) => ({
         tag: explanation._tag,
         task: "taskId" in explanation ? taskName(explanation.taskId) : null
       })),

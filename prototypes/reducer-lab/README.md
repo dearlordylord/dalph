@@ -34,6 +34,11 @@ until its driver coverage is classified. The view remains throwaway; this
 registry sketches the maintained test-support seam needed to prevent silent
 feature drift.
 
+The post-#133 refresh uses revision-bearing fresh tasks, exact tagged admission
+reservations, one-transition-at-a-time admission, and the generic
+executor-invocation responsibility, transition, wait, and settlement vocabulary.
+It does not add an executor driver or new Lab behavior.
+
 The current source boundary is not fully browser-safe: importing
 `managed-history.ts` reaches a static `@effect/platform-node` import through the
 all-events schema and implementation-evidence module. Vite aliases that unused
@@ -63,7 +68,9 @@ prototype because FoldKit already ignores superseded Commands and disables
 actions away from a branch tip. It still provides a small, explicit
 revalidation boundary for a delayed click or future asynchronous activation
 adapter. Keep it as part of this experiment; do not promote it to production
-domain state without evidence from issue #132's activation seam.
+domain state. Issue #132's activation seam now owns the real process-local
+selection and execution correlations; this revision remains only a browser
+command revalidation token.
 
 The prototype intentionally keeps whole-run and task pause controls disabled:
 the current reconstructed pause reducer always returns `RunUnpaused` and

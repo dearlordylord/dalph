@@ -1,8 +1,9 @@
 import { Effect, Schema } from "effect"
 
-export const PROJECTION_VERSION = 3 as const
+export const PROJECTION_VERSION = 5 as const
 
 export const TraceKindSchema = Schema.Literals([
+  "activation",
   "sampled",
   "restart",
   "counterexample",
@@ -30,9 +31,9 @@ export const ModelTaskId = Schema.Literals(["0", "1", "2", "3"]).pipe(
 )
 export type ModelTaskId = typeof ModelTaskId.Type
 
-/** Identifies one modeled workflow operation, including the -1 not-yet-created sentinel. */
+/** Identifies one durable modeled workflow operation. */
 export const ModelOperationId = Schema.String.check(
-  Schema.isPattern(/^(-1|0|[1-9][0-9]*)$/)
+  Schema.isPattern(/^(0|[1-9][0-9]*)$/)
 ).pipe(Schema.brand("ModelOperationId"))
 export type ModelOperationId = typeof ModelOperationId.Type
 
@@ -85,7 +86,12 @@ const NonStoryArtifactProvenanceSchema = Schema.Struct({
   init: Schema.NonEmptyString,
   scenarioTest: Schema.optional(Schema.Never),
   scenarioTestSourceSha256: Schema.optional(Schema.Never),
-  traceKind: Schema.Literals(["sampled", "restart", "counterexample"])
+  traceKind: Schema.Literals([
+    "activation",
+    "sampled",
+    "restart",
+    "counterexample"
+  ])
 })
 const ExplorationArtifactProvenanceSchema = Schema.Struct({
   ...CommonArtifactProvenanceFields,
@@ -214,8 +220,16 @@ const SettlementWire = taggedWire([
 ])
 
 export interface DecisionEntry {
-  readonly modelOperationId: ModelOperationId
+  readonly executorResourceUse:
+    | "UsesNoTaskWorkCapacityPosition"
+    | "UsesOneTaskWorkCapacityPosition"
   readonly modelTaskId: ModelTaskId
+  readonly transitionOperation:
+    | { readonly _tag: "FreshTransitionWithoutOperation" }
+    | {
+      readonly _tag: "DurableTransitionOperation"
+      readonly modelOperationId: ModelOperationId
+    }
   readonly transitionTag: string
 }
 
@@ -228,15 +242,55 @@ export const AdmissionExplanationSchema = Schema.Struct({
 })
 export type AdmissionExplanation = typeof AdmissionExplanationSchema.Type
 
+const TransitionOperationSchema = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("FreshTransitionWithoutOperation")
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("DurableTransitionOperation"),
+    modelOperationId: ModelOperationId
+  })
+])
+
+const ActivationOwnerSchema = Schema.Struct({
+  modelOperationId: Schema.optional(ModelOperationId),
+  modelTaskId: ModelTaskId,
+  phase: Schema.Literals(["PostIntent", "PreIntent"])
+})
+
+const ActivationReservedPositionSchema = Schema.Struct({
+  correlation: Schema.Literals(["Operation", "SelectedTransition"]),
+  modelOperationId: Schema.optional(ModelOperationId),
+  modelTaskId: ModelTaskId
+})
+
+export const ActivationProjectionSchema = Schema.Struct({
+  activationInProgressModelTaskIds: Schema.Array(ModelTaskId),
+  derivedModelTaskIds: Schema.Array(ModelTaskId),
+  freshlyObservedModelTaskIds: Schema.Array(ModelTaskId),
+  isolatedModelTaskIds: Schema.Array(ModelTaskId),
+  owners: Schema.Array(ActivationOwnerSchema),
+  postIntentExitedModelTaskIds: Schema.Array(ModelTaskId),
+  preIntentInterruptedModelTaskIds: Schema.Array(ModelTaskId),
+  providerConsumingModelTaskIds: Schema.Array(ModelTaskId),
+  reservedPositions: Schema.Array(ActivationReservedPositionSchema),
+  resultsRecordedModelTaskIds: Schema.Array(ModelTaskId),
+  runnerModelTaskIds: Schema.Array(ModelTaskId),
+  selectedModelTaskIds: Schema.Array(ModelTaskId),
+  triggerPending: Schema.Boolean
+})
+export type ActivationProjection = typeof ActivationProjectionSchema.Type
+
 export const MbtComparableProjectionSchema = Schema.Struct({
+  activation: ActivationProjectionSchema,
   admissionCapacity: AdmissionCapacity,
-  admittedModelOperationIds: Schema.Array(ModelOperationId),
+  admittedTransitionOperations: Schema.Array(TransitionOperationSchema),
   admittedModelTaskIds: Schema.Array(ModelTaskId),
   admittedTransitionTags: Schema.Array(Schema.String),
   admissionExplanations: Schema.Array(AdmissionExplanationSchema),
   admissionReservedModelTaskIds: Schema.Array(ModelTaskId),
   coordinatorRunning: Schema.Boolean,
-  frontierModelOperationIds: Schema.Array(ModelOperationId),
+  frontierTransitionOperations: Schema.Array(TransitionOperationSchema),
   frontierModelTaskIds: Schema.Array(ModelTaskId),
   frontierTransitionTags: Schema.Array(Schema.String),
   occupiedModelTaskIds: Schema.Array(ModelTaskId)
@@ -254,6 +308,7 @@ export type FrameComparison =
 
 export interface NormalizedFrame {
   readonly action: string
+  readonly activation: ActivationProjection
   readonly admission: ReadonlyArray<DecisionEntry>
   readonly capacity: AdmissionCapacity
   readonly comparison: FrameComparison
@@ -364,23 +419,64 @@ const WorkflowStoryWire = Schema.Struct({
   responsibility: ResponsibilityWire,
   settlement: SettlementWire
 })
+const ExecutorResourceUseWire = taggedWire([
+  "UsesNoTaskWorkCapacityPosition",
+  "UsesOneTaskWorkCapacityPosition"
+])
+const TransitionOperationWire = taggedWire([
+  "DurableTransitionOperation",
+  "FreshTransitionWithoutOperation"
+])
+const ActivationOwnerWire = taggedWire([
+  "NoActivationOwner",
+  "PostIntentActivationOwner",
+  "PreIntentActivationOwner"
+])
+const ActivationPositionWire = taggedWire([
+  "ActivationPositionAvailable",
+  "ActivationPositionOccupied",
+  "ActivationPositionReserved",
+  "ActivationPositionRetained"
+])
 export const SelectorProjectionWire = Schema.Struct({
   admittedTaskIds: SetOfBigIntWire,
   capacity: BigIntWire,
+  executorResourceUses: Schema.Struct({
+    "#map": Schema.Array(Schema.Tuple([BigIntWire, ExecutorResourceUseWire]))
+  }),
   explanations: Schema.Struct({
     "#set": Schema.Array(ExplanationWire)
   }),
   frontierTaskIds: SetOfBigIntWire,
   occupiedTaskIds: SetOfBigIntWire,
-  operationIds: Schema.Struct({
-    "#map": Schema.Array(Schema.Tuple([BigIntWire, BigIntWire]))
-  }),
   reservationTaskIds: SetOfBigIntWire,
+  transitionOperations: Schema.Struct({
+    "#map": Schema.Array(Schema.Tuple([BigIntWire, TransitionOperationWire]))
+  }),
   transitionTags: Schema.Struct({
     "#map": Schema.Array(Schema.Tuple([BigIntWire, Schema.String]))
   })
 })
 export const DisplayedModelStateWire = Schema.Struct({
+  activation: Schema.Struct({
+    activationInProgress: SetOfBigIntWire,
+    derivedTransitions: SetOfBigIntWire,
+    freshlyObservedCapacity: SetOfBigIntWire,
+    isolatedSubjects: SetOfBigIntWire,
+    owners: Schema.Struct({
+      "#map": Schema.Array(Schema.Tuple([BigIntWire, ActivationOwnerWire]))
+    }),
+    positions: Schema.Struct({
+      "#map": Schema.Array(Schema.Tuple([BigIntWire, ActivationPositionWire]))
+    }),
+    postIntentExited: SetOfBigIntWire,
+    preIntentInterrupted: SetOfBigIntWire,
+    providerConsuming: SetOfBigIntWire,
+    resultsRecorded: SetOfBigIntWire,
+    runners: SetOfBigIntWire,
+    selectedTransitions: SetOfBigIntWire,
+    triggerPending: Schema.Boolean
+  }),
   authority: Schema.Struct({
     "#map": Schema.Array(Schema.Tuple([BigIntWire, AuthorityStoryWire]))
   }),
@@ -412,12 +508,27 @@ export const ItfEnvelopeWire = Schema.Struct({
 
 export const retainedReconstructionActions = [
   "init",
-  "commitFirstIntent",
+  "deriveActivationPass",
+  "excludeOwnedTransitions",
+  "reserveTaskAdmissionPosition",
+  "claimActivationOwnership",
+  "rejectDuplicateOwnership",
+  "recordOwnedOperationIntent",
+  "interruptBeforeOwnership",
+  "interruptAfterOwnershipBeforeIntent",
+  "interruptAfterIntent",
+  "recordOwnedResultAndRelease",
+  "observeCapacityConsumed",
+  "observeCapacityReleased",
+  "crashCoordinatorWithActivation",
+  "stopProviderWorker",
+  "reconstructActivation",
+  "orchestratorCommitsNextFreshTaskClaimIntent",
+  "orchestratorCommitsFreshTaskClaimIntent",
+  "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
+  "taskTrackerReturnsTargetClosureReadWithPredecessor",
+  "taskTrackerReturnsTargetClosureReadAtNextRevision",
   "crash",
-  "observeCompatibleReplacement",
-  "observeIncomparableMembership",
-  "observeProvenAbsence",
-  "reconstructionStep",
   "restart"
 ] as const
 const reconstructionActions = new Set([
@@ -448,6 +559,7 @@ const storyActions = new Set([
   "loseWorktree",
   "initReconciliationProfile",
   "observeTask",
+  "orchestratorCommitsFreshTaskClaimIntent",
   "recordBoundaryOutcome",
   "recordInterruptedInvocation",
   "providerAcceptsInvocation",
@@ -466,6 +578,7 @@ const displayedFieldNames = [
   "mbt::actionTaken",
   "mbt::nondetPicks.task",
   "state.coordinator.running",
+  "state.activation.{owners,positions,runners,selectedTransitions,activationInProgress,triggerPending}",
   "state.control.runPaused",
   "state.control.taskPaused",
   "state.authority.{lifecycle,claim,worktree,invocation,promoted,baseCompatible,inTarget,readability}",
@@ -475,21 +588,23 @@ const displayedFieldNames = [
   "state.selectorProjection.capacity",
   "state.selectorProjection.frontierTaskIds",
   "state.selectorProjection.admittedTaskIds",
-  "state.selectorProjection.operationIds",
+  "state.selectorProjection.transitionOperations",
+  "state.selectorProjection.executorResourceUses",
   "state.selectorProjection.transitionTags",
   "state.selectorProjection.explanations",
   "state.selectorProjection.reservationTaskIds",
   "state.selectorProjection.occupiedTaskIds"
 ] as const
 const comparableFields: ReadonlyArray<keyof MbtComparableProjection> = [
+  "activation",
   "admissionCapacity",
-  "admittedModelOperationIds",
+  "admittedTransitionOperations",
   "admittedModelTaskIds",
   "admittedTransitionTags",
   "admissionExplanations",
   "admissionReservedModelTaskIds",
   "coordinatorRunning",
-  "frontierModelOperationIds",
+  "frontierTransitionOperations",
   "frontierModelTaskIds",
   "frontierTransitionTags",
   "occupiedModelTaskIds"
@@ -531,7 +646,7 @@ function exactInteger(
   }
   const normalized = BigInt(wire["#bigint"]).toString()
   if (identity === "operation") {
-    if (BigInt(normalized) < -1n) {
+    if (BigInt(normalized) < 0n) {
       throw new TraceDecodeError({
         detail: `invalid model operation identity ${normalized}`,
         reason: "MalformedIdentity"
@@ -684,14 +799,50 @@ const indexFrom = (
 const mapsFrom = (
   selector: typeof SelectorProjectionWire.Type
 ): {
-  readonly operationIds: ReadonlyMap<ModelTaskId, ModelOperationId>
+  readonly executorResourceUses: ReadonlyMap<
+    ModelTaskId,
+    DecisionEntry["executorResourceUse"]
+  >
+  readonly transitionOperations: ReadonlyMap<
+    ModelTaskId,
+    DecisionEntry["transitionOperation"]
+  >
   readonly transitionTags: ReadonlyMap<ModelTaskId, string>
 } => {
-  const operationIds = new Map(
-    selector.operationIds["#map"].map(([task, operation]) => [
+  const executorResourceUses = new Map(
+    selector.executorResourceUses["#map"].map(([task, resourceUse]) => [
       exactInteger(task, "task"),
-      exactInteger(operation, "operation")
-    ])
+      resourceUse.tag
+    ] as const)
+  )
+  const transitionOperations = new Map<
+    ModelTaskId,
+    DecisionEntry["transitionOperation"]
+  >(
+    selector.transitionOperations["#map"].map(([task, operation]) => {
+      const modelTaskId = exactInteger(task, "task")
+      if (operation.tag === "FreshTransitionWithoutOperation") {
+        return [
+          modelTaskId,
+          { _tag: "FreshTransitionWithoutOperation" as const }
+        ] as const
+      }
+      const operationValue = decodeSync(
+        Schema.Struct({ operationId: BigIntWire }),
+        operation.value,
+        `malformed durable transition operation for model task ${modelTaskId}`
+      )
+      return [
+        modelTaskId,
+        {
+          _tag: "DurableTransitionOperation" as const,
+          modelOperationId: exactInteger(
+            operationValue.operationId,
+            "operation"
+          )
+        }
+      ] as const
+    })
   )
   const transitionTags = new Map(
     selector.transitionTags["#map"].map(([task, tag]) => [
@@ -699,32 +850,138 @@ const mapsFrom = (
       tag
     ])
   )
-  if (operationIds.size !== 4 || transitionTags.size !== 4) {
+  if (
+    executorResourceUses.size !== 4
+    || transitionOperations.size !== 4
+    || transitionTags.size !== 4
+  ) {
     throw new TraceDecodeError({
       detail:
-        "operation and transition maps must contain each bounded model task exactly once",
+        "resource-use, transition-operation, and transition-tag maps must contain each bounded model task exactly once",
       reason: "MalformedIdentity"
     })
   }
-  return { operationIds, transitionTags }
+  return { executorResourceUses, transitionOperations, transitionTags }
 }
 
 const decisionEntries = (
   taskIds: ReadonlyArray<ModelTaskId>,
-  operationIds: ReadonlyMap<ModelTaskId, ModelOperationId>,
+  executorResourceUses: ReadonlyMap<
+    ModelTaskId,
+    DecisionEntry["executorResourceUse"]
+  >,
+  transitionOperations: ReadonlyMap<
+    ModelTaskId,
+    DecisionEntry["transitionOperation"]
+  >,
   transitionTags: ReadonlyMap<ModelTaskId, string>
 ): ReadonlyArray<DecisionEntry> =>
   taskIds.map((modelTaskId) => {
-    const modelOperationId = operationIds.get(modelTaskId)
+    const executorResourceUse = executorResourceUses.get(modelTaskId)
+    const transitionOperation = transitionOperations.get(modelTaskId)
     const transitionTag = transitionTags.get(modelTaskId)
-    if (modelOperationId === undefined || transitionTag === undefined) {
+    if (
+      executorResourceUse === undefined
+      || transitionOperation === undefined
+      || transitionTag === undefined
+    ) {
       throw new TraceDecodeError({
         detail: `missing decision mapping for model task ${modelTaskId}`,
         reason: "MissingDecisionField"
       })
     }
-    return { modelOperationId, modelTaskId, transitionTag }
+    return {
+      executorResourceUse,
+      modelTaskId,
+      transitionOperation,
+      transitionTag
+    }
   })
+
+const activationFrom = (
+  state: typeof DisplayedModelStateWire.Type
+): ActivationProjection => {
+  const owners = state.activation.owners["#map"].flatMap(
+    ([task, owner]): ReadonlyArray<ActivationProjection["owners"][number]> => {
+      if (owner.tag === "NoActivationOwner") return []
+      const modelTaskId = exactInteger(task, "task")
+      if (owner.tag === "PreIntentActivationOwner") {
+        return [{ modelTaskId, phase: "PreIntent" }]
+      }
+      const ownerValue = decodeSync(
+        Schema.Struct({ operationId: BigIntWire }),
+        owner.value,
+        `malformed post-intent activation owner for model task ${modelTaskId}`
+      )
+      return [{
+        modelOperationId: exactInteger(ownerValue.operationId, "operation"),
+        modelTaskId,
+        phase: "PostIntent"
+      }]
+    }
+  )
+  const reservedPositions = state.activation.positions["#map"].flatMap(
+    ([task, position]): ReadonlyArray<
+      ActivationProjection["reservedPositions"][number]
+    > => {
+      const modelTaskId = exactInteger(task, "task")
+      if (
+        position.tag === "ActivationPositionAvailable"
+        || position.tag === "ActivationPositionOccupied"
+      ) return []
+      if (position.tag === "ActivationPositionReserved") {
+        return [{ correlation: "SelectedTransition", modelTaskId }]
+      }
+      const positionValue = decodeSync(
+        Schema.Struct({ operationId: BigIntWire }),
+        position.value,
+        `malformed retained activation position for model task ${modelTaskId}`
+      )
+      return [{
+        correlation: "Operation",
+        modelOperationId: exactInteger(positionValue.operationId, "operation"),
+        modelTaskId
+      }]
+    }
+  )
+  return {
+    activationInProgressModelTaskIds: sortedIdentities(
+      state.activation.activationInProgress
+    ),
+    derivedModelTaskIds: sortedIdentities(
+      state.activation.derivedTransitions
+    ),
+    freshlyObservedModelTaskIds: sortedIdentities(
+      state.activation.freshlyObservedCapacity
+    ),
+    isolatedModelTaskIds: sortedIdentities(
+      state.activation.isolatedSubjects
+    ),
+    owners: [...owners].sort(
+      (left, right) => Number(left.modelTaskId) - Number(right.modelTaskId)
+    ),
+    postIntentExitedModelTaskIds: sortedIdentities(
+      state.activation.postIntentExited
+    ),
+    preIntentInterruptedModelTaskIds: sortedIdentities(
+      state.activation.preIntentInterrupted
+    ),
+    providerConsumingModelTaskIds: sortedIdentities(
+      state.activation.providerConsuming
+    ),
+    reservedPositions: [...reservedPositions].sort(
+      (left, right) => Number(left.modelTaskId) - Number(right.modelTaskId)
+    ),
+    resultsRecordedModelTaskIds: sortedIdentities(
+      state.activation.resultsRecorded
+    ),
+    runnerModelTaskIds: sortedIdentities(state.activation.runners),
+    selectedModelTaskIds: sortedIdentities(
+      state.activation.selectedTransitions
+    ),
+    triggerPending: state.activation.triggerPending
+  }
+}
 
 const explanationsFrom = (
   selector: typeof SelectorProjectionWire.Type
@@ -841,9 +1098,10 @@ const storyTaskStatesFrom = (
 export const toMbtComparable = (
   frame: Omit<NormalizedFrame, "comparison">
 ): MbtComparableProjection => ({
+  activation: frame.activation,
   admissionCapacity: frame.capacity,
-  admittedModelOperationIds:
-    frame.admission.map(({ modelOperationId }) => modelOperationId),
+  admittedTransitionOperations:
+    frame.admission.map(({ transitionOperation }) => transitionOperation),
   admittedModelTaskIds:
     frame.admission.map(({ modelTaskId }) => modelTaskId),
   admittedTransitionTags:
@@ -851,8 +1109,8 @@ export const toMbtComparable = (
   admissionExplanations: frame.explanations,
   admissionReservedModelTaskIds: frame.reservedModelTaskIds,
   coordinatorRunning: frame.coordinatorStatus === "Running",
-  frontierModelOperationIds:
-    frame.frontier.map(({ modelOperationId }) => modelOperationId),
+  frontierTransitionOperations:
+    frame.frontier.map(({ transitionOperation }) => transitionOperation),
   frontierModelTaskIds:
     frame.frontier.map(({ modelTaskId }) => modelTaskId),
   frontierTransitionTags:
@@ -890,13 +1148,19 @@ const frameFrom = (
   const selector = state.selectorProjection
   const frontierTaskIds = sortedIdentities(selector.frontierTaskIds)
   const admittedTaskIds = sortedIdentities(selector.admittedTaskIds)
-  const { operationIds, transitionTags } = mapsFrom(selector)
+  const {
+    executorResourceUses,
+    transitionOperations,
+    transitionTags
+  } = mapsFrom(selector)
   const pickedModelTaskId = pickedTaskFrom(rawState)
   const frame: Omit<NormalizedFrame, "comparison"> = {
     action: actionFrom(rawState, traceKind),
+    activation: activationFrom(state),
     admission: decisionEntries(
       admittedTaskIds,
-      operationIds,
+      executorResourceUses,
+      transitionOperations,
       transitionTags
     ),
     capacity: exactInteger(selector.capacity, "value"),
@@ -904,7 +1168,8 @@ const frameFrom = (
     explanations: explanationsFrom(selector),
     frontier: decisionEntries(
       frontierTaskIds,
-      operationIds,
+      executorResourceUses,
+      transitionOperations,
       transitionTags
     ),
     occupiedModelTaskIds: sortedIdentities(selector.occupiedTaskIds),
@@ -963,6 +1228,7 @@ const decodeTraceUnsafe = (
       decodedFields: displayedFieldNames,
       projectedAwayFields: [
         "authority blockers",
+        "activation registration counts and release-correlation diagnostics",
         "control epochs",
         "effect identity sets and counters",
         "reconstructed knowledge facts and observed-authority revision",

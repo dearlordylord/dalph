@@ -1,11 +1,22 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { describe, expect, it } from "vitest"
+import { TaskWorkCapacity } from "../../../packages/orchestrator/src/domain.js"
+import {
+  JournalStore,
+  memoryJournalStoreLayer
+} from "../../../packages/orchestrator/src/journal-store.js"
 import {
   frontierRecoveryReconstructionActions,
   frontierRecoveryReconstructionConformanceVersion
 } from "../../../packages/orchestrator/test/frontier-recovery/frontier-recovery-conformance.js"
+import type {
+  FrontierRecoveryReconstructionProjection
+} from "../../../packages/orchestrator/test/frontier-recovery/frontier-recovery-projection.js"
+import {
+  makeFrontierRecoveryReconstructionControls
+} from "../../../packages/orchestrator/test/frontier-recovery/frontier-recovery-reconstruction.js"
 import {
   AdmissionCapacity,
   BigIntWire,
@@ -15,6 +26,8 @@ import {
   ImplementationFixtureSchema,
   ItfEnvelopeWire,
   type MbtComparableProjection,
+  ModelOperationId,
+  ModelTaskId,
   retainedReconstructionActions,
   SelectorProjectionWire,
   TraceDecodeError
@@ -120,14 +133,35 @@ const expectedEntries = (
   taskIds: ReadonlyArray<string>,
   projection: typeof SelectorProjectionWire.Type
 ): ReadonlyArray<{
-  readonly modelOperationId: string
+  readonly executorResourceUse: string
   readonly modelTaskId: string
+  readonly transitionOperation:
+    | { readonly _tag: "FreshTransitionWithoutOperation" }
+    | {
+      readonly _tag: "DurableTransitionOperation"
+      readonly modelOperationId: string
+    }
   readonly transitionTag: string
 }> => {
-  const operations = new Map(
-    projection.operationIds["#map"].map(([task, operation]) => [
+  const resourceUses = new Map(
+    projection.executorResourceUses["#map"].map(([task, resourceUse]) => [
       task["#bigint"],
-      operation["#bigint"]
+      resourceUse.tag
+    ])
+  )
+  const operations = new Map(
+    projection.transitionOperations["#map"].map(([task, operation]) => [
+      task["#bigint"],
+      operation.tag === "FreshTransitionWithoutOperation"
+        ? { _tag: "FreshTransitionWithoutOperation" as const }
+        : {
+          _tag: "DurableTransitionOperation" as const,
+          modelOperationId: integer(
+            Schema.decodeUnknownSync(
+              Schema.Struct({ operationId: BigIntWire })
+            )(operation.value).operationId
+          )
+        }
     ])
   )
   const tags = new Map(
@@ -137,17 +171,20 @@ const expectedEntries = (
     ])
   )
   return taskIds.map((modelTaskId) => {
-    const modelOperationId = operations.get(modelTaskId)
+    const executorResourceUse = resourceUses.get(modelTaskId)
+    const transitionOperation = operations.get(modelTaskId)
     const transitionTag = tags.get(modelTaskId)
     if (
-      modelOperationId === undefined
+      executorResourceUse === undefined
+      || transitionOperation === undefined
       || transitionTag === undefined
     ) {
       throw new Error(`fixture lacks decision mapping for ${modelTaskId}`)
     }
     return {
-      modelOperationId,
+      executorResourceUse,
       modelTaskId,
+      transitionOperation,
       transitionTag
     }
   })
@@ -169,6 +206,85 @@ const expectedPickedTask = (
     return picked.tag === "None" ? undefined : picked.value["#bigint"]
   }
   return picked["#bigint"]
+}
+
+const productionComparableFrom = (
+  state: FrontierRecoveryReconstructionProjection
+): MbtComparableProjection => {
+  const taskId = (value: bigint) =>
+    Schema.decodeUnknownSync(ModelTaskId)(value.toString())
+  const operationId = (value: bigint) =>
+    Schema.decodeUnknownSync(ModelOperationId)(value.toString())
+  const transitionOperation = (
+    operation: FrontierRecoveryReconstructionProjection[
+      "frontierTransitionOperations"
+    ][number]
+  ): MbtComparableProjection["frontierTransitionOperations"][number] =>
+    operation._tag === "FreshTransitionWithoutOperation"
+      ? { _tag: "FreshTransitionWithoutOperation" }
+      : {
+        _tag: "DurableTransitionOperation",
+        modelOperationId: operationId(operation.modelOperationId)
+      }
+  return {
+    activation: {
+      activationInProgressModelTaskIds:
+        state.activation.activationInProgressModelTaskIds.map(taskId),
+      derivedModelTaskIds:
+        state.activation.derivedModelTaskIds.map(taskId),
+      freshlyObservedModelTaskIds:
+        state.activation.freshlyObservedModelTaskIds.map(taskId),
+      isolatedModelTaskIds:
+        state.activation.isolatedModelTaskIds.map(taskId),
+      owners: state.activation.owners.map((owner) => ({
+        ...(owner.modelOperationId === undefined
+          ? {}
+          : { modelOperationId: operationId(owner.modelOperationId) }),
+        modelTaskId: taskId(owner.modelTaskId),
+        phase: owner.phase
+      })),
+      postIntentExitedModelTaskIds:
+        state.activation.postIntentExitedModelTaskIds.map(taskId),
+      preIntentInterruptedModelTaskIds:
+        state.activation.preIntentInterruptedModelTaskIds.map(taskId),
+      providerConsumingModelTaskIds:
+        state.activation.providerConsumingModelTaskIds.map(taskId),
+      reservedPositions: state.activation.reservedPositions.map((position) => ({
+        correlation: position.correlation,
+        ...(position.modelOperationId === undefined
+          ? {}
+          : { modelOperationId: operationId(position.modelOperationId) }),
+        modelTaskId: taskId(position.modelTaskId)
+      })),
+      resultsRecordedModelTaskIds:
+        state.activation.resultsRecordedModelTaskIds.map(taskId),
+      runnerModelTaskIds:
+        state.activation.runnerModelTaskIds.map(taskId),
+      selectedModelTaskIds:
+        state.activation.selectedModelTaskIds.map(taskId),
+      triggerPending: state.activation.triggerPending
+    },
+    admissionCapacity: Schema.decodeUnknownSync(AdmissionCapacity)(
+      state.admissionCapacity.toString()
+    ),
+    admittedModelTaskIds: state.admittedModelTaskIds.map(taskId),
+    admittedTransitionOperations:
+      state.admittedTransitionOperations.map(transitionOperation),
+    admittedTransitionTags: state.admittedTransitionTags,
+    admissionExplanations: state.admissionExplanations.map((explanation) => ({
+      modelTaskId: taskId(explanation.modelTaskId),
+      tag: explanation.tag,
+      wakeCondition: explanation.wakeCondition
+    })),
+    admissionReservedModelTaskIds:
+      state.admissionReservedModelTaskIds.map(taskId),
+    coordinatorRunning: state.coordinatorRunning,
+    frontierModelTaskIds: state.frontierModelTaskIds.map(taskId),
+    frontierTransitionOperations:
+      state.frontierTransitionOperations.map(transitionOperation),
+    frontierTransitionTags: state.frontierTransitionTags,
+    occupiedModelTaskIds: state.occupiedModelTaskIds.map(taskId)
+  }
 }
 
 const expectReason = (
@@ -226,8 +342,12 @@ describe("ITF to normalized frame boundary", () => {
     expect(
       dag.edges.filter((edge) => edge.source === dag.nodes[0]?.id)
         .map((edge) => edge.action)
-    ).toEqual(["reconstructionStep", "weakenedCapacityStep(task 0)"])
-    expect(dag.edges.some((edge) => edge.traceKinds.length > 1)).toBe(true)
+    ).toEqual([
+      "orchestratorCommitsNextFreshTaskClaimIntent",
+      "taskTrackerReturnsTargetClosureReadWithPredecessor",
+      "weakenedCapacityStep(task 0)"
+    ])
+    expect(dag.nodes[0]?.occurrences).toHaveLength(3)
   })
 
   it("treats ITF set and map serialization order as semantically irrelevant", () => {
@@ -384,18 +504,57 @@ describe("ITF to normalized frame boundary", () => {
     })
   })
 
-  it("uses the existing version-3 closed reconstruction action inventory", () => {
-    expect(frontierRecoveryReconstructionConformanceVersion).toBe(3)
+  it("uses the existing version-5 closed reconstruction action inventory", () => {
+    expect(frontierRecoveryReconstructionConformanceVersion).toBe(5)
     expect([...retainedReconstructionActions].sort()).toEqual(
       [...frontierRecoveryReconstructionActions].sort()
     )
   })
 
-  it("equals the existing version-3 MBT comparable projection at every step", () => {
+  it("equals the existing version-5 MBT comparable projection at every step", () => {
     const trace = decode(raw, manifest.provenance, implementation)
     expect(trace.frames.map(({ comparison }) => comparison)).toEqual(
       implementation.map(() => ({ status: "Match" }))
     )
+  })
+
+  it("equals fresh production-backed version-5 reconstruction projections", async () => {
+    const services = Effect.runSync(
+      Layer.build(memoryJournalStoreLayer).pipe(Effect.scoped)
+    )
+    const controls = Effect.runSync(
+      makeFrontierRecoveryReconstructionControls({
+        capacity: TaskWorkCapacity.make(1),
+        coordinatorRunning: true,
+        journal: Context.get(services, JournalStore)
+      }).pipe(Effect.orDie)
+    )
+    try {
+      const production = []
+      await Effect.runPromise(controls.init())
+      production.push(productionComparableFrom(
+        await Effect.runPromise(controls.getState())
+      ))
+      await Effect.runPromise(
+        controls.orchestratorCommitsNextFreshTaskClaimIntent()
+      )
+      production.push(productionComparableFrom(
+        await Effect.runPromise(controls.getState())
+      ))
+      await Effect.runPromise(
+        controls.orchestratorCommitsNextFreshTaskClaimIntent()
+      )
+      production.push(productionComparableFrom(
+        await Effect.runPromise(controls.getState())
+      ))
+
+      const trace = decode(raw, manifest.provenance, production)
+      expect(trace.frames.map(({ comparison }) => comparison)).toEqual(
+        production.map(() => ({ status: "Match" }))
+      )
+    } finally {
+      await Effect.runPromise(controls.close())
+    }
   })
 
   it("reports the first implementation divergence without deciding correctness", () => {
@@ -420,6 +579,7 @@ describe("ITF to normalized frame boundary", () => {
   })
 
   it.each([
+    ["activation", 5, "claimActivationOwnership"],
     ["restart", 7, "restart"],
     ["counterexample", 3, "weakenedCapacityStep"]
   ] as const)("decodes the retained %s trace", (name, frameCount, finalAction) => {
@@ -451,16 +611,19 @@ describe("fail-closed inputs", () => {
     }
   }
 
-  it("rejects an implementation operation identity below the model sentinel", () => {
+  it("rejects a negative durable implementation operation identity", () => {
     const changed: unknown = clone(implementationFixture)
     if (!isRecord(changed) || !Array.isArray(changed.frames)) {
       throw new Error("implementation fixture has no frames")
     }
     const first = changed.frames[0]
-    if (!isRecord(first) || !Array.isArray(first.admittedModelOperationIds)) {
-      throw new Error("implementation fixture has no admitted operation IDs")
+    if (!isRecord(first) || !Array.isArray(first.admittedTransitionOperations)) {
+      throw new Error("implementation fixture has no admitted transition operations")
     }
-    first.admittedModelOperationIds[0] = "-2"
+    first.admittedTransitionOperations[0] = {
+      _tag: "DurableTransitionOperation",
+      modelOperationId: "-1"
+    }
     expect(() =>
       Schema.decodeUnknownSync(ImplementationFixtureSchema)(changed)
     ).toThrow()
@@ -519,6 +682,19 @@ describe("fail-closed inputs", () => {
     const changed = clone(raw)
     delete mutableSelector(requiredState(changed.states, 0)).reservationTaskIds
     expectReason(changed, "MissingDecisionField")
+  })
+
+  it("rejects removal of activation ownership", () => {
+    const activationManifest = Schema.decodeUnknownSync(
+      FixtureManifestSchema
+    )(readJson(resolve(fixtureRoot, "activation.manifest.json")))
+    const changed = clone(
+      Schema.decodeUnknownSync(ItfEnvelopeWire)(
+        readJson(resolve(fixtureRoot, activationManifest.rawItf))
+      )
+    )
+    delete mutableModelState(requiredState(changed.states, 4)).activation
+    expectReason(changed, "MissingDecisionField", activationManifest.provenance)
   })
 
   it("rejects an unknown closed Quint story variant", () => {

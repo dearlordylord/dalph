@@ -1,5 +1,4 @@
 {
-  "implementationProjection": "normal.mbt-projection.json",
   "provenance": {
     "dalphRevision": "a8a3d078c9dc303b7ac1d5150dfeb8b56072f572",
     "init": "init",
@@ -8,9 +7,9 @@
     "projectionVersion": 5,
     "quintVersion": "0.32.0",
     "rendererVersion": "observed-dag-prototype@1",
-    "seed": "131",
-    "step": "orchestratorCommitsNextFreshTaskClaimIntent",
-    "traceKind": "sampled"
+    "seed": "132151",
+    "step": "activationOwnedThenDerivedPrefixStep",
+    "traceKind": "activation"
   },
-  "rawItf": "normal.itf.json"
+  "rawItf": "activation.itf.json"
 }

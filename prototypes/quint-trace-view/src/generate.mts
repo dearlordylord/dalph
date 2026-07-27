@@ -17,6 +17,7 @@ import { Effect, Schema } from "effect"
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(packageRoot, "..", "..")
 const manifests = [
+  "activation",
   "normal",
   "responsibility-first",
   "restart",

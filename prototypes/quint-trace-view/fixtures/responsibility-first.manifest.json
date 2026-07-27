@@ -1,14 +1,14 @@
 {
   "provenance": {
-    "dalphRevision": "1f365307f",
+    "dalphRevision": "a8a3d078c9dc303b7ac1d5150dfeb8b56072f572",
     "init": "initCapacityOneResponsibilityFirstProfile",
-    "modelRevision": "1f365307f",
-    "modelSha256": "2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1",
-    "projectionVersion": 3,
+    "modelRevision": "a8a3d078c9dc303b7ac1d5150dfeb8b56072f572",
+    "modelSha256": "ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972",
+    "projectionVersion": 5,
     "quintVersion": "0.32.0",
     "rendererVersion": "observed-dag-prototype@1",
     "seed": "131137",
-    "step": "reconstructionStep",
+    "step": "orchestratorCommitsNextFreshTaskClaimIntent",
     "traceKind": "sampled"
   },
   "rawItf": "responsibility-first.itf.json"

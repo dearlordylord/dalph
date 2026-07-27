@@ -4,7 +4,10 @@ module frontierRecoveryRestartTrace {
   import frontierRecovery(CAPACITY = 1).* from "./frontierRecovery"
 
   action restartTraceStep: bool = any {
-    reconstructionStep,
+    orchestratorCommitsNextFreshTaskClaimIntent,
+    taskTrackerReturnsTargetClosureReadAtNextRevision,
+    taskTrackerReturnsTargetClosureReadWithPredecessor,
+    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage,
     crash,
     restart,
   }

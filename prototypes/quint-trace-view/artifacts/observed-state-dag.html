@@ -106,77 +106,63 @@
         <dt>Task A obligation</dt><dd>Unowned · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · operation -1</dd>
+        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · pre-intent selection · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
       </dl>
       <p class="changes">Initial state supplied by the named Quint scenario</p>
     </article><article class="milestone">
-      <header><span>2</span><div><small>S1 · commitFirstIntent</small><h3>record first claim intent</h3></div></header>
-      <p class="why">The journal now creates an Outstanding obligation before crossing the claim boundary.</p>
-      <dl>
-        <dt>Coordinator</dt><dd>Running</dd>
-        <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
-        <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
-        <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
-        <dt>Task C obligation</dt><dd>Unowned</dd>
-        <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
-
-      </dl>
-      <p class="changes">Task A responsibility: Unowned → Outstanding</p>
-    </article><article class="milestone">
-      <header><span>3</span><div><small>S2 · crash</small><h3>coordinator crashes</h3></div></header>
+      <header><span>2</span><div><small>S2 · crash</small><h3>coordinator crashes</h3></div></header>
       <p class="why">Only the process-local coordinator stops. Durable intent and responsibility remain.</p>
       <dl>
         <dt>Coordinator</dt><dd>Crashed</dd>
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Derived projection (inactive)</dt><dd>{A, C} → {A, C}</dd>
 
       </dl>
       <p class="changes">coordinator: Running → Crashed</p>
     </article><article class="milestone">
-      <header><span>4</span><div><small>S3 · restart</small><h3>coordinator restarts</h3></div></header>
+      <header><span>3</span><div><small>S3 · restart</small><h3>coordinator restarts</h3></div></header>
       <p class="why">A new activation starts. Pre-crash authority knowledge is no longer usable.</p>
       <dl>
         <dt>Coordinator</dt><dd>Running</dd>
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
       </dl>
       <p class="changes">coordinator: Crashed → Running</p>
     </article><article class="milestone">
-      <header><span>5</span><div><small>S4 · observeTask</small><h3>reread task authority</h3></div></header>
+      <header><span>4</span><div><small>S4 · observeTask</small><h3>reread task authority</h3></div></header>
       <p class="why">Dalph rereads the tracker-owned claim fact for this exact task and operation.</p>
       <dl>
         <dt>Coordinator</dt><dd>Running</dd>
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
       </dl>
       <p class="changes">Task A knowledge activation: 0 → 1 · Task A knowledge revision: 0 → 1</p>
     </article><article class="milestone">
-      <header><span>6</span><div><small>S5 · requestApplies</small><h3>authority request applies</h3></div></header>
+      <header><span>5</span><div><small>S5 · requestApplies</small><h3>authority request applies</h3></div></header>
       <p class="why">After the fresh check, the same operation may safely reach the authority boundary.</p>
       <dl>
         <dt>Coordinator</dt><dd>Running</dd>
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -184,8 +170,8 @@
       <p class="changes">Task A claim: Unclaimed → ActiveClaim · Task A authority revision: 0 → 1</p>
     </article></div>
     <details class="evidence"><summary>Real Quint evidence · 6 frames</summary>
-    <p class="provenance">frontierRecovery_test.qnt:78</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a6233814c&quot;,&quot;modelRevision&quot;:&quot;a6233814c&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13101&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;crashAfterIntentRequiresFreshReadTest&quot;,&quot;scenarioTest&quot;:&quot;crashAfterIntentRequiresFreshReadTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-crash-after-intent&quot;}</p>
+    <p class="provenance">frontierRecovery_test.qnt:149</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13101&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;crashAfterIntentRequiresFreshReadTest&quot;,&quot;scenarioTest&quot;:&quot;crashAfterIntentRequiresFreshReadTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-crash-after-intent&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -210,7 +196,7 @@
         <dt>Task A obligation</dt><dd>Unowned · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · operation -1</dd>
+        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · pre-intent selection · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -224,7 +210,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -238,7 +224,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -252,7 +238,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · RunningInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -266,7 +252,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · RunningInvocation</dd>
         <dt>Task A control</dt><dd>Paused</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -280,7 +266,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Paused</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -294,7 +280,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Paused</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -308,7 +294,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Paused</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -322,7 +308,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -336,7 +322,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -350,7 +336,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · InterruptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -387,7 +373,7 @@
     <p class="gap"><strong>Model gap:</strong> the current Quint selector always exports an empty occupied-task set. This trace proves pause/interruption and responsibility-first ordering separately; it does not yet show one end-to-end occupied-position handoff to another task.</p>
     <details class="evidence"><summary>Real Quint evidence · 22 frames</summary>
     <p class="provenance">retained generated trace</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13106&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;pauseInterruptResumeRereadsBeforeReinvocationTest&quot;,&quot;scenarioTest&quot;:&quot;pauseInterruptResumeRereadsBeforeReinvocationTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-pause-resume&quot;}</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13106&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;pauseInterruptResumeRereadsBeforeReinvocationTest&quot;,&quot;scenarioTest&quot;:&quot;pauseInterruptResumeRereadsBeforeReinvocationTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-pause-resume&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -428,7 +414,7 @@
         <dt>Task A obligation</dt><dd>Unowned · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · operation -1</dd>
+        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · pre-intent selection · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -442,7 +428,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -456,7 +442,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Claim</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -470,7 +456,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Worktree</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -484,7 +470,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Worktree</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -498,7 +484,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Worktree</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -512,7 +498,7 @@
         <dt>Task A obligation</dt><dd>Settled · No</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -521,8 +507,8 @@
     </article></div>
     <p class="gap"><strong>Model boundary:</strong> this trace proves no duplicate modeled completion effect. WIP preservation and dependent-task release are specified but not represented end-to-end in this Quint trace.</p>
     <details class="evidence"><summary>Real Quint evidence · 8 frames</summary>
-    <p class="provenance">frontierRecovery_test.qnt:198</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a6233814c&quot;,&quot;modelRevision&quot;:&quot;a6233814c&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13105&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;externallyCompletedTaskSettlesWithoutDuplicateEffectTest&quot;,&quot;scenarioTest&quot;:&quot;externallyCompletedTaskSettlesWithoutDuplicateEffectTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-external-completion&quot;}</p>
+    <p class="provenance">frontierRecovery_test.qnt:269</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13105&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;externallyCompletedTaskSettlesWithoutDuplicateEffectTest&quot;,&quot;scenarioTest&quot;:&quot;externallyCompletedTaskSettlesWithoutDuplicateEffectTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-external-completion&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -549,7 +535,7 @@
         <dt>Task A obligation</dt><dd>Unowned · Claim</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · operation -1</dd>
+        <dt>Task A transition</dt><dd>CommitFreshTaskClaimIntent · pre-intent selection · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -563,7 +549,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Worktree</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Missing worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 1 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -577,7 +563,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Session</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 2 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -591,7 +577,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · NoInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -605,7 +591,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Invocation</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 3 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -619,7 +605,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Promotion</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 4 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -633,7 +619,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · CompletionClaim</dd>
         <dt>Task A authority</dt><dd>ActiveClaim · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 5 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -647,7 +633,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · Completion</dd>
         <dt>Task A authority</dt><dd>CompletionClaim · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 6</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 6 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -661,7 +647,7 @@
         <dt>Task A obligation</dt><dd>Outstanding · ClaimDelete</dd>
         <dt>Task A authority</dt><dd>CompletionClaim · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 7</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 7 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -675,7 +661,7 @@
         <dt>Task A obligation</dt><dd>Settled · No</dd>
         <dt>Task A authority</dt><dd>Unclaimed · Available worktree · AcceptedInvocation</dd>
         <dt>Task A control</dt><dd>Active</dd>
-        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 8</dd>
+        <dt>Task A transition</dt><dd>CheckTaskClaim · operation 8 · UsesOneTaskWorkCapacityPosition</dd>
         <dt>Task C obligation</dt><dd>Unowned</dd>
         <dt>Frontier → admitted</dt><dd>{A, C} → {A, C}</dd>
 
@@ -684,7 +670,7 @@
     </article></div>
     <details class="evidence"><summary>Real Quint evidence · 34 frames</summary>
     <p class="provenance">retained generated trace</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13107&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;completeProtocolKeepsFinalitiesDistinctTest&quot;,&quot;scenarioTest&quot;:&quot;completeProtocolKeepsFinalitiesDistinctTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-success&quot;}</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13107&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;completeProtocolKeepsFinalitiesDistinctTest&quot;,&quot;scenarioTest&quot;:&quot;completeProtocolKeepsFinalitiesDistinctTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-success&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -1022,8 +1008,8 @@
   </svg></div>
     </details>
     <details class="evidence"><summary>Real Quint evidence · 9 frames</summary>
-    <p class="provenance">frontierRecovery_test.qnt:144</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a6233814c&quot;,&quot;modelRevision&quot;:&quot;a6233814c&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13103&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;claimLossIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;claimLossIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-claim-loss&quot;}</p>
+    <p class="provenance">frontierRecovery_test.qnt:215</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13103&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;claimLossIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;claimLossIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-claim-loss&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -1038,8 +1024,8 @@
 </table></div>
   </details>
     <details class="evidence"><summary>Real Quint evidence · 9 frames</summary>
-    <p class="provenance">frontierRecovery_test.qnt:174</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a6233814c&quot;,&quot;modelRevision&quot;:&quot;a6233814c&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13104&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;rewrittenTargetIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;rewrittenTargetIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-git-rewrite&quot;}</p>
+    <p class="provenance">frontierRecovery_test.qnt:245</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13104&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;rewrittenTargetIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;rewrittenTargetIsolatesOnlyAffectedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-git-rewrite&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -1055,7 +1041,7 @@
   </details>
     <details class="evidence"><summary>Real Quint evidence · 16 frames</summary>
     <p class="provenance">retained generated trace</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13108&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;lostWorktreeRecordsAttemptOutcomeTest&quot;,&quot;scenarioTest&quot;:&quot;lostWorktreeRecordsAttemptOutcomeTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-lost-worktree&quot;}</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13108&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;lostWorktreeRecordsAttemptOutcomeTest&quot;,&quot;scenarioTest&quot;:&quot;lostWorktreeRecordsAttemptOutcomeTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-lost-worktree&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>
@@ -1078,7 +1064,7 @@
   </details>
     <details class="evidence"><summary>Real Quint evidence · 4 frames</summary>
     <p class="provenance">retained generated trace</p>
-    <p class="provenance">{&quot;dalphRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelRevision&quot;:&quot;12c683601935ad5552548b54a910a66133dd5fc6&quot;,&quot;modelSha256&quot;:&quot;2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1&quot;,&quot;projectionVersion&quot;:3,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13109&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;newBlockerWaitsWithoutStoppingUnrelatedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;newBlockerWaitsWithoutStoppingUnrelatedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185&quot;,&quot;traceKind&quot;:&quot;story-blocker&quot;}</p>
+    <p class="provenance">{&quot;dalphRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelRevision&quot;:&quot;a8a3d078c9dc303b7ac1d5150dfeb8b56072f572&quot;,&quot;modelSha256&quot;:&quot;ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972&quot;,&quot;projectionVersion&quot;:5,&quot;quintVersion&quot;:&quot;0.32.0&quot;,&quot;rendererVersion&quot;:&quot;observed-dag-prototype@1&quot;,&quot;seed&quot;:&quot;13109&quot;,&quot;step&quot;:&quot;step&quot;,&quot;init&quot;:&quot;newBlockerWaitsWithoutStoppingUnrelatedTaskTest&quot;,&quot;scenarioTest&quot;:&quot;newBlockerWaitsWithoutStoppingUnrelatedTaskTest&quot;,&quot;scenarioTestSourceSha256&quot;:&quot;d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a&quot;,&quot;traceKind&quot;:&quot;story-blocker&quot;}</p>
     <div class="table-wrap"><table>
   <thead><tr><th>Step</th><th>Observed transition</th><th>What changed</th><th>Task A</th><th>Task C</th><th>Admitted tasks</th><th>Coordinator</th></tr></thead>
   <tbody><tr><td><code>0</code></td><td><code>init</code></td><td><code>Initial state from the existing Quint test</code></td><td><code>Claim · Unowned</code></td><td><code>Claim · Unowned</code></td><td><code>{A, C}</code></td><td><code>Running</code></td></tr>

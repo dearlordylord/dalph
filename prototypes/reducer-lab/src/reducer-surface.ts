@@ -72,17 +72,16 @@ export const workflowJournalEventCoverage = {
 } satisfies Coverage<WorkflowJournalEvent>
 
 export const responsibilityCoverage = {
-  ImplementationEvidenceResponsibility: excluded("No evidence-store driver."),
-  ImplementationReviewResponsibility: excluded("No reviewer driver."),
-  ReviewFindingsHandbackResponsibility: excluded("No review-handback driver."),
+  ExecutorInvocationResponsibility: excluded("No executor-boundary driver."),
   TaskClaimResponsibility: interactive("Created by a committed claim intent."),
-  TaskExecutionResponsibility: excluded("No executor driver."),
   TaskWorkSessionResponsibility: excluded("No task-work provider driver."),
   TaskWorktreeResponsibility: excluded("No Git authority driver.")
 } satisfies Coverage<WorkflowResponsibilityEntry>
 
 export const dispositionCoverage = {
   DependencyWait: observable("The real selector supports it; the thin fact editor does not construct prerequisites."),
+  ExecutorInvocationSettled: observable("The real selector supports it; the thin driver does not settle executor invocations."),
+  ExecutorInvocationWait: observable("The real selector supports it; the thin driver does not retry executor invocations."),
   FinalOutcome: observable("The real selector supports it; the thin fact editor does not construct terminal facts."),
   ForeignClaimIsolation: interactive("Available as a fresh authority fact."),
   MissingClaim: interactive("Available as a fresh authority fact."),
@@ -97,17 +96,19 @@ export const transitionCoverage = {
   CheckTaskClaim: observable("Shown when selected; driver execution is visibly missing."),
   CheckTaskWorkSession: observable("Shown when selected; driver execution is visibly missing."),
   CommitFreshTaskClaimIntent: interactive("Can be executed when admitted."),
-  ContinueImplementationEvidenceSealing: observable("Shown when selected; driver execution is visibly missing."),
-  ContinueImplementationReview: observable("Shown when selected; driver execution is visibly missing."),
-  ContinueReviewFindingsHandback: observable("Shown when selected; driver execution is visibly missing."),
-  ContinueTaskExecution: observable("Shown when selected; driver execution is visibly missing."),
+  ContinueExecutorInvocation: observable("Shown when selected; executor execution is visibly missing."),
+  ContinueFreshWorkflowOperation: observable("Shown when selected; driver execution is visibly missing."),
   ReconcileTaskClaim: observable("Shown when selected; driver execution is visibly missing."),
-  ReconcileTaskWorktree: observable("Shown when selected; driver execution is visibly missing.")
+  ReconcileTaskWorktree: observable("Shown when selected; driver execution is visibly missing."),
+  StartExecutorInvocation: observable("Shown when selected; executor execution is visibly missing.")
 } satisfies Coverage<RunnableFrontierTransition>
 
 export const explanationCoverage = {
+  ActivationInProgress: observable("Rendered if the process-local activation owner is already running it."),
   CapacityWait: observable("Rendered from real admission output."),
   DependencyWait: observable("Rendered if reached by the production selector."),
+  ExecutorInvocationSettlement: observable("Rendered if reached by the production selector."),
+  ExecutorInvocationWait: observable("Rendered if reached by the production selector."),
   FinalOutcome: observable("Rendered if reached by the production selector."),
   Isolation: observable("Rendered from a foreign-claim fact."),
   Pause: observable("Rendered from a paused fresh fact."),
@@ -121,4 +122,3 @@ export const finalityCoverage = {
   RunMayTerminate: observable("Rendered if the controlled state reaches it."),
   RunMustRemainActive: observable("Rendered from the current frontier and unsettled target.")
 } satisfies Coverage<RunFinalityDecision>
-

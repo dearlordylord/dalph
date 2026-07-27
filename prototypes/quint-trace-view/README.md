@@ -17,6 +17,13 @@ The secondary graph contains six retained samples; an absent edge is unknown,
 not disabled. The viewer never selects an action or computes a legal
 transition.
 
+The post-#133 refresh decodes conformance projection version 5. Fresh selected
+transitions and durable `OperationId` correlations are distinct tagged values;
+each transition shows the executor-declared outer-invocation capacity use; and
+activation owners, runners, selected transitions, reserved correlations, and
+pending triggers remain visible. The viewer contains no evidence-, review-, or
+handback-specific generic orchestration vocabulary.
+
 ## Run
 
 Use Node 22.22.2+ or 24.15.0+ and pnpm 10.29.3:
@@ -52,6 +59,7 @@ step, seed, and trace kind.
 
 | Trace | Raw ITF | Frames | Purpose |
 | --- | --- | ---: | --- |
+| Activation ownership | `fixtures/activation.itf.json` | 5 | One generated derive → reserve → own prefix exposes the process-local owner, runner, selected transition, and reserved correlation. |
 | Sampled | `fixtures/normal.itf.json` | 3 | Capacity-one selection of A while C has an exact `CapacityWait`. |
 | Responsibility first | `fixtures/responsibility-first.itf.json` | 1 | Capacity one admits outstanding C while fresh A has an exact `CapacityWait`. |
 | Restart | `fixtures/restart.itf.json` | 7 | Reconstruction steps, coordinator crash, and restart using only the closed reconstruction action inventory. |
@@ -78,11 +86,13 @@ Story 2's capacity comparison. Only the six nondeterministic exploration paths
 feed Story 5's secondary graph. The restart and counterexample traces remain
 retained decoder/conformance evidence.
 
-The sample's `fixtures/normal.mbt-projection.json` was independently captured
-from the existing version-3 production-backed MBT controls by running `init`
-and two `reconstructionStep` calls at capacity one. The test compares every
-frame's capacity, task and operation identities, transition tags, exact
-task-specific explanation, reservations, occupancy, and coordinator status.
+The sample's `fixtures/normal.mbt-projection.json` records the version-5
+comparable shape. A focused test independently creates fresh production-backed
+reconstruction controls, runs `init` and two
+`orchestratorCommitsNextFreshTaskClaimIntent` actions at capacity one, and
+compares every frame. The comparison includes activation, capacity, task and
+tagged operation identities, transition tags, exact task-specific explanation,
+reservations, occupancy, and coordinator status.
 
 Generated evidence for each trace:
 
@@ -98,12 +108,13 @@ deleted.
 
 ## Exact fixture commands
 
-The retained fixtures were produced from Dalph commit `a6233814c`, which is an
-ancestor of this prototype branch. The exact `specs/frontierRecovery.qnt`
+The refreshed fixtures were produced from post-#133 `master` commit
+`a8a3d078c9dc303b7ac1d5150dfeb8b56072f572`. The exact
+`specs/frontierRecovery.qnt`
 SHA-256 was
-`2c042fe67afd4a84e8481179ec82fc67bd72b198dffed58ec1c9150aaf8243a1`.
+`ecc53c65b24c980323ef42747402f9f0c871c3c8f6b45b415084c662d3583972`.
 The exact `specs/frontierRecovery_test.qnt` SHA-256 for the story traces was
-`abe0b81006cc8f291fcca9a479f0ea97de411fcef0ab221b3bb697e81472b185`.
+`d15d9ef1f0ac0865c58ca302c81b520a2d386cb11498a5a85c6196161681852a`.
 
 The six displayed paths were retained from this 1,500-path sample using the
 manifest names in the evidence table:
@@ -159,7 +170,7 @@ Normal sampled trace:
 pnpm exec quint run specs/frontierRecovery.qnt \
   --main frontierRecoveryCapacityOne \
   --init init \
-  --step reconstructionStep \
+  --step orchestratorCommitsNextFreshTaskClaimIntent \
   --max-steps 2 \
   --max-samples 1 \
   --n-traces 1 \
@@ -176,7 +187,7 @@ Responsibility-first capacity-one state:
 pnpm quint run specs/frontierRecovery.qnt \
   --main frontierRecoveryCapacityOne \
   --init initCapacityOneResponsibilityFirstProfile \
-  --step reconstructionStep \
+  --step orchestratorCommitsNextFreshTaskClaimIntent \
   --max-steps 0 \
   --max-samples 1 \
   --n-traces 1 \
@@ -187,8 +198,25 @@ pnpm quint run specs/frontierRecovery.qnt \
   --verbosity 1
 ```
 
-Restart candidates (sequence zero was retained). The copies recreate the exact
-absolute wrapper source recorded in the raw ITF:
+Activation ownership prefix:
+
+```sh
+pnpm exec quint run specs/frontierRecovery.qnt \
+  --main frontierRecoveryCapacityTwo \
+  --init init \
+  --step activationOwnedThenDerivedPrefixStep \
+  --max-steps 4 \
+  --max-samples 80 \
+  --n-traces 80 \
+  --seed 132151 \
+  --mbt \
+  --backend typescript \
+  --out-itf "activation_{seq}.json" \
+  --verbosity 0
+```
+
+Restart candidates (sequence 14 was retained because it ends in `restart`).
+The copies recreate the exact absolute wrapper source recorded in the raw ITF:
 
 ```sh
 cp specs/frontierRecovery.qnt /tmp/frontierRecovery.qnt
@@ -231,11 +259,11 @@ byte-identical canonical JSON traces.
 
 ## Test result
 
-Focused result on 2026-07-26:
+Focused result on 2026-07-27:
 
 ```text
 Test Files  1 passed (1)
-Tests       24 passed (24)
+Tests       27 passed (27)
 ```
 
 This throwaway story revision uses the focused prototype check. It does not add
@@ -245,10 +273,10 @@ Positive cases prove raw-ITF-to-frame preservation, the capacity-one
 responsibility-priority comparison, retained deterministic acceptance stories,
 meaningful branching from the reconciliation samples, equality with the existing
 MBT comparable projection at all three sampled steps, first-divergence
-reporting, agreement with the existing version-3 closed reconstruction action
-inventory, deterministic normalized bytes, and decoding of all three retained
-trace kinds. Artifact generation also hashes the checked-out Quint model and
-refuses to proceed unless it matches the manifest.
+reporting, agreement with the existing version-5 closed reconstruction action
+inventory, deterministic normalized bytes, decoding of activation ownership,
+and all three required trace kinds. Artifact generation also hashes the
+checked-out Quint model and refuses to proceed unless it matches the manifest.
 
 Fail-closed cases reject:
 
@@ -257,15 +285,15 @@ Fail-closed cases reject:
 - a model task identity outside the bounded `0..3` identity map;
 - an unsafe JavaScript state index that would lose integer precision; and
 - removal of a decision-bearing or displayed revision field;
+- removal of activation ownership state;
 - an unknown closed Quint state variant; and
 - incomplete or mismatched acceptance-test provenance.
 
 ## Performance observations
 
-On the retained 2,654,976 bytes of raw ITF (158 frames total), the latest warm
-`pnpm check` completed in 3.3 seconds: Vitest reported 514 ms, with the
-remaining time covering TypeScript compilation plus all thirty-nine presentation
-artifacts.
+On the retained 3,524,088 bytes of raw ITF (163 frames total), the latest warm
+`pnpm check` completed in 3.6 seconds. The remaining time after the focused
+tests covered TypeScript compilation plus all forty-one presentation artifacts.
 Regenerating twice produced identical SHA-256 hashes for every artifact.
 
 The normalized artifacts intentionally retain each raw ITF state, so this
@@ -279,19 +307,23 @@ Every displayed value comes from one schema-decoded field:
 - action and picked task from `mbt::actionTaken` and
   `mbt::nondetPicks.task`;
 - coordinator status from `state.coordinator.running`; and
+- process-local ownership, runner, selection, reservation correlation, and
+  trigger state from `state.activation`;
 - task pause from `state.control.taskPaused`;
 - task boundary, responsibility, isolation, and settlement from
   `state.workflow`;
 - task lifecycle, claim, worktree, invocation, target membership, Git
   compatibility, promotion, and revision from `state.authority`;
 - task observation and durable knowledge revision from `state.knowledge`; and
-- capacity, frontier, admission, task/operation identities, transition tags,
-  explanations, reservations, and occupancy from
+- capacity, frontier, admission, tagged transition-operation identities,
+  transition tags, executor-declared resource use, explanations, reservations,
+  and occupancy from
   `state.selectorProjection`.
 
 Projected away from the first-screen view:
 
 - authority fields not named above, including blockers and readability;
+- activation registration counts and release-correlation diagnostics;
 - control epochs;
 - effect identity sets and effect counters;
 - complete reconstructed facts and reconstruction graph evidence;
@@ -315,7 +347,8 @@ Unsupported inputs fail closed:
   counterexample action for counterexample traces);
 - model task identities outside `0..3`;
 - non-ITF, non-canonical, or lossy integer encodings;
-- the older tag-only selector projection without task-specific explanations;
+- selector projections without tagged transition operations,
+  executor-declared resource use, or task-specific explanations;
 - missing decision-bearing selector fields; and
 - traces containing zero or multiple imported `::state` variables.
 
@@ -324,11 +357,12 @@ implementation projection. It does not decide whether either side is correct.
 
 ## Adoption boundary
 
-If Dalph later adopts a trace explanation artifact, the normalized decoder,
-semantic tables, and observed graph may be useful as test/research tooling. A
-durable graph must retain the sampled/incomplete label unless an authoritative
-bounded explorer supplies every successor. Keep Quint and the existing MBT
-comparison authoritative.
+Adopt the normalized semantic table as the durable trace-explanation baseline.
+It is complete for every decoded frame and keeps each displayed value directly
+auditable. Retain the observed DAG only as a supplemental research view for
+reconvergent samples: it is materially clearer for those samples, but it cannot
+replace the table because absent edges remain unknown. Keep Quint and the
+existing MBT comparison authoritative.
 
 This result makes no decision about Effect Analyzer source analysis. That
 separate decision still requires all seven Decision B results in
@@ -348,10 +382,11 @@ uses strict standalone compilation and focused tests without a second
 lockfile or package-local quality configuration. Its retained action inventory
 cannot import production test code during standalone artifact generation
 without coupling the disposable package to Dalph internals, so a focused test
-imports the existing version-3 conformance inventory and fails on drift.
+imports the existing version-5 conformance inventory and fails on drift. The
+same test invokes fresh production reconstruction controls to prove model-frame
+equality at the current boundary.
 
-The final standards pass noted that model operation ID `-1` is a sentinel
-rather than a real operation identity. This prototype retains it because it is
-the exact existing Quint/MBT wire value and constrains the schema to `-1` or a
-nonnegative integer. A durable domain model should use a tagged
-`NoOperationYet | ModelOperationId` variant instead.
+Projection version 5 removed the earlier `-1` not-yet-created operation
+sentinel. The viewer now preserves the model's
+`FreshTransitionWithoutOperation | DurableTransitionOperation` distinction and
+rejects negative durable operation identities.
