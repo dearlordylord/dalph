@@ -128,21 +128,21 @@ const sampledProfiles = [
   {
     init: "init",
     name: "tracker proven-absence read witness",
-    step: "taskTrackerReportsProvenAbsenceInTargetClosure",
+    step: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
     steps: "1",
     witnesses: ["taskTrackerProvenAbsenceReadReached"]
   },
   {
     init: "init",
     name: "tracker incomparable-membership read witness",
-    step: "taskTrackerReportsIncomparableTargetClosureMembership",
+    step: "taskTrackerReturnsTargetClosureReadWithPredecessor",
     steps: "1",
     witnesses: ["taskTrackerIncomparableMembershipReadReached"]
   },
   {
     init: "init",
     name: "tracker compatible-replacement read witness",
-    step: "taskTrackerReportsCompatibleTargetClosureReplacement",
+    step: "taskTrackerReturnsTargetClosureReadAtNextRevision",
     steps: "1",
     witnesses: ["taskTrackerCompatibleReplacementReadReached"]
   }

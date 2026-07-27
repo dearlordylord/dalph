@@ -612,6 +612,16 @@ const decodeReconstructionModelState = (
         const admittedModelTaskIds = sortedBigInts(
           selector.admittedTaskIds
         ).map((task) => FrontierRecoveryModelTaskId.make(task))
+        const workflowHistoryProjection = modelWorkflowHistoryProjection(
+          state.reconstructionWorkflowHistory
+        )
+        const workflowEventTags = workflowHistoryProjection.map((record) =>
+          record._tag === "GraphObservationIntent"
+            ? "TrackerGraphObservationIntentRecorded" as const
+            : record._tag === "GraphOutcome"
+            ? "TrackerGraphOutcomeObserved" as const
+            : "TaskClaimAcquisitionIntended" as const
+        )
         const transitionTagFor = (taskId: bigint) => {
           const tag = selector.transitionTags.get(taskId)
           return tag === undefined
@@ -688,26 +698,8 @@ const decodeReconstructionModelState = (
           responsibilityProjection: modelResponsibilityProjection(
             reconstructionResponsibility
           ),
-          workflowHistoryProjection: modelWorkflowHistoryProjection(
-            state.reconstructionWorkflowHistory
-          ),
-          workflowEventTags: graphProfile !== undefined
-            ? [
-              "TrackerGraphObservationIntentRecorded",
-              "TrackerGraphOutcomeObserved",
-              "TrackerGraphObservationIntentRecorded",
-              "TrackerGraphOutcomeObserved"
-            ]
-            : responsibleModelTaskIds.length === 0
-            ? [
-              "TrackerGraphObservationIntentRecorded",
-              "TrackerGraphOutcomeObserved"
-            ]
-            : [
-              "TrackerGraphObservationIntentRecorded",
-              "TrackerGraphOutcomeObserved",
-              ...responsibleModelTaskIds.map(() => "TaskClaimAcquisitionIntended" as const)
-            ]
+          workflowEventTags,
+          workflowHistoryProjection
         } satisfies ReconstructionComparable
       })
     ),

@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { ClaimOwner, ClaimToken, OperationId } from "../../src/domain.js"
+import { OperationId } from "../../src/domain.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
@@ -24,6 +24,8 @@ import type { FrontierRecoveryModelTaskId, TargetClosureObservationInput } from 
 import {
   firstClaimOperationIdentity,
   frontierRecoveryClaimOperationEntries as claimOperationEntries,
+  frontierRecoveryClaimOwner,
+  frontierRecoveryClaimTokenFor,
   frontierRecoveryGraphObservationEntries as graphObservationEntries,
   frontierRecoveryRunId as runId,
   frontierRecoveryTarget as target,
@@ -152,9 +154,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         )
         const acquisition = TaskClaimAcquisition.make({
           operationId,
-          owner: ClaimOwner.make("frontier-recovery-owner"),
+          owner: frontierRecoveryClaimOwner,
           taskId,
-          token: ClaimToken.make(`frontier-recovery-token-${modelTaskId}`)
+          token: frontierRecoveryClaimTokenFor(modelTaskId)
         })
         const operation = makeTaskClaimAcquisitionOperation({
           acquisition,
@@ -291,12 +293,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             : "CompatibleReplacement" as const
           : "InitialObservation" as const
         : "InitialObservation" as const
-      const graphObservationIntents = records.filter(
+      const latestGraphIntent = records.findLast(
         ({ event }) => event._tag === "TrackerGraphObservationIntentRecorded"
-      )
-      // Negative one is the standard Array.at locator for the latest intent.
-      // eslint-disable-next-line no-magic-numbers
-      const latestGraphIntent = graphObservationIntents.at(-1)?.event
+      )?.event
       const latestGraphOutcome = latestGraphIntent?._tag
           === "TrackerGraphObservationIntentRecorded"
         ? records.findLast(({ event }) =>

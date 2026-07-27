@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { FixtureTarget, OperationId, RunId, TaskId, TrackerRevision } from "../../src/domain.js"
+import { ClaimOwner, ClaimToken, FixtureTarget, OperationId, RunId, TaskId, TrackerRevision } from "../../src/domain.js"
 import {
   FrontierRecoveryConformanceIssue,
   FrontierRecoveryModelOperationId,
@@ -13,6 +13,12 @@ export const frontierRecoveryRunId = RunId.make(
 export const frontierRecoveryTarget = FixtureTarget.make(
   "frontier-recovery-reconstruction-target"
 )
+export const frontierRecoveryClaimOwner = ClaimOwner.make(
+  "frontier-recovery-owner"
+)
+export const frontierRecoveryClaimTokenFor = (
+  modelTaskId: FrontierRecoveryModelTaskId
+) => ClaimToken.make(`frontier-recovery-token-${modelTaskId}`)
 
 /* eslint-disable no-magic-numbers -- Closed M2 identities are the versioned conformance manifest. */
 export const modelTaskA = FrontierRecoveryModelTaskId.make(0n)

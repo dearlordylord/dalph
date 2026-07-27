@@ -1,6 +1,5 @@
 import { Effect } from "effect"
-import type { OperationId, TaskId, TrackerRevision } from "../../src/domain.js"
-import { ClaimOwner, ClaimToken } from "../../src/domain.js"
+import type { ClaimOwner, ClaimToken, OperationId, TaskId, TrackerRevision } from "../../src/domain.js"
 import { intentRecordKey, type JournalRecord, outcomeRecordKey } from "../../src/journal-store.js"
 import type {
   BestAvailableDurableGraphKnowledge,
@@ -14,6 +13,7 @@ import {
   type FrontierRecoveryModelRevision,
   type FrontierRecoveryModelTaskId
 } from "./frontier-recovery-conformance.js"
+import { frontierRecoveryClaimOwner, frontierRecoveryClaimTokenFor } from "./frontier-recovery-fixture-identities.js"
 import type {
   FrontierRecoveryGraphKnowledgeProjection,
   FrontierRecoveryResponsibilityProjection,
@@ -148,9 +148,9 @@ const projectClaimIdentity = Effect.fn(
 ) {
   const modelTaskId = yield* mapping.taskToModel(acquisition.taskId)
   if (
-    acquisition.owner !== ClaimOwner.make("frontier-recovery-owner")
+    acquisition.owner !== frontierRecoveryClaimOwner
     || acquisition.token
-      !== ClaimToken.make(`frontier-recovery-token-${modelTaskId}`)
+      !== frontierRecoveryClaimTokenFor(modelTaskId)
   ) {
     return yield* projectionIssue(
       `M2 claim identity differs for task ${modelTaskId}`
