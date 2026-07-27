@@ -207,10 +207,40 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     )
     const initialStages = yield* Effect.forEach(initialTasks, makeCurrentGraphStage)
     const stages = yield* Ref.make<ReadonlyArray<WorkflowStage>>(initialStages)
+    const scheduledFreshTaskIds = yield* Ref.make<ReadonlySet<Task["id"]>>(
+      new Set(initialTasks.map(({ id }) => id))
+    )
     const readFrontier = Effect.fn("Workflow.readActivationFrontier")(
       function*() {
-        const current = yield* Ref.get(stages)
         const recovered = yield* recovery.readFrontier
+        const recoveredTaskIds = new Set([
+          ...recovered.explanations.flatMap(
+            (explanation) => "taskId" in explanation ? [explanation.taskId] : []
+          ),
+          ...recovered.transitions.map(({ taskId }) => taskId)
+        ])
+        const alreadyScheduled = yield* Ref.get(scheduledFreshTaskIds)
+        const newlyFresh = snapshot.eligibleTasks().filter(
+          ({ id }) =>
+            !alreadyScheduled.has(id)
+            && !recoveredTaskIds.has(id)
+        )
+        if (newlyFresh.length > 0) {
+          const added = yield* Effect.forEach(
+            newlyFresh,
+            makeCurrentGraphStage
+          )
+          yield* Ref.update(stages, (current) => [...current, ...added])
+          yield* Ref.update(
+            scheduledFreshTaskIds,
+            (current) =>
+              new Set([
+                ...current,
+                ...newlyFresh.map(({ id }) => id)
+              ])
+          )
+        }
+        const current = yield* Ref.get(stages)
         return {
           explanations: recovered.explanations,
           transitions: [

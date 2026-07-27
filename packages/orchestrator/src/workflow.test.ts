@@ -16,6 +16,7 @@ import {
   ImplementationReviewDisposition,
   ImplementationReviewSimulated,
   MatchingTaskWorkSessionReported,
+  OperationId,
   PlannedTaskAttemptPlanner,
   PlannedWorktreeReady,
   ProviderObservationId,
@@ -28,6 +29,7 @@ import {
   TaskAttemptPlanRecordAcknowledged,
   TaskAttemptPlanRecordingSimulated,
   TaskExecutorLocator,
+  TaskId,
   TaskRunner,
   TaskWorkCapacity,
   TaskWorkSessionId,
@@ -42,7 +44,8 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
-import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
+import { emptyManagedRecoveryActivationLayer, ManagedRecoveryActivation } from "./managed-activation.js"
+import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import type { TraceItem } from "./workflow.js"
 
 const fixture = (name: "singleton" | "wayfinder-105") => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
@@ -137,6 +140,52 @@ it.effect("simulates task-work establishment without provider protocol effects",
       "OperationSelected",
       "ImplementationConvergenceSimulated"
     ])
+  }))
+
+it.effect("adds a recovered task to fresh eligibility after its responsibility settles", () =>
+  Effect.gen(function*() {
+    const pending = yield* Ref.make(true)
+    const taskId = TaskId.make("task-only")
+    const transition = RunnableFrontierTransition.CheckTaskClaim({
+      operationId: OperationId.make("recovered-claim"),
+      taskId
+    })
+    const recovery = ManagedRecoveryActivation.of({
+      capacityEvidence: {
+        freshOccupiedInvocations: [],
+        freshlyReleasedOperationIds: new Set()
+      },
+      hasRecoveredWork: true,
+      readFrontier: Ref.get(pending).pipe(
+        Effect.map((isPending) => ({
+          explanations: [],
+          transitions: isPending ? [transition] : []
+        }))
+      ),
+      reconstructedReservedPositions: [],
+      runId: RunId.make("recovered-then-fresh"),
+      runTransition: () => Ref.set(pending, false)
+    })
+    const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
+    yield* runLayered(
+      runWorkflow(
+        FixtureTarget.make(fixture("singleton")),
+        TaskWorkCapacity.make(1)
+      ).pipe(
+        Effect.provideService(ManagedRecoveryActivation, recovery)
+      ),
+      Layer.succeed(
+        WorkflowTrace,
+        WorkflowTrace.of({
+          emit: (item) => Ref.update(items, (current) => [...current, item])
+        })
+      )
+    )
+
+    expect(yield* Ref.get(pending)).toBe(false)
+    expect((yield* Ref.get(items)).map(({ _tag }) => _tag)).toContain(
+      "TaskClaimAcquisitionIntended"
+    )
   }))
 
 it.effect("rejects authoritative implementation artifacts in simulated execution", () =>
