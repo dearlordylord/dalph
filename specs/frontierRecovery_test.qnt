@@ -237,8 +237,10 @@ module frontierRecoveryCapacityOneTest {
         state.workflow.get(C).responsibility == Unowned,
         state.selectorProjection.frontierTaskIds == Set(A, C),
         state.selectorProjection.admittedTaskIds == Set(A),
-        state.selectorProjection.operationIds.get(A) == 1,
-        state.selectorProjection.operationIds.get(C) == -1,
+        state.selectorProjection.transitionOperations.get(A)
+          == DurableTransitionOperation({ operationId: 1 }),
+        state.selectorProjection.transitionOperations.get(C)
+          == FreshTransitionWithoutOperation(()),
         state.selectorProjection.reservationTaskIds == Set(A),
         state.selectorProjection.explanations == Set({
           taskId: C,
