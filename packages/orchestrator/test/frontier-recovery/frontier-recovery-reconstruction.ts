@@ -91,7 +91,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     explanations: [],
     transitions: []
   }
-  let activationRunners: ReadonlySet<string> = new Set()
   let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map()
   let activationTriggerPending = true
   let freshlyObservedTaskIds: ReadonlySet<TaskId> = new Set()
@@ -283,10 +282,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               ({ taskId }) => taskId !== transition.taskId
             )
           }
-          activationRunners = new Set([
-            ...activationRunners,
-            registered.key
-          ])
         }
         return
       }
@@ -331,9 +326,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           .find(([, entry]) => entry.transition.taskId === transition.taskId)
         if (owner !== undefined) {
           yield* activationOwnership.remove(owner[0])
-          activationRunners = new Set(
-            [...activationRunners].filter((key) => key !== owner[0])
-          )
         }
         yield* activationController.cancelReservedPosition(selected)
         preIntentInterruptedTaskIds = new Set([
@@ -349,9 +341,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           .find(([, entry]) => entry.transition.taskId === transition.taskId)
         if (owner !== undefined) {
           yield* activationOwnership.remove(owner[0])
-          activationRunners = new Set(
-            [...activationRunners].filter((key) => key !== owner[0])
-          )
         }
         postIntentExitedTaskIds = new Set([
           ...postIntentExitedTaskIds,
@@ -366,9 +355,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           .find(([, entry]) => entry.transition.taskId === transition.taskId)
         if (owner !== undefined) {
           yield* activationOwnership.remove(owner[0])
-          activationRunners = new Set(
-            [...activationRunners].filter((key) => key !== owner[0])
-          )
           const ownedOperationId = Option.getOrUndefined(
             owner[1].operationId
           )
@@ -444,7 +430,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           freshOccupiedInvocations: [],
           reconstructedReservedPositions: []
         })
-        activationRunners = new Set()
         activationDerived = { explanations: [], transitions: [] }
         activationSelected = { explanations: [], transitions: [] }
         activationTriggerPending = false
@@ -466,7 +451,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ),
           reconstructedReservedPositions: []
         })
-        activationRunners = new Set()
         activationTriggerPending = true
         return
       }
@@ -802,10 +786,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             resultsRecordedTaskIds
           ),
           runnerModelTaskIds: yield* projectTaskIds(
-            [...activationRunners].flatMap((key) => {
-              const owner = ownerByKey.get(key)
-              return owner === undefined ? [] : [owner.transition.taskId]
-            })
+            [...ownerByKey.values()].map(({ transition }) => transition.taskId)
           ),
           selectedModelTaskIds: yield* projectTaskIds(
             activationSelected.transitions.map(({ taskId }) => taskId)
