@@ -3,12 +3,20 @@ import { Command, Runtime } from "foldkit"
 import { type Document, html } from "foldkit/html"
 import { m } from "foldkit/message"
 import {
-  actionLabel,
-  type DriverAction as DriverActionType,
+  executeLabMove,
   LabAction,
-  Projection,
-  projectLab
+  LabInput,
+  LabMoveExecution,
+  LabMoveId,
+  LabSnapshot,
+  LabSnapshotRevision,
+  reconstructLabSnapshot
 } from "./lab-engine.ts"
+import {
+  type LabDisplayAction,
+  LabViewModel,
+  presentLab
+} from "./lab-presenter.ts"
 
 const Branch = S.Struct({
   actions: S.Array(LabAction),
@@ -21,61 +29,120 @@ type Branch = typeof Branch.Type
 export const Model = S.Struct({
   activeBranchId: S.Number,
   branches: S.Array(Branch),
+  interactionError: S.NullOr(S.String),
   nextBranchId: S.Number,
-  projection: Projection,
-  requestId: S.Number
+  requestId: S.Number,
+  snapshot: S.NullOr(LabSnapshot),
+  viewModel: LabViewModel
 })
 export type Model = typeof Model.Type
 
 const ForkedAtCursor = m("ForkedAtCursor")
 const MovedCursor = m("MovedCursor", { cursor: S.Number })
-const ProjectionReady = m("ProjectionReady", {
-  projection: Projection,
-  requestId: S.Number
+const SnapshotReady = m("SnapshotReady", {
+  requestId: S.Number,
+  snapshot: LabSnapshot,
+  viewModel: LabViewModel
 })
 const SelectedBranch = m("SelectedBranch", { branchId: S.Number })
-const TriggeredDriverAction = m("TriggeredDriverAction", { actionId: S.String })
+const TriggeredLabMove = m("TriggeredLabMove", {
+  moveId: LabMoveId,
+  snapshotRevision: LabSnapshotRevision
+})
+
+const LabMoveResult = S.Union([
+  S.TaggedStruct("Executed", { execution: LabMoveExecution }),
+  S.TaggedStruct("Rejected", { reason: S.String })
+])
+
+const LabMoveFinished = m("LabMoveFinished", {
+  requestId: S.Number,
+  result: LabMoveResult
+})
 
 export const Message = S.Union([
   ForkedAtCursor,
+  LabMoveFinished,
   MovedCursor,
-  ProjectionReady,
   SelectedBranch,
-  TriggeredDriverAction
+  SnapshotReady,
+  TriggeredLabMove
 ])
 export type Message = typeof Message.Type
 
-const emptyProjection: Projection = {
-  actions: [],
-  admitted: [],
-  capacity: 1,
-  coordinatorRunning: true,
+const emptyViewModel: LabViewModel = {
+  actionGroups: [],
+  admittedRows: [],
+  capacityStatus: "computing · capacity 1",
+  coordinatorClass: "good",
+  coordinatorStatus: "Coordinator state computing",
   errors: [],
-  explanations: [],
+  explanationRows: [],
   finality: "computing",
-  frontier: [],
-  graphKnowledge: [],
+  frontierRows: [],
+  graphKnowledgeRows: [],
   journal: [],
-  knownTasks: [],
+  knownTasksMetric: "Known tasks: computing",
   notes: [],
-  reservedTasks: [],
-  responsibilities: [],
+  reservedTasksMetric: "Reserved: computing",
+  responsibilityRows: [],
+  revision: "computing",
   runPause: "computing",
   status: "computing",
   taskPause: "computing",
-  trackerTasks: ["A", "B", "C", "D"]
+  timelineLabels: [],
+  trackerAuthorityState: "Tracker authority and Dalph observation are computing."
 }
 
-const ComputeProjection = Command.define(
-  "ComputeProjection",
+const ComputeSnapshot = Command.define(
+  "ComputeSnapshot",
   {
-    actions: S.Array(LabAction),
+    input: LabInput,
     requestId: S.Number
   },
-  ProjectionReady
-)(({ actions, requestId }) =>
-  projectLab(actions).pipe(
-    Effect.map((projection) => ProjectionReady({ projection, requestId }))
+  SnapshotReady
+)(({ input, requestId }) =>
+  reconstructLabSnapshot(input).pipe(
+    Effect.map((snapshot) =>
+      SnapshotReady({
+        requestId,
+        snapshot,
+        viewModel: presentLab(snapshot)
+      })
+    )
+  )
+)
+
+const ExecuteLabMove = Command.define(
+  "ExecuteLabMove",
+  {
+    expectedRevision: LabSnapshotRevision,
+    moveId: LabMoveId,
+    requestId: S.Number,
+    snapshot: LabSnapshot
+  },
+  LabMoveFinished
+)(({ expectedRevision, moveId, requestId, snapshot }) =>
+  executeLabMove(snapshot, moveId, expectedRevision).pipe(
+    Effect.match({
+      onFailure: (failure) =>
+        LabMoveFinished({
+          requestId,
+          result: {
+            _tag: "Rejected",
+            reason: failure._tag === "StaleLabSnapshot"
+              ? "Move rejected: the displayed snapshot is stale."
+              : failure._tag === "UnknownLabMove"
+                ? "Move rejected: it is not present in this snapshot."
+                : `Move rejected: its availability is ${failure.availability}.`
+          }
+        }),
+      onSuccess: (execution) =>
+        LabMoveFinished({
+          requestId,
+          result: { _tag: "Executed", execution }
+        })
+    })
   )
 )
 
@@ -93,9 +160,15 @@ const recompute = (
   const branch = branches.find(({ id }) => id === activeBranchId) ?? branches[0]!
   const requestId = model.requestId + 1
   return [
-    { ...model, activeBranchId, branches, requestId },
-    [ComputeProjection({
-      actions: branch.actions.slice(0, branch.cursor),
+    {
+      ...model,
+      activeBranchId,
+      branches,
+      interactionError: null,
+      requestId
+    },
+    [ComputeSnapshot({
+      input: { actions: branch.actions.slice(0, branch.cursor) },
       requestId
     })]
   ]
@@ -106,17 +179,41 @@ export const update = (
   message: Message
 ): readonly [Model, ReadonlyArray<Command.Command<Message>>] => {
   switch (message._tag) {
-    case "TriggeredDriverAction": {
+    case "TriggeredLabMove": {
       const branch = activeBranch(model)
-      if (branch.cursor !== branch.actions.length) return [model, []]
-      const selected = model.projection.actions.find(({ id }) => id === message.actionId)
-      if (selected?.status !== "Available" || selected.command === null) return [model, []]
+      if (branch.cursor !== branch.actions.length || model.snapshot === null) {
+        return [model, []]
+      }
+      const requestId = model.requestId + 1
+      return [
+        { ...model, interactionError: null, requestId },
+        [ExecuteLabMove({
+          expectedRevision: message.snapshotRevision,
+          moveId: message.moveId,
+          requestId,
+          snapshot: model.snapshot
+        })]
+      ]
+    }
+    case "LabMoveFinished": {
+      if (message.requestId !== model.requestId) return [model, []]
+      if (message.result._tag === "Rejected") {
+        return [{ ...model, interactionError: message.result.reason }, []]
+      }
+      const branch = activeBranch(model)
+      const { input, snapshot } = message.result.execution
       const nextBranch = {
         ...branch,
-        actions: [...branch.actions, selected.command],
+        actions: [...branch.actions, input],
         cursor: branch.cursor + 1
       }
-      return recompute(model, replaceBranch(model, nextBranch))
+      return [{
+        ...model,
+        branches: replaceBranch(model, nextBranch),
+        interactionError: null,
+        snapshot,
+        viewModel: presentLab(snapshot)
+      }, []]
     }
     case "ForkedAtCursor": {
       const branch = activeBranch(model)
@@ -137,9 +234,13 @@ export const update = (
       const cursor = Math.max(0, Math.min(message.cursor, branch.actions.length))
       return recompute(model, replaceBranch(model, { ...branch, cursor }))
     }
-    case "ProjectionReady":
+    case "SnapshotReady":
       return message.requestId === model.requestId
-        ? [{ ...model, projection: message.projection }, []]
+        ? [{
+          ...model,
+          snapshot: message.snapshot,
+          viewModel: message.viewModel
+        }, []]
         : [model, []]
     case "SelectedBranch":
       return recompute(model, model.branches, message.branchId)
@@ -150,11 +251,16 @@ export const init: Runtime.ApplicationInit<Model, Message> = () => {
   const model: Model = {
     activeBranchId: 1,
     branches: [{ actions: [], cursor: 0, id: 1, name: "main" }],
+    interactionError: null,
     nextBranchId: 2,
-    projection: emptyProjection,
-    requestId: 1
+    requestId: 1,
+    snapshot: null,
+    viewModel: emptyViewModel
   }
-  return [model, [ComputeProjection({ actions: [], requestId: 1 })]]
+  return [
+    model,
+    [ComputeSnapshot({ input: { actions: [] }, requestId: 1 })]
+  ]
 }
 
 type HtmlFactory = ReturnType<typeof html<Message>>
@@ -195,15 +301,19 @@ const stateCard = (
 
 const actionButton = (
   h: HtmlFactory,
-  action: DriverActionType,
+  action: LabDisplayAction,
+  snapshotRevision: LabSnapshotRevision | null,
   locked: boolean
-) => h.div([h.Class(`driver-action ${action.status.toLowerCase()}`)], [
+) => h.div([h.Class(`driver-action ${action.cssClass}`)], [
   button(
     h,
     action.label,
-    TriggeredDriverAction({ actionId: action.id }),
-    locked || action.status !== "Available",
-    action.origin === "Reducer" ? "accent" : action.origin === "ExternalAuthority" ? "outline" : ""
+    TriggeredLabMove({
+      moveId: action.moveId,
+      snapshotRevision: snapshotRevision ?? LabSnapshotRevision.make("snapshot-unavailable")
+    }),
+    locked || !action.enabled || snapshotRevision === null,
+    action.buttonKind
   ),
   h.p([h.Class("action-reason")], [`${action.status} · ${action.reason}`])
 ])
@@ -211,22 +321,25 @@ const actionButton = (
 const actionGroup = (
   h: HtmlFactory,
   title: string,
-  actions: ReadonlyArray<DriverActionType>,
+  actions: ReadonlyArray<LabDisplayAction>,
+  snapshotRevision: LabSnapshotRevision | null,
   locked: boolean
 ) => h.section([h.Class("action-group")], [
   h.p([h.Class("label")], [title]),
   actions.length === 0
     ? h.p([h.Class("empty")], ["No moves in this category."])
-    : h.div([h.Class("action-list")], actions.map((action) => actionButton(h, action, locked)))
+    : h.div(
+      [h.Class("action-list")],
+      actions.map((action) => actionButton(h, action, snapshotRevision, locked))
+    )
 ])
 
 export const view = (model: Model): Document => {
   const h = html<Message>()
   const branch = activeBranch(model)
   const atTip = branch.cursor === branch.actions.length
-  const projection = model.projection
-  const actionsByOrigin = (origin: DriverActionType["origin"]) =>
-    projection.actions.filter((action) => action.origin === origin)
+  const viewModel = model.viewModel
+  const snapshotRevision = model.snapshot?.revision ?? null
 
   return {
     title: "Dalph reducer lab",
@@ -236,14 +349,14 @@ export const view = (model: Model): Document => {
           h.p([h.Class("kicker")], ["THROWAWAY PROTOTYPE · BROWSER ONLY"]),
           h.h1([], ["Reducer lab"]),
           h.p([h.Class("lede")], [
-            "Dispatch controlled inputs, rewind to any prefix, fork, and compare what Dalph’s current reducers actually derive."
+            "Trigger semantic moves, rewind to any prefix, fork, and compare what Dalph’s current reducers actually derive."
           ])
         ]),
         h.div([h.Class("status-stack")], [
-          h.span([h.Class(`status ${projection.coordinatorRunning ? "good" : "stopped"}`)], [
-            projection.coordinatorRunning ? "Coordinator running" : "Coordinator crashed"
+          h.span([h.Class(`status ${viewModel.coordinatorClass}`)], [
+            viewModel.coordinatorStatus
           ]),
-          h.span([h.Class("status")], [`${projection.status} · capacity ${projection.capacity}`])
+          h.span([h.Class("status")], [viewModel.capacityStatus])
         ])
       ]),
 
@@ -270,11 +383,11 @@ export const view = (model: Model): Document => {
             h.li([], [
               button(h, "0 · Empty journal", MovedCursor({ cursor: 0 }), branch.cursor === 0, "step")
             ]),
-            ...branch.actions.map((action, index) =>
+            ...viewModel.timelineLabels.map((label, index) =>
               h.li([], [
                 button(
                   h,
-                  `${index + 1} · ${actionLabel(action)}`,
+                  `${index + 1} · ${label}`,
                   MovedCursor({ cursor: index + 1 }),
                   branch.cursor === index + 1,
                   "step"
@@ -290,70 +403,71 @@ export const view = (model: Model): Document => {
 
         h.div([h.Class("main-column")], [
           h.section([h.Class("card controls")], [
-            h.p([h.Class("eyebrow")], ["DRIVER ACTION PALETTE"]),
+            h.p([h.Class("eyebrow")], ["SEMANTIC MOVE PALETTE"]),
             h.h2([], ["What can happen from this state?"]),
-            h.p([h.Class("authority-state")], [
-              `Tracker authority now: [${projection.trackerTasks.join(", ") || "empty"}]. `,
-              `Dalph last observed: [${projection.knownTasks.join(", ") || "nothing"}].`
-            ]),
-            actionGroup(h, "Reducer-selected moves", actionsByOrigin("Reducer"), !atTip),
-            actionGroup(h, "External authority", actionsByOrigin("ExternalAuthority"), !atTip),
-            actionGroup(h, "Process controls", actionsByOrigin("Process"), !atTip),
-            actionGroup(h, "Planned but absent from production", actionsByOrigin("Planned"), !atTip)
+            h.p([h.Class("authority-state")], [viewModel.trackerAuthorityState]),
+            ...viewModel.actionGroups.map(({ actions, title }) =>
+              actionGroup(h, title, actions, snapshotRevision, !atTip)
+            ),
+            model.interactionError === null
+              ? null
+              : h.p([h.Class("error")], [model.interactionError])
           ]),
 
           h.div([h.Class("state-grid")], [
             stateCard(h, "Graph knowledge", h.div([], [
-              h.p([h.Class("metric")], [`Known tasks: ${projection.knownTasks.join(", ") || "none"}`]),
-              listOrEmpty(h, projection.graphKnowledge, "No authoritative graph observation yet.")
+              h.p([h.Class("metric")], [viewModel.knownTasksMetric]),
+              listOrEmpty(
+                h,
+                viewModel.graphKnowledgeRows,
+                "No authoritative graph observation yet."
+              )
             ]), "REAL reconstructManagedRunState"),
             stateCard(h, "Responsibility", h.div([], [
               listOrEmpty(
                 h,
-                projection.responsibilities.map(({ beganAt, kind, task }) =>
-                  `${task} · ${kind} · began at journal #${beganAt}`
-                ),
+                viewModel.responsibilityRows,
                 "No durable task responsibility."
               ),
-              h.p([h.Class("metric")], [`Reserved: ${projection.reservedTasks.join(", ") || "none"}`])
+              h.p([h.Class("metric")], [viewModel.reservedTasksMetric])
             ]), "REAL RESPONSIBILITY REDUCER"),
             stateCard(h, "Frontier → admission", h.div([], [
               h.p([h.Class("label")], ["Runnable frontier"]),
-              listOrEmpty(h, projection.frontier.map(({ tag, task }) => `${task} · ${tag}`), "No runnable transitions."),
+              listOrEmpty(h, viewModel.frontierRows, "No runnable transitions."),
               h.p([h.Class("label")], ["Admitted"]),
-              listOrEmpty(h, projection.admitted.map(({ tag, task }) => `${task} · ${tag}`), "Nothing admitted."),
-              listOrEmpty(h, projection.explanations, "No wait/isolation explanation.")
+              listOrEmpty(h, viewModel.admittedRows, "Nothing admitted."),
+              listOrEmpty(h, viewModel.explanationRows, "No wait/isolation explanation.")
             ]), "REAL SELECTOR + ADMISSION CONTROLLER"),
             stateCard(h, "Pause + finality", h.dl([], [
               h.dt([], ["Run pause"]),
-              h.dd([], [projection.runPause]),
+              h.dd([], [viewModel.runPause]),
               h.dt([], ["Task pause"]),
-              h.dd([], [projection.taskPause]),
+              h.dd([], [viewModel.taskPause]),
               h.dt([], ["Finality"]),
-              h.dd([], [projection.finality])
+              h.dd([], [viewModel.finality])
             ]), "THE GAP IS PART OF THE RESULT")
           ]),
 
           h.section([h.Class("card journal")], [
             h.p([h.Class("eyebrow")], ["EXACT INPUT TO THE FOLD"]),
             h.h2([], ["Workflow journal"]),
-            projection.journal.length === 0
+            viewModel.journal.length === 0
               ? h.p([h.Class("empty")], ["No records."])
               : h.table([], [
                 h.thead([], [h.tr([], [h.th([], ["#"]), h.th([], ["Event"])])]),
-                h.tbody([], projection.journal.map(({ position, tag }) =>
+                h.tbody([], viewModel.journal.map(({ position, tag }) =>
                   h.tr([], [h.td([], [String(position)]), h.td([], [tag])])
                 ))
               ]),
-            ...projection.errors.map((error) => h.p([h.Class("error")], [error]))
+            ...viewModel.errors.map((error) => h.p([h.Class("error")], [error]))
           ]),
 
           h.section([h.Class("card notes")], [
             h.p([h.Class("eyebrow")], ["WHAT THIS REVEALS"]),
             h.h2([], ["Reducer boundary notes"]),
-            h.ul([], projection.notes.map((note) => h.li([], [note]))),
+            h.ul([], viewModel.notes.map((note) => h.li([], [note]))),
             h.p([], [
-              "All state and computation stay in this browser tab. FoldKit owns the Elm-style Model → Message → update → view loop; no Dalph backend is running."
+              "All state and computation stay in this browser tab. FoldKit owns navigation and rendering; the driver owns semantic execution and revalidation."
             ])
           ])
         ])

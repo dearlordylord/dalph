@@ -37,6 +37,7 @@ export type TaskName = typeof TaskName.Type
 export const FreshFact = S.Literals(["Ready", "ForeignClaim", "MissingClaim", "Paused"])
 export type FreshFact = typeof FreshFact.Type
 
+/** One semantic input accepted by the reducer Lab driver. */
 export const LabAction = S.Union([
   S.TaggedStruct("EditedTrackerTask", { present: S.Boolean, task: TaskName }),
   S.TaggedStruct("ObservedTrackerGraph", {}),
@@ -48,30 +49,69 @@ export const LabAction = S.Union([
 ])
 export type LabAction = typeof LabAction.Type
 
-export const ActionOrigin = S.Literals([
-  "Reducer",
-  "ExternalAuthority",
-  "Process",
-  "Planned"
+/** The complete semantic input history from which the Lab reconstructs state. */
+export const LabInput = S.Struct({ actions: S.Array(LabAction) })
+export interface LabInput extends S.Schema.Type<typeof LabInput> {}
+
+/** Opaque process-local identity for the exact input prefix represented by a snapshot. */
+export const LabSnapshotRevision = S.String.pipe(S.brand("LabSnapshotRevision"))
+export type LabSnapshotRevision = typeof LabSnapshotRevision.Type
+
+/** Stable semantic identity used to request one move without exposing its input to FoldKit. */
+export const LabMoveId = S.String.pipe(S.brand("LabMoveId"))
+export type LabMoveId = typeof LabMoveId.Type
+
+export const LabMoveOrigin = S.Literals([
+  "FrontierTransition",
+  "TrackerAuthority",
+  "CoordinatorProcess",
+  "LabCapability"
 ])
-export type ActionOrigin = typeof ActionOrigin.Type
-export const ActionStatus = S.Literals([
-  "Available",
-  "Waiting",
-  "NotCurrent",
-  "DriverMissing",
-  "Planned"
+export type LabMoveOrigin = typeof LabMoveOrigin.Type
+
+export const LabMoveSubject = S.Union([
+  S.TaggedStruct("Task", { task: TaskName }),
+  S.TaggedStruct("TrackerTarget", {}),
+  S.TaggedStruct("Coordinator", {}),
+  S.TaggedStruct("Capacity", { capacity: S.Number }),
+  S.TaggedStruct("Run", {})
 ])
-export type ActionStatus = typeof ActionStatus.Type
-export const DriverAction = S.Struct({
-  command: S.NullOr(LabAction),
-  id: S.String,
-  label: S.String,
-  origin: ActionOrigin,
-  reason: S.String,
-  status: ActionStatus
+export type LabMoveSubject = typeof LabMoveSubject.Type
+
+export const LabMoveUnavailableReason = S.Literals([
+  "WaitingForAdmissionCapacity",
+  "CoordinatorStopped",
+  "AlreadyCurrent",
+  "ProductionTransitionNotDriven",
+  "ProductionPauseStateAbsent"
+])
+export type LabMoveUnavailableReason = typeof LabMoveUnavailableReason.Type
+
+/** Availability keeps executable input out of unavailable and capability-gap states. */
+export const LabMoveAvailability = S.Union([
+  S.TaggedStruct("Available", { input: LabAction }),
+  S.TaggedStruct("Waiting", { reason: LabMoveUnavailableReason }),
+  S.TaggedStruct("NotCurrent", { reason: LabMoveUnavailableReason }),
+  S.TaggedStruct("DriverMissing", {
+    owningIssue: S.String,
+    reason: LabMoveUnavailableReason
+  }),
+  S.TaggedStruct("Planned", {
+    owningIssue: S.String,
+    reason: LabMoveUnavailableReason
+  })
+])
+export type LabMoveAvailability = typeof LabMoveAvailability.Type
+
+/** A label-free semantic move emitted by the driver for one exact snapshot. */
+export const LabMove = S.Struct({
+  availability: LabMoveAvailability,
+  id: LabMoveId,
+  origin: LabMoveOrigin,
+  subject: LabMoveSubject,
+  transition: S.String
 })
-export type DriverAction = typeof DriverAction.Type
+export interface LabMove extends S.Schema.Type<typeof LabMove> {}
 
 const Decision = S.Struct({ tag: S.String, task: TaskName })
 const Responsibility = S.Struct({
@@ -80,28 +120,68 @@ const Responsibility = S.Struct({
   task: TaskName
 })
 const JournalRow = S.Struct({ position: S.Number, tag: S.String })
+const FrontierExplanation = S.Struct({
+  tag: S.String,
+  task: S.NullOr(TaskName)
+})
+const GraphKnowledge = S.Struct({
+  kind: S.String,
+  observationCount: S.Number,
+  tasks: S.Array(TaskName)
+})
 
-export const Projection = S.Struct({
-  actions: S.Array(DriverAction),
+/** Semantic result reconstructed by real production reducers plus controlled Lab inputs. */
+export const LabSnapshot = S.Struct({
   admitted: S.Array(Decision),
   capacity: S.Number,
   coordinatorRunning: S.Boolean,
   errors: S.Array(S.String),
-  explanations: S.Array(S.String),
-  finality: S.String,
+  explanations: S.Array(FrontierExplanation),
+  finalityReason: S.NullOr(S.String),
+  finalityTag: S.String,
   frontier: S.Array(Decision),
-  graphKnowledge: S.Array(S.String),
+  graphKnowledge: S.Array(GraphKnowledge),
+  input: LabInput,
   journal: S.Array(JournalRow),
   knownTasks: S.Array(TaskName),
-  notes: S.Array(S.String),
+  moves: S.Array(LabMove),
   reservedTasks: S.Array(TaskName),
   responsibilities: S.Array(Responsibility),
+  revision: LabSnapshotRevision,
   runPause: S.String,
   status: S.String,
   taskPause: S.String,
   trackerTasks: S.Array(TaskName)
 })
-export type Projection = typeof Projection.Type
+export interface LabSnapshot extends S.Schema.Type<typeof LabSnapshot> {}
+
+export class StaleLabSnapshot extends S.TaggedErrorClass<StaleLabSnapshot>()(
+  "StaleLabSnapshot",
+  {
+    actualRevision: LabSnapshotRevision,
+    expectedRevision: LabSnapshotRevision,
+    moveId: LabMoveId
+  }
+) {}
+
+export class UnknownLabMove extends S.TaggedErrorClass<UnknownLabMove>()(
+  "UnknownLabMove",
+  { moveId: LabMoveId }
+) {}
+
+export class UnavailableLabMove extends S.TaggedErrorClass<UnavailableLabMove>()(
+  "UnavailableLabMove",
+  {
+    availability: S.String,
+    moveId: LabMoveId
+  }
+) {}
+
+export const LabMoveExecution = S.Struct({
+  input: LabAction,
+  snapshot: LabSnapshot
+})
+export interface LabMoveExecution extends S.Schema.Type<typeof LabMoveExecution> {}
 
 const runId = RunId.make("reducer-lab-run")
 const target = FixtureTarget.make("reducer-lab-target")
@@ -180,7 +260,7 @@ const appendClaimIntent = (
   )
 }
 
-const buildInput = (actions: ReadonlyArray<LabAction>) => {
+const buildProductionInput = (input: LabInput) => {
   const records = new Array<JournalRecord>()
   const freshFacts = new Map<TaskName, FreshFact>()
   const trackerTasks = new Set<TaskName>(["A", "B", "C", "D"])
@@ -188,7 +268,7 @@ const buildInput = (actions: ReadonlyArray<LabAction>) => {
   let capacity = 1
   let observationOrdinal = 0
   let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
-  for (const action of actions) {
+  for (const action of input.actions) {
     switch (action._tag) {
       case "EditedTrackerTask":
         if (action.present) trackerTasks.add(action.task)
@@ -224,6 +304,16 @@ const buildInput = (actions: ReadonlyArray<LabAction>) => {
   return { capacity, coordinatorRunning, freshFacts, records, trackerTasks: [...trackerTasks] }
 }
 
+const revisionFor = (input: LabInput): LabSnapshotRevision => {
+  const source = JSON.stringify(input.actions)
+  let hash = 2_166_136_261
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index)
+    hash = Math.imul(hash, 16_777_619)
+  }
+  return LabSnapshotRevision.make(`snapshot-${input.actions.length}-${(hash >>> 0).toString(16)}`)
+}
+
 const dispositionFor = (fact: FreshFact) => {
   switch (fact) {
     case "Ready": return ResponsibilityDisposition.Ready()
@@ -238,169 +328,198 @@ const decision = (transition: { readonly _tag: string; readonly taskId: TaskId }
   task: taskName(transition.taskId)
 })
 
-const invalidProjection = (
-  records: ReadonlyArray<JournalRecord>,
-  coordinatorRunning: boolean,
-  capacity: number,
-  trackerTasks: ReadonlyArray<TaskName>,
-  errors: ReadonlyArray<string>
-): Projection => ({
-  actions: [],
-  admitted: [],
-  capacity,
-  coordinatorRunning,
-  errors,
-  explanations: [],
-  finality: "unsafe to decide",
-  frontier: [],
-  graphKnowledge: [],
-  journal: records.map(({ event, position }) => ({ position, tag: event._tag })),
-  knownTasks: [],
-  notes: ["The production managed-history fold rejected this prefix and retained every issue."],
-  reservedTasks: [],
-  responsibilities: [],
-  runPause: "unknown",
-  status: "InvalidManagedHistory",
-  taskPause: "unknown",
-  trackerTasks
+const move = (
+  id: string,
+  origin: LabMoveOrigin,
+  transition: string,
+  subject: LabMoveSubject,
+  availability: LabMoveAvailability
+): LabMove => ({
+  availability,
+  id: LabMoveId.make(id),
+  origin,
+  subject,
+  transition
 })
 
-const driverAction = (
-  id: string,
-  label: string,
-  origin: ActionOrigin,
-  status: ActionStatus,
-  reason: string,
-  command: LabAction | null
-): DriverAction => ({ command, id, label, origin, reason, status })
-
-const transitionCommand = (
+const frontierMove = (
   transition: { readonly _tag: string; readonly taskId: TaskId },
   admitted: ReadonlyArray<{ readonly _tag: string; readonly taskId: TaskId }>,
   coordinatorRunning: boolean
-): DriverAction => {
+): LabMove => {
   const task = taskName(transition.taskId)
   if (transition._tag !== "CommitFreshTaskClaimIntent") {
-    return driverAction(
-      `reducer:${transition._tag}:${task}`,
-      `${transition._tag} · ${task}`,
-      "Reducer",
-      "DriverMissing",
-      "The real reducer selected this move, but this prototype driver cannot execute it yet.",
-      null
+    return move(
+      `frontier:${transition._tag}:${task}`,
+      "FrontierTransition",
+      transition._tag,
+      { _tag: "Task", task },
+      {
+        _tag: "DriverMissing",
+        owningIssue: "#132",
+        reason: "ProductionTransitionNotDriven"
+      }
     )
   }
   const isAdmitted = admitted.some((candidate) =>
     candidate._tag === transition._tag && candidate.taskId === transition.taskId
   )
-  return driverAction(
-    `reducer:claim:${task}`,
-    `Commit fresh claim intent · ${task}`,
-    "Reducer",
-    coordinatorRunning && isAdmitted ? "Available" : "Waiting",
-    coordinatorRunning
-      ? isAdmitted
-        ? "Selected by the frontier and admitted within current capacity."
-        : "Runnable, but waiting for capacity."
-      : "Runnable, but the coordinator is crashed.",
-    coordinatorRunning && isAdmitted
-      ? { _tag: "CommittedClaimIntent", task }
-      : null
+  const availability: LabMoveAvailability = !coordinatorRunning
+    ? { _tag: "Waiting", reason: "CoordinatorStopped" }
+    : isAdmitted
+      ? { _tag: "Available", input: { _tag: "CommittedClaimIntent", task } }
+      : { _tag: "Waiting", reason: "WaitingForAdmissionCapacity" }
+  return move(
+    `frontier:CommitFreshTaskClaimIntent:${task}`,
+    "FrontierTransition",
+    transition._tag,
+    { _tag: "Task", task },
+    availability
   )
 }
 
-const staticDriverActions = (
+const driverMoves = (
   coordinatorRunning: boolean,
   capacity: number,
   trackerTasks: ReadonlyArray<TaskName>,
-  responsibilities: Projection["responsibilities"]
-): ReadonlyArray<DriverAction> => [
+  responsibilities: LabSnapshot["responsibilities"]
+): ReadonlyArray<LabMove> => [
   ...(["A", "B", "C", "D"] as const).map((task) => {
     const present = trackerTasks.includes(task)
-    return driverAction(
-      `authority:toggle:${task}`,
-      `${present ? "Remove" : "Add"} task ${task} in tracker`,
-      "ExternalAuthority",
-      "Available",
-      "Changes the controlled tracker authority only; Dalph state changes after a later observation.",
-      { _tag: "EditedTrackerTask", present: !present, task }
+    return move(
+      `tracker:set-presence:${task}:${!present}`,
+      "TrackerAuthority",
+      "SetTrackerTaskPresence",
+      { _tag: "Task", task },
+      {
+        _tag: "Available",
+        input: { _tag: "EditedTrackerTask", present: !present, task }
+      }
     )
   }),
-  driverAction(
-    "authority:observe",
-    "Observe tracker target closure",
-    "ExternalAuthority",
-    coordinatorRunning ? "Available" : "Waiting",
+  move(
+    "tracker:observe-target",
+    "TrackerAuthority",
+    "ObserveTrackerTarget",
+    { _tag: "TrackerTarget" },
     coordinatorRunning
-      ? "Reads the current controlled tracker membership through the real graph observation fold."
-      : "The coordinator must be running to perform this read.",
-    coordinatorRunning ? { _tag: "ObservedTrackerGraph" } : null
+      ? { _tag: "Available", input: { _tag: "ObservedTrackerGraph" } }
+      : { _tag: "Waiting", reason: "CoordinatorStopped" }
   ),
   ...responsibilities.flatMap(({ task }) =>
     (["Ready", "ForeignClaim", "MissingClaim", "Paused"] as const).map((fact) =>
-      driverAction(
-        `authority:fact:${task}:${fact}`,
-        `${fact} fact · ${task}`,
-        "ExternalAuthority",
-        "Available",
-        "Supplies a fresh authority fact to the real frontier selector; it is not a journal command.",
-        { _tag: "SuppliedFreshFact", fact, task }
+      move(
+        `tracker:supply-fact:${task}:${fact}`,
+        "TrackerAuthority",
+        `Supply${fact}Fact`,
+        { _tag: "Task", task },
+        {
+          _tag: "Available",
+          input: { _tag: "SuppliedFreshFact", fact, task }
+        }
       )
     )
   ),
-  driverAction(
-    "process:crash",
-    "Crash coordinator",
-    "Process",
-    coordinatorRunning ? "Available" : "NotCurrent",
-    coordinatorRunning ? "Stops activation while preserving journal history." : "Coordinator is already crashed.",
-    coordinatorRunning ? { _tag: "CrashedCoordinator" } : null
+  move(
+    "coordinator:crash",
+    "CoordinatorProcess",
+    "CrashCoordinator",
+    { _tag: "Coordinator" },
+    coordinatorRunning
+      ? { _tag: "Available", input: { _tag: "CrashedCoordinator" } }
+      : { _tag: "NotCurrent", reason: "AlreadyCurrent" }
   ),
-  driverAction(
-    "process:restart",
-    "Restart coordinator",
-    "Process",
-    coordinatorRunning ? "NotCurrent" : "Available",
-    coordinatorRunning ? "Coordinator is already running." : "Reconstructs from the retained journal prefix.",
-    coordinatorRunning ? null : { _tag: "RestartedCoordinator" }
+  move(
+    "coordinator:restart",
+    "CoordinatorProcess",
+    "RestartCoordinator",
+    { _tag: "Coordinator" },
+    coordinatorRunning
+      ? { _tag: "NotCurrent", reason: "AlreadyCurrent" }
+      : { _tag: "Available", input: { _tag: "RestartedCoordinator" } }
   ),
   ...([1, 2] as const).map((nextCapacity) =>
-    driverAction(
-      `process:capacity:${nextCapacity}`,
-      `Set capacity to ${nextCapacity}`,
-      "Process",
-      capacity === nextCapacity ? "NotCurrent" : "Available",
-      capacity === nextCapacity ? `Capacity is already ${nextCapacity}.` : "Changes bounded admission for subsequent projections.",
-      capacity === nextCapacity ? null : { _tag: "ChangedCapacity", capacity: nextCapacity }
+    move(
+      `coordinator:set-capacity:${nextCapacity}`,
+      "CoordinatorProcess",
+      "SetTaskWorkCapacity",
+      { _tag: "Capacity", capacity: nextCapacity },
+      capacity === nextCapacity
+        ? { _tag: "NotCurrent", reason: "AlreadyCurrent" }
+        : {
+          _tag: "Available",
+          input: { _tag: "ChangedCapacity", capacity: nextCapacity }
+        }
     )
   ),
-  driverAction(
-    "planned:pause-run",
-    "Pause run",
-    "Planned",
-    "Planned",
-    "The production reconstructed pause reducer currently has no paused-run state.",
-    null
+  move(
+    "capability:pause-run",
+    "LabCapability",
+    "PauseRun",
+    { _tag: "Run" },
+    {
+      _tag: "Planned",
+      owningIssue: "#134",
+      reason: "ProductionPauseStateAbsent"
+    }
   ),
-  driverAction(
-    "planned:pause-task",
-    "Pause task",
-    "Planned",
-    "Planned",
-    "The production reconstructed pause reducer currently has no paused-task state.",
-    null
+  move(
+    "capability:pause-task",
+    "LabCapability",
+    "PauseTask",
+    { _tag: "Task", task: "A" },
+    {
+      _tag: "Planned",
+      owningIssue: "#135",
+      reason: "ProductionPauseStateAbsent"
+    }
   )
 ]
 
-/** Runs the real Dalph fold, reconstructed-run reducers, selector, and admission controller. */
-export const projectLab = (
-  actions: ReadonlyArray<LabAction>
-): Effect.Effect<Projection> =>
+const invalidSnapshot = (
+  input: LabInput,
+  records: ReadonlyArray<JournalRecord>,
+  coordinatorRunning: boolean,
+  capacity: number,
+  trackerTasks: ReadonlyArray<TaskName>,
+  errors: ReadonlyArray<string>
+): LabSnapshot => ({
+  admitted: [],
+  capacity,
+  coordinatorRunning,
+  errors,
+  explanations: [],
+  finalityReason: null,
+  finalityTag: "UnsafeToDecide",
+  frontier: [],
+  graphKnowledge: [],
+  input,
+  journal: records.map(({ event, position }) => ({ position, tag: event._tag })),
+  knownTasks: [],
+  moves: [],
+  reservedTasks: [],
+  responsibilities: [],
+  revision: revisionFor(input),
+  runPause: "Unknown",
+  status: "InvalidManagedHistory",
+  taskPause: "Unknown",
+  trackerTasks
+})
+
+/**
+ * Narrow temporary adapter around current production reconstruction and selection.
+ * Issue #132 can replace this one-pass boundary without changing Lab moves or presentation.
+ */
+const reconstructThroughProduction = (
+  input: LabInput
+): Effect.Effect<LabSnapshot> =>
   Effect.gen(function*() {
-    const { capacity, coordinatorRunning, freshFacts, records, trackerTasks } = buildInput(actions)
+    const { capacity, coordinatorRunning, freshFacts, records, trackerTasks } =
+      buildProductionInput(input)
     const reduced = reduceManagedHistory(runId, records)
     if (reduced._tag === "InvalidManagedHistory") {
-      return invalidProjection(
+      return invalidSnapshot(
+        input,
         records,
         coordinatorRunning,
         capacity,
@@ -452,7 +571,7 @@ export const projectLab = (
       }>
     }>)
     const preview = yield* controller.admit(frontier)
-    const snapshot = yield* controller.snapshot()
+    const admissionSnapshot = yield* controller.snapshot()
     const admitted = coordinatorRunning ? preview.transitions : []
     const finality = deriveRunFinalityDecision(frontier, run.responsibility, false)
     const responsibilities = run.responsibility.entries.map((entry) => ({
@@ -462,40 +581,42 @@ export const projectLab = (
     }))
 
     return {
-      actions: [
-        ...frontier.transitions.map((transition) =>
-          transitionCommand(transition, admitted, coordinatorRunning)
-        ),
-        ...staticDriverActions(coordinatorRunning, capacity, trackerTasks, responsibilities)
-      ],
       admitted: admitted.map(decision),
       capacity,
       coordinatorRunning,
       errors: [],
-      explanations: preview.explanations.map((explanation) =>
-        `${explanation._tag}${"taskId" in explanation ? ` · ${taskName(explanation.taskId)}` : ""}`
-      ),
-      finality: finality._tag === "RunMayTerminate"
-        ? finality._tag
-        : `${finality._tag} · ${finality.reason}`,
+      explanations: preview.explanations.map((explanation) => ({
+        tag: explanation._tag,
+        task: "taskId" in explanation ? taskName(explanation.taskId) : null
+      })),
+      finalityReason: finality._tag === "RunMayTerminate" ? null : finality.reason,
+      finalityTag: finality._tag,
       frontier: frontier.transitions.map(decision),
       graphKnowledge: run.graphKnowledge.targetClosures.map((knowledge) =>
         knowledge._tag === "TaskTrackerTargetClosureObserved"
-          ? `${knowledge._tag} · [${knowledge.taskIds.map(taskName).join(", ")}]`
-          : `${knowledge._tag} · ${knowledge.observations.length} observations`
+          ? {
+            kind: knowledge._tag,
+            observationCount: 1,
+            tasks: knowledge.taskIds.map(taskName)
+          }
+          : {
+            kind: knowledge._tag,
+            observationCount: knowledge.observations.length,
+            tasks: []
+          }
       ),
+      input,
       journal: records.map(({ event, position }) => ({ position, tag: event._tag })),
       knownTasks,
-      notes: [
-        "Eligibility [A, C] is a fresh tracker input to the selector; it is not persisted frontier state.",
-        "Packaging gap: the pure fold currently reaches a static Node platform import through the all-events schema; this prototype shims that unused adapter.",
-        coordinatorRunning
-          ? "The coordinator is running, so admission is shown."
-          : "The coordinator is stopped. Reducers still reconstruct the journal, but no transition is activated.",
-        "Pause facts can be supplied to the selector seam, but the reconstructed pause reducer itself always returns unpaused."
+      moves: [
+        ...frontier.transitions.map((transition) =>
+          frontierMove(transition, admitted, coordinatorRunning)
+        ),
+        ...driverMoves(coordinatorRunning, capacity, trackerTasks, responsibilities)
       ],
-      reservedTasks: snapshot.reservedTaskIds.map(taskName),
+      reservedTasks: admissionSnapshot.reservedTaskIds.map(taskName),
       responsibilities,
+      revision: revisionFor(input),
       runPause: run.pause.run._tag,
       status: reduced._tag,
       taskPause: run.pause.tasks._tag,
@@ -503,14 +624,42 @@ export const projectLab = (
     }
   })
 
-export const actionLabel = (action: LabAction): string => {
-  switch (action._tag) {
-    case "EditedTrackerTask": return `${action.present ? "Add" : "Remove"} ${action.task} in tracker`
-    case "ObservedTrackerGraph": return "Observe tracker target closure"
-    case "CommittedClaimIntent": return `Commit claim intent for ${action.task}`
-    case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.task}`
-    case "CrashedCoordinator": return "Crash coordinator"
-    case "RestartedCoordinator": return "Restart coordinator"
-    case "ChangedCapacity": return `Set capacity to ${action.capacity}`
-  }
-}
+/** Reconstructs one semantic snapshot from an exact Lab input prefix. */
+export const reconstructLabSnapshot = (
+  input: LabInput
+): Effect.Effect<LabSnapshot> => reconstructThroughProduction(input)
+
+/**
+ * Revalidates a semantic move against the exact snapshot before applying it.
+ * FoldKit never receives or appends the move's hidden Lab input directly.
+ */
+export const executeLabMove = (
+  snapshot: LabSnapshot,
+  moveId: LabMoveId,
+  expectedRevision: LabSnapshotRevision
+): Effect.Effect<
+  LabMoveExecution,
+  StaleLabSnapshot | UnknownLabMove | UnavailableLabMove
+> =>
+  Effect.gen(function*() {
+    if (snapshot.revision !== expectedRevision) {
+      return yield* new StaleLabSnapshot({
+        actualRevision: snapshot.revision,
+        expectedRevision,
+        moveId
+      })
+    }
+    const selected = snapshot.moves.find((candidate) => candidate.id === moveId)
+    if (selected === undefined) return yield* new UnknownLabMove({ moveId })
+    if (selected.availability._tag !== "Available") {
+      return yield* new UnavailableLabMove({
+        availability: selected.availability._tag,
+        moveId
+      })
+    }
+    const input = selected.availability.input
+    const nextSnapshot = yield* reconstructThroughProduction({
+      actions: [...snapshot.input.actions, input]
+    })
+    return { input, snapshot: nextSnapshot }
+  })

@@ -8,7 +8,9 @@ frontier selector, finality decision, and admission controller directly from
 No backend or persistence is used. Input history, branches, and projections live
 only in the browser tab.
 
-The action palette is returned by the exploration driver. It distinguishes:
+The semantic move inventory is returned by the exploration driver. A separate
+pure presenter turns each move into exactly one display action and owns all
+labels, explanations, grouping, ordering, and styling intent. It distinguishes:
 
 - reducer-selected moves, including runnable moves waiting for capacity;
 - external tracker edits and fresh authority facts;
@@ -19,6 +21,11 @@ Tracker edits change the controlled external authority immediately. The
 reconstructed Dalph state changes only after **Observe tracker target closure**,
 making stale observations and re-observation visible. Capacity is an input in
 the branch history, so undo, redo, and forks restore it consistently.
+
+FoldKit dispatches only a semantic move ID and the opaque revision of the
+snapshot it rendered. A Command asks the driver to revalidate that exact move;
+only the driver can append the hidden semantic input and reconstruct the next
+snapshot. FoldKit continues to own branches, cursors, undo/redo, and panels.
 
 `src/reducer-surface.ts` exhaustively classifies the production operation,
 journal-event, responsibility, disposition, frontier-transition, explanation,
@@ -38,6 +45,25 @@ remove the need for this shim.
 pnpm install --ignore-workspace
 pnpm dev
 ```
+
+Run the proportional semantic scenarios with:
+
+```sh
+pnpm smoke
+```
+
+## Prototype verdict
+
+The presenter boundary materially clarifies ownership: driver types no longer
+contain display labels, prose, groups, or CSS intent, and the presenter parity
+check can prove that every semantic move is represented exactly once.
+
+The opaque snapshot revision is partly redundant in this single-process
+prototype because FoldKit already ignores superseded Commands and disables
+actions away from a branch tip. It still provides a small, explicit
+revalidation boundary for a delayed click or future asynchronous activation
+adapter. Keep it as part of this experiment; do not promote it to production
+domain state without evidence from issue #132's activation seam.
 
 The prototype intentionally keeps whole-run and task pause controls disabled:
 the current reconstructed pause reducer always returns `RunUnpaused` and
