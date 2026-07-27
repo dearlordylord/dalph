@@ -936,6 +936,7 @@ it.effect("records reviewer technical exhaustion only after its captured schedul
       FixtureTarget.make("implementation-convergence-recovery"),
       TaskWorkCapacity.make(1)
     ).pipe(Effect.forkScoped)
+    yield* TestClock.adjust(0)
     yield* TestClock.adjust("1 second")
     yield* Fiber.join(fiber)
 
@@ -1037,6 +1038,7 @@ it.effect("records handback technical exhaustion separately after its captured s
       FixtureTarget.make("implementation-convergence-recovery"),
       TaskWorkCapacity.make(1)
     ).pipe(Effect.forkScoped)
+    yield* TestClock.adjust(0)
     yield* TestClock.adjust("1 second")
     yield* Fiber.join(fiber)
 

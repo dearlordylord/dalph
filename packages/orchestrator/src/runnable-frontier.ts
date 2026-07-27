@@ -80,6 +80,10 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
   }
+  ActivationInProgress: {
+    readonly operationId: Option.Option<OperationId>
+    readonly taskId: TaskId
+  }
   DependencyWait: {
     readonly operationId: OperationId
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>

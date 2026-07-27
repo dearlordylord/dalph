@@ -74,6 +74,174 @@ module frontierRecoveryCounterexamples {
       requestUsingStaleKnowledge(task),
     }
   }
+
+  action duplicateExactOwner(task: TaskId): bool = all {
+    activationOwnerExists(state, task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 2),
+      },
+    },
+  }
+
+  action readmitOwnedTransition(task: TaskId): bool = all {
+    activationOwnerExists(state, task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        selectedTransitions:
+          state.activation.selectedTransitions.union(Set(task)),
+      },
+    },
+  }
+
+  action leakDuplicateReservation(task: TaskId): bool = all {
+    activationOwnerExists(state, task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        duplicateReservationLeaks:
+          state.activation.duplicateReservationLeaks.union(Set(task)),
+        isolatedSubjects:
+          state.activation.isolatedSubjects.union(Set(task)),
+      },
+    },
+  }
+
+  action stopIndependentCOnDuplicate: bool = all {
+    activationOwnerExists(state, A),
+    state.activation.derivedTransitions.contains(C),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        isolatedSubjects:
+          state.activation.isolatedSubjects.union(Set(A)),
+        selectedTransitions:
+          state.activation.selectedTransitions.exclude(Set(C)),
+      },
+    },
+  }
+
+  action leakPreIntentInterruption(task: TaskId): bool = all {
+    state.activation.positions.get(task)
+      == ActivationPositionReserved({ selectedTaskId: task }),
+    state.activation.owners.get(task) == NoActivationOwner,
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        preIntentInterrupted:
+          state.activation.preIntentInterrupted.union(Set(task)),
+      },
+    },
+  }
+
+  action releasePostIntentPositionWithoutFreshEvidence(task: TaskId): bool = all {
+    match state.activation.owners.get(task) {
+      | PostIntentActivationOwner(_) => true
+      | _ => false
+    },
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        activationInProgress:
+          state.activation.activationInProgress.exclude(Set(task)),
+        owners: state.activation.owners.put(task, NoActivationOwner),
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 0),
+        positions:
+          state.activation.positions.put(task, ActivationPositionAvailable),
+        runners: state.activation.runners.exclude(Set(task)),
+        postIntentExited:
+          state.activation.postIntentExited.union(Set(task)),
+      },
+    },
+  }
+
+  action delayedReleaseA17RemovesA18: bool =
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        lastReleaseCorrelation:
+          ActivationReleaseObserved({
+            requestedOperationId: 17,
+            affectedOperationId: 18,
+          }),
+      },
+    }
+
+  action reserveWhileObservedUsageIsAtLowerLimit: bool = {
+    val operationA = state.workflow.get(A).operationId
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        configuredCapacity: 1,
+        positions:
+          state.activation.positions
+            .put(A, ActivationPositionOccupied({ operationId: operationA }))
+            .put(C, ActivationPositionReserved({ selectedTaskId: C })),
+        providerConsuming: Set(A),
+      },
+    }
+  }
+
+  action admitPausedTransitionFromStaleOrder: bool =
+    state' = {
+      ...state,
+      control: {
+        ...state.control,
+        taskPaused: state.control.taskPaused.put(A, true),
+      },
+      activation: {
+        ...state.activation,
+        selectedTransitions: Set(A),
+      },
+    }
+
+  action duplicateOwnershipStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(duplicateExactOwner(A))
+
+  action ownedReadmissionStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(readmitOwnedTransition(A))
+
+  action duplicateReservationLeakStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(leakDuplicateReservation(A))
+
+  action duplicateStopsIndependentCStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(stopIndependentCOnDuplicate)
+
+  action preIntentInterruptionLeakStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(leakPreIntentInterruption(A))
+
+  action earlyPostIntentReleaseStep: bool =
+    deriveActivationPass
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(recordOwnedOperationIntent(A))
+      .then(releasePostIntentPositionWithoutFreshEvidence(A))
 }
 
 module frontierRecoveryCapacityCounterexample {

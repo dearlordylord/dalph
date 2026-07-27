@@ -62,6 +62,27 @@ export type ClaimToken = typeof ClaimToken.Type
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type
 
+/**
+ * Fingerprints the immutable inputs of one process-local selected transition.
+ * It is not a task revision, operation identity, journal position, or random nonce.
+ */
+export const SelectedTransitionFingerprint = Schema.NonEmptyString.pipe(
+  Schema.brand("SelectedTransitionFingerprint")
+)
+export type SelectedTransitionFingerprint = typeof SelectedTransitionFingerprint.Type
+
+/**
+ * Identifies one exact process-local selector result before operation intent.
+ * It creates no workflow responsibility and is never persisted.
+ */
+export const SelectedTransitionIdentity = Schema.Struct({
+  decisionFingerprint: SelectedTransitionFingerprint,
+  runId: RunId,
+  subjectTaskId: TaskId,
+  transitionTag: Schema.NonEmptyString
+}).pipe(Schema.brand("SelectedTransitionIdentity"))
+export type SelectedTransitionIdentity = typeof SelectedTransitionIdentity.Type
+
 /** Identifies one planned task attempt, not its task, run, or provider session. */
 export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
 export type AttemptId = typeof AttemptId.Type

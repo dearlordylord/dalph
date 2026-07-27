@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Fiber, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -330,7 +330,10 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
           taskId: taskB
         }
       ],
-      reconstructedReservedTaskIds: [taskB, taskA, taskA]
+      reconstructedReservedPositions: [{
+        operationId: OperationId.make("capacity-A-reserved"),
+        taskId: taskA
+      }]
     })
     expect(yield* controller.snapshot()).toEqual({
       capacity: 3,
@@ -346,6 +349,13 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
           taskId: taskD
         }
       ],
+      reservedPositions: [{
+        correlation: {
+          _tag: "OperationReservation",
+          operationId: "capacity-A-reserved"
+        },
+        taskId: taskA
+      }],
       reservedTaskIds: [taskA]
     })
 
@@ -356,7 +366,8 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
           operationId: OperationId.make("capacity-B-invocation"),
           taskId: taskB
         }),
-        RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        RunnableFrontierTransition.ContinueImplementationReview({
+          operationId: OperationId.make("capacity-A-reserved"),
           taskId: taskA
         }),
         RunnableFrontierTransition.CheckTaskClaim({
@@ -375,42 +386,24 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
           taskId: taskD
         })
       ]
-    })
+    }, RunId.make("capacity-rebuild-run"))
     expect(admission.transitions).toEqual([
       {
-        _tag: "CommitFreshTaskClaimIntent",
-        taskId: taskA
-      },
-      {
-        _tag: "CheckTaskClaim",
-        operationId: "capacity-A-claim",
+        _tag: "ContinueImplementationReview",
+        operationId: "capacity-A-reserved",
         taskId: taskA
       }
     ])
-    expect(admission.explanations).toEqual([
-      {
-        _tag: "CapacityWait",
-        taskId: taskB,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      },
-      {
-        _tag: "CapacityWait",
-        taskId: taskC,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      },
-      {
-        _tag: "CapacityWait",
-        taskId: taskC,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      },
-      {
-        _tag: "CapacityWait",
-        taskId: taskD,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      }
-    ])
+    expect(admission.explanations).toEqual([{
+      _tag: "CapacityWait",
+      taskId: taskB,
+      wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
+    }])
 
-    yield* controller.releaseReservation(taskA, null)
+    yield* controller.releaseTaskAdmissionPosition(
+      OperationId.make("capacity-A-reserved")
+    )
+    const capacityRunId = RunId.make("capacity-run")
     expect(
       (yield* controller.admit({
         explanations: [],
@@ -419,10 +412,18 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
             taskId: taskC
           })
         ]
-      })).transitions
+      }, capacityRunId)).transitions
     ).toHaveLength(1)
-    yield* controller.bindReservation(
-      taskC,
+    const selectedReservation = (yield* controller.snapshot())
+      .reservedPositions.find(({ taskId }) => taskId === taskC)
+    if (
+      selectedReservation?.correlation._tag
+        !== "SelectedTransitionReservation"
+    ) {
+      return yield* Effect.die("expected selected transition reservation")
+    }
+    yield* controller.bindReservedPosition(
+      selectedReservation.correlation.selected,
       OperationId.make("capacity-C-invocation")
     )
     yield* controller.applyFreshInvocationObservation({
@@ -468,183 +469,86 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
     ])
   }))
 
-it.effect("waits for an exact later invocation position without accepting a stale observation", () =>
-  Effect.scoped(Effect.gen(function*() {
-    const taskA = TaskId.make("waiting-A")
-    const taskB = TaskId.make("waiting-B")
+it.effect("uses current restart capacity without preempting freshly observed invocations", () =>
+  Effect.gen(function*() {
+    const scenarios = [
+      { label: "8-to-2", currentCapacity: 2, occupied: 5, expectedAdmissions: 0 },
+      { label: "1-to-2", currentCapacity: 2, occupied: 1, expectedAdmissions: 1 },
+      { label: "2-to-1", currentCapacity: 1, occupied: 2, expectedAdmissions: 0 }
+    ] as const
+
+    for (const scenario of scenarios) {
+      const occupied = Array.from({ length: scenario.occupied }, (_, index) => ({
+        observationId: ProviderObservationId.make(
+          `${scenario.label}-observation-${index}`
+        ),
+        operationId: OperationId.make(`${scenario.label}-operation-${index}`),
+        taskId: TaskId.make(`${scenario.label}-occupied-${index}`)
+      }))
+      const controller = yield* makeTaskAdmissionController({
+        capacity: TaskWorkCapacity.make(scenario.currentCapacity),
+        freshOccupiedInvocations: occupied,
+        reconstructedReservedPositions: []
+      })
+      const freshTasks = [
+        TaskId.make(`${scenario.label}-fresh-0`),
+        TaskId.make(`${scenario.label}-fresh-1`)
+      ]
+      let admissions = 0
+      for (const taskId of freshTasks) {
+        const admission = yield* controller.admit(
+          {
+            explanations: [],
+            transitions: [
+              RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId })
+            ]
+          },
+          RunId.make(`${scenario.label}-run`)
+        )
+        admissions += admission.transitions.length
+      }
+      const snapshot = yield* controller.snapshot()
+      expect(snapshot.occupied, scenario.label).toHaveLength(scenario.occupied)
+      expect(admissions, scenario.label).toBe(scenario.expectedAdmissions)
+    }
+  }))
+
+it.effect("returns capacity waiting and signals when exact release may permit admission", () =>
+  Effect.gen(function*() {
+    const taskA = TaskId.make("capacity-return-A")
+    const taskB = TaskId.make("capacity-return-B")
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
       freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: []
+      reconstructedReservedPositions: [{
+        operationId: OperationId.make("capacity-return-A-operation"),
+        taskId: taskA
+      }]
     })
-    yield* controller.admit({
-      explanations: [],
-      transitions: [
-        RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskA })
-      ]
-    })
-    yield* controller.bindReservation(
-      taskB,
-      OperationId.make("not-yet-reserved")
-    )
-    yield* controller.bindReservation(
-      taskA,
-      OperationId.make("waiting-A-execution")
-    )
+
     expect(
-      (yield* controller.admit({
+      yield* controller.admit({
         explanations: [],
         transitions: [
-          RunnableFrontierTransition.ContinueTaskExecution({
-            operationId: OperationId.make("different-A-execution"),
-            taskId: taskA
-          })
+          RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskB })
         ]
-      })).transitions
-    ).toEqual([])
-    yield* controller.applyFreshInvocationObservation({
-      _tag: "FreshCapacityConsumed",
-      observationId: ProviderObservationId.make("stale-A-running"),
-      operationId: OperationId.make("stale-A-execution"),
-      taskId: taskA
-    })
-    expect(yield* controller.snapshot()).toEqual({
-      capacity: 1,
-      occupied: [],
-      reservedTaskIds: [taskA]
+      }, RunId.make("capacity-return-run"))
+    ).toEqual({
+      explanations: [{
+        _tag: "CapacityWait",
+        taskId: taskB,
+        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
+      }],
+      transitions: []
     })
 
-    const transition = RunnableFrontierTransition.ContinueImplementationReview({
-      operationId: OperationId.make("waiting-B-review"),
-      taskId: taskB
+    expect(
+      yield* controller.releaseTaskAdmissionPosition(
+        OperationId.make("capacity-return-A-operation")
+      )
+    ).toEqual({
+      _tag: "AdmissionMayNowBePossible"
     })
-    const waiting = yield* controller.awaitAdmission(transition).pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
-    yield* controller.releaseReservation(
-      taskA,
-      OperationId.make("waiting-A-execution")
-    )
-    yield* Fiber.join(waiting)
-    expect(yield* controller.snapshot()).toEqual({
-      capacity: 1,
-      occupied: [],
-      reservedTaskIds: [taskB]
-    })
-  })))
-
-it.effect("removes an interrupted capacity waiter before a later release", () =>
-  Effect.scoped(Effect.gen(function*() {
-    const taskA = TaskId.make("interrupt-wait-A")
-    const taskB = TaskId.make("interrupt-wait-B")
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: []
-    })
-    yield* controller.admit({
-      explanations: [],
-      transitions: [
-        RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskA })
-      ]
-    })
-    const waiting = yield* controller.awaitAdmission(
-      RunnableFrontierTransition.ContinueImplementationReview({
-        operationId: OperationId.make("interrupt-wait-B-review"),
-        taskId: taskB
-      })
-    ).pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
-
-    yield* Fiber.interrupt(waiting)
-    yield* controller.releaseReservation(taskA, null)
-
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([])
-  })))
-
-it.effect("drains blocked waiters in canonical task and operation order", () =>
-  Effect.scoped(Effect.gen(function*() {
-    const taskA = TaskId.make("drain-A")
-    const taskB = TaskId.make("drain-B")
-    const taskC = TaskId.make("drain-C")
-    const operationBFirst = OperationId.make("drain-B-1")
-    const operationBSecond = OperationId.make("drain-B-2")
-    const operationC = OperationId.make("drain-C-1")
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: [taskA]
-    })
-    const waitC = yield* controller.awaitAdmission(
-      RunnableFrontierTransition.ContinueImplementationReview({
-        operationId: operationC,
-        taskId: taskC
-      })
-    ).pipe(Effect.forkScoped)
-    const waitBSecond = yield* controller.awaitAdmission(
-      RunnableFrontierTransition.ContinueImplementationReview({
-        operationId: operationBSecond,
-        taskId: taskB
-      })
-    ).pipe(Effect.forkScoped)
-    const waitBFirst = yield* controller.awaitAdmission(
-      RunnableFrontierTransition.ContinueImplementationReview({
-        operationId: operationBFirst,
-        taskId: taskB
-      })
-    ).pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
-
-    yield* controller.releaseReservation(taskA, null)
-    yield* Fiber.join(waitBFirst)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskB])
-
-    yield* Fiber.interrupt(waitBSecond)
-    yield* controller.releaseReservation(taskB, operationBFirst)
-    yield* Fiber.join(waitC)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
-  })))
-
-it.effect("hands one exact reservation to one of two duplicate waiters", () =>
-  Effect.scoped(Effect.gen(function*() {
-    const taskA = TaskId.make("duplicate-wait-A")
-    const taskB = TaskId.make("duplicate-wait-B")
-    const operationB = OperationId.make("duplicate-wait-B-review")
-    const transition = RunnableFrontierTransition.ContinueImplementationReview({
-      operationId: operationB,
-      taskId: taskB
-    })
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: [taskA]
-    })
-    const first = yield* controller.awaitAdmission(transition).pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
-    const duplicate = yield* Effect.exit(controller.awaitAdmission(transition))
-    expect(duplicate._tag).toBe("Failure")
-
-    yield* controller.releaseReservation(taskA, null)
-    yield* Fiber.join(first)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskB])
-
-    yield* controller.releaseReservation(taskB, operationB)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([])
-  })))
-
-it.effect("hands an exact reconstructed reservation to its first waiter", () =>
-  Effect.gen(function*() {
-    const taskId = TaskId.make("reconstructed-wait")
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: [taskId]
-    })
-
-    yield* controller.awaitAdmission(
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId })
-    )
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
-    yield* controller.releaseReservation(taskId, null)
   }))
 
 it.effect("reserves at most one exact operation for a task in one admission decision", () =>
@@ -661,21 +565,21 @@ it.effect("reserves at most one exact operation for a task in one admission deci
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
       freshOccupiedInvocations: [],
-      reconstructedReservedTaskIds: []
+      reconstructedReservedPositions: []
     })
 
     expect(
       (yield* controller.admit({
         explanations: [],
         transitions: [first, second]
-      })).transitions
+      }, RunId.make("same-task-run"))).transitions
     ).toEqual([first])
 
-    yield* controller.releaseReservation(taskId, first.operationId)
+    yield* controller.releaseTaskAdmissionPosition(first.operationId)
     expect(
       (yield* controller.admit({
         explanations: [],
         transitions: [second]
-      })).transitions
+      }, RunId.make("same-task-run"))).transitions
     ).toEqual([second])
   }))

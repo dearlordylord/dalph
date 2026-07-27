@@ -183,6 +183,46 @@ module frontierRecovery {
     crashCount: int,
   }
 
+  type ActivationOwner =
+    | NoActivationOwner
+    | PreIntentActivationOwner(())
+    | PostIntentActivationOwner({ operationId: int })
+
+  type ActivationPosition =
+    | ActivationPositionAvailable
+    | ActivationPositionReserved({ selectedTaskId: TaskId })
+    | ActivationPositionRetained({ operationId: int })
+    | ActivationPositionOccupied({ operationId: int })
+
+  type ActivationReleaseCorrelation =
+    | NoActivationRelease
+    | ActivationReleaseObserved({
+        requestedOperationId: int,
+        affectedOperationId: int,
+      })
+
+  // Process-local activation coordination remains separate from durable
+  // workflow responsibility and fresh provider consumption evidence.
+  type Activation = {
+    triggerPending: bool,
+    derivedTransitions: Set[TaskId],
+    selectedTransitions: Set[TaskId],
+    activationInProgress: Set[TaskId],
+    positions: TaskId -> ActivationPosition,
+    owners: TaskId -> ActivationOwner,
+    ownerRegistrationCounts: TaskId -> int,
+    runners: Set[TaskId],
+    providerConsuming: Set[TaskId],
+    postIntentExited: Set[TaskId],
+    freshlyObservedCapacity: Set[TaskId],
+    resultsRecorded: Set[TaskId],
+    isolatedSubjects: Set[TaskId],
+    duplicateReservationLeaks: Set[TaskId],
+    preIntentInterrupted: Set[TaskId],
+    lastReleaseCorrelation: ActivationReleaseCorrelation,
+    configuredCapacity: int,
+  }
+
   type TransitionOperation =
     | FreshTransitionWithoutOperation(())
     | DurableTransitionOperation({ operationId: int })
@@ -213,6 +253,7 @@ module frontierRecovery {
     effects: TaskId -> Boundary -> int,
     control: Control,
     coordinator: Coordinator,
+    activation: Activation,
     nextKnowledgeRevision: int,
     requestFreshnessViolations: int,
     duplicateEffectViolations: int,
@@ -297,6 +338,26 @@ module frontierRecovery {
     taskControlEpoch: TASKS.mapBy(_ => 0),
   }
 
+  pure def initialActivation: Activation = {
+    triggerPending: true,
+    derivedTransitions: Set(),
+    selectedTransitions: Set(),
+    activationInProgress: Set(),
+    positions: TASKS.mapBy(_ => ActivationPositionAvailable),
+    owners: TASKS.mapBy(_ => NoActivationOwner),
+    ownerRegistrationCounts: TASKS.mapBy(_ => 0),
+    runners: Set(),
+    providerConsuming: Set(),
+    postIntentExited: Set(),
+    freshlyObservedCapacity: Set(),
+    resultsRecorded: Set(),
+    isolatedSubjects: Set(),
+    duplicateReservationLeaks: Set(),
+    preIntentInterrupted: Set(),
+    lastReleaseCorrelation: NoActivationRelease,
+    configuredCapacity: CAPACITY,
+  }
+
   pure val initialTargetClosureRead: TargetClosureReadEvidence = {
     completeness: Complete(()),
     consistency: PotentiallyMixedTime(()),
@@ -330,6 +391,7 @@ module frontierRecovery {
     effects: TASKS.mapBy(_ => BOUNDARIES.mapBy(_ => 0)),
     control: initialControl,
     coordinator: { running: true, activation: 0, crashCount: 0 },
+    activation: initialActivation,
     nextKnowledgeRevision: 1,
     requestFreshnessViolations: 0,
     duplicateEffectViolations: 0,
@@ -1427,6 +1489,356 @@ module frontierRecovery {
     }
   }
 
+  pure def activationOwnerExists(s: State, task: TaskId): bool =
+    s.activation.owners.get(task) != NoActivationOwner
+
+  pure def activationPositionUsesCapacity(
+    position: ActivationPosition
+  ): bool =
+    position != ActivationPositionAvailable
+
+  pure def activationCapacityUsage(s: State): int =
+    TASKS.filter(task =>
+      activationPositionUsesCapacity(s.activation.positions.get(task))
+    ).size()
+
+  pure def activationFrontier(s: State): Set[TaskId] =
+    s.selectorProjection.frontierTaskIds
+
+  pure def applyActivationOwnershipExclusion(
+    s: State,
+    derived: Set[TaskId]
+  ): Activation = {
+    val owned = derived.filter(task => activationOwnerExists(s, task))
+    {
+      ...s.activation,
+      derivedTransitions: derived,
+      selectedTransitions: derived.exclude(owned),
+      activationInProgress: owned,
+      triggerPending: false,
+    }
+  }
+
+  action deriveActivationPass: bool = all {
+    state.coordinator.running,
+    state' = {
+      ...state,
+      activation:
+        applyActivationOwnershipExclusion(state, activationFrontier(state)),
+    },
+  }
+
+  action excludeOwnedTransitions: bool =
+    state' = {
+      ...state,
+      activation:
+        applyActivationOwnershipExclusion(
+          state,
+          state.activation.derivedTransitions
+        ),
+    }
+
+  action reserveTaskAdmissionPosition(task: TaskId): bool = all {
+    state.activation.selectedTransitions.contains(task),
+    state.activation.positions.get(task) == ActivationPositionAvailable,
+    activationCapacityUsage(state) < state.activation.configuredCapacity,
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        selectedTransitions:
+          state.activation.selectedTransitions.exclude(Set(task)),
+        // These sets describe the current interrupted attempt, not durable
+        // task history. A later exact selection begins a new attempt.
+        postIntentExited:
+          state.activation.postIntentExited.exclude(Set(task)),
+        preIntentInterrupted:
+          state.activation.preIntentInterrupted.exclude(Set(task)),
+        positions:
+          state.activation.positions.put(
+            task,
+            ActivationPositionReserved({ selectedTaskId: task })
+          ),
+      },
+    },
+  }
+
+  action claimActivationOwnership(task: TaskId): bool = all {
+    state.activation.positions.get(task)
+      == ActivationPositionReserved({ selectedTaskId: task }),
+    state.activation.owners.get(task) == NoActivationOwner,
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        // Claiming ownership is the other half of the interruption-masked
+        // reservation handoff. A separately sampled derivation between the
+        // two model actions must not leave the claimed transition selected.
+        selectedTransitions:
+          state.activation.selectedTransitions.exclude(Set(task)),
+        activationInProgress:
+          state.activation.activationInProgress.union(Set(task)),
+        owners:
+          state.activation.owners.put(
+            task,
+            PreIntentActivationOwner(())
+          ),
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 1),
+        runners: state.activation.runners.union(Set(task)),
+      },
+    },
+  }
+
+  action rejectDuplicateOwnership(task: TaskId): bool = all {
+    activationOwnerExists(state, task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        duplicateReservationLeaks:
+          state.activation.duplicateReservationLeaks.exclude(Set(task)),
+        isolatedSubjects:
+          state.activation.isolatedSubjects.union(Set(task)),
+      },
+    },
+  }
+
+  action recordOwnedOperationIntent(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      state.activation.owners.get(task) == PreIntentActivationOwner(()),
+      state.activation.positions.get(task)
+        == ActivationPositionReserved({ selectedTaskId: task }),
+      state' = {
+        ...state,
+        activation: {
+          ...state.activation,
+          owners:
+            state.activation.owners.put(
+              task,
+              PostIntentActivationOwner({ operationId: operationId })
+            ),
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionRetained({ operationId: operationId })
+            ),
+        },
+      },
+    }
+  }
+
+  action interruptBeforeOwnership(task: TaskId): bool = all {
+    state.activation.positions.get(task)
+      == ActivationPositionReserved({ selectedTaskId: task }),
+    state.activation.owners.get(task) == NoActivationOwner,
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        positions:
+          state.activation.positions.put(task, ActivationPositionAvailable),
+        preIntentInterrupted:
+          state.activation.preIntentInterrupted.union(Set(task)),
+        triggerPending: true,
+      },
+    },
+  }
+
+  action interruptAfterOwnershipBeforeIntent(task: TaskId): bool = all {
+    state.activation.owners.get(task) == PreIntentActivationOwner(()),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        activationInProgress:
+          state.activation.activationInProgress.exclude(Set(task)),
+        owners: state.activation.owners.put(task, NoActivationOwner),
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 0),
+        positions:
+          state.activation.positions.put(task, ActivationPositionAvailable),
+        runners: state.activation.runners.exclude(Set(task)),
+        preIntentInterrupted:
+          state.activation.preIntentInterrupted.union(Set(task)),
+        triggerPending: true,
+      },
+    },
+  }
+
+  action interruptAfterIntent(task: TaskId): bool = {
+    val owner = state.activation.owners.get(task)
+    all {
+      match owner {
+        | PostIntentActivationOwner(_) => true
+        | _ => false
+      },
+      state' = {
+        ...state,
+        activation: {
+          ...state.activation,
+          activationInProgress:
+            state.activation.activationInProgress.exclude(Set(task)),
+          owners: state.activation.owners.put(task, NoActivationOwner),
+          ownerRegistrationCounts:
+            state.activation.ownerRegistrationCounts.put(task, 0),
+          runners: state.activation.runners.exclude(Set(task)),
+          postIntentExited:
+            state.activation.postIntentExited.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action recordOwnedResultAndRelease(task: TaskId): bool = all {
+    activationOwnerExists(state, task),
+    state.activation.runners.contains(task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        activationInProgress:
+          state.activation.activationInProgress.exclude(Set(task)),
+        owners: state.activation.owners.put(task, NoActivationOwner),
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 0),
+        positions:
+          state.activation.positions.put(task, ActivationPositionAvailable),
+        providerConsuming:
+          state.activation.providerConsuming.exclude(Set(task)),
+        runners: state.activation.runners.exclude(Set(task)),
+        resultsRecorded:
+          state.activation.resultsRecorded.union(Set(task)),
+        triggerPending: true,
+      },
+    },
+  }
+
+  action observeCapacityConsumed(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      state.activation.positions.get(task)
+        == ActivationPositionRetained({ operationId: operationId }),
+      state' = {
+        ...state,
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionOccupied({ operationId: operationId })
+            ),
+          providerConsuming:
+            state.activation.providerConsuming.union(Set(task)),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action observeCapacityReleased(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      state.activation.owners.get(task) == NoActivationOwner,
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionRetained({ operationId: operationId }),
+        state.activation.positions.get(task)
+          == ActivationPositionOccupied({ operationId: operationId }),
+      },
+      state' = {
+        ...state,
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(task, ActivationPositionAvailable),
+          providerConsuming:
+            state.activation.providerConsuming.exclude(Set(task)),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          lastReleaseCorrelation:
+            ActivationReleaseObserved({
+              requestedOperationId: operationId,
+              affectedOperationId: operationId,
+            }),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action crashCoordinatorWithActivation: bool = all {
+    state.coordinator.running,
+    state' = {
+      ...state,
+      coordinator: {
+        ...state.coordinator,
+        running: false,
+        crashCount: state.coordinator.crashCount + 1,
+      },
+      activation: {
+        ...state.activation,
+        triggerPending: false,
+        derivedTransitions: Set(),
+        selectedTransitions: Set(),
+        activationInProgress: Set(),
+        positions: TASKS.mapBy(_ => ActivationPositionAvailable),
+        owners: TASKS.mapBy(_ => NoActivationOwner),
+        ownerRegistrationCounts: TASKS.mapBy(_ => 0),
+        runners: Set(),
+      },
+    },
+  }
+
+  action stopProviderWorker(task: TaskId): bool = all {
+    state.activation.providerConsuming.contains(task),
+    state' = {
+      ...state,
+      activation: {
+        ...state.activation,
+        providerConsuming:
+          state.activation.providerConsuming.exclude(Set(task)),
+        freshlyObservedCapacity:
+          state.activation.freshlyObservedCapacity.union(Set(task)),
+        triggerPending: true,
+      },
+    },
+  }
+
+  action reconstructActivation: bool = all {
+    not(state.coordinator.running),
+    state' = {
+      ...state,
+      coordinator: {
+        ...state.coordinator,
+        running: true,
+        activation: state.coordinator.activation + 1,
+      },
+      activation: {
+        ...initialActivation,
+        configuredCapacity: state.activation.configuredCapacity,
+        positions: TASKS.mapBy(task =>
+          if (state.activation.providerConsuming.contains(task))
+            ActivationPositionOccupied({
+              operationId: state.workflow.get(task).operationId,
+            })
+          else if (state.workflow.get(task).responsibility == Outstanding)
+            ActivationPositionRetained({
+              operationId: state.workflow.get(task).operationId,
+            })
+          else
+            ActivationPositionAvailable
+        ),
+        providerConsuming: state.activation.providerConsuming,
+        freshlyObservedCapacity: state.activation.freshlyObservedCapacity,
+      },
+    },
+  }
+
   var state: State
 
   val boundedCapacity: bool = and {
@@ -1434,6 +1846,111 @@ module frontierRecovery {
     state.selectorProjection.admittedTaskIds.size() <= CAPACITY,
     state.selectorProjection.reservationTaskIds.size() <= CAPACITY,
   }
+  val oneOwnerPerExactTransition: bool =
+    TASKS.forall(task => and {
+      state.activation.ownerRegistrationCounts.get(task) <= 1,
+      match state.activation.owners.get(task) {
+        | NoActivationOwner =>
+            state.activation.ownerRegistrationCounts.get(task) == 0
+        | _ =>
+            state.activation.ownerRegistrationCounts.get(task) == 1
+              and state.activation.activationInProgress.contains(task)
+      },
+    })
+  val oneExactTransitionPerActivationOwner: bool =
+    state.activation.activationInProgress.forall(task =>
+      activationOwnerExists(state, task))
+  val everyOwnerNamesAnAdmittedTransition: bool =
+    TASKS.forall(task =>
+      not(activationOwnerExists(state, task))
+        or activationPositionUsesCapacity(state.activation.positions.get(task)))
+  val ownedTransitionIsNotReadmitted: bool =
+    TASKS.forall(task =>
+      not(activationOwnerExists(state, task))
+        or not(state.activation.selectedTransitions.contains(task)))
+  val duplicateOwnershipLeaksNoReservedPosition: bool =
+    state.activation.duplicateReservationLeaks.size() == 0
+  val preIntentInterruptionLeaksNoReservedPosition: bool =
+    state.activation.preIntentInterrupted.forall(task =>
+      and {
+        state.activation.positions.get(task) == ActivationPositionAvailable,
+        state.activation.owners.get(task) == NoActivationOwner,
+      })
+  val duplicateOwnershipDoesNotStopIndependentResponsibility: bool =
+    not(state.activation.isolatedSubjects.contains(A))
+      or not(state.activation.derivedTransitions.contains(C))
+      or activationCapacityUsage(state) >= state.activation.configuredCapacity
+      or state.activation.selectedTransitions.contains(C)
+      or activationOwnerExists(state, C)
+      or match state.activation.positions.get(C) {
+        | ActivationPositionReserved(_) => true
+        | ActivationPositionRetained(_) => true
+        | ActivationPositionOccupied(_) => true
+        | ActivationPositionAvailable =>
+            state.activation.triggerPending
+        | _ => false
+      }
+  val postIntentOwnerUsesStableOperationIdentity: bool =
+    TASKS.forall(task =>
+      match state.activation.owners.get(task) {
+        | PostIntentActivationOwner(owner) =>
+            owner.operationId == state.workflow.get(task).operationId
+        | _ => true
+      })
+  val postIntentSelectionAliasIsCorrelationOnly: bool =
+    TASKS.forall(task =>
+      match state.activation.owners.get(task) {
+        | PostIntentActivationOwner(_) =>
+            not(state.activation.selectedTransitions.contains(task))
+        | _ => true
+      })
+  val postIntentExitRetainsPositionUntilFreshEvidence: bool =
+    state.activation.postIntentExited.forall(task =>
+      not(state.coordinator.running)
+        or state.activation.freshlyObservedCapacity.contains(task)
+        or match state.activation.positions.get(task) {
+          | ActivationPositionRetained(_) => true
+          | ActivationPositionOccupied(_) => true
+          | _ => false
+        })
+  val everyAmbiguityCrossingEffectHasIntent: bool = everyEffectHasIntent
+  val newReservedPositionsRespectConfiguredCapacity: bool = {
+    val retainedOrOccupied = TASKS.filter(task =>
+      match state.activation.positions.get(task) {
+        | ActivationPositionRetained(_) => true
+        | ActivationPositionOccupied(_) => true
+        | _ => false
+      }).size()
+    val newlyReserved = TASKS.filter(task =>
+      match state.activation.positions.get(task) {
+        | ActivationPositionReserved(_) => true
+        | _ => false
+      }).size()
+    if (retainedOrOccupied >= state.activation.configuredCapacity)
+      newlyReserved == 0
+    else
+      retainedOrOccupied + newlyReserved <= state.activation.configuredCapacity
+  }
+  val lowerRestartCapacityDoesNotPreemptObservedUsage: bool =
+    state.activation.providerConsuming.forall(task =>
+      match state.activation.positions.get(task) {
+        | ActivationPositionOccupied(_) => true
+        | _ => not(state.coordinator.running)
+      })
+  val releaseAffectsOnlyItsExactOperation: bool =
+    match state.activation.lastReleaseCorrelation {
+      | NoActivationRelease => true
+      | ActivationReleaseObserved(release) =>
+          release.requestedOperationId == release.affectedOperationId
+    }
+  val exactActivationIssueDoesNotStopIndependentResponsibility: bool =
+    duplicateOwnershipDoesNotStopIndependentResponsibility
+  val everyResponsibilityIsActionableOrExactlyExplained: bool =
+    everyTaskIsActionableOrExplained
+  val currentFactsExcludePausedTransitions: bool =
+    TASKS.forall(task =>
+      not(isGroupingPaused(state, task))
+        or not(state.activation.selectedTransitions.contains(task)))
   val everyEffectHasIntent: bool =
     TASKS.forall(task =>
       BOUNDARIES.forall(boundary =>
@@ -1511,6 +2028,30 @@ module frontierRecovery {
       | CompatibleReplacementGraphObservation(_) => true
       | _ => false
     }
+  val activationOwnershipBeforeIntentReached: bool =
+    TASKS.exists(task =>
+      state.activation.owners.get(task) == PreIntentActivationOwner(()))
+  val activationOwnershipAfterIntentReached: bool =
+    TASKS.exists(task =>
+      match state.activation.owners.get(task) {
+        | PostIntentActivationOwner(_) => true
+        | _ => false
+      })
+  val activationPreIntentInterruptionReached: bool =
+    state.activation.triggerPending
+      and state.activation.positions.get(A) == ActivationPositionAvailable
+  val activationPostIntentInterruptionReached: bool =
+    state.activation.postIntentExited.size() > 0
+  val activationResultReleaseReached: bool =
+    state.activation.resultsRecorded.size() > 0
+      and state.activation.triggerPending
+  val activationFreshNonConsumptionReached: bool =
+    state.activation.freshlyObservedCapacity.size() > 0
+      and state.activation.triggerPending
+  val activationChangedCapacityReconstructionReached: bool =
+    state.coordinator.running
+      and state.activation.providerConsuming.size()
+        > state.activation.configuredCapacity
 
   action init: bool = state' = initialState
 
@@ -1533,6 +2074,24 @@ module frontierRecovery {
 
   action initCapacityOneResponsibilityFirstProfile: bool =
     state' = capacityOneResponsibilityFirstState
+
+  action initChangedCapacityActivationProfile: bool = {
+    val operationA = initialState.workflow.get(A).operationId
+    val operationC = initialState.workflow.get(C).operationId
+    state' = {
+      ...initialState,
+      coordinator: {...initialState.coordinator, running: false},
+      activation: {
+        ...initialActivation,
+        configuredCapacity: 1,
+        providerConsuming: Set(A, C),
+        positions:
+          initialActivation.positions
+            .put(A, ActivationPositionOccupied({ operationId: operationA }))
+            .put(C, ActivationPositionOccupied({ operationId: operationC })),
+      },
+    }
+  }
 
   action orchestratorCommitsFreshTaskClaimIntent(task: TaskId): bool = all {
     canCommitFirstIntent(state, task),
@@ -1767,6 +2326,27 @@ module frontierRecovery {
     orchestratorCommitsFreshTaskClaimIntent(C),
   }
 
+  action activationProfileStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    any {
+      deriveActivationPass,
+      excludeOwnedTransitions,
+      reserveTaskAdmissionPosition(task),
+      claimActivationOwnership(task),
+      rejectDuplicateOwnership(task),
+      recordOwnedOperationIntent(task),
+      interruptBeforeOwnership(task),
+      interruptAfterOwnershipBeforeIntent(task),
+      interruptAfterIntent(task),
+      recordOwnedResultAndRelease(task),
+      observeCapacityConsumed(task),
+      observeCapacityReleased(task),
+      crashCoordinatorWithActivation,
+      stopProviderWorker(task),
+      reconstructActivation,
+    }
+  }
+
   // Construction profile: only ordinary successful workflow actions.
   // It exists so every major forward boundary has a reachable sampled witness
   // without external-change actions dominating random walks.
@@ -1983,6 +2563,7 @@ module frontierRecovery {
       repairIsolatedAuthority(task),
       clearIsolation(task),
       settleExternalCompletion(task),
+      activationProfileStep,
     }
   }
 }

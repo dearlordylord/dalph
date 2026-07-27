@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import {
+  type FrontierRecoveryActivationAction,
   FrontierRecoveryConformanceIssue,
   FrontierRecoveryModelCapacity,
   FrontierRecoveryModelJournalPosition,
@@ -17,14 +18,29 @@ import type { FrontierRecoveryReconstructionProjection } from "./frontier-recove
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const actionSchema = {
+  claimActivationOwnership: { task: ITFBigInt },
   crash: {},
+  crashCoordinatorWithActivation: {},
+  deriveActivationPass: {},
+  excludeOwnedTransitions: {},
   init: {},
   initCapacityOneResponsibilityFirstProfile: {},
   initStoppedCoordinator: {},
+  interruptAfterIntent: { task: ITFBigInt },
+  interruptAfterOwnershipBeforeIntent: { task: ITFBigInt },
+  interruptBeforeOwnership: { task: ITFBigInt },
+  observeCapacityConsumed: { task: ITFBigInt },
+  observeCapacityReleased: { task: ITFBigInt },
   orchestratorCommitsFirstFreshTaskClaimIntent: {},
   orchestratorCommitsFreshTaskClaimIntent: { task: ITFBigInt },
   orchestratorCommitsNextFreshTaskClaimIntent: {},
+  reconstructActivation: {},
+  recordOwnedOperationIntent: { task: ITFBigInt },
+  recordOwnedResultAndRelease: { task: ITFBigInt },
+  rejectDuplicateOwnership: { task: ITFBigInt },
+  reserveTaskAdmissionPosition: { task: ITFBigInt },
   restart: {},
+  stopProviderWorker: { task: ITFBigInt },
   taskTrackerReturnsTargetClosureReadAtNextRevision: {},
   taskTrackerReturnsTargetClosureReadWithPredecessor: {},
   taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {}
@@ -367,7 +383,26 @@ const makeReconstructionDriver = (
             yield* Ref.set(controlsRef, stopped)
           }
         })
+      const activation = (action: FrontierRecoveryActivationAction) =>
+        Ref.get(controlsRef).pipe(
+          Effect.flatMap((current) => current.activation(action))
+        )
+      const activationForTask = (
+        _tag: Extract<
+          FrontierRecoveryActivationAction,
+          { readonly task: unknown }
+        >["_tag"],
+        task: bigint
+      ) =>
+        activation({
+          _tag,
+          task: FrontierRecoveryModelTaskId.make(task)
+        } as Extract<FrontierRecoveryActivationAction, { readonly task: unknown }>)
       return {
+        claimActivationOwnership: ({ task }) => activationForTask("claimActivationOwnership", task),
+        crashCoordinatorWithActivation: () => activation({ _tag: "crashCoordinatorWithActivation" }),
+        deriveActivationPass: () => activation({ _tag: "deriveActivationPass" }),
+        excludeOwnedTransitions: () => activation({ _tag: "excludeOwnedTransitions" }),
         orchestratorCommitsFirstFreshTaskClaimIntent: () =>
           Ref.get(controlsRef).pipe(
             Effect.flatMap((current) =>
@@ -396,6 +431,12 @@ const makeReconstructionDriver = (
         init: initialize,
         initCapacityOneResponsibilityFirstProfile: initialize,
         initStoppedCoordinator: initialize,
+        interruptAfterIntent: ({ task }) => activationForTask("interruptAfterIntent", task),
+        interruptAfterOwnershipBeforeIntent: ({ task }) =>
+          activationForTask("interruptAfterOwnershipBeforeIntent", task),
+        interruptBeforeOwnership: ({ task }) => activationForTask("interruptBeforeOwnership", task),
+        observeCapacityConsumed: ({ task }) => activationForTask("observeCapacityConsumed", task),
+        observeCapacityReleased: ({ task }) => activationForTask("observeCapacityReleased", task),
         taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
           Ref.get(controlsRef).pipe(
             Effect.flatMap((current) => current.taskTrackerReturnsTargetClosureReadAtNextRevision())
@@ -412,6 +453,11 @@ const makeReconstructionDriver = (
           Ref.get(controlsRef).pipe(
             Effect.flatMap((current) => current.orchestratorCommitsNextFreshTaskClaimIntent())
           ),
+        reconstructActivation: () => activation({ _tag: "reconstructActivation" }),
+        recordOwnedOperationIntent: ({ task }) => activationForTask("recordOwnedOperationIntent", task),
+        recordOwnedResultAndRelease: ({ task }) => activationForTask("recordOwnedResultAndRelease", task),
+        rejectDuplicateOwnership: ({ task }) => activationForTask("rejectDuplicateOwnership", task),
+        reserveTaskAdmissionPosition: ({ task }) => activationForTask("reserveTaskAdmissionPosition", task),
         restart: () =>
           Effect.gen(function*() {
             const freshControls = yield* makeFrontierRecoveryReconstructionControls({
@@ -422,7 +468,8 @@ const makeReconstructionDriver = (
             yield* freshControls.restart()
             yield* Ref.set(controlsRef, freshControls)
             return yield* freshControls.getState()
-          })
+          }),
+        stopProviderWorker: ({ task }) => activationForTask("stopProviderWorker", task)
       }
     }
   )

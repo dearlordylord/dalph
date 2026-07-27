@@ -2,8 +2,8 @@ import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
-// eslint-disable-next-line no-magic-numbers -- Version four names actors and brands model identities.
-export const frontierRecoveryReconstructionConformanceVersion = 4 as const
+// eslint-disable-next-line no-magic-numbers -- Version five adds exact activation ownership actions.
+export const frontierRecoveryReconstructionConformanceVersion = 5 as const
 const minimumModelIdentity = 0n
 
 /** Identifies one bounded M2 task, not a production task or model operation. */
@@ -41,6 +41,21 @@ export type FrontierRecoveryModelJournalPosition = typeof FrontierRecoveryModelJ
  */
 const frontierRecoveryReconstructionActionFields = {
   init: {},
+  deriveActivationPass: {},
+  excludeOwnedTransitions: {},
+  reserveTaskAdmissionPosition: { task: FrontierRecoveryModelTaskId },
+  claimActivationOwnership: { task: FrontierRecoveryModelTaskId },
+  rejectDuplicateOwnership: { task: FrontierRecoveryModelTaskId },
+  recordOwnedOperationIntent: { task: FrontierRecoveryModelTaskId },
+  interruptBeforeOwnership: { task: FrontierRecoveryModelTaskId },
+  interruptAfterOwnershipBeforeIntent: { task: FrontierRecoveryModelTaskId },
+  interruptAfterIntent: { task: FrontierRecoveryModelTaskId },
+  recordOwnedResultAndRelease: { task: FrontierRecoveryModelTaskId },
+  observeCapacityConsumed: { task: FrontierRecoveryModelTaskId },
+  observeCapacityReleased: { task: FrontierRecoveryModelTaskId },
+  crashCoordinatorWithActivation: {},
+  stopProviderWorker: { task: FrontierRecoveryModelTaskId },
+  reconstructActivation: {},
   orchestratorCommitsNextFreshTaskClaimIntent: {},
   orchestratorCommitsFreshTaskClaimIntent: {
     task: FrontierRecoveryModelTaskId
@@ -60,6 +75,27 @@ const FrontierRecoveryReconstructionAction = Schema.TaggedUnion(
   frontierRecoveryReconstructionActionFields
 )
 export type FrontierRecoveryReconstructionAction = typeof FrontierRecoveryReconstructionAction.Type
+export type FrontierRecoveryActivationAction = Extract<
+  FrontierRecoveryReconstructionAction,
+  {
+    readonly _tag:
+      | "deriveActivationPass"
+      | "excludeOwnedTransitions"
+      | "reserveTaskAdmissionPosition"
+      | "claimActivationOwnership"
+      | "rejectDuplicateOwnership"
+      | "recordOwnedOperationIntent"
+      | "interruptBeforeOwnership"
+      | "interruptAfterOwnershipBeforeIntent"
+      | "interruptAfterIntent"
+      | "recordOwnedResultAndRelease"
+      | "observeCapacityConsumed"
+      | "observeCapacityReleased"
+      | "crashCoordinatorWithActivation"
+      | "stopProviderWorker"
+      | "reconstructActivation"
+  }
+>
 export type FrontierRecoveryReconstructionActionFields = {
   readonly [Action in FrontierRecoveryReconstructionAction as Action["_tag"]]: {
     readonly [Field in Exclude<keyof Action, "_tag">]: unknown
@@ -75,6 +111,9 @@ export interface TargetClosureObservationInput {
 }
 
 export interface FrontierRecoveryReconstructionControls<A, E, R> {
+  readonly activation: (
+    action: FrontierRecoveryActivationAction
+  ) => Effect.Effect<A, E, R>
   readonly orchestratorCommitsFreshTaskClaimIntent: (task: FrontierRecoveryModelTaskId) => Effect.Effect<A, E, R>
   readonly orchestratorCommitsNextFreshTaskClaimIntent: () => Effect.Effect<A, E, R>
   readonly crash: () => Effect.Effect<A, E, R>
@@ -120,10 +159,25 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
   return yield* Match.value(action).pipe(
     Match.tags({
       crash: controls.crash,
+      crashCoordinatorWithActivation: controls.activation,
+      deriveActivationPass: controls.activation,
+      excludeOwnedTransitions: controls.activation,
       init: controls.init,
+      interruptAfterIntent: controls.activation,
+      interruptAfterOwnershipBeforeIntent: controls.activation,
+      interruptBeforeOwnership: controls.activation,
+      observeCapacityConsumed: controls.activation,
+      observeCapacityReleased: controls.activation,
       orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
       orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
+      claimActivationOwnership: controls.activation,
+      reconstructActivation: controls.activation,
+      recordOwnedOperationIntent: controls.activation,
+      recordOwnedResultAndRelease: controls.activation,
+      rejectDuplicateOwnership: controls.activation,
+      reserveTaskAdmissionPosition: controls.activation,
       restart: controls.restart,
+      stopProviderWorker: controls.activation,
       taskTrackerReturnsTargetClosureReadAtNextRevision: controls.taskTrackerReturnsTargetClosureReadAtNextRevision,
       taskTrackerReturnsTargetClosureReadWithPredecessor: controls.taskTrackerReturnsTargetClosureReadWithPredecessor,
       taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage:

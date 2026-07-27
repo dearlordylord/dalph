@@ -48,6 +48,75 @@ module frontierRecoveryTest {
       .then(orchestratorCommitsFreshTaskClaimIntent(C))
       .expect(initialReservedCount(state) == CAPACITY)
 
+  run activationOwnershipBeforeAndAfterIntentTest =
+    init
+      .then(deriveActivationPass)
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .expect(and {
+        activationOwnershipBeforeIntentReached,
+        ownedTransitionIsNotReadmitted,
+      })
+      .then(recordOwnedOperationIntent(A))
+      .expect(and {
+        activationOwnershipAfterIntentReached,
+        postIntentOwnerUsesStableOperationIdentity,
+        postIntentSelectionAliasIsCorrelationOnly,
+      })
+
+  run preIntentInterruptionMakesExactPositionAvailableTest =
+    init
+      .then(deriveActivationPass)
+      .then(reserveTaskAdmissionPosition(A))
+      .then(interruptBeforeOwnership(A))
+      .expect(state.activation.positions.get(A) == ActivationPositionAvailable)
+      .then(deriveActivationPass)
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(interruptAfterOwnershipBeforeIntent(A))
+      .expect(and {
+        state.activation.positions.get(A) == ActivationPositionAvailable,
+        state.activation.owners.get(A) == NoActivationOwner,
+      })
+
+  run postIntentExitWaitsForFreshEvidenceTest =
+    init
+      .then(deriveActivationPass)
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(recordOwnedOperationIntent(A))
+      .then(interruptAfterIntent(A))
+      .expect(and {
+        activationPostIntentInterruptionReached,
+        postIntentExitRetainsPositionUntilFreshEvidence,
+      })
+      .then(observeCapacityReleased(A))
+      .expect(and {
+        activationFreshNonConsumptionReached,
+        state.activation.positions.get(A) == ActivationPositionAvailable,
+      })
+
+  run resultReleaseSignalsRederivationTest =
+    init
+      .then(deriveActivationPass)
+      .then(reserveTaskAdmissionPosition(A))
+      .then(claimActivationOwnership(A))
+      .then(recordOwnedOperationIntent(A))
+      .then(recordOwnedResultAndRelease(A))
+      .expect(and {
+        activationResultReleaseReached,
+        state.activation.positions.get(A) == ActivationPositionAvailable,
+      })
+
+  run changedCapacityReconstructionDoesNotPreemptTest =
+    initChangedCapacityActivationProfile
+      .then(reconstructActivation)
+      .expect(and {
+        activationChangedCapacityReconstructionReached,
+        lowerRestartCapacityDoesNotPreemptObservedUsage,
+        newReservedPositionsRespectConfiguredCapacity,
+      })
+
   run completeProtocolKeepsFinalitiesDistinctTest =
     init
       .then(completeSuccessfulTask(A))

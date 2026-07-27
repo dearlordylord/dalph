@@ -2,10 +2,20 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, FileSystem } from "effect"
 import { expect } from "vitest"
-import { JournalDatabaseLocator, TaskWorkCapacity } from "../../src/domain.js"
+import {
+  JournalDatabaseLocator,
+  OperationId,
+  ProviderObservationId,
+  RunId,
+  TaskId,
+  TaskWorkCapacity
+} from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
+import { RunnableFrontierTransition } from "../../src/runnable-frontier.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
+import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
 import { FrontierRecoveryModelTaskId } from "./frontier-recovery-conformance.js"
+import { frontierRecoveryRunId } from "./frontier-recovery-fixture-identities.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const assertReconstructedPrefix = (
@@ -381,5 +391,73 @@ it.effect("reopens bounded first-intent selection from SQLite at capacities one 
         frontierModelTaskIds: [0n, 2n],
         responsibleModelTaskIds: capacity === 1 ? [0n] : [0n, 2n]
       })
+    }
+  }).pipe(Effect.provide(NodeServices.layer)))
+
+it.effect("uses current capacity and fresh provider evidence after reopening SQLite", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "dalph-frontier-current-capacity-"
+    })
+    const scenarios = [
+      { label: "8-to-2", capacity: 2, occupied: 5, expectedAdmissions: 0 },
+      { label: "1-to-2", capacity: 2, occupied: 1, expectedAdmissions: 1 },
+      { label: "2-to-1", capacity: 1, occupied: 2, expectedAdmissions: 0 }
+    ] as const
+
+    for (const scenario of scenarios) {
+      const filename = JournalDatabaseLocator.make(
+        `${directory}/${scenario.label}.sqlite`
+      )
+      yield* Effect.gen(function*() {
+        const controls = yield* makeFrontierRecoveryReconstructionControls({
+          capacity: TaskWorkCapacity.make(8),
+          coordinatorRunning: true,
+          journal: yield* JournalStore
+        })
+        yield* controls.init()
+        yield* controls.crash()
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+
+      yield* Effect.gen(function*() {
+        const journal = yield* JournalStore
+        expect(yield* journal.read(frontierRecoveryRunId))
+          .not.toEqual([])
+        const occupied = Array.from(
+          { length: scenario.occupied },
+          (_, index) => ({
+            observationId: ProviderObservationId.make(
+              `${scenario.label}-observation-${index}`
+            ),
+            operationId: OperationId.make(
+              `${scenario.label}-operation-${index}`
+            ),
+            taskId: TaskId.make(`${scenario.label}-task-${index}`)
+          })
+        )
+        const controller = yield* makeTaskAdmissionController({
+          capacity: TaskWorkCapacity.make(scenario.capacity),
+          freshOccupiedInvocations: occupied,
+          reconstructedReservedPositions: []
+        })
+        const freshTaskId = TaskId.make(`${scenario.label}-fresh`)
+        const admission = yield* controller.admit(
+          {
+            explanations: [],
+            transitions: [
+              RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+                taskId: freshTaskId
+              })
+            ]
+          },
+          RunId.make(`${scenario.label}-run`)
+        )
+        expect((yield* controller.snapshot()).occupied)
+          .toHaveLength(scenario.occupied)
+        expect(admission.transitions).toHaveLength(
+          scenario.expectedAdmissions
+        )
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
     }
   }).pipe(Effect.provide(NodeServices.layer)))

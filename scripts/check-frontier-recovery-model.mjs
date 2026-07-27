@@ -18,7 +18,23 @@ const invariants = [
   "noStaleAuthorityUse",
   "everyTaskIsActionableOrExplained",
   "branchLocalConstraintDoesNotStopC",
-  "finalityIsSubjectSpecific"
+  "finalityIsSubjectSpecific",
+  "oneOwnerPerExactTransition",
+  "oneExactTransitionPerActivationOwner",
+  "everyOwnerNamesAnAdmittedTransition",
+  "ownedTransitionIsNotReadmitted",
+  "duplicateOwnershipLeaksNoReservedPosition",
+  "duplicateOwnershipDoesNotStopIndependentResponsibility",
+  "postIntentOwnerUsesStableOperationIdentity",
+  "postIntentSelectionAliasIsCorrelationOnly",
+  "postIntentExitRetainsPositionUntilFreshEvidence",
+  "everyAmbiguityCrossingEffectHasIntent",
+  "newReservedPositionsRespectConfiguredCapacity",
+  "lowerRestartCapacityDoesNotPreemptObservedUsage",
+  "releaseAffectsOnlyItsExactOperation",
+  "exactActivationIssueDoesNotStopIndependentResponsibility",
+  "everyResponsibilityIsActionableOrExactlyExplained",
+  "preIntentInterruptionLeaksNoReservedPosition"
 ]
 
 const run = (name, args) => {
@@ -44,16 +60,18 @@ const expectInvariantFailure = (
     [
       pnpmEntryPoint,
       "quint",
-      "verify",
+      "run",
       counterexamples,
       "--main",
       main,
-      "--backend",
-      "tlc",
       "--step",
       step,
-      "--invariant",
+      "--invariants",
       invariant,
+      "--max-steps",
+      "2",
+      "--max-samples",
+      "1000",
       "--verbosity",
       "1"
     ],
@@ -145,6 +163,26 @@ const sampledProfiles = [
     step: "taskTrackerReturnsTargetClosureReadAtNextRevision",
     steps: "1",
     witnesses: ["taskTrackerCompatibleReplacementReadReached"]
+  },
+  {
+    init: "init",
+    name: "activation ownership and interruption witnesses",
+    step: "activationProfileStep",
+    steps: "12",
+    witnesses: [
+      "activationOwnershipBeforeIntentReached",
+      "activationOwnershipAfterIntentReached",
+      "activationPostIntentInterruptionReached",
+      "activationResultReleaseReached",
+      "activationFreshNonConsumptionReached"
+    ]
+  },
+  {
+    init: "initChangedCapacityActivationProfile",
+    name: "changed restart capacity witness",
+    step: "reconstructActivation",
+    steps: "1",
+    witnesses: ["activationChangedCapacityReconstructionReached"]
   }
 ]
 
@@ -208,6 +246,12 @@ const exhaustiveProfiles = [
     "frontierRecoveryCapacityTwo",
     "initReconciliationProfile",
     "reconciliationProfileStep"
+  ],
+  [
+    "activation ownership and independent coordinator-worker lifetimes",
+    "frontierRecoveryCapacityTwo",
+    "init",
+    "activationProfileStep"
   ]
 ]
 const invariantExpression = invariants.join(" and ")
@@ -252,6 +296,51 @@ expectInvariantFailure(
   "weakenedCapacityStep",
   "boundedCapacity",
   "frontierRecoveryCapacityCounterexample"
+)
+expectInvariantFailure(
+  "duplicate exact activation owner counterexample",
+  "duplicateOwnershipStep",
+  "oneOwnerPerExactTransition"
+)
+expectInvariantFailure(
+  "owned-transition readmission counterexample",
+  "ownedReadmissionStep",
+  "ownedTransitionIsNotReadmitted"
+)
+expectInvariantFailure(
+  "duplicate registration reservation leak counterexample",
+  "duplicateReservationLeakStep",
+  "duplicateOwnershipLeaksNoReservedPosition"
+)
+expectInvariantFailure(
+  "duplicate registration stops independent C counterexample",
+  "duplicateStopsIndependentCStep",
+  "duplicateOwnershipDoesNotStopIndependentResponsibility"
+)
+expectInvariantFailure(
+  "pre-intent interruption reservation leak counterexample",
+  "preIntentInterruptionLeakStep",
+  "preIntentInterruptionLeaksNoReservedPosition"
+)
+expectInvariantFailure(
+  "post-intent exit early release counterexample",
+  "earlyPostIntentReleaseStep",
+  "postIntentExitRetainsPositionUntilFreshEvidence"
+)
+expectInvariantFailure(
+  "delayed A-17 release removes A-18 counterexample",
+  "delayedReleaseA17RemovesA18",
+  "releaseAffectsOnlyItsExactOperation"
+)
+expectInvariantFailure(
+  "lowered-capacity new reservation counterexample",
+  "reserveWhileObservedUsageIsAtLowerLimit",
+  "newReservedPositionsRespectConfiguredCapacity"
+)
+expectInvariantFailure(
+  "controller-carried stale ordering counterexample",
+  "admitPausedTransitionFromStaleOrder",
+  "currentFactsExcludePausedTransitions"
 )
 
 process.stdout.write("\nCanonical frontier recovery model checks passed.\n")

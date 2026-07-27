@@ -3,6 +3,7 @@ import {
   type ImplementationReviewRoundLimit,
   type OperationId,
   ReviewerSessionId,
+  type RunId,
   SemanticReviewRound,
   type Task
 } from "./domain.js"
@@ -69,13 +70,25 @@ interface LiveImplementationConvergenceOptions {
 
 const withTaskAdmission = <A, E, R>(
   controller: TaskAdmissionController | undefined,
+  runId: RunId,
   transition: RunnableFrontierTransition,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> =>
   controller === undefined
     ? effect
     : Effect.gen(function*() {
-      yield* controller.awaitAdmission(transition)
+      const admission = yield* controller.admit(
+        {
+          explanations: [],
+          transitions: [transition]
+        },
+        runId
+      )
+      if (!admission.transitions.includes(transition)) {
+        return yield* Effect.die(
+          new Error(`task admission must be rederived for ${transition.taskId}`)
+        )
+      }
       return yield* effect
     })
 
@@ -85,10 +98,12 @@ const releaseTaskAdmission = (
 ): Effect.Effect<void> =>
   controller === undefined
     ? Effect.void
-    : controller.releaseReservation(
-      transition.taskId,
-      "operationId" in transition ? transition.operationId : null
+    : "operationId" in transition
+    ? controller.releaseTaskAdmissionPosition(transition.operationId).pipe(
+      Effect.orDie,
+      Effect.asVoid
     )
+    : Effect.void
 
 const priorEvidence = (
   review: SealedImplementationReview | undefined
@@ -217,6 +232,7 @@ export const runLiveImplementationConvergence = Effect.fn(
       })
       const reviewResult = yield* Effect.result(withTaskAdmission(
         options.admissionController,
+        options.subject.plannedAttempt.runId,
         reviewTransition,
         options.interpreter.reviewImplementation(actualReviewOperation)
       ))
@@ -287,6 +303,7 @@ export const runLiveImplementationConvergence = Effect.fn(
       })
       const handbackResult = yield* Effect.result(withTaskAdmission(
         options.admissionController,
+        options.subject.plannedAttempt.runId,
         handbackTransition,
         options.interpreter.handBackReviewFindings(handbackOperation)
       ))
@@ -331,6 +348,7 @@ export const runLiveImplementationConvergence = Effect.fn(
     })
     const execution = yield* withTaskAdmission(
       options.admissionController,
+      options.subject.plannedAttempt.runId,
       executionTransition,
       options.interpreter.executeTaskWork(executionOperation)
     )

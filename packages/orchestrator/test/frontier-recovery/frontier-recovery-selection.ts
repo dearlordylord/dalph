@@ -13,6 +13,7 @@ import {
   type FrontierRecoveryModelOperationId,
   type FrontierRecoveryModelTaskId
 } from "./frontier-recovery-conformance.js"
+import { frontierRecoveryRunId } from "./frontier-recovery-fixture-identities.js"
 import type {
   FrontierRecoveryAdmissionExplanation,
   FrontierRecoveryTransitionOperation
@@ -62,9 +63,38 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
   const controller = yield* makeTaskAdmissionController({
     capacity: input.capacity,
     freshOccupiedInvocations: [],
-    reconstructedReservedTaskIds: responsibilityFacts.map(({ responsibility }) => responsibility.taskId)
+    reconstructedReservedPositions: responsibilityFacts.map(
+      ({ responsibility }) => ({
+        operationId: responsibility.acquisition.operationId,
+        taskId: responsibility.taskId
+      })
+    )
   })
-  const admission = yield* controller.admit(frontier)
+  let admittedProductionTransitions: ReadonlyArray<RunnableFrontierTransition> = []
+  let remainingTransitions = [...frontier.transitions]
+  let passAdmissionExplanations = [...frontier.explanations]
+  for (;;) {
+    const pass = yield* controller.admit(
+      {
+        explanations: frontier.explanations,
+        transitions: remainingTransitions
+      },
+      frontierRecoveryRunId
+    )
+    const admitted = pass.transitions[0]
+    if (admitted === undefined) {
+      passAdmissionExplanations = [...pass.explanations]
+      break
+    }
+    admittedProductionTransitions = [...admittedProductionTransitions, admitted]
+    remainingTransitions = remainingTransitions.filter(
+      (transition) => transition !== admitted
+    )
+  }
+  const admission = {
+    explanations: passAdmissionExplanations,
+    transitions: admittedProductionTransitions
+  }
   const controllerSnapshot = yield* controller.snapshot()
   const operationToModel = (transition: RunnableFrontierTransition) =>
     "operationId" in transition

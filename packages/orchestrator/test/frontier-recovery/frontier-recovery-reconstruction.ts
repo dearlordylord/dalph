@@ -20,7 +20,11 @@ import {
   makeFrontierRecoveryIdentityMapping,
   runFrontierRecoveryReconstructionAction
 } from "./frontier-recovery-conformance.js"
-import type { FrontierRecoveryModelTaskId, TargetClosureObservationInput } from "./frontier-recovery-conformance.js"
+import type {
+  FrontierRecoveryActivationAction,
+  FrontierRecoveryModelTaskId,
+  TargetClosureObservationInput
+} from "./frontier-recovery-conformance.js"
 import {
   firstClaimOperationIdentity,
   frontierRecoveryClaimOperationEntries as claimOperationEntries,
@@ -132,6 +136,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   })
 
   const rawControls = {
+    activation: (_action: FrontierRecoveryActivationAction) => Effect.void,
     orchestratorCommitsFreshTaskClaimIntent: (modelTaskId: FrontierRecoveryModelTaskId) =>
       Effect.gen(function*() {
         if (!coordinatorRunning) {
@@ -391,36 +396,22 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       } satisfies FrontierRecoveryReconstructionProjection
     }
   )
-
+  const runAction = (action: unknown) => runFrontierRecoveryReconstructionAction(action, rawControls)
   return {
+    activation: runAction,
     orchestratorCommitsFreshTaskClaimIntent: (task: FrontierRecoveryModelTaskId) =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "orchestratorCommitsFreshTaskClaimIntent", task },
-        rawControls
-      ),
-    crash: () => runFrontierRecoveryReconstructionAction({ _tag: "crash" }, rawControls),
+      runAction({ _tag: "orchestratorCommitsFreshTaskClaimIntent", task }),
+    crash: () => runAction({ _tag: "crash" }),
     getState,
-    init: () => runFrontierRecoveryReconstructionAction({ _tag: "init" }, rawControls),
+    init: () => runAction({ _tag: "init" }),
     taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReturnsTargetClosureReadAtNextRevision" },
-        rawControls
-      ),
+      runAction({ _tag: "taskTrackerReturnsTargetClosureReadAtNextRevision" }),
     taskTrackerReturnsTargetClosureReadWithPredecessor: () =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReturnsTargetClosureReadWithPredecessor" },
-        rawControls
-      ),
+      runAction({ _tag: "taskTrackerReturnsTargetClosureReadWithPredecessor" }),
     taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: () =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage" },
-        rawControls
-      ),
+      runAction({ _tag: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage" }),
     orchestratorCommitsNextFreshTaskClaimIntent: () =>
-      runFrontierRecoveryReconstructionAction(
-        { _tag: "orchestratorCommitsNextFreshTaskClaimIntent" },
-        rawControls
-      ),
-    restart: () => runFrontierRecoveryReconstructionAction({ _tag: "restart" }, rawControls)
+      runAction({ _tag: "orchestratorCommitsNextFreshTaskClaimIntent" }),
+    restart: () => runAction({ _tag: "restart" })
   } as const
 })

@@ -28,7 +28,7 @@ export const recoverImplementationConvergences = Effect.fn(
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
     freshOccupiedInvocations: [],
-    reconstructedReservedTaskIds: []
+    reconstructedReservedPositions: []
   })
   const initialRecords = yield* journal.read(runId)
   const attempts = initialRecords.flatMap(({ event }) =>
@@ -177,13 +177,23 @@ export const recoverImplementationConvergences = Effect.fn(
         operationId: executionOperation.request.operationId,
         taskId: latestExecution.operation.request.task.id
       })
-      yield* admissionController.awaitAdmission(executionTransition)
+      const executionAdmission = yield* admissionController.admit(
+        {
+          explanations: [],
+          transitions: [executionTransition]
+        },
+        runId
+      )
+      if (!executionAdmission.transitions.includes(executionTransition)) {
+        return yield* Effect.die(
+          new Error(`recovery admission must be rederived for ${executionTransition.taskId}`)
+        )
+      }
       const result = yield* interpreter.executeTaskWork(executionOperation)
       yield* trace.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: result }))
-      yield* admissionController.releaseReservation(
-        executionTransition.taskId,
+      yield* admissionController.releaseTaskAdmissionPosition(
         executionTransition.operationId
-      )
+      ).pipe(Effect.orDie)
       latestExecution = { operation: executionOperation, outcome: result.outcome, position: Number.MAX_SAFE_INTEGER }
     }
 

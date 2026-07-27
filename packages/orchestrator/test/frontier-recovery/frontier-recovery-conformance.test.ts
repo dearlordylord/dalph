@@ -18,9 +18,24 @@ const taskB = TaskId.make("frontier-recovery-task-B")
 const operationOne = OperationId.make("frontier-recovery-operation-1")
 
 it("defines the versioned closed M2 reconstruction action map", () => {
-  expect(frontierRecoveryReconstructionConformanceVersion).toBe(4)
+  expect(frontierRecoveryReconstructionConformanceVersion).toBe(5)
   expect(frontierRecoveryReconstructionActions).toEqual([
     "init",
+    "deriveActivationPass",
+    "excludeOwnedTransitions",
+    "reserveTaskAdmissionPosition",
+    "claimActivationOwnership",
+    "rejectDuplicateOwnership",
+    "recordOwnedOperationIntent",
+    "interruptBeforeOwnership",
+    "interruptAfterOwnershipBeforeIntent",
+    "interruptAfterIntent",
+    "recordOwnedResultAndRelease",
+    "observeCapacityConsumed",
+    "observeCapacityReleased",
+    "crashCoordinatorWithActivation",
+    "stopProviderWorker",
+    "reconstructActivation",
     "orchestratorCommitsNextFreshTaskClaimIntent",
     "orchestratorCommitsFreshTaskClaimIntent",
     "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
@@ -35,6 +50,7 @@ it.effect("rejects unknown M2 reconstruction actions before invoking a control",
   Effect.gen(function*() {
     let invocations = 0
     const controls = {
+      activation: () => Effect.sync(() => invocations += 1),
       crash: () => Effect.sync(() => invocations += 1),
       init: () => Effect.sync(() => invocations += 1),
       orchestratorCommitsFreshTaskClaimIntent: () => Effect.sync(() => invocations += 1),

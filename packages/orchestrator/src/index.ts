@@ -1,3 +1,4 @@
+export { ActivationCause, type ActivationCoordinator, ActivationCoordinatorClosed } from "./activation-coordinator.js"
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
 export {
   ControlledCoordinatorLock,
@@ -40,6 +41,8 @@ export {
   ReviewerSessionId,
   ReviewFindingId,
   RunId,
+  SelectedTransitionFingerprint,
+  SelectedTransitionIdentity,
   SemanticReviewRound,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -143,7 +146,6 @@ export {
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./sqlite-journal-store.js"
-export * from "./task-admission-controller.js"
 export {
   TaskAttemptPlanAcknowledged,
   TaskAttemptPlanHistoryContradiction,
