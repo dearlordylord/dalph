@@ -1885,6 +1885,8 @@ module frontierRecovery {
       or activationCapacityUsage(state) >= state.activation.configuredCapacity
       or state.activation.selectedTransitions.contains(C)
       or activationOwnerExists(state, C)
+      or state.activation.isolatedSubjects.contains(C)
+      or state.activation.resultsRecorded.contains(C)
       or match state.activation.positions.get(C) {
         | ActivationPositionReserved(_) => true
         | ActivationPositionRetained(_) => true
