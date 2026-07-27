@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Startup collects preserved run issues before failing closed. */
 import { NodeServices } from "@effect/platform-node"
-import { Context, Effect, Layer, Ref, Result, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
 import {
   defaultTaskWorkCapacity,
@@ -29,7 +29,6 @@ import {
 import {
   makeManagedRecoveryActivation,
   ManagedRecoveryActivation,
-  observeRecoveredAdmissionCapacity,
   type RecoveredAdmissionCapacityEvidence
 } from "./managed-activation.js"
 import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
@@ -41,12 +40,13 @@ import type { TaskRunner } from "./task-work-start.js"
 import type { TrackerMutation } from "./tracker-mutation.js"
 import { makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
-  observeManagedRunAuthorities,
+  observeManagedRunAuthoritiesWithCapacityEvidence,
   recoverExactRunAfterCoordinatorDeath,
   RecoveryAuthorityContradictionIssue,
   RecoveryOwnershipIssue,
   RecoveryProgressIssue,
-  RecoveryReconciliationIssue
+  RecoveryReconciliationIssue,
+  validateManagedRunContinuation
 } from "./workflow-recovery.js"
 import { RecoveryTaskEligibilityIssue } from "./workflow-stage-recovery.js"
 import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter } from "./workflow.js"
@@ -196,33 +196,26 @@ export const productionWorkflowInterpreterLayer = <
       for (const history of scan.runs) {
         const reduction = reduceManagedHistory(history.runId, history.records)
         if (reduction._tag === "InvalidManagedHistory") issues.push(...reduction.issues)
-        const observationIssues = yield* observeManagedRunAuthorities(
+        const observation = yield* observeManagedRunAuthoritiesWithCapacityEvidence(
           history.runId,
           history.records
         )
+        const observationIssues = observation.issues
         issues.push(...observationIssues)
         if (
           reduction._tag === "InvalidManagedHistory"
           || observationIssues.length > 0
           || scan.issues.some((issue) => issue.runId === history.runId)
         ) continue
-        const capacityEvidence = yield* Effect.result(
-          observeRecoveredAdmissionCapacity(history.runId)
-        )
-        if (Result.isFailure(capacityEvidence)) {
-          issues.push(
-            new RecoveryReconciliationIssue({
-              authority: "TaskExecutor",
-              detail: String(capacityEvidence.failure),
-              runId: history.runId
-            })
-          )
-          continue
-        }
         if (history.runId === runId) {
+          const continuationIssues = yield* validateManagedRunContinuation(
+            history.runId,
+            history.records
+          )
+          issues.push(...continuationIssues)
           yield* Ref.set(
             currentCapacityEvidence,
-            capacityEvidence.success
+            observation.capacityEvidence
           )
           continue
         }
@@ -230,7 +223,7 @@ export const productionWorkflowInterpreterLayer = <
           history.runId,
           history.records,
           capacity,
-          capacityEvidence.success
+          observation.capacityEvidence
         ).pipe(Effect.provide(interpreterLayerFor(history.runId)))
         issues.push(...runIssues)
       }

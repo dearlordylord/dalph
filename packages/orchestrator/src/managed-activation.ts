@@ -160,14 +160,19 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
 
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction inputs with their exact recovered operation.
 interface ManagedRecoveryActivationService {
+  /**
+   * Identifies whether activation is attached to an authoritative journal run
+   * or is the explicit synthetic source used by non-journaled compositions.
+   */
+  readonly composition:
+    | { readonly _tag: "AuthoritativeManagedRun"; readonly runId: RunId }
+    | { readonly _tag: "SyntheticFreshOnly"; readonly runId: RunId }
   readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
-  readonly hasRecoveredWork: boolean
   readonly readFrontier: Effect.Effect<RunnableFrontier, unknown>
   readonly reconstructedReservedPositions: ReadonlyArray<{
     readonly operationId: OperationId
     readonly taskId: TaskId
   }>
-  readonly runId: RunId
   readonly runTransition: (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
@@ -187,11 +192,13 @@ export class ManagedRecoveryActivation extends Context.Service<
 export const emptyManagedRecoveryActivationLayer = Layer.succeed(
   ManagedRecoveryActivation,
   ManagedRecoveryActivation.of({
+    composition: {
+      _tag: "SyntheticFreshOnly",
+      runId: RunId.make("fresh-only-activation")
+    },
     capacityEvidence: noRecoveredAdmissionCapacityEvidence,
-    hasRecoveredWork: false,
     readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
     reconstructedReservedPositions: [],
-    runId: RunId.make("fresh-only-activation"),
     runTransition: () => Effect.die("fresh-only activation cannot execute a recovered transition")
   })
 )
@@ -282,11 +289,10 @@ export const makeManagedRecoveryActivation = Effect.fn(
     }
   )
   return ManagedRecoveryActivation.of({
+    composition: { _tag: "AuthoritativeManagedRun", runId },
     capacityEvidence,
-    hasRecoveredWork: true,
     readFrontier: provideDependencies(readFrontier()),
     reconstructedReservedPositions,
-    runId,
     runTransition: (transition, execution) =>
       provideDependencies(
         runTransition(transition, execution.recordIntent)

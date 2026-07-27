@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
+/* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
@@ -147,6 +147,21 @@ const contradict = (detail: string): Effect.Effect<never, AuthorityObservationCo
  */
 export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeManagedRunAuthorities")(
   function*(runId: RunId, records: ReadonlyArray<JournalRecord>) {
+    return (yield* observeManagedRunAuthoritiesWithCapacityEvidence(
+      runId,
+      records
+    )).issues
+  }
+)
+
+/**
+ * Refreshes external authority and retains the exact unresolved-execution
+ * observations that also determine reconstructed admission usage.
+ */
+export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
+  "WorkflowRecovery.observeManagedRunAuthoritiesWithCapacityEvidence"
+)(
+  function*(runId: RunId, records: ReadonlyArray<JournalRecord>) {
     const graph = yield* TrackerGraphReader
     const tracker = yield* TrackerMutation
     const git = yield* GitWorktree
@@ -158,6 +173,10 @@ export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeM
       Effect.Effect<
         ReadonlyArray<RecoveryAuthorityContradictionIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue>
       >
+    >()
+    const freshOccupiedInvocations = new Array<RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"][number]>()
+    const freshlyReleasedOperationIds = new Set<
+      RecoveredAdmissionCapacityEvidence["freshlyReleasedOperationIds"] extends ReadonlySet<infer Item> ? Item : never
     >()
     for (const { event } of records) {
       Match.valueTags(event, {
@@ -244,6 +263,17 @@ export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeM
                 sessionId: session.sessionId
               }).pipe(Effect.flatMap((observed) => {
                 if (durable?._tag !== "TaskExecutionOutcomeObserved") {
+                  if (observed._tag === "RunningTaskExecutionReported") {
+                    freshOccupiedInvocations.push({
+                      observationId: observed.observationId,
+                      operationId: event.operation.request.operationId,
+                      taskId: event.operation.request.plannedAttempt.taskId
+                    })
+                  } else if (observed._tag === "NoTaskExecutionReported") {
+                    freshlyReleasedOperationIds.add(
+                      event.operation.request.operationId
+                    )
+                  }
                   return Effect.void
                 }
                 return executionAuthorityMatches(observed, durable.outcome.outcome)
@@ -340,9 +370,44 @@ export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeM
         TechnicalRetryDeferralSuperseded: ignoreAuthorityRefresh
       })
     }
-    return (yield* Effect.all(checks, { concurrency: 1 })).flat()
+    const issues = (yield* Effect.all(checks, { concurrency: 1 })).flat()
+    return {
+      capacityEvidence: {
+        freshOccupiedInvocations,
+        freshlyReleasedOperationIds
+      },
+      issues
+    } satisfies {
+      readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
+      readonly issues: ReadonlyArray<
+        | RecoveryAuthorityContradictionIssue
+        | RecoveryOwnershipIssue
+        | RecoveryReconciliationIssue
+      >
+    }
   }
 )
+
+/** Checks that the next attempt continuation has the causal eligibility lineage it needs. */
+export const validateManagedRunContinuation = Effect.fn(
+  "WorkflowRecovery.validateManagedRunContinuation"
+)(function*(runId: RunId, records: ReadonlyArray<JournalRecord>) {
+  const reduction = reduceManagedHistory(runId, records)
+  if (reduction._tag === "InvalidManagedHistory") return reduction.issues
+  const stage = reduction.recoveryStage.entries.find((candidate) =>
+    candidate._tag === "TaskWorktreeReconciliationNeeded"
+    || candidate._tag === "TaskWorkSessionEstablishmentNeeded"
+    || candidate._tag === "TaskExecutionNeeded"
+    || candidate._tag === "ImplementationConvergencePending"
+  )
+  if (stage === undefined) return []
+  const eligibility = yield* Effect.result(
+    refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
+  )
+  return Result.isFailure(eligibility)
+    ? [classifyStageContinuationFailure("Tracker", runId, eligibility.failure)]
+    : []
+})
 /** Validates history before refreshing every current external authority. */
 export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.recoverExactRunAfterCoordinatorDeath")(
   function*(

@@ -253,8 +253,8 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
       readFrontier: readFrontier(),
-      runId: recovery.hasRecoveredWork
-        ? recovery.runId
+      runId: recovery.composition._tag === "AuthoritativeManagedRun"
+        ? recovery.composition.runId
         : RunId.make(`workflow:${target}`),
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
