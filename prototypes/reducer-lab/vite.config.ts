@@ -12,6 +12,7 @@ export default defineConfig({
     }]
   },
   server: {
+    allowedHosts: ["determined_johnson.orb.local"],
     host: "0.0.0.0"
   }
 })
