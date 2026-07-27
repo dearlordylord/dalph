@@ -1,0 +1,19 @@
+{
+  "name": "@dalph/reducer-lab-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 0.0.0.0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "4.0.0-beta.101",
+    "effect": "4.0.0-beta.101",
+    "foldkit": "0.132.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}
