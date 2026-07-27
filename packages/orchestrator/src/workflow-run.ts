@@ -261,8 +261,8 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
       readFrontier: readFrontier(),
-      runId: recovery.composition._tag === "AuthoritativeManagedRun"
-        ? recovery.composition.runId
+      runId: recovery._tag === "AuthoritativeManagedRunActivation"
+        ? recovery.runId
         : RunId.make(`workflow:${target}`),
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
@@ -273,11 +273,16 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             FreshWorkflowStage | undefined,
             FreshWorkflowStageError | ManagedRecoveryActivationError
           > = stage === undefined
+              && recovery._tag === "AuthoritativeManagedRunActivation"
             ? recovery.runTransition(
               transition,
               execution
             ).pipe(
               Effect.as<FreshWorkflowStage | undefined>(undefined)
+            )
+            : stage === undefined
+            ? Effect.die(
+              "synthetic activation cannot derive a recovered transition"
             )
             : stage.run(execution.recordIntent)
           const exit = yield* Effect.exit(operation)

@@ -8,10 +8,14 @@ import type { TaskWorktreeExecutionModeContradiction } from "./task-worktree-rec
 import type { TraceOutputError } from "./trace-output.js"
 import type { WorkflowInterpreterService } from "./workflow.js"
 
-type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
+type InterpreterError = {
+  [Key in keyof WorkflowInterpreterService]: Effect.Error<
+    ReturnType<WorkflowInterpreterService[Key]>
+  >
+}[keyof WorkflowInterpreterService]
 
 export type FreshWorkflowStageError =
-  | Effect.Error<ReturnType<InterpreterOperation>>
+  | InterpreterError
   | FreshImplementationConvergenceStageError
   | PlannedTaskAttemptError
   | PlatformError.PlatformError

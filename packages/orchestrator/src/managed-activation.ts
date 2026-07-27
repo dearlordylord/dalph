@@ -1,6 +1,6 @@
 import { Context, Effect, Exit, Layer, Match, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
-import { type OperationId, type ProviderObservationId, RunId, type TaskId, type TaskWorkCapacity } from "./domain.js"
+import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
 import type { FreshImplementationConvergenceStageError } from "./implementation-convergence-stage.js"
 import { JournalStore, type JournalStoreError } from "./journal-store.js"
@@ -15,10 +15,13 @@ import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutor } from "./task-execution.js"
-import type { TraceOutputError } from "./trace-output.js"
 import type { WorkflowInterpreter, WorkflowInterpreterService, WorkflowTrace } from "./workflow.js"
 
-type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
+type InterpreterError = {
+  [Key in keyof WorkflowInterpreterService]: Effect.Error<
+    ReturnType<WorkflowInterpreterService[Key]>
+  >
+}[keyof WorkflowInterpreterService]
 
 type InvalidManagedHistory = Extract<
   ReturnType<typeof reduceManagedHistory>,
@@ -26,11 +29,10 @@ type InvalidManagedHistory = Extract<
 >
 
 export type ManagedRecoveryActivationError =
-  | Effect.Error<ReturnType<InterpreterOperation>>
   | FreshImplementationConvergenceStageError
   | InvalidManagedHistory
+  | InterpreterError
   | JournalStoreError
-  | TraceOutputError
 
 export interface RecoveredAdmissionCapacityEvidence {
   readonly freshOccupiedInvocations: ReadonlyArray<{
@@ -174,15 +176,7 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
   }
 )
 
-// eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction inputs with their exact recovered operation.
-interface ManagedRecoveryActivationService {
-  /**
-   * Identifies whether activation is attached to an authoritative journal run
-   * or is the explicit synthetic source used by non-journaled compositions.
-   */
-  readonly composition:
-    | { readonly _tag: "AuthoritativeManagedRun"; readonly runId: RunId }
-    | { readonly _tag: "SyntheticFreshOnly"; readonly runId: RunId }
+interface ManagedActivationSource {
   readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
   readonly readFrontier: Effect.Effect<
     RunnableFrontier,
@@ -193,11 +187,27 @@ interface ManagedRecoveryActivationService {
     readonly operationId: OperationId
     readonly taskId: TaskId
   }>
+}
+
+/** A journal-backed source can execute recovered transitions for its exact run. */
+// eslint-disable-next-line functional/no-mixed-types -- The discriminated source carries the exact run and its sole recovered-transition capability.
+interface AuthoritativeManagedRunActivation extends ManagedActivationSource {
+  readonly _tag: "AuthoritativeManagedRunActivation"
+  readonly runId: RunId
   readonly runTransition: (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
   ) => Effect.Effect<void, ManagedRecoveryActivationError, never>
 }
+
+/** A non-journaled composition has no recovered-transition capability. */
+interface SyntheticFreshOnlyActivation extends ManagedActivationSource {
+  readonly _tag: "SyntheticFreshOnlyActivation"
+}
+
+type ManagedRecoveryActivationService =
+  | AuthoritativeManagedRunActivation
+  | SyntheticFreshOnlyActivation
 
 /**
  * Current-run recovered work source. It owns no selector, admission controller,
@@ -212,14 +222,10 @@ export class ManagedRecoveryActivation extends Context.Service<
 export const emptyManagedRecoveryActivationLayer = Layer.succeed(
   ManagedRecoveryActivation,
   ManagedRecoveryActivation.of({
-    composition: {
-      _tag: "SyntheticFreshOnly",
-      runId: RunId.make("fresh-only-activation")
-    },
+    _tag: "SyntheticFreshOnlyActivation",
     capacityEvidence: noRecoveredAdmissionCapacityEvidence,
     readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-    reconstructedReservedPositions: [],
-    runTransition: () => Effect.die("fresh-only activation cannot execute a recovered transition")
+    reconstructedReservedPositions: []
   })
 )
 
@@ -290,16 +296,17 @@ export const makeManagedRecoveryActivation = Effect.fn(
       yield* stage.run(recordIntent)
     }
   )
-  return ManagedRecoveryActivation.of({
-    composition: { _tag: "AuthoritativeManagedRun", runId },
+  return {
+    _tag: "AuthoritativeManagedRunActivation",
     capacityEvidence,
     readFrontier: provideDependencies(readFrontier()),
     reconstructedReservedPositions,
+    runId,
     runTransition: (transition, execution) =>
       provideDependencies(
         runTransition(transition, execution.recordIntent)
       )
-  })
+  } satisfies AuthoritativeManagedRunActivation
 })
 
 /**
@@ -323,14 +330,23 @@ export const activateRecoveredResponsibilities = Effect.fn(
     freshlyReleasedOperationIds: capacityEvidence.freshlyReleasedOperationIds,
     reconstructedReservedPositions: recovery.reconstructedReservedPositions
   })
-  const completed = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
+  const completed = yield* Queue.unbounded<
+    Exit.Exit<void, ManagedRecoveryActivationError>
+  >()
+  const readFrontier: Effect.Effect<
+    RunnableFrontier,
+    ManagedRecoveryActivationError
+  > = recovery.readFrontier
 
   yield* Effect.scoped(Effect.gen(function*() {
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
-      readFrontier: recovery.readFrontier,
+      readFrontier,
       runId,
-      runTransition: (transition, execution) =>
+      runTransition: (
+        transition,
+        execution
+      ): Effect.Effect<void, ManagedRecoveryActivationError> =>
         Effect.gen(function*() {
           const exit = yield* recovery.runTransition(
             transition,

@@ -16,7 +16,11 @@ import type { TraceOutputError } from "./trace-output.js"
 import type { makeImplementationReviewOperation, makeReviewFindingsHandbackOperation } from "./workflow-operation.js"
 import type { TraceItem, WorkflowInterpreterService } from "./workflow.js"
 
-type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
+type InterpreterError = {
+  [Key in keyof WorkflowInterpreterService]: Effect.Error<
+    ReturnType<WorkflowInterpreterService[Key]>
+  >
+}[keyof WorkflowInterpreterService]
 
 export type AuthoritativeImplementationConvergenceResult = Extract<
   Effect.Success<
@@ -26,7 +30,7 @@ export type AuthoritativeImplementationConvergenceResult = Extract<
 >
 
 export type FreshImplementationConvergenceStageError =
-  | Effect.Error<ReturnType<InterpreterOperation>>
+  | InterpreterError
   | TaskWorktreeExecutionModeContradiction
   | TraceOutputError
 

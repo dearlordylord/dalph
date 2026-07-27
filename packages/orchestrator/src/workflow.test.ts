@@ -151,10 +151,7 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
       taskId
     })
     const recovery = ManagedRecoveryActivation.of({
-      composition: {
-        _tag: "AuthoritativeManagedRun",
-        runId: RunId.make("recovered-then-fresh")
-      },
+      _tag: "AuthoritativeManagedRunActivation",
       capacityEvidence: {
         freshOccupiedInvocations: [],
         freshlyReleasedOperationIds: new Set()
@@ -166,6 +163,7 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
         }))
       ),
       reconstructedReservedPositions: [],
+      runId: RunId.make("recovered-then-fresh"),
       runTransition: () => Ref.set(pending, false)
     })
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])

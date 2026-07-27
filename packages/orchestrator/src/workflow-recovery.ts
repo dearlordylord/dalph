@@ -394,19 +394,30 @@ export const validateManagedRunContinuation = Effect.fn(
 )(function*(runId: RunId, records: ReadonlyArray<JournalRecord>) {
   const reduction = reduceManagedHistory(runId, records)
   if (reduction._tag === "InvalidManagedHistory") return reduction.issues
-  const stage = reduction.recoveryStage.entries.find((candidate) =>
+  const stages = reduction.recoveryStage.entries.filter((candidate) =>
     candidate._tag === "TaskWorktreeReconciliationNeeded"
     || candidate._tag === "TaskWorkSessionEstablishmentNeeded"
     || candidate._tag === "TaskExecutionNeeded"
     || candidate._tag === "ImplementationConvergencePending"
   )
-  if (stage === undefined) return []
-  const eligibility = yield* Effect.result(
-    refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
-  )
-  return Result.isFailure(eligibility)
-    ? [classifyStageContinuationFailure("Tracker", runId, eligibility.failure)]
-    : []
+  return (yield* Effect.forEach(
+    stages,
+    (stage) =>
+      Effect.result(
+        refreshPlannedAttemptEligibility(runId, records, stage.planOperation)
+      ).pipe(
+        Effect.map((eligibility) =>
+          Result.isFailure(eligibility)
+            ? [classifyStageContinuationFailure(
+              "Tracker",
+              runId,
+              eligibility.failure
+            )]
+            : []
+        )
+      ),
+    { concurrency: 1 }
+  )).flat()
 })
 /** Validates history before refreshing every current external authority. */
 export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.recoverExactRunAfterCoordinatorDeath")(
