@@ -40,7 +40,7 @@ import { makeTrackerGraphObservationOperation } from "./workflow-operation.js"
 import {
   classifyRecoveryIssue,
   continueMissingPlannedTaskAttemptStages,
-  observeManagedRunAuthorities,
+  observeManagedRunAuthoritiesWithCapacityEvidence,
   recoverExactRunAfterCoordinatorDeath
 } from "./workflow-recovery.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
@@ -338,7 +338,10 @@ it.effect("collects completed stale, foreign, and unreadable authority facts wit
       }
     ] as const
     const records = events.map((event, index) => ({ event, index })) as never
-    const issues = yield* observeManagedRunAuthorities(runId, records).pipe(
+    const observation = yield* observeManagedRunAuthoritiesWithCapacityEvidence(
+      runId,
+      records
+    ).pipe(
       Effect.provideService(TrackerGraphReader, TrackerGraphReader.of({ read: () => emptySnapshot })),
       Effect.provideService(
         TrackerMutation,
@@ -416,7 +419,9 @@ it.effect("collects completed stale, foreign, and unreadable authority facts wit
         })
       )
     )
-    expect(issues.map((issue) => issue._tag === "RecoveryOwnershipIssue" ? "Ownership" : issue.authority)).toEqual(
+    expect(
+      observation.issues.map((issue) => issue._tag === "RecoveryOwnershipIssue" ? "Ownership" : issue.authority)
+    ).toEqual(
       [
         "Tracker",
         "Git",
@@ -426,4 +431,8 @@ it.effect("collects completed stale, foreign, and unreadable authority facts wit
         "Reviewer"
       ]
     )
+    expect([...observation.capacityEvidence.freshlyReleasedOperationIds]).toEqual([
+      OperationId.make("observer-unresolved-execution")
+    ])
+    expect(observation.capacityEvidence.freshOccupiedInvocations).toEqual([])
   }))
