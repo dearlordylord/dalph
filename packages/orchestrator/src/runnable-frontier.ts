@@ -22,6 +22,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   ContinueFreshWorkflowOperation: {
     readonly operationId: OperationId
+    readonly requiresTaskAdmission: boolean
     readonly taskId: TaskId
   }
   ContinueImplementationEvidenceSealing: {

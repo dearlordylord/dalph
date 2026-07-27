@@ -63,6 +63,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   ): RunnableFrontierTransition =>
     FrontierTransition.ContinueFreshWorkflowOperation({
       operationId,
+      requiresTaskAdmission: false,
       taskId: task.id
     })
 
@@ -208,6 +209,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             (candidate) => candidate.transition === transition
           )
           if (stage === undefined) return
+          if (transition._tag === "ContinueFreshWorkflowOperation") {
+            yield* execution.recordIntent(transition.operationId)
+          }
           const exit = yield* stage.run(execution.recordIntent).pipe(Effect.exit)
           if (Exit.isSuccess(exit)) {
             yield* Ref.update(stages, (current) =>

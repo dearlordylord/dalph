@@ -48,6 +48,17 @@ interface SimulatedImplementationConvergenceOptions {
   readonly task: Task
 }
 
+const freshTransition = (
+  operationId: OperationId,
+  task: Task,
+  requiresTaskAdmission: boolean
+) =>
+  FrontierTransition.ContinueFreshWorkflowOperation({
+    operationId,
+    requiresTaskAdmission,
+    taskId: task.id
+  })
+
 /** Builds the three exact simulated convergence operations as separate selector stages. */
 export const makeSimulatedImplementationConvergenceStage = Effect.fn(
   "Workflow.makeSimulatedImplementationConvergenceStage"
@@ -69,10 +80,11 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
       predecessorOperationId
     )
     return {
-      transition: FrontierTransition.ContinueFreshWorkflowOperation({
-        operationId: operation.request.operationId,
-        taskId: options.task.id
-      }),
+      transition: freshTransition(
+        operation.request.operationId,
+        options.task,
+        false
+      ),
       run: () =>
         Effect.gen(function*() {
           yield* options.emit(OperationSelected.make({ operation }))
@@ -107,10 +119,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
         })
       )
       return {
-        transition: FrontierTransition.ContinueImplementationReview({
-          operationId,
-          taskId: options.task.id
-        }),
+        transition: freshTransition(operationId, options.task, true),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -141,10 +150,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
     plannedAttempt: options.plannedAttempt
   })
   return {
-    transition: FrontierTransition.ContinueImplementationEvidenceSealing({
-      operationId: operation.operationId,
-      taskId: options.task.id
-    }),
+    transition: freshTransition(operation.operationId, options.task, false),
     run: () =>
       Effect.gen(function*() {
         yield* options.emit(OperationSelected.make({ operation }))

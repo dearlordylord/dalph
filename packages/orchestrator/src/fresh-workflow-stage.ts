@@ -1,6 +1,6 @@
 import type { Effect, PlatformError } from "effect"
 import type { OperationId } from "./domain.js"
-import type { FreshImplementationConvergenceStageError } from "./fresh-implementation-convergence-stages.js"
+import type { FreshImplementationConvergenceStageError } from "./implementation-convergence-stage.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
 import type { SimulatedImplementationConvergenceStageError } from "./simulated-implementation-convergence-stages.js"
 import type { PlannedTaskAttemptError } from "./task-work-planning.js"

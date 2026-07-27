@@ -119,6 +119,10 @@ export const transitionRequiresTaskAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
   transition._tag === "CommitFreshTaskClaimIntent"
+  || (
+    transition._tag === "ContinueFreshWorkflowOperation"
+    && transition.requiresTaskAdmission
+  )
   || transition._tag === "ContinueTaskExecution"
   || transition._tag === "ContinueImplementationReview"
   || transition._tag === "ContinueReviewFindingsHandback"
@@ -150,6 +154,7 @@ const transitionReservation = (
   runId: RunId
 ): TaskAdmissionReservationCorrelation =>
   "operationId" in transition
+    && transition._tag !== "ContinueFreshWorkflowOperation"
     ? operationReservation(transition.operationId)
     : {
       _tag: "SelectedTransitionReservation",
@@ -169,6 +174,7 @@ const sameReservation = (
   reservation.taskId === transition.taskId
   && (
     "operationId" in transition
+      && transition._tag !== "ContinueFreshWorkflowOperation"
       ? reservation.correlation._tag === "OperationReservation"
         && reservation.correlation.operationId === transition.operationId
       : reservation.correlation._tag === "SelectedTransitionReservation"

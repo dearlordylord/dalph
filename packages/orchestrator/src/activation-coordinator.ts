@@ -164,6 +164,7 @@ export const makeActivationOwnershipRegistry = Effect.fn(
         if (current.has(key)) return [undefined, current] as const
         const entry: ActivationOwnershipEntry = {
           operationId: "operationId" in transition
+              && transition._tag !== "ContinueFreshWorkflowOperation"
             ? Option.some(transition.operationId)
             : Option.none(),
           selected,

@@ -1,361 +1,95 @@
-import { Effect } from "effect"
+import { Effect, Exit, Queue, Ref } from "effect"
+import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
+import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import {
-  type ImplementationReviewRoundLimit,
-  type OperationId,
-  ReviewerSessionId,
-  type RunId,
-  SemanticReviewRound,
-  type Task
-} from "./domain.js"
-import { ImplementationConvergenceDispositionRecordedTrace } from "./implementation-convergence-trace.js"
-import {
-  ImplementationConvergenceDisposition,
-  type ImplementationConvergenceSubject,
-  PriorImplementationReviewEvidence
-} from "./implementation-convergence.js"
-import type { SealedImplementationEvidence } from "./implementation-evidence.js"
-import {
-  ImplementationEvidenceSealingSimulatedTrace,
-  ImplementationReviewCompletedTrace,
-  ReviewFindingsHandedBackTrace,
-  SealedImplementationEvidenceTrace
-} from "./implementation-review-trace.js"
-import {
-  AuthorizedImplementationReviewRequest,
-  ImplementationReviewInvocationFailure,
-  ReviewFindingsHandbackFailure,
-  ReviewFindingsHandbackRequest,
-  type SealedImplementationReview
-} from "./implementation-review.js"
-import {
-  type RunnableFrontierTransition,
-  RunnableFrontierTransition as FrontierTransition
-} from "./runnable-frontier.js"
+  type AuthoritativeImplementationConvergenceResult,
+  type FreshImplementationConvergenceOptions,
+  type FreshImplementationConvergenceStage,
+  type FreshImplementationConvergenceStageError
+} from "./implementation-convergence-stage.js"
 import type { TaskAdmissionController } from "./task-admission-controller.js"
-import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
-import { type TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import type { OperationIdAllocatorService } from "./task-work-planning.js"
-import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
-import type { TraceOutputError } from "./trace-output.js"
-import { OperationSelected } from "./tracker-workflow-trace.js"
-import {
-  makeImplementationDispositionOperation,
-  makeImplementationEvidenceSealingOperation,
-  makeImplementationReviewOperation,
-  makeReviewFindingsHandbackOperation,
-  makeTaskExecutionOperation
-} from "./workflow-operation.js"
-import type { TraceItem, WorkflowInterpreterService } from "./workflow.js"
+import type { TaskExecutionOutcome } from "./task-execution.js"
 
-// eslint-disable-next-line functional/no-mixed-types -- One workflow invocation carries services and immutable resume state.
-interface LiveImplementationConvergenceOptions {
+interface LiveImplementationConvergenceOptions extends FreshImplementationConvergenceOptions {
   readonly admissionController?: TaskAdmissionController
-  readonly allocator: OperationIdAllocatorService
-  readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
   readonly initialExecutionOutcome: TaskExecutionOutcome
-  readonly interpreter: WorkflowInterpreterService
-  readonly roundLimit: ImplementationReviewRoundLimit
-  readonly subject: ImplementationConvergenceSubject
-  readonly task: Task
-  readonly initialHandbackOperation?: ReturnType<typeof makeReviewFindingsHandbackOperation>
-  readonly initialPreviousReview?: SealedImplementationReview
-  readonly initialReview?: SealedImplementationReview
-  readonly initialReviewOperation?: ReturnType<typeof makeImplementationReviewOperation>
-  readonly initialRound?: number
-  readonly initialSealedEvidence?: {
-    readonly operationId: OperationId
-    readonly sealed: SealedImplementationEvidence
-  }
 }
 
-const withTaskAdmission = <A, E, R>(
-  controller: TaskAdmissionController | undefined,
-  runId: RunId,
-  transition: RunnableFrontierTransition,
-  effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> =>
-  controller === undefined
-    ? effect
-    : Effect.gen(function*() {
-      const admission = yield* controller.admit(
-        {
-          explanations: [],
-          transitions: [transition]
-        },
-        runId
-      )
-      if (!admission.transitions.includes(transition)) {
-        return yield* Effect.die(
-          new Error(`task admission must be rederived for ${transition.taskId}`)
-        )
-      }
-      return yield* effect
-    })
-
-const releaseTaskAdmission = (
-  controller: TaskAdmissionController | undefined,
-  transition: RunnableFrontierTransition
-): Effect.Effect<void> =>
-  controller === undefined
-    ? Effect.void
-    : "operationId" in transition
-    ? controller.releaseTaskAdmissionPosition(transition.operationId).pipe(
-      Effect.orDie,
-      Effect.asVoid
-    )
-    : Effect.void
-
-const priorEvidence = (
-  review: SealedImplementationReview | undefined
-): PriorImplementationReviewEvidence =>
-  review === undefined
-    ? PriorImplementationReviewEvidence.cases.NoPriorReviewEvidence.make({})
-    : PriorImplementationReviewEvidence.cases.PriorReviewEvidence.make({ review })
-
-/** Runs bounded semantic review and same-session rework until one exact terminal disposition is durable. */
+/** Drives the same exact-operation convergence stages sequentially for legacy callers. */
 export const runLiveImplementationConvergence = Effect.fn(
   "Workflow.runLiveImplementationConvergence"
 )(function*(options: LiveImplementationConvergenceOptions) {
-  let executionOutcome = options.initialExecutionOutcome
-  let previousReview = options.initialPreviousReview
-  let pendingReview = options.initialReview
-  let pendingReviewOperation = options.initialReviewOperation
-  let pendingHandbackOperation = options.initialHandbackOperation
-  let pendingSealedEvidence = options.initialSealedEvidence
-  let round = options.initialRound ?? options.initialReview?.manifest.round ?? 1
-
-  const recordDisposition = Effect.fn("Workflow.recordImplementationDisposition")(function*(
-    disposition: ImplementationConvergenceDisposition,
-    predecessorOperationId: OperationId
-  ) {
-    const operationId = yield* options.allocator.allocate()
-    const operation = makeImplementationDispositionOperation(
-      {
-        _tag: "AuthorizedImplementationConvergenceDisposition",
-        disposition,
-        operationId
-      },
-      predecessorOperationId
-    )
-    yield* options.emit(OperationSelected.make({ operation }))
-    const result = yield* options.interpreter.recordImplementationDisposition(operation)
-    if (result._tag !== "AuthoritativeImplementationConvergenceDisposition") {
-      return yield* new TaskWorktreeExecutionModeContradiction({ operationId })
-    }
-    yield* options.emit(ImplementationConvergenceDispositionRecordedTrace.make({ operation, result }))
-    return result
-  })
-
-  for (;;) {
-    let review = pendingReview
-    pendingReview = undefined
-    if (review !== undefined) pendingSealedEvidence = undefined
-    if (review === undefined) {
-      if (executionOutcome._tag !== "Succeeded") {
-        const retainedEvidence = priorEvidence(previousReview)
-        const disposition = executionOutcome._tag === "ResourceEmergency"
-          ? ImplementationConvergenceDisposition.cases.ResourceEmergency.make({
-            outcome: executionOutcome,
-            priorEvidence: retainedEvidence,
-            subject: options.subject
-          })
-          : executionOutcome._tag === "Failed"
-          ? ImplementationConvergenceDisposition.cases.ImplementationExecutionFailed.make({
-            outcome: executionOutcome,
-            priorEvidence: retainedEvidence,
-            subject: options.subject
-          })
-          : ImplementationConvergenceDisposition.cases.ImplementationExecutionInterrupted.make({
-            outcome: executionOutcome,
-            priorEvidence: retainedEvidence,
-            subject: options.subject
-          })
-        return yield* recordDisposition(disposition, executionOutcome.operationId)
-      }
-      const successfulExecution = executionOutcome
-      let availableEvidence = pendingSealedEvidence
-      pendingSealedEvidence = undefined
-      const recoveringReviewOperation = pendingReviewOperation !== undefined
-      let actualReviewOperation: ReturnType<typeof makeImplementationReviewOperation>
-      if (pendingReviewOperation === undefined) {
-        if (availableEvidence === undefined) {
-          const evidenceOperation = makeImplementationEvidenceSealingOperation({
-            operationId: yield* options.allocator.allocate(),
-            execution: { _tag: "SuccessfulExecution", outcome: successfulExecution },
-            plannedAttempt: options.subject.plannedAttempt
-          })
-          yield* options.emit(OperationSelected.make({ operation: evidenceOperation }))
-          const sealingResult = yield* options.interpreter.sealImplementationEvidence(evidenceOperation)
-          if (sealingResult._tag !== "SealedImplementationEvidence") {
-            yield* options.emit(ImplementationEvidenceSealingSimulatedTrace.make({
-              operation: evidenceOperation,
-              simulation: sealingResult
-            }))
-            return yield* new TaskWorktreeExecutionModeContradiction({ operationId: evidenceOperation.operationId })
-          }
-          availableEvidence = { operationId: evidenceOperation.operationId, sealed: sealingResult }
-          yield* options.emit(
-            SealedImplementationEvidenceTrace.make({ operation: evidenceOperation, sealed: sealingResult })
-          )
-        }
-        const reviewOperationId = yield* options.allocator.allocate()
-        actualReviewOperation = makeImplementationReviewOperation(AuthorizedImplementationReviewRequest.make({
-          evidenceSealingOperationId: availableEvidence.operationId,
-          findingHistory: previousReview?.manifest.findingHistory ?? [],
-          implementationEvidence: availableEvidence.sealed,
-          implementerInvocationId: successfulExecution.operationId,
-          implementerSessionId: successfulExecution.sessionId,
-          operationId: reviewOperationId,
-          plannedAttempt: options.subject.plannedAttempt,
-          predecessorEvidenceReference: previousReview?.manifestReference ?? availableEvidence.sealed.manifestReference,
-          reviewerSessionId: ReviewerSessionId.make(`reviewer-session:${reviewOperationId}`),
-          round: SemanticReviewRound.make(round),
-          roundLimit: options.roundLimit
-        }))
-      } else {
-        actualReviewOperation = pendingReviewOperation
-      }
-      pendingReviewOperation = undefined
-      if (actualReviewOperation.request._tag !== "AuthorizedImplementationReview") {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: actualReviewOperation.request.operationId
-        })
-      }
-      const reviewRequest = actualReviewOperation.request
-      const reviewOperationId = reviewRequest.operationId
-      if (!recoveringReviewOperation) {
-        yield* options.emit(OperationSelected.make({ operation: actualReviewOperation }))
-      }
-      const reviewTransition = FrontierTransition.ContinueImplementationReview({
-        operationId: reviewOperationId,
-        taskId: options.task.id
-      })
-      const reviewResult = yield* Effect.result(withTaskAdmission(
-        options.admissionController,
-        options.subject.plannedAttempt.runId,
-        reviewTransition,
-        options.interpreter.reviewImplementation(actualReviewOperation)
-      ))
-      if (reviewResult._tag === "Failure") {
-        if (!(reviewResult.failure instanceof ImplementationReviewInvocationFailure)) {
-          return yield* Effect.fail(reviewResult.failure)
-        }
-        const disposition = yield* recordDisposition(
-          ImplementationConvergenceDisposition.cases.ReviewTechnicalRetryExhausted.make({
-            failure: reviewResult.failure,
-            request: reviewRequest,
-            subject: options.subject
-          }),
-          reviewRequest.operationId
-        )
-        yield* releaseTaskAdmission(options.admissionController, reviewTransition)
-        return disposition
-      }
-      const returnedReview = reviewResult.success
-      if (returnedReview._tag !== "SealedImplementationReview") {
-        return yield* new TaskWorktreeExecutionModeContradiction({ operationId: reviewOperationId })
-      }
-      review = returnedReview
-      yield* options.emit(
-        ImplementationReviewCompletedTrace.make({ operation: actualReviewOperation, review: returnedReview })
-      )
-      yield* releaseTaskAdmission(options.admissionController, reviewTransition)
-    }
-    const completedReview = review
-    if (completedReview.manifest.disposition._tag === "Accepted") {
-      return yield* recordDisposition(
-        ImplementationConvergenceDisposition.cases.Accepted.make({ review: completedReview, subject: options.subject }),
-        completedReview.manifest.operationId
-      )
-    }
-    if (round === Number(options.roundLimit)) {
-      return yield* recordDisposition(
-        ImplementationConvergenceDisposition.cases.ImplementationNonConvergent.make({
-          review: completedReview,
-          subject: options.subject
-        }),
-        completedReview.manifest.operationId
-      )
-    }
-
-    let handbackOperationId: OperationId
+  type Completion = AuthoritativeImplementationConvergenceResult
+  const completion = yield* Ref.make<Completion | undefined>(undefined)
+  let stage: FreshImplementationConvergenceStage | undefined = yield* makeFreshImplementationConvergenceStage(
     {
-      const recoveringHandbackOperation = pendingHandbackOperation !== undefined
-      const handbackOperation = pendingHandbackOperation ?? makeReviewFindingsHandbackOperation(
-        ReviewFindingsHandbackRequest.make({
-          implementerInvocationId: executionOutcome.operationId,
-          implementerSessionId: executionOutcome.sessionId,
-          operationId: yield* options.allocator.allocate(),
-          plannedAttempt: options.subject.plannedAttempt,
-          review: completedReview,
-          reviewOperationId: completedReview.manifest.operationId
-        })
-      )
-      pendingHandbackOperation = undefined
-      const handbackRequest = handbackOperation.request
-      handbackOperationId = handbackRequest.operationId
-      if (!recoveringHandbackOperation) {
-        yield* options.emit(OperationSelected.make({ operation: handbackOperation }))
-      }
-      const handbackTransition = FrontierTransition.ContinueReviewFindingsHandback({
-        operationId: handbackOperationId,
-        taskId: options.task.id
-      })
-      const handbackResult = yield* Effect.result(withTaskAdmission(
-        options.admissionController,
-        options.subject.plannedAttempt.runId,
-        handbackTransition,
-        options.interpreter.handBackReviewFindings(handbackOperation)
-      ))
-      if (handbackResult._tag === "Failure") {
-        if (!(handbackResult.failure instanceof ReviewFindingsHandbackFailure)) {
-          return yield* Effect.fail(handbackResult.failure)
-        }
-        const disposition = yield* recordDisposition(
-          ImplementationConvergenceDisposition.cases.HandbackTechnicalRetryExhausted.make({
-            failure: handbackResult.failure,
-            request: handbackRequest,
-            subject: options.subject
-          }),
-          handbackRequest.operationId
-        )
-        yield* releaseTaskAdmission(options.admissionController, handbackTransition)
-        return disposition
-      }
-      yield* options.emit(ReviewFindingsHandedBackTrace.make({
-        acknowledgement: handbackResult.success,
-        operation: handbackOperation
-      }))
-      yield* releaseTaskAdmission(options.admissionController, handbackTransition)
+      ...options,
+      onCompleted: (result) => Ref.set(completion, result)
+    },
+    options.initialExecutionOutcome
+  )
+  const admissionController = options.admissionController
+  if (admissionController === undefined) {
+    while (stage !== undefined) {
+      stage = yield* stage.run()
     }
-
-    const executionOperation = makeTaskExecutionOperation({
-      predecessorOperationIds: [handbackOperationId, options.subject.sessionEstablishmentOperationId],
-      request: TaskExecutionRequest.make({
-        operationId: yield* options.allocator.allocate(),
-        plannedAttempt: options.subject.plannedAttempt,
-        session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-          sessionId: options.subject.sessionId
-        }),
-        task: options.task
+  } else {
+    const initialStage = stage
+    yield* Effect.scoped(Effect.gen(function*() {
+      const stages = yield* Ref.make<
+        ReadonlyArray<FreshImplementationConvergenceStage>
+      >([initialStage])
+      const outcomes = yield* Queue.unbounded<
+        Exit.Exit<
+          AuthoritativeImplementationConvergenceResult,
+          FreshImplementationConvergenceStageError
+        >
+      >()
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController,
+        readFrontier: Ref.get(stages).pipe(
+          Effect.map((current) => ({
+            explanations: [],
+            transitions: current.map(({ transition }) => transition)
+          }))
+        ),
+        runId: options.subject.plannedAttempt.runId,
+        runTransition: (transition, execution) =>
+          Effect.gen(function*() {
+            const owned = (yield* Ref.get(stages)).find(
+              (candidate) => candidate.transition === transition
+            )
+            if (owned === undefined) return
+            if (transition._tag === "ContinueFreshWorkflowOperation") {
+              yield* execution.recordIntent(transition.operationId)
+            }
+            const exit = yield* owned.run().pipe(Effect.exit)
+            if (Exit.isFailure(exit)) {
+              yield* Ref.set(stages, [])
+              yield* Queue.offer(outcomes, Exit.failCause(exit.cause))
+              return yield* Effect.failCause(exit.cause)
+            }
+            yield* Ref.set(
+              stages,
+              exit.value === undefined ? [] : [exit.value]
+            )
+            if (exit.value === undefined) {
+              const result = yield* Ref.get(completion)
+              if (result !== undefined) {
+                yield* Queue.offer(outcomes, Exit.succeed(result))
+              }
+            }
+          })
       })
-    })
-    yield* options.emit(OperationSelected.make({ operation: executionOperation }))
-    yield* options.emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
-    const executionTransition = FrontierTransition.ContinueTaskExecution({
-      operationId: executionOperation.request.operationId,
-      taskId: options.task.id
-    })
-    const execution = yield* withTaskAdmission(
-      options.admissionController,
-      options.subject.plannedAttempt.runId,
-      executionTransition,
-      options.interpreter.executeTaskWork(executionOperation)
-    )
-    yield* options.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: execution }))
-    yield* releaseTaskAdmission(options.admissionController, executionTransition)
-    previousReview = completedReview
-    executionOutcome = execution.outcome
-    round += 1
+      yield* coordinator.signal(ActivationCause.Restart())
+      const outcome = yield* Queue.take(outcomes)
+      if (Exit.isFailure(outcome)) {
+        return yield* Effect.failCause(outcome.cause)
+      }
+    }))
   }
+  const result = yield* Ref.get(completion)
+  return result === undefined
+    ? yield* Effect.die("implementation convergence ended without a disposition")
+    : result
 })

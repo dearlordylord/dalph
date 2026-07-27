@@ -1,10 +1,8 @@
 import { Effect } from "effect"
 import type { OperationId, Task } from "./domain.js"
-import {
-  type FreshImplementationConvergenceStage,
-  makeFreshImplementationConvergenceStage
-} from "./fresh-implementation-convergence-stages.js"
+import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
+import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import type { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { RunnableFrontierTransition as FrontierTransition } from "./runnable-frontier.js"
@@ -46,6 +44,17 @@ interface FreshTaskAttemptStageOptions {
   readonly planner: PlannedTaskAttemptPlannerService
 }
 
+const freshTransition = (
+  operationId: OperationId,
+  task: Task,
+  requiresTaskAdmission: boolean
+) =>
+  FrontierTransition.ContinueFreshWorkflowOperation({
+    operationId,
+    requiresTaskAdmission,
+    taskId: task.id
+  })
+
 const adaptLiveStage = (
   stage: FreshImplementationConvergenceStage
 ): FreshWorkflowStage => ({
@@ -86,10 +95,11 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         | undefined
     ): Effect.fn.Return<FreshWorkflowStage> {
       return {
-        transition: FrontierTransition.ContinueTaskExecution({
-          operationId: operation.request.operationId,
-          taskId: task.id
-        }),
+        transition: freshTransition(
+          operation.request.operationId,
+          task,
+          true
+        ),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -153,10 +163,11 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         })
       })
       return {
-        transition: FrontierTransition.CheckTaskWorkSession({
-          operationId: operation.request.operationId,
-          taskId: task.id
-        }),
+        transition: freshTransition(
+          operation.request.operationId,
+          task,
+          false
+        ),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -255,10 +266,7 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         predecessorOperationIds: [planOperationId]
       })
       return {
-        transition: FrontierTransition.ReconcileTaskWorktree({
-          operationId: operation.operationId,
-          taskId: task.id
-        }),
+        transition: freshTransition(operation.operationId, task, false),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -292,10 +300,7 @@ export const makeFreshTaskAttemptStage = Effect.fn(
     predecessorOperationIds: [predecessorOperationId]
   })
   return {
-    transition: FrontierTransition.ContinueFreshWorkflowOperation({
-      operationId: operation.operationId,
-      taskId: task.id
-    }),
+    transition: freshTransition(operation.operationId, task, false),
     run: () =>
       Effect.gen(function*() {
         yield* options.emit(OperationSelected.make({ operation }))

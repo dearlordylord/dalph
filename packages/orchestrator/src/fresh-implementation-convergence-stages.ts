@@ -1,11 +1,13 @@
 import { Effect } from "effect"
-import { type ImplementationReviewRoundLimit, ReviewerSessionId, SemanticReviewRound, type Task } from "./domain.js"
-import { ImplementationConvergenceDispositionRecordedTrace } from "./implementation-convergence-trace.js"
+import { ReviewerSessionId, SemanticReviewRound } from "./domain.js"
 import {
-  ImplementationConvergenceDisposition,
-  type ImplementationConvergenceSubject,
-  PriorImplementationReviewEvidence
-} from "./implementation-convergence.js"
+  type FreshImplementationConvergenceOptions,
+  type FreshImplementationConvergenceStage,
+  freshImplementationTransition,
+  priorImplementationReviewEvidence
+} from "./implementation-convergence-stage.js"
+import { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
+import { makeImplementationDispositionStage } from "./implementation-disposition-stage.js"
 import {
   ImplementationReviewCompletedTrace,
   ReviewFindingsHandedBackTrace,
@@ -18,58 +20,17 @@ import {
   ReviewFindingsHandbackRequest,
   type SealedImplementationReview
 } from "./implementation-review.js"
-import {
-  type RunnableFrontierTransition,
-  RunnableFrontierTransition as FrontierTransition
-} from "./runnable-frontier.js"
+import { RunnableFrontierTransition as FrontierTransition } from "./runnable-frontier.js"
 import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { type TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import type { OperationIdAllocatorService } from "./task-work-planning.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
-import type { TraceOutputError } from "./trace-output.js"
 import { OperationSelected } from "./tracker-workflow-trace.js"
 import {
-  makeImplementationDispositionOperation,
   makeImplementationEvidenceSealingOperation,
   makeImplementationReviewOperation,
   makeReviewFindingsHandbackOperation,
   makeTaskExecutionOperation
 } from "./workflow-operation.js"
-import type { TraceItem, WorkflowInterpreterService } from "./workflow.js"
-
-type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
-
-export type FreshImplementationConvergenceStageError =
-  | Effect.Error<ReturnType<InterpreterOperation>>
-  | TaskWorktreeExecutionModeContradiction
-  | TraceOutputError
-
-// eslint-disable-next-line functional/no-mixed-types -- A process-local stage deliberately pairs immutable selection with its sole executable operation.
-export interface FreshImplementationConvergenceStage {
-  readonly transition: RunnableFrontierTransition
-
-  readonly run: () => Effect.Effect<
-    FreshImplementationConvergenceStage | undefined,
-    FreshImplementationConvergenceStageError
-  >
-}
-
-// eslint-disable-next-line functional/no-mixed-types -- Dependencies and the serialized trace emitter form one stage factory input.
-interface FreshImplementationConvergenceOptions {
-  readonly allocator: OperationIdAllocatorService
-  readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
-  readonly interpreter: WorkflowInterpreterService
-  readonly roundLimit: ImplementationReviewRoundLimit
-  readonly subject: ImplementationConvergenceSubject
-  readonly task: Task
-}
-
-const priorEvidence = (
-  review: SealedImplementationReview | undefined
-): PriorImplementationReviewEvidence =>
-  review === undefined
-    ? PriorImplementationReviewEvidence.cases.NoPriorReviewEvidence.make({})
-    : PriorImplementationReviewEvidence.cases.PriorReviewEvidence.make({ review })
 
 /** Builds process-local selector stages; durable journal facts remain the recovery authority. */
 export const makeFreshImplementationConvergenceStage = Effect.fn(
@@ -77,47 +38,52 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
 )(function*(
   options: FreshImplementationConvergenceOptions,
   initialExecutionOutcome: TaskExecutionOutcome
-): Effect.fn.Return<FreshImplementationConvergenceStage> {
-  const makeDispositionStage = Effect.fn(
-    "Workflow.makeFreshImplementationDispositionStage"
+): Effect.fn.Return<
+  FreshImplementationConvergenceStage,
+  TaskWorktreeExecutionModeContradiction
+> {
+  const makeReworkExecutionStage = Effect.fn(
+    "Workflow.makeFreshReworkExecutionStage"
   )(function*(
-    disposition: ImplementationConvergenceDisposition,
+    review: SealedImplementationReview,
+    round: number,
     predecessorOperationId: Parameters<
-      typeof makeImplementationDispositionOperation
-    >[1]
+      typeof makeTaskExecutionOperation
+    >[0]["predecessorOperationIds"][number]
   ): Effect.fn.Return<FreshImplementationConvergenceStage> {
-    const operation = makeImplementationDispositionOperation(
-      {
-        _tag: "AuthorizedImplementationConvergenceDisposition",
-        disposition,
-        operationId: yield* options.allocator.allocate()
-      },
-      predecessorOperationId
-    )
+    const operation = makeTaskExecutionOperation({
+      predecessorOperationIds: [
+        predecessorOperationId,
+        options.subject.sessionEstablishmentOperationId
+      ],
+      request: TaskExecutionRequest.make({
+        operationId: yield* options.allocator.allocate(),
+        plannedAttempt: options.subject.plannedAttempt,
+        session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+          sessionId: options.subject.sessionId
+        }),
+        task: options.task
+      })
+    })
     return {
-      transition: FrontierTransition.ContinueFreshWorkflowOperation({
-        operationId: operation.request.operationId,
-        taskId: options.task.id
-      }),
+      transition: freshImplementationTransition(
+        operation.request.operationId,
+        options.task,
+        true
+      ),
       run: () =>
         Effect.gen(function*() {
           yield* options.emit(OperationSelected.make({ operation }))
-          const result = yield* options.interpreter.recordImplementationDisposition(
-            operation
-          )
-          if (
-            result._tag
-              !== "AuthoritativeImplementationConvergenceDisposition"
-          ) {
-            return yield* new TaskWorktreeExecutionModeContradiction({
-              operationId: operation.request.operationId
-            })
-          }
-          yield* options.emit(
-            ImplementationConvergenceDispositionRecordedTrace.make({
-              operation,
-              result
-            })
+          yield* options.emit(TaskExecutionAdmitted.make({ operation }))
+          const observed = yield* options.interpreter.executeTaskWork(operation)
+          yield* options.emit(TaskExecutionOutcomeObserved.make({
+            operation,
+            outcome: observed
+          }))
+          return yield* stageForOutcome(
+            observed.outcome,
+            review,
+            round + 1
           )
         })
     }
@@ -127,10 +93,16 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
     function*(
       executionOutcome: Extract<TaskExecutionOutcome, { readonly _tag: "Succeeded" }>,
       review: SealedImplementationReview,
-      round: number
+      round: number,
+      recoveredHandback:
+        | ReturnType<
+          typeof makeReviewFindingsHandbackOperation
+        >
+        | undefined
     ): Effect.fn.Return<FreshImplementationConvergenceStage> {
       if (review.manifest.disposition._tag === "Accepted") {
-        return yield* makeDispositionStage(
+        return yield* makeImplementationDispositionStage(
+          options,
           ImplementationConvergenceDisposition.cases.Accepted.make({
             review,
             subject: options.subject
@@ -139,7 +111,8 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         )
       }
       if (round === Number(options.roundLimit)) {
-        return yield* makeDispositionStage(
+        return yield* makeImplementationDispositionStage(
+          options,
           ImplementationConvergenceDisposition.cases.ImplementationNonConvergent.make({
             review,
             subject: options.subject
@@ -147,7 +120,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           review.manifest.operationId
         )
       }
-      const operation = makeReviewFindingsHandbackOperation(
+      const operation = recoveredHandback ?? makeReviewFindingsHandbackOperation(
         ReviewFindingsHandbackRequest.make({
           implementerInvocationId: executionOutcome.operationId,
           implementerSessionId: executionOutcome.sessionId,
@@ -158,13 +131,21 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         })
       )
       return {
-        transition: FrontierTransition.ContinueReviewFindingsHandback({
-          operationId: operation.request.operationId,
-          taskId: options.task.id
-        }),
+        transition: recoveredHandback === undefined
+          ? freshImplementationTransition(
+            operation.request.operationId,
+            options.task,
+            true
+          )
+          : FrontierTransition.ContinueReviewFindingsHandback({
+            operationId: operation.request.operationId,
+            taskId: options.task.id
+          }),
         run: () =>
           Effect.gen(function*() {
-            yield* options.emit(OperationSelected.make({ operation }))
+            if (recoveredHandback === undefined) {
+              yield* options.emit(OperationSelected.make({ operation }))
+            }
             const handback = yield* Effect.result(
               options.interpreter.handBackReviewFindings(operation)
             )
@@ -172,7 +153,8 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
               if (!(handback.failure instanceof ReviewFindingsHandbackFailure)) {
                 return yield* Effect.fail(handback.failure)
               }
-              return yield* makeDispositionStage(
+              return yield* makeImplementationDispositionStage(
+                options,
                 ImplementationConvergenceDisposition.cases.HandbackTechnicalRetryExhausted.make({
                   failure: handback.failure,
                   request: operation.request,
@@ -185,47 +167,11 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
               acknowledgement: handback.success,
               operation
             }))
-            const executionOperation = makeTaskExecutionOperation({
-              predecessorOperationIds: [
-                operation.request.operationId,
-                options.subject.sessionEstablishmentOperationId
-              ],
-              request: TaskExecutionRequest.make({
-                operationId: yield* options.allocator.allocate(),
-                plannedAttempt: options.subject.plannedAttempt,
-                session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-                  sessionId: options.subject.sessionId
-                }),
-                task: options.task
-              })
-            })
-            return {
-              transition: FrontierTransition.ContinueTaskExecution({
-                operationId: executionOperation.request.operationId,
-                taskId: options.task.id
-              }),
-              run: () =>
-                Effect.gen(function*() {
-                  yield* options.emit(
-                    OperationSelected.make({ operation: executionOperation })
-                  )
-                  yield* options.emit(
-                    TaskExecutionAdmitted.make({ operation: executionOperation })
-                  )
-                  const observed = yield* options.interpreter.executeTaskWork(
-                    executionOperation
-                  )
-                  yield* options.emit(TaskExecutionOutcomeObserved.make({
-                    operation: executionOperation,
-                    outcome: observed
-                  }))
-                  return yield* stageForOutcome(
-                    observed.outcome,
-                    review,
-                    round + 1
-                  )
-                })
-            }
+            return yield* makeReworkExecutionStage(
+              review,
+              round,
+              operation.request.operationId
+            )
           })
       }
     }
@@ -241,33 +187,58 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         typeof AuthorizedImplementationReviewRequest.make
       >[0]["evidenceSealingOperationId"],
       previousReview: SealedImplementationReview | undefined,
-      round: number
-    ): Effect.fn.Return<FreshImplementationConvergenceStage> {
-      const operationId = yield* options.allocator.allocate()
-      const request = AuthorizedImplementationReviewRequest.make({
-        evidenceSealingOperationId: evidenceOperationId,
-        findingHistory: previousReview?.manifest.findingHistory ?? [],
-        implementationEvidence: evidence,
-        implementerInvocationId: executionOutcome.operationId,
-        implementerSessionId: executionOutcome.sessionId,
-        operationId,
-        plannedAttempt: options.subject.plannedAttempt,
-        predecessorEvidenceReference: previousReview?.manifestReference ?? evidence.manifestReference,
-        reviewerSessionId: ReviewerSessionId.make(
-          `reviewer-session:${operationId}`
-        ),
-        round: SemanticReviewRound.make(round),
-        roundLimit: options.roundLimit
-      })
-      const operation = makeImplementationReviewOperation(request)
-      return {
-        transition: FrontierTransition.ContinueImplementationReview({
+      round: number,
+      recoveredOperation:
+        | ReturnType<
+          typeof makeImplementationReviewOperation
+        >
+        | undefined
+    ): Effect.fn.Return<
+      FreshImplementationConvergenceStage,
+      TaskWorktreeExecutionModeContradiction
+    > {
+      const recoveredRequest = recoveredOperation?.request
+      if (
+        recoveredRequest !== undefined
+        && recoveredRequest._tag !== "AuthorizedImplementationReview"
+      ) {
+        return yield* new TaskWorktreeExecutionModeContradiction({
+          operationId: recoveredRequest.operationId
+        })
+      }
+      const operationId = recoveredRequest?.operationId
+        ?? (yield* options.allocator.allocate())
+      const request: typeof AuthorizedImplementationReviewRequest.Type = recoveredRequest
+        ?? AuthorizedImplementationReviewRequest.make({
+          evidenceSealingOperationId: evidenceOperationId,
+          findingHistory: previousReview?.manifest.findingHistory ?? [],
+          implementationEvidence: evidence,
+          implementerInvocationId: executionOutcome.operationId,
+          implementerSessionId: executionOutcome.sessionId,
           operationId,
-          taskId: options.task.id
-        }),
+          plannedAttempt: options.subject.plannedAttempt,
+          predecessorEvidenceReference: previousReview?.manifestReference
+            ?? evidence.manifestReference,
+          reviewerSessionId: ReviewerSessionId.make(
+            `reviewer-session:${operationId}`
+          ),
+          round: SemanticReviewRound.make(round),
+          roundLimit: options.roundLimit
+        })
+      const operation = recoveredOperation
+        ?? makeImplementationReviewOperation(request)
+      return {
+        transition: recoveredOperation === undefined
+          ? freshImplementationTransition(operationId, options.task, true)
+          : FrontierTransition.ContinueImplementationReview({
+            operationId,
+            taskId: options.task.id
+          }),
         run: () =>
           Effect.gen(function*() {
-            yield* options.emit(OperationSelected.make({ operation }))
+            if (recoveredOperation === undefined) {
+              yield* options.emit(OperationSelected.make({ operation }))
+            }
             const reviewed = yield* Effect.result(
               options.interpreter.reviewImplementation(operation)
             )
@@ -277,7 +248,8 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
               ) {
                 return yield* Effect.fail(reviewed.failure)
               }
-              return yield* makeDispositionStage(
+              return yield* makeImplementationDispositionStage(
+                options,
                 ImplementationConvergenceDisposition.cases.ReviewTechnicalRetryExhausted.make({
                   failure: reviewed.failure,
                   request,
@@ -298,7 +270,8 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
             return yield* stageAfterReview(
               executionOutcome,
               reviewed.success,
-              round
+              round,
+              undefined
             )
           })
       }
@@ -312,7 +285,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
       round: number
     ): Effect.fn.Return<FreshImplementationConvergenceStage> {
       if (executionOutcome._tag !== "Succeeded") {
-        const evidence = priorEvidence(previousReview)
+        const evidence = priorImplementationReviewEvidence(previousReview)
         const disposition = executionOutcome._tag === "ResourceEmergency"
           ? ImplementationConvergenceDisposition.cases.ResourceEmergency.make({
             outcome: executionOutcome,
@@ -330,7 +303,8 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
             priorEvidence: evidence,
             subject: options.subject
           })
-        return yield* makeDispositionStage(
+        return yield* makeImplementationDispositionStage(
+          options,
           disposition,
           executionOutcome.operationId
         )
@@ -344,10 +318,11 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         plannedAttempt: options.subject.plannedAttempt
       })
       return {
-        transition: FrontierTransition.ContinueImplementationEvidenceSealing({
-          operationId: operation.operationId,
-          taskId: options.task.id
-        }),
+        transition: freshImplementationTransition(
+          operation.operationId,
+          options.task,
+          false
+        ),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -368,12 +343,81 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
               sealed,
               operation.operationId,
               previousReview,
-              round
+              round,
+              undefined
             )
           })
       }
     }
   )
 
-  return yield* stageForOutcome(initialExecutionOutcome, undefined, 1)
+  const round = Number(
+    options.initialRound
+      ?? options.initialReview?.manifest.round
+      ?? 1
+  )
+  if (options.initialCompletedHandbackOperationId !== undefined) {
+    if (options.initialPreviousReview === undefined) {
+      return yield* new TaskWorktreeExecutionModeContradiction({
+        operationId: options.initialCompletedHandbackOperationId
+      })
+    }
+    return yield* makeReworkExecutionStage(
+      options.initialPreviousReview,
+      round,
+      options.initialCompletedHandbackOperationId
+    )
+  }
+  if (options.initialReview !== undefined) {
+    if (initialExecutionOutcome._tag !== "Succeeded") {
+      return yield* new TaskWorktreeExecutionModeContradiction({
+        operationId: initialExecutionOutcome.operationId
+      })
+    }
+    return yield* stageAfterReview(
+      initialExecutionOutcome,
+      options.initialReview,
+      round,
+      options.initialHandbackOperation
+    )
+  }
+  if (options.initialReviewOperation !== undefined) {
+    const request = options.initialReviewOperation.request
+    if (
+      initialExecutionOutcome._tag !== "Succeeded"
+      || request._tag !== "AuthorizedImplementationReview"
+    ) {
+      return yield* new TaskWorktreeExecutionModeContradiction({
+        operationId: request.operationId
+      })
+    }
+    return yield* makeReviewStage(
+      initialExecutionOutcome,
+      request.implementationEvidence,
+      request.evidenceSealingOperationId,
+      options.initialPreviousReview,
+      round,
+      options.initialReviewOperation
+    )
+  }
+  if (options.initialSealedEvidence !== undefined) {
+    if (initialExecutionOutcome._tag !== "Succeeded") {
+      return yield* new TaskWorktreeExecutionModeContradiction({
+        operationId: initialExecutionOutcome.operationId
+      })
+    }
+    return yield* makeReviewStage(
+      initialExecutionOutcome,
+      options.initialSealedEvidence.sealed,
+      options.initialSealedEvidence.operationId,
+      options.initialPreviousReview,
+      round,
+      undefined
+    )
+  }
+  return yield* stageForOutcome(
+    initialExecutionOutcome,
+    options.initialPreviousReview,
+    round
+  )
 })

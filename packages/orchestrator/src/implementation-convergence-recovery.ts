@@ -5,12 +5,7 @@ import { runLiveImplementationConvergence } from "./implementation-convergence-w
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore } from "./journal-store.js"
-import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
-import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
-import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import { OperationSelected } from "./tracker-workflow-trace.js"
-import { makeTaskExecutionOperation } from "./workflow-operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 const sameAttemptId = (
@@ -85,7 +80,7 @@ export const recoverImplementationConvergences = Effect.fn(
     const hasPostEmergencyExecutionIntent = resourceEmergency !== undefined
       && executionIntents.some(({ position }) => Number(position) > resourceEmergency.position)
     if (hasPostEmergencyExecutionIntent) continue
-    let latestExecution = resourceEmergency ?? executions[executions.length - 1]
+    const latestExecution = resourceEmergency ?? executions[executions.length - 1]
     if (latestExecution === undefined) continue
 
     const reviews = records.flatMap((record) =>
@@ -152,49 +147,39 @@ export const recoverImplementationConvergences = Effect.fn(
         }
       })
     }
+    const subject = {
+      claim,
+      plannedAttempt,
+      sessionEstablishmentOperationId: sessionIntent.operation.request.operationId,
+      sessionId: sessionEvent.outcome.sessionId,
+      worktreeOperationId: worktreeEvent.operationId,
+      worktreeProof: worktreeEvent.proof
+    } as const
+    const task = latestExecution.operation.request.task
 
     if (
       completedHandback !== undefined
       && latestExecution.position < Number(completedHandback.record.position)
     ) {
-      const executionOperation = makeTaskExecutionOperation({
-        predecessorOperationIds: [
-          completedHandback.intent.operation.request.operationId,
-          sessionIntent.operation.request.operationId
-        ],
-        request: TaskExecutionRequest.make({
-          operationId: yield* allocator.allocate(),
-          plannedAttempt,
-          session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-            sessionId: sessionEvent.outcome.sessionId
-          }),
-          task: latestExecution.operation.request.task
-        })
-      })
-      yield* trace.emit(OperationSelected.make({ operation: executionOperation }))
-      yield* trace.emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
-      const executionTransition = RunnableFrontierTransition.ContinueTaskExecution({
-        operationId: executionOperation.request.operationId,
-        taskId: latestExecution.operation.request.task.id
-      })
-      const executionAdmission = yield* admissionController.admit(
-        {
-          explanations: [],
-          transitions: [executionTransition]
-        },
-        runId
-      )
-      if (!executionAdmission.transitions.includes(executionTransition)) {
+      if (latestReview === undefined) {
         return yield* Effect.die(
-          new Error(`recovery admission must be rederived for ${executionTransition.taskId}`)
+          new Error("completed findings handback requires its durable review")
         )
       }
-      const result = yield* interpreter.executeTaskWork(executionOperation)
-      yield* trace.emit(TaskExecutionOutcomeObserved.make({ operation: executionOperation, outcome: result }))
-      yield* admissionController.releaseTaskAdmissionPosition(
-        executionTransition.operationId
-      ).pipe(Effect.orDie)
-      latestExecution = { operation: executionOperation, outcome: result.outcome, position: Number.MAX_SAFE_INTEGER }
+      yield* runLiveImplementationConvergence({
+        admissionController,
+        allocator,
+        emit: trace.emit,
+        initialCompletedHandbackOperationId: completedHandback.intent.operation.request.operationId,
+        initialExecutionOutcome: latestExecution.outcome,
+        initialPreviousReview: latestReview.review,
+        initialRound: Number(latestReview.review.manifest.round),
+        interpreter,
+        roundLimit: latestReview.review.manifest.roundLimit,
+        subject,
+        task
+      })
+      continue
     }
 
     const currentExecution = latestExecution
@@ -244,14 +229,7 @@ export const recoverImplementationConvergences = Effect.fn(
       initialRound,
       interpreter,
       roundLimit,
-      subject: {
-        claim,
-        plannedAttempt,
-        sessionEstablishmentOperationId: sessionIntent.operation.request.operationId,
-        sessionId: sessionEvent.outcome.sessionId,
-        worktreeOperationId: worktreeEvent.operationId,
-        worktreeProof: worktreeEvent.proof
-      },
+      subject,
       task: currentExecution.operation.request.task
     })
   }
