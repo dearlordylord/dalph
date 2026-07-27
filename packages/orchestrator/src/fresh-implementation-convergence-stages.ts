@@ -195,23 +195,20 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
       previousReview: SealedImplementationReview | undefined,
       round: SemanticReviewRound,
       recoveredOperation:
-        | ReturnType<
-          typeof makeImplementationReviewOperation
-        >
+        | (
+          & ReturnType<
+            typeof makeImplementationReviewOperation
+          >
+          & {
+            readonly request: typeof AuthorizedImplementationReviewRequest.Type
+          }
+        )
         | undefined
     ): Effect.fn.Return<
       FreshImplementationConvergenceStage,
       TaskWorktreeExecutionModeContradiction
     > {
       const recoveredRequest = recoveredOperation?.request
-      if (
-        recoveredRequest !== undefined
-        && recoveredRequest._tag !== "AuthorizedImplementationReview"
-      ) {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: recoveredRequest.operationId
-        })
-      }
       const operationId = recoveredRequest?.operationId
         ?? (yield* options.allocator.allocate())
       const request: typeof AuthorizedImplementationReviewRequest.Type = recoveredRequest
@@ -396,7 +393,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         request.evidenceSealingOperationId,
         start.previousReview,
         start.round,
-        start.operation
+        { ...start.operation, request }
       )
     }
     case "EvidenceSealed":

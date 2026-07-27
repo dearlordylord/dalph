@@ -29,6 +29,7 @@ import { GitWorktree, gitWorktreeTestLayer, PlannedWorktreeAbsent } from "./git-
 import {
   EvidenceDigest,
   EvidenceReference,
+  EvidenceStore,
   ImplementationEvidenceManifest,
   SealedImplementationEvidence
 } from "./implementation-evidence.js"
@@ -44,8 +45,10 @@ import {
 import {
   controlledCoordinatorLockLayer,
   controlledTrackerMutationLayer,
+  coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedImplementationReviewLayer,
+  coordinatorOwnedTaskExecutorLayer,
   coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
@@ -53,6 +56,13 @@ import {
   TrackerMutation
 } from "./index.js"
 import { taskRevisionFor } from "./task-dag.js"
+import {
+  NoTaskExecutionReported,
+  TaskExecutionRequest,
+  TaskExecutionRequestAcknowledgement,
+  TaskExecutionSessionBinding,
+  TaskExecutor
+} from "./task-execution.js"
 import { MatchingTaskWorkSessionReported, TaskRunner, TaskWorkStartRequest } from "./task-work-start.js"
 
 it.effect("shares one ownership capability across guarded starts and read-only lookups", () =>
@@ -185,6 +195,119 @@ it.effect("guards worktree creation while leaving Git observation read-only", ()
       expect((yield* git.readPlannedWorktree(plannedAttempt))._tag)
         .toBe("PlannedWorktreeReady")
     }).pipe(Effect.provide(ownedGitLayer))
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("guards task execution requests while leaving execution observation read-only", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "dalph-executor-owner-"
+    })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const taskId = TaskId.make("executor-owned-task")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("executor-owned-attempt"),
+      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      branch: TaskBranchRef.make("refs/heads/executor-owned"),
+      executor: TaskExecutorLocator.make("executor:owned"),
+      runId: RunId.make("executor-owned-run"),
+      session: TaskWorkSessionLocator.make("session:executor-owned"),
+      taskId,
+      taskRevision: taskRevisionFor(task),
+      worktree: WorktreeLocator.make(`${directory}/executor-worktree`)
+    })
+    const operationId = OperationId.make("executor-owned-operation")
+    const sessionId = TaskWorkSessionId.make("executor-owned-session")
+    const requests = yield* Ref.make(0)
+    const observations = yield* Ref.make(0)
+    const executorLayer = Layer.succeed(
+      TaskExecutor,
+      TaskExecutor.of({
+        observeTaskExecution: (lookup) =>
+          Ref.update(observations, (count) => count + 1).pipe(
+            Effect.as(
+              NoTaskExecutionReported.make({
+                observationId: ProviderObservationId.make("executor-owned-observation"),
+                operationId: lookup.operationId,
+                sessionId: lookup.sessionId
+              })
+            )
+          ),
+        requestTaskExecution: () =>
+          Ref.update(requests, (count) => count + 1).pipe(
+            Effect.as(
+              TaskExecutionRequestAcknowledgement.make({
+                observationId: ProviderObservationId.make("executor-owned-request-observation"),
+                providerRequestId: ProviderRequestId.make("executor-owned-provider-request")
+              })
+            )
+          )
+      })
+    )
+    const ownedExecutorLayer = coordinatorOwnedTaskExecutorLayer(executorLayer).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+
+    yield* Effect.gen(function*() {
+      const executor = yield* TaskExecutor
+      yield* executor.requestTaskExecution(
+        TaskExecutionRequest.make({
+          operationId,
+          plannedAttempt,
+          session: TaskExecutionSessionBinding.cases.EstablishedSession.make({ sessionId }),
+          task
+        })
+      )
+      yield* executor.observeTaskExecution({ operationId, plannedAttempt, sessionId })
+    }).pipe(Effect.provide(ownedExecutorLayer))
+
+    expect(yield* Ref.get(requests)).toBe(1)
+    expect(yield* Ref.get(observations)).toBe(1)
+  }).pipe(Effect.provide(NodeFileSystem.layer)))
+
+it.effect("guards evidence publication while leaving evidence reads read-only", () =>
+  Effect.gen(function*() {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "dalph-evidence-owner-"
+    })
+    const target = GitCommonDirectoryTarget.make(directory)
+    const bytes = new Uint8Array([1, 3, 2])
+    const reference = EvidenceReference.make({
+      byteLength: bytes.byteLength,
+      digest: EvidenceDigest.make(
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      )
+    })
+    const writes = yield* Ref.make(0)
+    const reads = yield* Ref.make(0)
+    const storeLayer = Layer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: () => Ref.update(writes, (count) => count + 1).pipe(Effect.as(reference)),
+        read: () => Ref.update(reads, (count) => count + 1).pipe(Effect.as(bytes))
+      })
+    )
+    const ownedStoreLayer = coordinatorOwnedEvidenceStoreLayer(storeLayer).pipe(
+      Layer.provide(coordinatorOwnershipLayer(target)),
+      Layer.provide(controlledCoordinatorLockLayer)
+    )
+
+    yield* Effect.gen(function*() {
+      const store = yield* EvidenceStore
+      expect(yield* store.put(bytes)).toEqual(reference)
+      expect(yield* store.read(reference)).toEqual(bytes)
+    }).pipe(Effect.provide(ownedStoreLayer))
+
+    expect(yield* Ref.get(writes)).toBe(1)
+    expect(yield* Ref.get(reads)).toBe(1)
   }).pipe(Effect.provide(NodeFileSystem.layer)))
 
 it.effect("guards reviewer invocation and exact findings handback", () =>

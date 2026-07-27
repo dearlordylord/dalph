@@ -385,8 +385,9 @@ const makeReconstructionDriver = (
   configuredCapacity: 1 | 2,
   initiallyResponsibleTask?: 0 | 2,
   startStopped = false
-) =>
-  defineDriver(
+) => {
+  let closePreviousControls: Effect.Effect<void> = Effect.void
+  const driver = defineDriver(
     actionSchema,
     () => {
       const capacity = TaskWorkCapacity.make(configuredCapacity)
@@ -401,6 +402,7 @@ const makeReconstructionDriver = (
           journal
         }).pipe(Effect.orDie)
       )
+      closePreviousControls = controls.close()
       const controlsRef = Effect.runSync(Ref.make(controls))
       const initialize = () =>
         Effect.gen(function*() {
@@ -414,12 +416,14 @@ const makeReconstructionDriver = (
             )
           }
           if (startStopped) {
+            yield* current.close()
             const stopped = yield* makeFrontierRecoveryReconstructionControls({
               capacity,
               coordinatorRunning: false,
               journal
             })
             yield* Ref.set(controlsRef, stopped)
+            closePreviousControls = stopped.close()
           }
         })
       const activation = (action: FrontierRecoveryActivationAction) =>
@@ -464,8 +468,11 @@ const makeReconstructionDriver = (
           ),
         getState: () =>
           Ref.get(controlsRef).pipe(
-            Effect.flatMap((current) => current.getState()),
-            Effect.map(reconstructionComparableFrom)
+            Effect.flatMap((current) =>
+              current.getState().pipe(
+                Effect.map(reconstructionComparableFrom)
+              )
+            )
           ),
         init: initialize,
         initCapacityOneResponsibilityFirstProfile: initialize,
@@ -499,6 +506,8 @@ const makeReconstructionDriver = (
         reserveTaskAdmissionPosition: ({ task }) => activationForTask("reserveTaskAdmissionPosition", task),
         restart: () =>
           Effect.gen(function*() {
+            const current = yield* Ref.get(controlsRef)
+            yield* current.close()
             const freshControls = yield* makeFrontierRecoveryReconstructionControls({
               capacity,
               coordinatorRunning: false,
@@ -506,12 +515,17 @@ const makeReconstructionDriver = (
             })
             yield* freshControls.restart()
             yield* Ref.set(controlsRef, freshControls)
+            closePreviousControls = freshControls.close()
             return yield* freshControls.getState()
           }),
         stopProviderWorker: ({ task }) => activationForTask("stopProviderWorker", task)
       }
     }
   )
+  return {
+    create: () => closePreviousControls.pipe(Effect.andThen(driver.create()))
+  }
+}
 
 const normalizeImportedModelState = (raw: unknown): unknown => {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw

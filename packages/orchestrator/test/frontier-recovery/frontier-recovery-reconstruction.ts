@@ -1,6 +1,11 @@
 /* eslint-disable max-lines -- This closed adapter keeps action execution and its journal projection together. */
-import { Effect, Option } from "effect"
-import { makeActivationOwnershipRegistry } from "../../src/activation-coordinator.js"
+import { Deferred, Effect, Exit, Fiber, Option, Queue, Scope } from "effect"
+import {
+  ActivationCause,
+  type ActivationCoordinator,
+  makeActivationCoordinator,
+  type OwnedTransitionExecution
+} from "../../src/activation-coordinator.js"
 import { OperationId, ProviderObservationId, TaskRevision } from "../../src/domain.js"
 import type { TaskId } from "../../src/domain.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
@@ -16,7 +21,8 @@ import type { WorkflowResponsibilityState } from "../../src/reconstructed-manage
 import {
   deriveRunnableFrontier,
   ResponsibilityDisposition,
-  type RunnableFrontier
+  type RunnableFrontier,
+  type RunnableFrontierTransition
 } from "../../src/runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../../src/selected-transition.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
@@ -66,6 +72,29 @@ import type {
 import { frontierRecoveryReconstructionIssue } from "./frontier-recovery-projection.js"
 import { selectFrontierRecoveryAdmission } from "./frontier-recovery-selection.js"
 
+type ActivationCoordinatorInput = Parameters<
+  typeof makeActivationCoordinator
+>[0]
+type ActivationCoordinatorControl = NonNullable<
+  ActivationCoordinatorInput["control"]
+>
+type ActivationCoordinatorCheckpoint = Parameters<
+  ActivationCoordinatorControl["checkpoint"]
+>[0]
+type ActivationCoordinatorCheckpointFailure = Effect.Error<
+  ReturnType<ActivationCoordinatorControl["checkpoint"]>
+>
+type ActivationOwnershipSnapshot = ActivationCoordinatorCheckpoint["observation"]["ownership"]
+
+const CheckpointFailure = {
+  InterruptActivation: (): ActivationCoordinatorCheckpointFailure => ({
+    _tag: "InterruptActivation"
+  }),
+  RejectDuplicateOwnership: (): ActivationCoordinatorCheckpointFailure => ({
+    _tag: "RejectDuplicateOwnership"
+  })
+} as const
+
 export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   "FrontierRecoveryReconstruction.makeControls"
 )(function*(options: MakeFrontierRecoveryReconstructionControlsOptions) {
@@ -79,24 +108,54 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   let coordinatorRunning = options.coordinatorRunning
   let activationController = yield* makeTaskAdmissionController({
     capacity: options.capacity,
-    freshOccupiedInvocations: [],
+    freshOccupiedInvocations: options.freshOccupiedInvocations ?? [],
     reconstructedReservedPositions: []
   })
-  let activationOwnership = yield* makeActivationOwnershipRegistry(runId)
-  let activationDerived: RunnableFrontier = {
+  let derivedFrontierObservation: RunnableFrontier = {
     explanations: [],
     transitions: []
   }
-  let activationSelected: RunnableFrontier = {
+  let selectedFrontierObservation: RunnableFrontier = {
     explanations: [],
     transitions: []
   }
-  let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map()
-  let activationTriggerPending = true
-  let freshlyObservedTaskIds: ReadonlySet<TaskId> = new Set()
-  let postIntentExitedTaskIds: ReadonlySet<TaskId> = new Set()
-  let preIntentInterruptedTaskIds: ReadonlySet<TaskId> = new Set()
-  let resultsRecordedTaskIds: ReadonlySet<TaskId> = new Set()
+  let selectedAtOwnershipExclusion = false
+  let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map(
+    (options.freshOccupiedInvocations ?? []).map(
+      ({ operationId, taskId }) => [taskId, operationId]
+    )
+  )
+  let providerObservationTaskIds: ReadonlySet<TaskId> = new Set()
+  let activationCheckpointHistory: ReadonlyArray<ActivationCoordinatorCheckpoint> = []
+  let activationProjectionEvents: ReadonlyArray<
+    "Derived" | "ReactivationRequested"
+  > = ["ReactivationRequested"]
+  let latestActivationCheckpoint: ActivationCoordinatorCheckpoint | undefined
+  let pendingActivationCheckpoints: ReadonlyArray<{
+    readonly checkpoint: ActivationCoordinatorCheckpoint
+    readonly decision: Deferred.Deferred<
+      void,
+      ActivationCoordinatorCheckpointFailure
+    >
+  }> = []
+  let heldActivationCheckpoints: typeof pendingActivationCheckpoints = []
+  let activationCoordinator: ActivationCoordinator | undefined
+  let activationScope: Scope.Closeable | undefined
+  const incomingActivationCheckpoints = yield* Queue.unbounded<{
+    readonly checkpoint: ActivationCoordinatorCheckpoint
+    readonly decision: Deferred.Deferred<
+      void,
+      ActivationCoordinatorCheckpointFailure
+    >
+  }>()
+  let runnerCommands: ReadonlyMap<
+    TaskId,
+    Queue.Queue<
+      | { readonly _tag: "Complete" }
+      | { readonly _tag: "Interrupt" }
+      | { readonly _tag: "RecordIntent"; readonly operationId: OperationId }
+    >
+  > = new Map()
 
   const deriveActivationFrontier = Effect.fn(
     "FrontierRecoveryReconstruction.deriveActivationFrontier"
@@ -131,21 +190,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     })
   })
 
-  const activationTransitionFor = Effect.fn(
-    "FrontierRecoveryReconstruction.activationTransitionFor"
-  )(function*(modelTaskId: FrontierRecoveryModelTaskId) {
-    const taskId = yield* identityMapping.taskFromModel(modelTaskId)
-    const transition = activationDerived.transitions.find(
-      (candidate) => candidate.taskId === taskId
-    )
-    return transition === undefined
-      ? yield* new FrontierRecoveryConformanceIssue({
-        detail: `M2 activation has no derived transition for task ${modelTaskId}`,
-        reason: "MissingMapping"
-      })
-      : transition
-  })
-
   const activationOperationFor = (
     modelTaskId: FrontierRecoveryModelTaskId
   ) =>
@@ -154,6 +198,300 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         ? firstClaimOperationIdentity
         : secondClaimOperationIdentity
     )
+
+  const rememberCheckpoint = (
+    checkpoint: ActivationCoordinatorCheckpoint
+  ) => {
+    latestActivationCheckpoint = checkpoint
+    activationCheckpointHistory = [...activationCheckpointHistory, checkpoint]
+    if (checkpoint._tag === "FrontierDerived") {
+      derivedFrontierObservation = checkpoint.frontier
+    } else if (checkpoint._tag === "OwnedTransitionsExcluded") {
+      selectedFrontierObservation = checkpoint.frontier
+      selectedAtOwnershipExclusion = true
+      activationProjectionEvents = [...activationProjectionEvents, "Derived"]
+    } else if (checkpoint._tag === "AdmissionReserved") {
+      selectedFrontierObservation = {
+        ...selectedFrontierObservation,
+        transitions: selectedFrontierObservation.transitions.filter(
+          ({ taskId }) => taskId !== checkpoint.transition.taskId
+        )
+      }
+      selectedAtOwnershipExclusion = false
+    } else if (
+      checkpoint._tag === "AdmissionReservationCancelled"
+      || checkpoint._tag === "OwnershipReleased"
+    ) {
+      activationProjectionEvents = [
+        ...activationProjectionEvents,
+        "ReactivationRequested"
+      ]
+    }
+  }
+
+  const takeActivationCheckpoint = Effect.fn(
+    "FrontierRecoveryReconstruction.takeActivationCheckpoint"
+  )(function*(
+    tag: ActivationCoordinatorCheckpoint["_tag"],
+    taskId?: TaskId
+  ) {
+    const matchesRequestedCheckpoint = (
+      pending: {
+        readonly checkpoint: ActivationCoordinatorCheckpoint
+      }
+    ) =>
+      pending.checkpoint._tag === tag
+      && (
+        taskId === undefined
+        || (
+          "transition" in pending.checkpoint
+          && pending.checkpoint.transition.taskId === taskId
+        )
+      )
+
+    for (;;) {
+      const held = heldActivationCheckpoints.find(matchesRequestedCheckpoint)
+      if (held !== undefined) {
+        return held
+      }
+      const index = pendingActivationCheckpoints.findIndex(
+        matchesRequestedCheckpoint
+      )
+      if (index >= 0) {
+        const pending = pendingActivationCheckpoints[index]
+        if (pending !== undefined) {
+          pendingActivationCheckpoints = pendingActivationCheckpoints.filter(
+            (_, candidateIndex) => candidateIndex !== index
+          )
+          rememberCheckpoint(pending.checkpoint)
+          heldActivationCheckpoints = [
+            ...heldActivationCheckpoints,
+            pending
+          ]
+          return pending
+        }
+      }
+      pendingActivationCheckpoints = [
+        ...pendingActivationCheckpoints,
+        yield* Queue.take(incomingActivationCheckpoints).pipe(
+          Effect.timeout("2 seconds"),
+          Effect.catchTag("TimeoutError", () =>
+            new FrontierRecoveryConformanceIssue({
+              detail: `production coordinator did not reach checkpoint ${tag}`,
+              reason: "LossyProjection"
+            }))
+        )
+      ]
+    }
+  })
+
+  const settleCheckpoint = Effect.fn(
+    "FrontierRecoveryReconstruction.settleCheckpoint"
+  )(function*(
+    pending: {
+      readonly decision: Deferred.Deferred<
+        void,
+        ActivationCoordinatorCheckpointFailure
+      >
+    },
+    failure?: ActivationCoordinatorCheckpointFailure
+  ) {
+    heldActivationCheckpoints = heldActivationCheckpoints.filter(
+      ({ decision }) => decision !== pending.decision
+    )
+    yield* failure === undefined
+      ? Deferred.succeed(pending.decision, undefined)
+      : Deferred.fail(pending.decision, failure)
+  })
+
+  const observeOwnershipRelease = Effect.fn(
+    "FrontierRecoveryReconstruction.observeOwnershipRelease"
+  )(function*(taskId: TaskId) {
+    const released = yield* takeActivationCheckpoint(
+      "OwnershipReleased",
+      taskId
+    )
+    runnerCommands = new Map(
+      [...runnerCommands].filter(([candidate]) => candidate !== taskId)
+    )
+    yield* settleCheckpoint(released)
+  })
+
+  const observeAdmissionReservationCancellation = Effect.fn(
+    "FrontierRecoveryReconstruction.observeAdmissionReservationCancellation"
+  )(function*(taskId: TaskId) {
+    const cancelled = yield* takeActivationCheckpoint(
+      "AdmissionReservationCancelled",
+      taskId
+    )
+    yield* settleCheckpoint(cancelled)
+  })
+
+  const reachOwnershipExclusion = Effect.fn(
+    "FrontierRecoveryReconstruction.reachOwnershipExclusion"
+  )(function*() {
+    const held = heldActivationCheckpoints.find(
+      ({ checkpoint }) => checkpoint._tag === "OwnedTransitionsExcluded"
+    )
+    if (held !== undefined) return held
+    const derived = yield* takeActivationCheckpoint("FrontierDerived")
+    yield* settleCheckpoint(derived)
+    return yield* takeActivationCheckpoint("OwnedTransitionsExcluded")
+  })
+
+  const runControlledTransition = Effect.fn(
+    "FrontierRecoveryReconstruction.runControlledTransition"
+  )(function*(
+    transition: RunnableFrontierTransition,
+    execution: OwnedTransitionExecution
+  ) {
+    const commands = yield* Queue.unbounded<
+      | { readonly _tag: "Complete" }
+      | { readonly _tag: "Interrupt" }
+      | { readonly _tag: "RecordIntent"; readonly operationId: OperationId }
+    >()
+    runnerCommands = new Map([
+      ...runnerCommands,
+      [transition.taskId, commands]
+    ])
+    for (;;) {
+      const command = yield* Queue.take(commands)
+      switch (command._tag) {
+        case "Complete":
+          return
+        case "Interrupt":
+          return yield* Effect.die("controlled activation runner interruption")
+        case "RecordIntent":
+          yield* execution.recordIntent(command.operationId)
+      }
+    }
+  })
+
+  const awaitRunnerCommands = Effect.fn(
+    "FrontierRecoveryReconstruction.awaitRunnerCommands"
+  )(function*(taskId: TaskId) {
+    return yield* Effect.gen(function*() {
+      for (;;) {
+        const commands = runnerCommands.get(taskId)
+        if (commands !== undefined) return commands
+        yield* Effect.yieldNow
+      }
+    }).pipe(
+      Effect.timeout("2 seconds"),
+      Effect.catchTag("TimeoutError", () =>
+        new FrontierRecoveryConformanceIssue({
+          detail: `production coordinator did not start the runner for ${taskId}`,
+          reason: "LossyProjection"
+        }))
+    )
+  })
+
+  const makeControlledCoordinator = Effect.fn(
+    "FrontierRecoveryReconstruction.makeControlledCoordinator"
+  )(function*() {
+    const scope = yield* Scope.make()
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: activationController,
+      control: {
+        checkpoint: (checkpoint) =>
+          Effect.gen(function*() {
+            const decision = yield* Deferred.make<
+              void,
+              ActivationCoordinatorCheckpointFailure
+            >()
+            yield* Queue.offer(incomingActivationCheckpoints, {
+              checkpoint,
+              decision
+            })
+            yield* Deferred.await(decision)
+          })
+      },
+      readFrontier: deriveActivationFrontier(),
+      runId,
+      runTransition: runControlledTransition
+    }).pipe(Scope.provide(scope))
+    activationCoordinator = coordinator
+    activationScope = scope
+  })
+
+  const ensureCoordinatorSignal = Effect.fn(
+    "FrontierRecoveryReconstruction.ensureCoordinatorSignal"
+  )(function*() {
+    const coordinator = activationCoordinator
+    const scope = activationScope
+    if (coordinator === undefined || scope === undefined) {
+      return yield* frontierRecoveryReconstructionIssue(
+        "CoordinatorStopped",
+        "a stopped coordinator cannot derive activation"
+      )
+    }
+    yield* Effect.sync(() =>
+      Effect.runFork(
+        coordinator.signal(ActivationCause.Resume()).pipe(Effect.ignore)
+      )
+    ).pipe(Effect.asVoid)
+  })
+
+  const releasePendingTerminalCheckpoints = Effect.fn(
+    "FrontierRecoveryReconstruction.releasePendingTerminalCheckpoints"
+  )(function*() {
+    const terminal = pendingActivationCheckpoints.filter(
+      ({ checkpoint }) => checkpoint._tag === "OwnershipReleased"
+    )
+    pendingActivationCheckpoints = pendingActivationCheckpoints.filter(
+      ({ checkpoint }) => checkpoint._tag !== "OwnershipReleased"
+    )
+    const heldTerminal = heldActivationCheckpoints.filter(
+      ({ checkpoint }) => checkpoint._tag === "OwnershipReleased"
+    )
+    heldActivationCheckpoints = heldActivationCheckpoints.filter(
+      ({ checkpoint }) => checkpoint._tag !== "OwnershipReleased"
+    )
+    yield* Effect.forEach(
+      [...terminal, ...heldTerminal],
+      ({ decision }) => Deferred.succeed(decision, undefined),
+      { discard: true }
+    )
+  })
+
+  const closeControlledCoordinator = Effect.fn(
+    "FrontierRecoveryReconstruction.closeControlledCoordinator"
+  )(function*() {
+    const scope = activationScope
+    if (scope === undefined) return
+    const permitCheckpoints = Effect.forever(Effect.gen(function*() {
+      let incoming: ReadonlyArray<
+        (typeof pendingActivationCheckpoints)[number]
+      > = []
+      for (;;) {
+        const next = yield* Queue.poll(incomingActivationCheckpoints)
+        if (Option.isNone(next)) break
+        incoming = [...incoming, next.value]
+      }
+      const checkpoints = [
+        ...heldActivationCheckpoints,
+        ...pendingActivationCheckpoints,
+        ...incoming
+      ]
+      heldActivationCheckpoints = []
+      pendingActivationCheckpoints = []
+      yield* Effect.forEach(
+        checkpoints,
+        ({ decision }) => Deferred.succeed(decision, undefined),
+        { discard: true }
+      )
+      yield* Effect.yieldNow
+    }))
+    const permitFiber = yield* permitCheckpoints.pipe(
+      Effect.forkChild({ startImmediately: true })
+    )
+    yield* Scope.close(scope, Exit.void)
+    yield* Fiber.interrupt(permitFiber)
+  })
+
+  if (coordinatorRunning) {
+    yield* makeControlledCoordinator()
+  }
 
   const selectFrontier = Effect.fn(
     "FrontierRecoveryReconstruction.selectFrontier"
@@ -226,218 +564,268 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     "FrontierRecoveryReconstruction.runActivationAction"
   )(function*(action: FrontierRecoveryActivationAction) {
     const taskAction = "task" in action ? action : undefined
-    const transition = taskAction === undefined
+    const taskId = taskAction === undefined
       ? undefined
-      : yield* activationTransitionFor(taskAction.task)
-    const selected = transition === undefined
-      ? undefined
-      : makeSelectedTransitionIdentity(runId, transition)
+      : yield* identityMapping.taskFromModel(taskAction.task)
 
     switch (action._tag) {
       case "deriveActivationPass": {
-        activationDerived = yield* deriveActivationFrontier()
-        activationSelected = yield* activationOwnership.exclude(
-          activationDerived
+        yield* releasePendingTerminalCheckpoints()
+        const priorExclusion = heldActivationCheckpoints.find(
+          ({ checkpoint }) => checkpoint._tag === "OwnedTransitionsExcluded"
         )
-        activationTriggerPending = false
+        if (priorExclusion !== undefined) {
+          yield* settleCheckpoint(
+            priorExclusion,
+            CheckpointFailure.InterruptActivation()
+          )
+          yield* Effect.yieldNow
+        }
+        const registered = heldActivationCheckpoints.find(
+          ({ checkpoint }) => checkpoint._tag === "OwnershipRegistered"
+        )
+        if (registered !== undefined) yield* settleCheckpoint(registered)
+        if (
+          !pendingActivationCheckpoints.some(
+            ({ checkpoint }) => checkpoint._tag === "FrontierDerived"
+          )
+          && !heldActivationCheckpoints.some(
+            ({ checkpoint }) => checkpoint._tag === "FrontierDerived"
+          )
+        ) {
+          yield* ensureCoordinatorSignal()
+        }
+        const derived = yield* takeActivationCheckpoint("FrontierDerived")
+        yield* settleCheckpoint(derived)
+        yield* takeActivationCheckpoint("OwnedTransitionsExcluded")
         return
       }
       case "excludeOwnedTransitions": {
-        activationSelected = yield* activationOwnership.exclude(
-          activationDerived
+        const registered = heldActivationCheckpoints.find(
+          ({ checkpoint }) => checkpoint._tag === "OwnershipRegistered"
         )
-        activationTriggerPending = false
+        if (registered !== undefined) yield* settleCheckpoint(registered)
+        yield* reachOwnershipExclusion()
         return
       }
       case "reserveTaskAdmissionPosition": {
-        if (transition === undefined) return
-        yield* activationController.admit(
-          {
-            explanations: activationSelected.explanations,
-            transitions: [transition]
-          },
-          runId
-        )
-        activationSelected = {
-          ...activationSelected,
-          transitions: activationSelected.transitions.filter(
-            (candidate) => candidate !== transition
-          )
-        }
-        postIntentExitedTaskIds = new Set(
-          [...postIntentExitedTaskIds].filter((taskId) => taskId !== transition.taskId)
-        )
-        preIntentInterruptedTaskIds = new Set(
-          [...preIntentInterruptedTaskIds].filter((taskId) => taskId !== transition.taskId)
-        )
+        if (taskId === undefined) return
+        const excluded = yield* reachOwnershipExclusion()
+        yield* settleCheckpoint(excluded)
+        yield* takeActivationCheckpoint("AdmissionReserved", taskId)
         return
       }
       case "claimActivationOwnership": {
-        if (transition === undefined) return
-        const registered = yield* activationOwnership.register(transition)
-        if (registered !== undefined) {
-          activationSelected = {
-            ...activationSelected,
-            transitions: activationSelected.transitions.filter(
-              ({ taskId }) => taskId !== transition.taskId
-            )
-          }
+        if (taskId === undefined) return
+        const excluded = heldActivationCheckpoints.find(
+          ({ checkpoint }) => checkpoint._tag === "OwnedTransitionsExcluded"
+        )
+        if (excluded !== undefined) {
+          yield* settleCheckpoint(excluded)
         }
+        const reserved = yield* takeActivationCheckpoint(
+          "AdmissionReserved",
+          taskId
+        )
+        yield* settleCheckpoint(reserved)
+        const owned = yield* takeActivationCheckpoint(
+          "OwnershipRegistered",
+          taskId
+        )
+        yield* settleCheckpoint(owned)
+        yield* awaitRunnerCommands(taskId)
         return
       }
       case "rejectDuplicateOwnership": {
-        if (transition === undefined) return
-        const registered = yield* activationOwnership.register(transition)
-        const snapshot = yield* activationOwnership.snapshot()
-        const key = registered?.key
-          ?? [...snapshot.owners]
-            .find(([, entry]) => entry.transition.taskId === transition.taskId)?.[0]
-        if (key !== undefined) yield* activationOwnership.isolate(key)
+        if (taskId === undefined) return
+        const reserved = yield* takeActivationCheckpoint(
+          "AdmissionReserved",
+          taskId
+        )
+        yield* settleCheckpoint(reserved)
+        const owned = yield* takeActivationCheckpoint(
+          "OwnershipRegistered",
+          taskId
+        )
+        yield* settleCheckpoint(
+          owned,
+          CheckpointFailure.RejectDuplicateOwnership()
+        )
+        yield* awaitRunnerCommands(taskId)
+        yield* takeActivationCheckpoint("FrontierDerived")
         return
       }
       case "recordOwnedOperationIntent": {
-        if (transition === undefined || selected === undefined) return
+        if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
-        yield* activationController.bindReservedPosition(
-          selected,
-          operationId
-        )
-        const owner = [...(yield* activationOwnership.snapshot()).owners]
-          .find(([, entry]) => entry.transition.taskId === transition.taskId)
-        if (owner !== undefined) {
-          yield* activationOwnership.bindOperation(owner[0], operationId)
+        let commands = runnerCommands.get(taskId)
+        if (commands === undefined) {
+          const owned = yield* takeActivationCheckpoint(
+            "OwnershipRegistered",
+            taskId
+          )
+          yield* settleCheckpoint(owned)
+          commands = yield* awaitRunnerCommands(taskId)
         }
+        yield* Queue.offer(commands, {
+          _tag: "RecordIntent",
+          operationId
+        })
+        yield* takeActivationCheckpoint("IntentBound", taskId)
         return
       }
       case "interruptBeforeOwnership": {
-        if (selected !== undefined) {
-          yield* activationController.cancelReservedPosition(selected)
-          preIntentInterruptedTaskIds = new Set([
-            ...preIntentInterruptedTaskIds,
-            selected.subjectTaskId
-          ])
-          activationTriggerPending = true
-        }
+        if (taskId === undefined) return
+        const reserved = yield* takeActivationCheckpoint(
+          "AdmissionReserved",
+          taskId
+        )
+        yield* settleCheckpoint(
+          reserved,
+          CheckpointFailure.InterruptActivation()
+        )
+        yield* observeAdmissionReservationCancellation(taskId)
         return
       }
       case "interruptAfterOwnershipBeforeIntent": {
-        if (transition === undefined || selected === undefined) return
-        const owner = [...(yield* activationOwnership.snapshot()).owners]
-          .find(([, entry]) => entry.transition.taskId === transition.taskId)
-        yield* activationController.cancelReservedPosition(selected)
-        if (owner !== undefined) {
-          yield* activationOwnership.remove(owner[0])
+        if (taskId === undefined) return
+        const commands = runnerCommands.get(taskId)
+        if (commands === undefined) {
+          const owned = yield* takeActivationCheckpoint(
+            "OwnershipRegistered",
+            taskId
+          )
+          yield* settleCheckpoint(
+            owned,
+            CheckpointFailure.InterruptActivation()
+          )
+        } else {
+          yield* Queue.offer(commands, { _tag: "Interrupt" })
+          const returned = yield* takeActivationCheckpoint(
+            "OperationReturned",
+            taskId
+          )
+          yield* settleCheckpoint(returned)
         }
-        preIntentInterruptedTaskIds = new Set([
-          ...preIntentInterruptedTaskIds,
-          transition.taskId
-        ])
-        activationTriggerPending = true
+        yield* observeOwnershipRelease(taskId)
         return
       }
       case "interruptAfterIntent": {
-        if (transition === undefined) return
-        const owner = [...(yield* activationOwnership.snapshot()).owners]
-          .find(([, entry]) => entry.transition.taskId === transition.taskId)
-        if (owner !== undefined) {
-          yield* activationOwnership.remove(owner[0])
-        }
-        postIntentExitedTaskIds = new Set([
-          ...postIntentExitedTaskIds,
-          transition.taskId
-        ])
-        activationTriggerPending = true
+        if (taskId === undefined) return
+        const intended = yield* takeActivationCheckpoint("IntentBound", taskId)
+        yield* settleCheckpoint(
+          intended,
+          CheckpointFailure.InterruptActivation()
+        )
+        const returned = yield* takeActivationCheckpoint(
+          "OperationReturned",
+          taskId
+        )
+        yield* settleCheckpoint(returned)
+        yield* observeOwnershipRelease(taskId)
         return
       }
       case "recordOwnedResultAndRelease": {
-        if (transition === undefined) return
-        const owner = [...(yield* activationOwnership.snapshot()).owners]
-          .find(([, entry]) => entry.transition.taskId === transition.taskId)
-        if (owner !== undefined) {
-          const ownedOperationId = Option.getOrUndefined(
-            owner[1].operationId
-          )
-          if (ownedOperationId !== undefined) {
-            yield* activationController.releaseTaskAdmissionPosition(
-              ownedOperationId
-            )
-          } else {
-            yield* activationController.cancelReservedPosition(
-              owner[1].selected
-            )
-          }
-          yield* activationOwnership.remove(owner[0])
-        }
-        resultsRecordedTaskIds = new Set([
-          ...resultsRecordedTaskIds,
-          transition.taskId
-        ])
-        providerWorkers = new Map(
-          [...providerWorkers].filter(([taskId]) => taskId !== transition.taskId)
+        if (taskId === undefined) return
+        const intended = heldActivationCheckpoints.find(
+          ({ checkpoint }) =>
+            checkpoint._tag === "IntentBound"
+            && checkpoint.transition.taskId === taskId
         )
-        activationTriggerPending = true
+        if (intended !== undefined) yield* settleCheckpoint(intended)
+        let commands = runnerCommands.get(taskId)
+        if (commands === undefined) {
+          const owned = yield* takeActivationCheckpoint(
+            "OwnershipRegistered",
+            taskId
+          )
+          yield* settleCheckpoint(owned)
+          commands = yield* awaitRunnerCommands(taskId)
+        }
+        yield* Queue.offer(commands, { _tag: "Complete" })
+        const returned = yield* takeActivationCheckpoint(
+          "OperationReturned",
+          taskId
+        )
+        yield* settleCheckpoint(returned)
+        yield* observeOwnershipRelease(taskId)
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        )
         return
       }
       case "observeCapacityConsumed": {
-        if (transition === undefined) return
+        if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
         providerWorkers = new Map([
           ...providerWorkers,
-          [transition.taskId, operationId]
+          [taskId, operationId]
         ])
-        freshlyObservedTaskIds = new Set([
-          ...freshlyObservedTaskIds,
-          transition.taskId
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
         ])
-        activationTriggerPending = true
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
         yield* activationController.applyFreshInvocationObservation({
           _tag: "FreshCapacityConsumed",
           observationId: ProviderObservationId.make(
             `M2-consumed:${action.task}`
           ),
           operationId,
-          taskId: transition.taskId
+          taskId
         })
         return
       }
       case "observeCapacityReleased":
       case "stopProviderWorker": {
-        if (transition === undefined) return
+        if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
         providerWorkers = new Map(
-          [...providerWorkers].filter(([taskId]) => taskId !== transition.taskId)
+          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
         )
-        freshlyObservedTaskIds = new Set([
-          ...freshlyObservedTaskIds,
-          transition.taskId
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
         ])
-        activationTriggerPending = true
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
         yield* activationController.applyFreshInvocationObservation({
           _tag: "FreshCapacityReleased",
           observationId: ProviderObservationId.make(
             `M2-released:${action.task}`
           ),
           operationId,
-          taskId: transition.taskId
+          taskId
         })
         return
       }
       case "crashCoordinatorWithActivation": {
+        yield* closeControlledCoordinator()
         coordinatorRunning = false
-        activationOwnership = yield* makeActivationOwnershipRegistry(runId)
         activationController = yield* makeTaskAdmissionController({
           capacity: options.capacity,
           freshOccupiedInvocations: [],
           reconstructedReservedPositions: []
         })
-        activationDerived = { explanations: [], transitions: [] }
-        activationSelected = { explanations: [], transitions: [] }
-        activationTriggerPending = false
+        activationCoordinator = undefined
+        activationScope = undefined
+        pendingActivationCheckpoints = []
+        heldActivationCheckpoints = []
+        latestActivationCheckpoint = undefined
+        activationProjectionEvents = []
+        derivedFrontierObservation = { explanations: [], transitions: [] }
+        selectedFrontierObservation = { explanations: [], transitions: [] }
+        selectedAtOwnershipExclusion = false
+        runnerCommands = new Map()
         return
       }
       case "reconstructActivation": {
         coordinatorRunning = true
-        activationOwnership = yield* makeActivationOwnershipRegistry(runId)
         activationController = yield* makeTaskAdmissionController({
           capacity: options.capacity,
           freshOccupiedInvocations: [...providerWorkers].map(
@@ -451,7 +839,14 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ),
           reconstructedReservedPositions: []
         })
-        activationTriggerPending = true
+        pendingActivationCheckpoints = []
+        heldActivationCheckpoints = []
+        latestActivationCheckpoint = undefined
+        activationProjectionEvents = ["ReactivationRequested"]
+        derivedFrontierObservation = { explanations: [], transitions: [] }
+        selectedFrontierObservation = { explanations: [], transitions: [] }
+        selectedAtOwnershipExclusion = false
+        yield* makeControlledCoordinator()
         return
       }
     }
@@ -559,8 +954,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         }
       }),
     restart: () =>
-      Effect.sync(() => {
+      Effect.gen(function*() {
         coordinatorRunning = true
+        if (activationCoordinator === undefined) {
+          yield* makeControlledCoordinator()
+        }
       })
   }
 
@@ -690,11 +1088,42 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             ? "CompatibleReplacement" as const
             : "InitialObservation" as const
         }
-      const ownershipSnapshot = yield* activationOwnership.snapshot()
-      const ownershipProjection = yield* activationOwnership.exclude(
-        activationDerived
-      )
       const controllerSnapshot = yield* activationController.snapshot()
+      const ownershipSnapshot: ActivationOwnershipSnapshot = latestActivationCheckpoint?.observation
+        .ownership ?? {
+        isolatedTransitionKeys: new Set<string>(),
+        owners: new Map()
+      }
+      const releasedCheckpoints = activationCheckpointHistory.filter(
+        (
+          checkpoint
+        ): checkpoint is Extract<
+          ActivationCoordinatorCheckpoint,
+          { readonly _tag: "OwnershipReleased" }
+        > => checkpoint._tag === "OwnershipReleased"
+      )
+      const currentAttemptReleasedCheckpoints = activationCheckpointHistory
+        .flatMap((checkpoint, index, history) =>
+          checkpoint._tag === "OwnershipReleased"
+            && !history.slice(index + 1).some(
+              (candidate) =>
+                candidate._tag === "AdmissionReserved"
+                && candidate.transition.taskId === checkpoint.transition.taskId
+            )
+            ? [checkpoint]
+            : []
+        )
+      const currentAttemptAdmissionCancellations = activationCheckpointHistory
+        .flatMap((checkpoint, index, history) =>
+          checkpoint._tag === "AdmissionReservationCancelled"
+            && !history.slice(index + 1).some(
+              (candidate) =>
+                candidate._tag === "AdmissionReserved"
+                && candidate.transition.taskId === checkpoint.transition.taskId
+            )
+            ? [checkpoint.transition.taskId]
+            : []
+        )
       const projectTaskIds = (
         taskIds: Iterable<TaskId>
       ) =>
@@ -726,24 +1155,21 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       return {
         activation: {
           activationInProgressModelTaskIds: yield* projectTaskIds(
-            ownershipProjection.explanations.flatMap(
-              (explanation) =>
-                explanation._tag === "ActivationInProgress"
-                  ? [explanation.taskId]
-                  : []
+            [...ownershipSnapshot.owners.values()].map(
+              ({ transition }) => transition.taskId
             )
           ),
           derivedModelTaskIds: yield* projectTaskIds(
-            activationDerived.transitions.map(({ taskId }) => taskId)
+            derivedFrontierObservation.transitions.map(({ taskId }) => taskId)
           ),
           freshlyObservedModelTaskIds: yield* projectTaskIds(
-            freshlyObservedTaskIds
+            providerObservationTaskIds
           ),
           isolatedModelTaskIds: yield* projectTaskIds(
             [...ownershipSnapshot.isolatedTransitionKeys].flatMap((key) => {
               const owner = ownerByKey.get(key)
               if (owner !== undefined) return [owner.transition.taskId]
-              const transition = activationDerived.transitions.find(
+              const transition = derivedFrontierObservation.transitions.find(
                 (candidate) =>
                   selectedTransitionKey(
                     makeSelectedTransitionIdentity(runId, candidate)
@@ -754,10 +1180,27 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ),
           owners: activationOwners,
           postIntentExitedModelTaskIds: yield* projectTaskIds(
-            postIntentExitedTaskIds
+            new Set(
+              currentAttemptReleasedCheckpoints.flatMap((checkpoint) =>
+                checkpoint.runnerExit === "Failed"
+                  && Option.isSome(checkpoint.operationId)
+                  ? [checkpoint.transition.taskId]
+                  : []
+              )
+            )
           ),
           preIntentInterruptedModelTaskIds: yield* projectTaskIds(
-            preIntentInterruptedTaskIds
+            new Set(
+              [
+                ...currentAttemptAdmissionCancellations,
+                ...currentAttemptReleasedCheckpoints.flatMap((checkpoint) =>
+                  checkpoint.runnerExit === "Failed"
+                    && Option.isNone(checkpoint.operationId)
+                    ? [checkpoint.transition.taskId]
+                    : []
+                )
+              ]
+            )
           ),
           providerConsumingModelTaskIds: yield* projectTaskIds(
             providerWorkers.keys()
@@ -783,15 +1226,26 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               })
           ),
           resultsRecordedModelTaskIds: yield* projectTaskIds(
-            resultsRecordedTaskIds
+            new Set(
+              releasedCheckpoints.flatMap((checkpoint) =>
+                checkpoint.runnerExit === "Succeeded"
+                  ? [checkpoint.transition.taskId]
+                  : []
+              )
+            )
           ),
           runnerModelTaskIds: yield* projectTaskIds(
-            [...ownerByKey.values()].map(({ transition }) => transition.taskId)
+            runnerCommands.keys()
           ),
           selectedModelTaskIds: yield* projectTaskIds(
-            activationSelected.transitions.map(({ taskId }) => taskId)
+            selectedFrontierObservation.transitions.filter(({ taskId }) =>
+              selectedAtOwnershipExclusion
+              || !controllerSnapshot.reservedTaskIds.includes(taskId)
+            )
+              .map(({ taskId }) => taskId)
           ),
-          triggerPending: activationTriggerPending
+          triggerPending: activationProjectionEvents.toReversed()[0]
+            === "ReactivationRequested"
         },
         admissionCapacity: selection.admissionCapacity,
         admittedTransitionOperations: selection.admittedTransitionOperations,
@@ -822,7 +1276,19 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   )
   const runAction = (action: unknown) => runFrontierRecoveryReconstructionAction(action, rawControls)
   return {
+    advanceActivationAdmission: () =>
+      Effect.gen(function*() {
+        const excluded = yield* reachOwnershipExclusion()
+        yield* settleCheckpoint(excluded)
+        yield* Effect.yieldNow
+        const snapshot = yield* activationController.snapshot()
+        return {
+          occupiedCount: snapshot.occupied.length,
+          reservedPositionCount: snapshot.reservedPositions.length
+        }
+      }),
     activation: runAction,
+    close: closeControlledCoordinator,
     orchestratorCommitsFreshTaskClaimIntent: (task: FrontierRecoveryModelTaskId) =>
       runAction({ _tag: "orchestratorCommitsFreshTaskClaimIntent", task }),
     crash: () => runAction({ _tag: "crash" }),

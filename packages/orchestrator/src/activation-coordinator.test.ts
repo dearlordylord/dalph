@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Queue, Ref } from "effect"
+import { Deferred, Effect, Exit, Queue, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
@@ -11,6 +11,13 @@ const freshTransition = (taskId: TaskId) =>
     taskId,
     taskRevision: TaskRevision.make(`revision:${taskId}`)
   })
+
+type ActivationCoordinatorInput = Parameters<typeof makeActivationCoordinator>[0]
+type ActivationCoordinatorControl = NonNullable<ActivationCoordinatorInput["control"]>
+type ActivationCoordinatorCheckpoint = Parameters<ActivationCoordinatorControl["checkpoint"]>[0]
+type ActivationCoordinatorCheckpointFailure = Effect.Error<
+  ReturnType<ActivationCoordinatorControl["checkpoint"]>
+>
 
 it.effect("coalesces concurrent triggers into one owner for one exact transition", () =>
   Effect.scoped(Effect.gen(function*() {
@@ -282,6 +289,141 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
         Effect.map((transitions) => ({ explanations: [], transitions }))
       ),
       runId: RunId.make("non-capacity-run"),
+      runTransition: (_, execution) =>
+        execution.recordIntent(transition.operationId).pipe(
+          Effect.andThen(Ref.set(remaining, []))
+        )
+    })
+
+    yield* coordinator.signal(ActivationCause.Startup())
+    yield* Effect.yieldNow
+
+    expect(yield* Ref.get(remaining)).toEqual([])
+    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+  })))
+
+it.effect("rolls back the exact partial handoff when a controlled boundary interrupts", () =>
+  Effect.forEach(
+    [
+      {
+        interruptedTag: "OwnedTransitionsExcluded",
+        transitionKind: "Capacity"
+      },
+      {
+        interruptedTag: "AdmissionReserved",
+        transitionKind: "Capacity"
+      },
+      {
+        interruptedTag: "AdmissionReserved",
+        transitionKind: "NonCapacity"
+      },
+      {
+        interruptedTag: "OwnershipRegistered",
+        transitionKind: "Capacity"
+      },
+      {
+        interruptedTag: "OwnershipRegistered",
+        transitionKind: "NonCapacity"
+      }
+    ] as const,
+    ({ interruptedTag, transitionKind }) =>
+      Effect.scoped(Effect.gen(function*() {
+        const taskId = TaskId.make(
+          `interrupted-${interruptedTag}-${transitionKind}`
+        )
+        const transition = transitionKind === "Capacity"
+          ? freshTransition(taskId)
+          : RunnableFrontierTransition.CheckTaskClaim({
+            operationId: OperationId.make(
+              `interrupted-operation-${interruptedTag}`
+            ),
+            taskId
+          })
+        const checkpoints = yield* Ref.make<
+          ReadonlyArray<ActivationCoordinatorCheckpoint["_tag"]>
+        >([])
+        const runnerCount = yield* Ref.make(0)
+        const controller = yield* makeTaskAdmissionController({
+          capacity: TaskWorkCapacity.make(1),
+          freshOccupiedInvocations: [],
+          reconstructedReservedPositions: []
+        })
+        const control: ActivationCoordinatorControl = {
+          checkpoint: (checkpoint) =>
+            Ref.update(
+              checkpoints,
+              (current) => [...current, checkpoint._tag]
+            ).pipe(
+              Effect.andThen(
+                checkpoint._tag === interruptedTag
+                  ? Effect.fail(
+                    {
+                      _tag: "InterruptActivation"
+                    } satisfies ActivationCoordinatorCheckpointFailure
+                  )
+                  : Effect.void
+              )
+            )
+        }
+        const coordinator = yield* makeActivationCoordinator({
+          admissionController: controller,
+          control,
+          readFrontier: Effect.succeed({
+            explanations: [],
+            transitions: [transition]
+          }),
+          runId: RunId.make(`interrupted-run-${interruptedTag}`),
+          runTransition: () => Ref.update(runnerCount, (count) => count + 1)
+        })
+
+        yield* coordinator.signal(ActivationCause.Startup())
+
+        expect(yield* Ref.get(runnerCount), interruptedTag).toBe(0)
+        expect((yield* controller.snapshot()).reservedPositions, interruptedTag)
+          .toEqual([])
+        expect(yield* Ref.get(checkpoints), interruptedTag).toContain(
+          interruptedTag
+        )
+      })),
+    { discard: true }
+  ))
+
+it.effect("isolates a controlled duplicate while preserving its original owner", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskId = TaskId.make("controlled-duplicate")
+    const remaining = yield* Ref.make([freshTransition(taskId)])
+    const checkpoints = yield* Ref.make<
+      ReadonlyArray<ActivationCoordinatorCheckpoint["_tag"]>
+    >([])
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const control: ActivationCoordinatorControl = {
+      checkpoint: (checkpoint) =>
+        Ref.update(
+          checkpoints,
+          (current) => [...current, checkpoint._tag]
+        ).pipe(
+          Effect.andThen(
+            checkpoint._tag === "OwnershipRegistered"
+              ? Effect.fail(
+                {
+                  _tag: "RejectDuplicateOwnership"
+                } satisfies ActivationCoordinatorCheckpointFailure
+              )
+              : Effect.void
+          )
+        )
+    }
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      control,
+      readFrontier: Ref.get(remaining).pipe(
+        Effect.map((transitions) => ({ explanations: [], transitions }))
+      ),
+      runId: RunId.make("controlled-duplicate-run"),
       runTransition: () => Ref.set(remaining, [])
     })
 
@@ -290,6 +432,7 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
 
     expect(yield* Ref.get(remaining)).toEqual([])
     expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+    expect(yield* Ref.get(checkpoints)).toContain("OwnershipReleased")
   })))
 
 it.effect("atomically rejects or drains signals when the coordinator closes", () =>
@@ -326,3 +469,25 @@ it.effect("atomically rejects or drains signals when the coordinator closes", ()
     expect(exits).toHaveLength(64)
     expect(exits.every(Exit.isFailure)).toBe(true)
   })))
+
+it.effect("rejects a signal submitted after its exact coordinator scope closes", () =>
+  Effect.gen(function*() {
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const coordinatorScope = yield* Scope.make()
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+      runId: RunId.make("closed-coordinator-run"),
+      runTransition: () => Effect.void
+    }).pipe(Scope.provide(coordinatorScope))
+
+    yield* Scope.close(coordinatorScope, Exit.void)
+
+    expect(
+      (yield* Effect.exit(coordinator.signal(ActivationCause.Resume())))._tag
+    ).toBe("Failure")
+  }))

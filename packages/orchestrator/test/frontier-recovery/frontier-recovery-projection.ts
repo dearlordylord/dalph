@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import type { TaskWorkCapacity } from "../../src/domain.js"
+import type { OperationId, ProviderObservationId, TaskId, TaskWorkCapacity } from "../../src/domain.js"
 import type { JournalRecord, JournalStoreService } from "../../src/journal-store.js"
 import type {
   BestAvailableDurableGraphKnowledge,
@@ -177,6 +177,12 @@ export interface MakeFrontierRecoveryReconstructionControlsOptions {
   readonly coordinatorRunning: boolean
   /** Fresh tracker eligibility supplied to this adapter invocation. */
   readonly freshEligibleModelTaskIds?: ReadonlyArray<FrontierRecoveryModelTaskId>
+  /** Fresh provider evidence supplied at this reconstruction boundary. */
+  readonly freshOccupiedInvocations?: ReadonlyArray<{
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }>
   readonly journal: JournalStoreService
 }
 

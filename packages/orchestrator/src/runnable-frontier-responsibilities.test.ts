@@ -34,6 +34,7 @@ import {
 } from "./implementation-review.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition, RunnableFrontierTransition } from "./runnable-frontier.js"
+import { makeSelectedTransitionIdentity } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
@@ -554,6 +555,86 @@ it.effect("returns capacity waiting and signals when exact release may permit ad
     })
   }))
 
+it.effect("fails closed for stale reservation mutations and conflicting provider evidence", () =>
+  Effect.gen(function*() {
+    const runId = RunId.make("stale-reservation-run")
+    const taskId = TaskId.make("stale-reservation-task")
+    const originalOperationId = OperationId.make("stale-reservation-original")
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: [{
+        operationId: originalOperationId,
+        taskId
+      }]
+    })
+
+    expect(
+      yield* controller.applyFreshInvocationObservation({
+        _tag: "FreshCapacityConsumed",
+        observationId: ProviderObservationId.make("conflicting-observation"),
+        operationId: OperationId.make("conflicting-operation"),
+        taskId
+      })
+    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
+    expect((yield* controller.snapshot()).occupied).toEqual([])
+
+    const selected = makeSelectedTransitionIdentity(
+      runId,
+      freshTransition(taskId)
+    )
+    expect(
+      (yield* Effect.exit(
+        controller.bindReservedPosition(selected, OperationId.make("missing-bind"))
+      ))._tag
+    ).toBe("Failure")
+    expect(
+      (yield* Effect.exit(
+        controller.cancelReservedPosition(selected)
+      ))._tag
+    ).toBe("Failure")
+    expect(
+      (yield* Effect.exit(
+        controller.releaseTaskAdmissionPosition(
+          OperationId.make("missing-release")
+        )
+      ))._tag
+    ).toBe("Failure")
+
+    expect(
+      yield* controller.releaseTaskAdmissionPosition(originalOperationId)
+    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    expect(
+      yield* controller.releaseTaskAdmissionPosition(originalOperationId)
+    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
+  }))
+
+it.effect("cancels one exact fresh reservation and rejects stale repeats", () =>
+  Effect.gen(function*() {
+    const runId = RunId.make("cancel-reservation-run")
+    const taskId = TaskId.make("cancel-reservation-task")
+    const transition = freshTransition(taskId)
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    yield* controller.admit({ explanations: [], transitions: [transition] }, runId)
+    const reservation = (yield* controller.snapshot()).reservedPositions[0]
+    if (reservation?.correlation._tag !== "SelectedTransitionReservation") {
+      return yield* Effect.die("fresh admission must retain its selection identity")
+    }
+
+    expect(
+      yield* controller.cancelReservedPosition(reservation.correlation.selected)
+    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    expect(
+      (yield* Effect.exit(
+        controller.cancelReservedPosition(reservation.correlation.selected)
+      ))._tag
+    ).toBe("Failure")
+  }))
+
 it.effect("reserves at most one exact operation for a task in one admission decision", () =>
   Effect.gen(function*() {
     const taskId = TaskId.make("same-task")
@@ -585,4 +666,73 @@ it.effect("reserves at most one exact operation for a task in one admission deci
         transitions: [second]
       }, RunId.make("same-task-run"))).transitions
     ).toEqual([second])
+  }))
+
+it.effect("correlates both operation-backed and pre-intent reservations exactly", () =>
+  Effect.gen(function*() {
+    const runId = RunId.make("reservation-correlation-run")
+    const taskId = TaskId.make("reservation-correlation-task")
+    const reservedOperationId = OperationId.make(
+      "reservation-correlation-operation"
+    )
+    const operationController = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: [{
+        operationId: reservedOperationId,
+        taskId
+      }]
+    })
+    const exactOperation = RunnableFrontierTransition.ContinueImplementationReview({
+      operationId: reservedOperationId,
+      taskId
+    })
+    const differentOperation = RunnableFrontierTransition.ContinueImplementationReview({
+      operationId: OperationId.make(
+        "reservation-correlation-other-operation"
+      ),
+      taskId
+    })
+    expect(
+      (yield* operationController.admit(
+        { explanations: [], transitions: [exactOperation] },
+        runId
+      )).transitions
+    ).toEqual([exactOperation])
+    expect(
+      (yield* operationController.admit(
+        { explanations: [], transitions: [differentOperation] },
+        runId
+      )).transitions
+    ).toEqual([])
+
+    const selectedController = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const selected = freshTransition(taskId)
+    const differentSelection = RunnableFrontierTransition
+      .CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision: TaskRevision.make(
+          "reservation-correlation-other-revision"
+        )
+      })
+    yield* selectedController.admit(
+      { explanations: [], transitions: [selected] },
+      runId
+    )
+    expect(
+      (yield* selectedController.admit(
+        { explanations: [], transitions: [selected] },
+        runId
+      )).transitions
+    ).toEqual([selected])
+    expect(
+      (yield* selectedController.admit(
+        { explanations: [], transitions: [differentSelection] },
+        runId
+      )).transitions
+    ).toEqual([])
   }))

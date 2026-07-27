@@ -1506,6 +1506,14 @@ module frontierRecovery {
   pure def activationFrontier(s: State): Set[TaskId] =
     s.selectorProjection.frontierTaskIds
 
+  pure def noActivationReservationHandoffInProgress(s: State): bool =
+    TASKS.forall(task =>
+      match s.activation.positions.get(task) {
+        | ActivationPositionReserved(_) =>
+          activationOwnerExists(s, task)
+        | _ => true
+      })
+
   pure def applyActivationOwnershipExclusion(
     s: State,
     derived: Set[TaskId]
@@ -1523,6 +1531,10 @@ module frontierRecovery {
 
   action deriveActivationPass: bool = all {
     state.coordinator.running,
+    // Reservation and ownership registration are one interruption-masked
+    // production handoff. A later pass can overlap a live owner, but cannot
+    // enter between those two boundaries.
+    noActivationReservationHandoffInProgress(state),
     state' = {
       ...state,
       activation:
@@ -1530,7 +1542,9 @@ module frontierRecovery {
     },
   }
 
-  action excludeOwnedTransitions: bool =
+  action excludeOwnedTransitions: bool = all {
+    not(state.activation.triggerPending),
+    noActivationReservationHandoffInProgress(state),
     state' = {
       ...state,
       activation:
@@ -1538,12 +1552,21 @@ module frontierRecovery {
           state,
           state.activation.derivedTransitions
         ),
-    }
+    },
+  }
 
   action reserveTaskAdmissionPosition(task: TaskId): bool = all {
+    // Release/provider observations request a fresh ordered derivation. A
+    // stale selection cannot admit another task before that pass consumes the
+    // trigger.
+    not(state.activation.triggerPending),
     state.activation.selectedTransitions.contains(task),
     state.activation.selectedTransitions.forall(candidate => task <= candidate),
     state.activation.positions.get(task) == ActivationPositionAvailable,
+    // Reservation and ownership registration are one serialized production
+    // handoff. The model exposes both checkpoints but cannot start a second
+    // reservation between them.
+    noActivationReservationHandoffInProgress(state),
     activationCapacityUsage(state) < state.activation.configuredCapacity,
     state' = {
       ...state,
@@ -1594,11 +1617,25 @@ module frontierRecovery {
   }
 
   action rejectDuplicateOwnership(task: TaskId): bool = all {
-    activationOwnerExists(state, task),
+    state.activation.positions.get(task)
+      == ActivationPositionReserved({ selectedTaskId: task }),
+    state.activation.owners.get(task) == NoActivationOwner,
     state' = {
       ...state,
       activation: {
         ...state.activation,
+        selectedTransitions:
+          state.activation.selectedTransitions.exclude(Set(task)),
+        activationInProgress:
+          state.activation.activationInProgress.union(Set(task)),
+        owners:
+          state.activation.owners.put(
+            task,
+            PreIntentActivationOwner(())
+          ),
+        ownerRegistrationCounts:
+          state.activation.ownerRegistrationCounts.put(task, 1),
+        runners: state.activation.runners.union(Set(task)),
         duplicateReservationLeaks:
           state.activation.duplicateReservationLeaks.exclude(Set(task)),
         isolatedSubjects:

@@ -1,10 +1,11 @@
-import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
+import { Deferred, Effect, Exit, Match, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { type OperationId, RunId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
+import { type OperationId, RunId, type TaskId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-workflow-stage.js"
 import { ManagedRecoveryActivation, type ManagedRecoveryActivationError } from "./managed-activation.js"
 import {
+  type RunnableFrontier,
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
 } from "./runnable-frontier.js"
@@ -26,6 +27,13 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
+
+const explanationTaskIds = (
+  explanation: RunnableFrontier["explanations"][number]
+): ReadonlyArray<TaskId> =>
+  Option.toArray(
+    Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId"))
+  )
 
 export const runWorkflow = Effect.fn("Workflow.run")(function*(
   target: TrackerTarget,
@@ -205,9 +213,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   return yield* Effect.scoped(Effect.gen(function*() {
     const initialRecoveredFrontier = yield* recovery.readFrontier
     const recoveredTaskIds = new Set([
-      ...initialRecoveredFrontier.explanations.flatMap(
-        (explanation) => "taskId" in explanation ? [explanation.taskId] : []
-      ),
+      ...initialRecoveredFrontier.explanations.flatMap(explanationTaskIds),
       ...initialRecoveredFrontier.transitions.map(({ taskId }) => taskId)
     ])
     const initialTasks = snapshot.eligibleTasks().filter(
@@ -222,9 +228,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
       function*() {
         const recovered = yield* recovery.readFrontier
         const recoveredTaskIds = new Set([
-          ...recovered.explanations.flatMap(
-            (explanation) => "taskId" in explanation ? [explanation.taskId] : []
-          ),
+          ...recovered.explanations.flatMap(explanationTaskIds),
           ...recovered.transitions.map(({ taskId }) => taskId)
         ])
         const alreadyScheduled = yield* Ref.get(scheduledFreshTaskIds)
@@ -272,19 +276,26 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           const operation: Effect.Effect<
             FreshWorkflowStage | undefined,
             FreshWorkflowStageError | ManagedRecoveryActivationError
-          > = stage === undefined
-              && recovery._tag === "AuthoritativeManagedRunActivation"
-            ? recovery.runTransition(
-              transition,
-              execution
-            ).pipe(
-              Effect.as<FreshWorkflowStage | undefined>(undefined)
-            )
-            : stage === undefined
-            ? Effect.die(
-              "synthetic activation cannot derive a recovered transition"
-            )
-            : stage.run(execution.recordIntent)
+          > = Option.match(Option.fromUndefinedOr(stage), {
+            onNone: () =>
+              Match.value(recovery).pipe(
+                Match.tags({
+                  AuthoritativeManagedRunActivation: (authoritative) =>
+                    authoritative.runTransition(
+                      transition,
+                      execution
+                    ).pipe(
+                      Effect.as<FreshWorkflowStage | undefined>(undefined)
+                    ),
+                  SyntheticFreshOnlyActivation: () =>
+                    Effect.die(
+                      "synthetic activation cannot derive a recovered transition"
+                    )
+                }),
+                Match.exhaustive
+              ),
+            onSome: (fresh) => fresh.run(execution.recordIntent)
+          })
           const exit = yield* Effect.exit(operation)
           const acknowledged = yield* Deferred.make<void>()
           yield* Queue.offer(completions, { acknowledged, exit, stage })

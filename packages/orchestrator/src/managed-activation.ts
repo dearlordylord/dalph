@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Match, Queue } from "effect"
+import { Context, Effect, Exit, Layer, Match, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
 import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
@@ -48,6 +48,9 @@ const noRecoveredAdmissionCapacityEvidence = {
   freshlyReleasedOperationIds: new Set()
 } satisfies RecoveredAdmissionCapacityEvidence
 
+const noOccupiedInvocations = (): RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"] => []
+const noOperationIds = (): ReadonlyArray<OperationId> => []
+
 /**
  * Reads current execution-provider evidence for each unresolved execution.
  * A proved absence can free its retained position; unreadable or ambiguous
@@ -63,16 +66,24 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
     return yield* Effect.fail(reduction)
   }
   const records = reduction.managedRun.workflowHistory.records
+  const settledExecutionOperationIds = new Set(
+    records.flatMap(({ event }) =>
+      Match.value(event).pipe(
+        Match.tag("TaskExecutionOutcomeObserved", ({ outcome }) => [
+          outcome.outcome.operationId
+        ]),
+        Match.orElse(noOperationIds)
+      )
+    )
+  )
   const observations = yield* Effect.forEach(
     reduction.managedRun.responsibility.entries,
     (responsibility) => {
       if (
         responsibility._tag !== "TaskExecutionResponsibility"
         || responsibility.operation.request.session._tag !== "EstablishedSession"
-        || records.some(({ event }) =>
-          event._tag === "TaskExecutionOutcomeObserved"
-          && event.outcome.outcome.operationId
-            === responsibility.operation.request.operationId
+        || settledExecutionOperationIds.has(
+          responsibility.operation.request.operationId
         )
       ) return Effect.succeed(undefined)
       return executor.observeTaskExecution({
@@ -87,19 +98,31 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
   )
   return {
     freshOccupiedInvocations: observations.flatMap((observation) =>
-      observation?.report._tag === "RunningTaskExecutionReported"
-        ? [{
-          observationId: observation.report.observationId,
-          operationId: observation.responsibility.operation.request.operationId,
-          taskId: observation.responsibility.taskId
-        }]
-        : []
+      Option.match(Option.fromUndefinedOr(observation), {
+        onNone: noOccupiedInvocations,
+        onSome: (candidate) =>
+          Match.value(candidate.report).pipe(
+            Match.tag("RunningTaskExecutionReported", (report) => [{
+              observationId: report.observationId,
+              operationId: candidate.responsibility.operation.request.operationId,
+              taskId: candidate.responsibility.taskId
+            }]),
+            Match.orElse(noOccupiedInvocations)
+          )
+      })
     ),
     freshlyReleasedOperationIds: new Set(
       observations.flatMap((observation) =>
-        observation?.report._tag === "NoTaskExecutionReported"
-          ? [observation.responsibility.operation.request.operationId]
-          : []
+        Option.match(Option.fromUndefinedOr(observation), {
+          onNone: noOperationIds,
+          onSome: (candidate) =>
+            Match.value(candidate.report).pipe(
+              Match.tag("NoTaskExecutionReported", () => [
+                candidate.responsibility.operation.request.operationId
+              ]),
+              Match.orElse(noOperationIds)
+            )
+        })
       )
     )
   } satisfies RecoveredAdmissionCapacityEvidence
@@ -113,49 +136,44 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
       return yield* Effect.fail(reduction)
     }
     const records = reduction.managedRun.workflowHistory.records
+    const settledOperationIds = new Set(
+      records.flatMap(({ event }) =>
+        Match.value(event).pipe(
+          Match.tags({
+            ImplementationEvidenceSealed: ({ operationId }) => [operationId],
+            ImplementationReviewCompleted: ({ review }) => [
+              review.manifest.operationId
+            ],
+            ReviewFindingsHandbackCompleted: ({ acknowledgement }) => [
+              acknowledgement.operationId
+            ],
+            TaskClaimAcquired: ({ claim }) => [claim.operationId],
+            TaskExecutionOutcomeObserved: ({ outcome }) => [
+              outcome.outcome.operationId
+            ],
+            TaskWorkSessionEstablished: ({ outcome }) => [
+              outcome.operationId
+            ],
+            TaskWorktreeReady: ({ operationId }) => [operationId]
+          }),
+          Match.orElse(noOperationIds)
+        )
+      )
+    )
     const isUnresolved = (
       responsibility: typeof reduction.managedRun.responsibility.entries[number]
     ): boolean =>
       Match.value(responsibility).pipe(
         Match.tags({
-          ImplementationEvidenceResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "ImplementationEvidenceSealed"
-              && event.operationId === operation.operationId
-            ),
+          ImplementationEvidenceResponsibility: ({ operation }) => !settledOperationIds.has(operation.operationId),
           ImplementationReviewResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "ImplementationReviewCompleted"
-              && event.review.manifest.operationId
-                === operation.request.operationId
-            ),
+            !settledOperationIds.has(operation.request.operationId),
           ReviewFindingsHandbackResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "ReviewFindingsHandbackCompleted"
-              && event.acknowledgement.operationId
-                === operation.request.operationId
-            ),
-          TaskClaimResponsibility: ({ acquisition }) =>
-            !records.some(({ event }) =>
-              event._tag === "TaskClaimAcquired"
-              && event.claim.operationId === acquisition.operationId
-            ),
-          TaskExecutionResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "TaskExecutionOutcomeObserved"
-              && event.outcome.outcome.operationId
-                === operation.request.operationId
-            ),
-          TaskWorkSessionResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "TaskWorkSessionEstablished"
-              && event.outcome.operationId === operation.request.operationId
-            ),
-          TaskWorktreeResponsibility: ({ operation }) =>
-            !records.some(({ event }) =>
-              event._tag === "TaskWorktreeReady"
-              && event.operationId === operation.operationId
-            )
+            !settledOperationIds.has(operation.request.operationId),
+          TaskClaimResponsibility: ({ acquisition }) => !settledOperationIds.has(acquisition.operationId),
+          TaskExecutionResponsibility: ({ operation }) => !settledOperationIds.has(operation.request.operationId),
+          TaskWorkSessionResponsibility: ({ operation }) => !settledOperationIds.has(operation.request.operationId),
+          TaskWorktreeResponsibility: ({ operation }) => !settledOperationIds.has(operation.operationId)
         }),
         Match.exhaustive
       )
@@ -353,21 +371,34 @@ export const activateRecoveredResponsibilities = Effect.fn(
             execution
           ).pipe(Effect.exit)
           yield* Queue.offer(completed, exit)
-          if (Exit.isFailure(exit)) {
-            return yield* Effect.failCause(exit.cause)
-          }
+          yield* Exit.match(exit, {
+            onFailure: Effect.failCause,
+            onSuccess: () => Effect.void
+          })
         })
     })
 
-    for (;;) {
-      yield* coordinator.signal(ActivationCause.Restart())
-      if ((yield* recovery.readFrontier).transitions.length === 0) {
-        return
-      }
-      const completion = yield* Queue.take(completed)
-      if (Exit.isFailure(completion)) {
-        return yield* Effect.failCause(completion.cause)
-      }
+    function drainRecoveredResponsibilities(): Effect.Effect<
+      void,
+      ManagedRecoveryActivationError
+    > {
+      return Effect.gen(function*() {
+        yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
+        const next = (yield* recovery.readFrontier).transitions[0]
+        yield* Option.match(Option.fromUndefinedOr(next), {
+          onNone: () => Effect.void,
+          onSome: () =>
+            Queue.take(completed).pipe(
+              Effect.flatMap((completion) =>
+                Exit.match(completion, {
+                  onFailure: Effect.failCause,
+                  onSuccess: drainRecoveredResponsibilities
+                })
+              )
+            )
+        })
+      })
     }
+    yield* drainRecoveredResponsibilities()
   }))
 })

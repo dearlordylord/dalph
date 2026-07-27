@@ -6,15 +6,11 @@ import {
   JournalDatabaseLocator,
   OperationId,
   ProviderObservationId,
-  RunId,
   TaskId,
-  TaskRevision,
   TaskWorkCapacity
 } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
-import { RunnableFrontierTransition } from "../../src/runnable-frontier.js"
 import { sqliteJournalStoreLayer } from "../../src/sqlite-journal-store.js"
-import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
 import { FrontierRecoveryModelTaskId } from "./frontier-recovery-conformance.js"
 import { frontierRecoveryRunId } from "./frontier-recovery-fixture-identities.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
@@ -125,6 +121,32 @@ it.effect("projects one ActivationInProgress explanation and runner after own th
       runnerModelTaskIds: [task],
       selectedModelTaskIds: [FrontierRecoveryModelTaskId.make(2n)]
     })
+    yield* controls.close()
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("drives intent and result release through the production coordinator", () =>
+  Effect.gen(function*() {
+    const controls = yield* makeFrontierRecoveryReconstructionControls({
+      capacity: TaskWorkCapacity.make(2),
+      coordinatorRunning: true,
+      journal: yield* JournalStore
+    })
+    const task = FrontierRecoveryModelTaskId.make(0n)
+    yield* controls.init()
+    yield* controls.activation({ _tag: "deriveActivationPass" })
+    yield* controls.activation({ _tag: "reserveTaskAdmissionPosition", task })
+    yield* controls.activation({ _tag: "claimActivationOwnership", task })
+    yield* controls.activation({ _tag: "recordOwnedOperationIntent", task })
+    yield* controls.activation({ _tag: "recordOwnedResultAndRelease", task })
+
+    expect((yield* controls.getState()).activation).toMatchObject({
+      owners: [],
+      reservedPositions: [],
+      resultsRecordedModelTaskIds: [task],
+      runnerModelTaskIds: [],
+      triggerPending: true
+    })
+    yield* controls.close()
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("selects the same bounded first intents before and after restart", () =>
@@ -458,31 +480,20 @@ it.effect("uses current capacity and fresh provider evidence after reopening SQL
             taskId: TaskId.make(`${scenario.label}-task-${index}`)
           })
         )
-        const controller = yield* makeTaskAdmissionController({
+        const controls = yield* makeFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(scenario.capacity),
           freshOccupiedInvocations: occupied,
-          reconstructedReservedPositions: []
+          coordinatorRunning: false,
+          journal
         })
-        const freshTaskId = TaskId.make(`${scenario.label}-fresh`)
-        const admission = yield* controller.admit(
-          {
-            explanations: [],
-            transitions: [
-              RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-                taskId: freshTaskId,
-                taskRevision: TaskRevision.make(
-                  `${scenario.label}-fresh-revision`
-                )
-              })
-            ]
-          },
-          RunId.make(`${scenario.label}-run`)
-        )
-        expect((yield* controller.snapshot()).occupied)
-          .toHaveLength(scenario.occupied)
-        expect(admission.transitions).toHaveLength(
-          scenario.expectedAdmissions
-        )
+        yield* controls.restart()
+        yield* controls.activation({ _tag: "deriveActivationPass" })
+        const admission = yield* controls.advanceActivationAdmission()
+        expect(admission).toEqual({
+          occupiedCount: scenario.occupied,
+          reservedPositionCount: scenario.expectedAdmissions
+        })
+        yield* controls.close()
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
     }
   }).pipe(Effect.provide(NodeServices.layer)))

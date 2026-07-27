@@ -125,6 +125,7 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
     readonly dispositionModeContradiction?: boolean
     readonly evidenceModeContradiction?: boolean
     readonly handbackFailure?: ReviewFindingsHandbackFailure
+    readonly initialEvidence?: typeof SealedImplementationEvidence.Type
     readonly initialExecutionOutcome?: TaskExecutionOutcome
     readonly initialHandbackOperation?: ReturnType<typeof makeReviewFindingsHandbackOperation>
     readonly initialReview?: typeof SealedImplementationReview.Type
@@ -277,6 +278,15 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
           === "AuthorizedImplementationReview"
         ? options.initialReviewOperation.request.round
         : SemanticReviewRound.make(1)
+    }
+    : options.initialEvidence !== undefined
+    ? {
+      _tag: "EvidenceSealed" as const,
+      evidence: {
+        operationId: OperationId.make("initial-evidence-operation"),
+        sealed: options.initialEvidence
+      },
+      round: SemanticReviewRound.make(1)
     }
     : {
       _tag: "ExecutionOutcome" as const,
@@ -432,6 +442,46 @@ it.effect("retains failed and interrupted first executions without invoking revi
       const harness = yield* makeHarness([], [], { initialExecutionOutcome: item.outcome })
       expect(harness.result.disposition._tag).toBe(item.expected)
       expect(yield* Ref.get(harness.reviewRequests)).toHaveLength(0)
+    }
+  }))
+
+it.effect("rejects review-derived starts paired with a non-successful execution", () =>
+  Effect.gen(function*() {
+    const failed = TaskExecutionOutcome.cases.Failed.make({
+      exitCode: FailedProcessExitCode.make(2),
+      observationId: ProviderObservationId.make(
+        "contradictory-start-observation"
+      ),
+      operationId: OperationId.make("contradictory-start-execution"),
+      partialOutput: "failed before review",
+      processId: WorkerProcessId.make(14),
+      sessionId,
+      wipPreserved: true
+    })
+    const evidence = SealedImplementationEvidence.make({
+      manifest: {
+        diff: reference,
+        implementationOutput: reference,
+        plannedBaseSha: plannedAttempt.baseSha,
+        predecessorOperationId: failed.operationId,
+        runId,
+        stage: "Implementation",
+        taskId
+      },
+      manifestReference: reference
+    })
+
+    for (
+      const start of [
+        { initialReview: findingsReview("contradictory-start-review") },
+        { initialEvidence: evidence }
+      ]
+    ) {
+      const failure = yield* makeHarness([], [], {
+        ...start,
+        initialExecutionOutcome: failed
+      }).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(TaskWorktreeExecutionModeContradiction)
     }
   }))
 

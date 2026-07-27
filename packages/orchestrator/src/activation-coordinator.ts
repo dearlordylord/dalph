@@ -1,10 +1,15 @@
+/* eslint-disable max-lines -- Activation ownership, its controlled production boundaries, and scoped cleanup remain one domain owner. */
 import { Data, Deferred, Effect, Exit, Option, Queue, Ref, Schema } from "effect"
 import type * as Scope from "effect/Scope"
 import { SelectedTransitionIdentity as SelectedTransitionIdentitySchema } from "./domain.js"
 import type { OperationId, RunId, SelectedTransitionIdentity } from "./domain.js"
 import { FrontierExplanation, type RunnableFrontier, type RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
-import { type TaskAdmissionController, transitionRequiresTaskAdmissionPosition } from "./task-admission-controller.js"
+import {
+  type TaskAdmissionController,
+  type TaskAdmissionControllerSnapshot,
+  transitionRequiresTaskAdmissionPosition
+} from "./task-admission-controller.js"
 
 export type ActivationCause = Data.TaggedEnum<{
   AdmissionMayNowBePossible: Record<never, never>
@@ -47,8 +52,79 @@ export interface OwnedTransitionExecution {
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
 }
 
+type ActivationCoordinatorCheckpointFailure = Data.TaggedEnum<{
+  InterruptActivation: Record<never, never>
+  RejectDuplicateOwnership: Record<never, never>
+}>
+
+const ActivationCoordinatorCheckpointFailure = Data.taggedEnum<ActivationCoordinatorCheckpointFailure>()
+
+interface ActivationCoordinatorObservation {
+  readonly admission: TaskAdmissionControllerSnapshot
+  readonly ownership: ActivationOwnershipSnapshot
+}
+
+/**
+ * Package-internal deterministic conformance boundary. Production
+ * compositions omit the control and the public coordinator remains
+ * trigger-only.
+ */
+type ActivationCoordinatorCheckpoint =
+  | {
+    readonly _tag: "FrontierDerived"
+    readonly frontier: RunnableFrontier
+    readonly observation: ActivationCoordinatorObservation
+  }
+  | {
+    readonly _tag: "OwnedTransitionsExcluded"
+    readonly frontier: RunnableFrontier
+    readonly observation: ActivationCoordinatorObservation
+  }
+  | {
+    readonly _tag: "AdmissionReserved"
+    readonly observation: ActivationCoordinatorObservation
+    readonly transition: RunnableFrontierTransition
+  }
+  | {
+    readonly _tag: "AdmissionReservationCancelled"
+    readonly observation: ActivationCoordinatorObservation
+    readonly transition: RunnableFrontierTransition
+  }
+  | {
+    readonly _tag: "OwnershipRegistered"
+    readonly observation: ActivationCoordinatorObservation
+    readonly transition: RunnableFrontierTransition
+  }
+  | {
+    readonly _tag: "IntentBound"
+    readonly observation: ActivationCoordinatorObservation
+    readonly operationId: OperationId
+    readonly transition: RunnableFrontierTransition
+  }
+  | {
+    readonly _tag: "OperationReturned"
+    readonly observation: ActivationCoordinatorObservation
+    readonly operationId: Option.Option<OperationId>
+    readonly runnerExit: "Failed" | "Succeeded"
+    readonly transition: RunnableFrontierTransition
+  }
+  | {
+    readonly _tag: "OwnershipReleased"
+    readonly observation: ActivationCoordinatorObservation
+    readonly operationId: Option.Option<OperationId>
+    readonly runnerExit: "Failed" | "Succeeded"
+    readonly transition: RunnableFrontierTransition
+  }
+
+interface ActivationCoordinatorControl {
+  readonly checkpoint: (
+    checkpoint: ActivationCoordinatorCheckpoint
+  ) => Effect.Effect<void, ActivationCoordinatorCheckpointFailure>
+}
+
 type MakeActivationCoordinatorInput<E, R> = {
   readonly admissionController: TaskAdmissionController
+  readonly control?: ActivationCoordinatorControl
   readonly readFrontier: Effect.Effect<RunnableFrontier, E, R>
   readonly runId: RunId
 } & {
@@ -74,7 +150,8 @@ const ownedTransitionKey = (
   transition: RunnableFrontierTransition
 ): string => selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
 
-const excludeOwnedTransitions = (
+/** Projects exact live ownership into selector explanations without mutating either authority. */
+const projectActivationOwnership = (
   runId: RunId,
   frontier: RunnableFrontier,
   ownership: ReadonlyMap<string, ActivationOwnershipEntry>
@@ -105,10 +182,11 @@ const excludeOwnedTransitions = (
 }
 
 /**
- * Internal process-local ownership registry shared by the live coordinator
- * and the closed M2 adapter. It is intentionally absent from package exports.
+ * Internal process-local ownership registry owned by the live coordinator.
+ * Deterministic adapters may observe its read-only checkpoint projection but
+ * cannot register, bind, remove, or isolate ownership directly.
  */
-export const makeActivationOwnershipRegistry = Effect.fn(
+const makeActivationOwnershipRegistry = Effect.fn(
   "ActivationOwnershipRegistry.make"
 )(function*(runId: RunId) {
   const owners = yield* Ref.make<ReadonlyMap<string, ActivationOwnershipEntry>>(
@@ -123,8 +201,7 @@ export const makeActivationOwnershipRegistry = Effect.fn(
       operationId: OperationId
     ) =>
       Ref.update(owners, (current) => {
-        const owned = current.get(key)
-        if (owned === undefined) return current
+        Option.getOrThrow(Option.fromUndefinedOr(current.get(key)))
         return new Map(
           [...current].map(([candidateKey, candidate]) =>
             candidateKey === key
@@ -142,7 +219,7 @@ export const makeActivationOwnershipRegistry = Effect.fn(
           isolatedTransitionKeys: yield* Ref.get(isolatedTransitionKeys),
           owners: yield* Ref.get(owners)
         }
-        const withoutOwners = excludeOwnedTransitions(
+        const withoutOwners = projectActivationOwnership(
           runId,
           frontier,
           snapshot.owners
@@ -166,19 +243,23 @@ export const makeActivationOwnershipRegistry = Effect.fn(
       Ref.modify(owners, (current) => {
         const selected = makeSelectedTransitionIdentity(runId, transition)
         const key = selectedTransitionKey(selected)
-        if (current.has(key)) return [undefined, current] as const
-        const entry: ActivationOwnershipEntry = {
-          operationId: "operationId" in transition
-              && transition._tag !== "ContinueFreshWorkflowOperation"
-            ? Option.some(transition.operationId)
-            : Option.none(),
-          selected,
-          transition
-        }
-        return [
-          { entry, key },
-          new Map([...current, [key, entry]])
-        ] as const
+        return Option.match(Option.fromUndefinedOr(current.get(key)), {
+          onNone: () => {
+            const entry: ActivationOwnershipEntry = {
+              operationId: "operationId" in transition
+                  && transition._tag !== "ContinueFreshWorkflowOperation"
+                ? Option.some(transition.operationId)
+                : Option.none(),
+              selected,
+              transition
+            }
+            return [
+              { entry, key },
+              new Map([...current, [key, entry]])
+            ] as const
+          },
+          onSome: () => [undefined, current] as const
+        })
       }),
     remove: (key: string) =>
       Ref.modify(owners, (current) => {
@@ -214,6 +295,20 @@ export const makeActivationCoordinator = Effect.fn(
     readonly closed: boolean
   }>({ acknowledgements: [], closed: false })
   const ownership = yield* makeActivationOwnershipRegistry(input.runId)
+  const checkpoint = (
+    make: (
+      observation: ActivationCoordinatorObservation
+    ) => ActivationCoordinatorCheckpoint
+  ): Effect.Effect<void, ActivationCoordinatorCheckpointFailure> => {
+    const control = input.control
+    if (control === undefined) return Effect.void
+    return Effect.all({
+      admission: input.admissionController.snapshot(),
+      ownership: ownership.snapshot()
+    }).pipe(
+      Effect.flatMap((observation) => control.checkpoint(make(observation)))
+    )
+  }
 
   const signal = Effect.fn("ActivationCoordinator.signal")(function*(cause: ActivationCause) {
     const acknowledgement = yield* Deferred.make<
@@ -239,6 +334,26 @@ export const makeActivationCoordinator = Effect.fn(
     key: string,
     entry: ActivationOwnershipEntry
   ): Effect.Effect<void, never, R> => {
+    const settleRunnerAdmission = (
+      owned: ActivationOwnershipEntry,
+      exit: Exit.Exit<void, unknown>
+    ): Effect.Effect<void> => {
+      if (!transitionRequiresTaskAdmissionPosition(owned.transition)) {
+        return Effect.void
+      }
+      if (Option.isNone(owned.operationId)) {
+        return input.admissionController.cancelReservedPosition(entry.selected).pipe(
+          Effect.orDie,
+          Effect.asVoid
+        )
+      }
+      return Exit.isSuccess(exit)
+        ? input.admissionController.releaseTaskAdmissionPosition(
+          owned.operationId.value
+        ).pipe(Effect.orDie)
+        : Effect.void
+    }
+
     const recordIntent = Effect.fn("ActivationCoordinator.recordIntent")(
       function*(operationId: OperationId) {
         yield* Effect.uninterruptible(Effect.gen(function*() {
@@ -253,6 +368,12 @@ export const makeActivationCoordinator = Effect.fn(
           }
           yield* ownership.bindOperation(key, operationId)
         }))
+        yield* checkpoint((observation) => ({
+          _tag: "IntentBound",
+          observation,
+          operationId,
+          transition: entry.transition
+        })).pipe(Effect.orDie)
       }
     )
 
@@ -263,25 +384,29 @@ export const makeActivationCoordinator = Effect.fn(
       Effect.exit,
       Effect.flatMap((exit) =>
         Effect.gen(function*() {
-          const owned = yield* ownership.get(key)
-          if (
-            owned !== undefined
-            && Option.isNone(owned.operationId)
-            && transitionRequiresTaskAdmissionPosition(owned.transition)
-          ) {
-            yield* input.admissionController.cancelReservedPosition(entry.selected)
-              .pipe(Effect.orDie)
-          } else if (
-            owned !== undefined
-            && Option.isSome(owned.operationId)
-            && Exit.isSuccess(exit)
-            && transitionRequiresTaskAdmissionPosition(owned.transition)
-          ) {
-            yield* input.admissionController.releaseTaskAdmissionPosition(
-              owned.operationId.value
-            ).pipe(Effect.orDie)
-          }
+          const owned = Option.getOrThrow(
+            Option.fromUndefinedOr(yield* ownership.get(key))
+          )
+          const operationId = owned.operationId
+          const runnerExit = Exit.isSuccess(exit)
+            ? "Succeeded" as const
+            : "Failed" as const
+          yield* checkpoint((observation) => ({
+            _tag: "OperationReturned",
+            observation,
+            operationId,
+            runnerExit,
+            transition: entry.transition
+          })).pipe(Effect.orDie)
+          yield* settleRunnerAdmission(owned, exit)
           yield* ownership.remove(key)
+          yield* checkpoint((observation) => ({
+            _tag: "OwnershipReleased",
+            observation,
+            operationId,
+            runnerExit,
+            transition: entry.transition
+          })).pipe(Effect.orDie)
           yield* signal(ActivationCause.WorkflowResultRecorded()).pipe(
             Effect.catchTag("ActivationCoordinatorClosed", () => Effect.void)
           )
@@ -290,79 +415,143 @@ export const makeActivationCoordinator = Effect.fn(
     )
   }
 
+  const isolateDuplicate = (
+    selected: SelectedTransitionIdentity,
+    key: string
+  ) =>
+    Effect.die(
+      new DuplicateActivationOwnershipDefect({ selected })
+    ).pipe(
+      Effect.catchCause(() => ownership.isolate(key))
+    )
+
+  const admitFirstCandidate = Effect.fn(
+    "ActivationCoordinator.admitFirstCandidate"
+  )(function*(frontier: RunnableFrontier) {
+    const candidate = frontier.transitions[0]
+    if (candidate === undefined) return undefined
+    const admission = yield* input.admissionController.admit(
+      frontier,
+      input.runId
+    )
+    const transition = admission.transitions[0]
+    if (transition === undefined) return undefined
+    const selected = makeSelectedTransitionIdentity(input.runId, transition)
+    return {
+      key: selectedTransitionKey(selected),
+      selected,
+      transition
+    }
+  })
+
   const handoff = Effect.fn("ActivationCoordinator.handoff")(
     (frontier: RunnableFrontier) =>
       Effect.uninterruptibleMask(() =>
         Effect.gen(function*() {
-          const candidate = frontier.transitions[0]
-          if (candidate === undefined) return false
-          const candidateSelected = makeSelectedTransitionIdentity(
-            input.runId,
-            candidate
+          const admitted = yield* admitFirstCandidate(frontier)
+          if (admitted === undefined) return false
+          const { key, selected, transition } = admitted
+          const admissionCheckpoint = yield* (
+            checkpoint((observation) => ({
+              _tag: "AdmissionReserved",
+              observation,
+              transition
+            }))
+          ).pipe(
+            Effect.result
           )
-          const candidateKey = selectedTransitionKey(candidateSelected)
-          if ((yield* ownership.get(candidateKey)) !== undefined) {
-            // The defect is raised and caught inside this exact-subject
-            // supervisor. It remains a defect rather than an expected error,
-            // while the serialized coordinator loop stays alive for C.
-            yield* Effect.die(
-              new DuplicateActivationOwnershipDefect({
-                selected: candidateSelected
-              })
-            ).pipe(
-              Effect.catchCause(() => ownership.isolate(candidateKey))
-            )
+          if (admissionCheckpoint._tag === "Failure") {
+            if (transitionRequiresTaskAdmissionPosition(transition)) {
+              yield* input.admissionController.cancelReservedPosition(selected)
+                .pipe(Effect.orDie)
+            }
+            yield* checkpoint((observation) => ({
+              _tag: "AdmissionReservationCancelled",
+              observation,
+              transition
+            })).pipe(Effect.orDie)
             return false
           }
-          const admission = yield* input.admissionController.admit(
-            frontier,
-            input.runId
-          )
-          const transition = admission.transitions[0]
-          if (transition === undefined) return false
-          const selected = makeSelectedTransitionIdentity(input.runId, transition)
-          const key = selectedTransitionKey(selected)
           const registered = yield* ownership.register(transition)
-          if (registered === undefined) {
+          return yield* Option.match(Option.fromUndefinedOr(registered), {
             // No second reservation is cancelled here: a matching reservation
             // belongs to the existing exact owner. Isolate only this subject.
-            yield* Effect.die(
-              new DuplicateActivationOwnershipDefect({ selected })
-            ).pipe(
-              Effect.catchCause(() => ownership.isolate(key))
-            )
-            return false
-          }
-          const rollbackFailedStart = Effect.gen(function*() {
-            const partialOwner = yield* ownership.get(registered.key)
-            if (
-              partialOwner !== undefined
-              && Option.isNone(partialOwner.operationId)
-              && transitionRequiresTaskAdmissionPosition(
-                partialOwner.transition
-              )
-            ) {
-              yield* input.admissionController.cancelReservedPosition(
-                registered.entry.selected
-              ).pipe(Effect.orDie)
-            }
-            yield* ownership.remove(registered.key)
+            onNone: () => isolateDuplicate(selected, key).pipe(Effect.as(false)),
+            onSome: (ownedRegistration) =>
+              Effect.gen(function*() {
+                const rollbackFailedStart = Effect.gen(function*() {
+                  const partialOwner = Option.getOrThrow(
+                    Option.fromUndefinedOr(
+                      yield* ownership.get(ownedRegistration.key)
+                    )
+                  )
+                  if (
+                    Option.isNone(partialOwner.operationId)
+                    && transitionRequiresTaskAdmissionPosition(
+                      partialOwner.transition
+                    )
+                  ) {
+                    yield* input.admissionController.cancelReservedPosition(
+                      ownedRegistration.entry.selected
+                    ).pipe(Effect.orDie)
+                  }
+                  yield* ownership.remove(ownedRegistration.key)
+                  yield* checkpoint((observation) => ({
+                    _tag: "OwnershipReleased",
+                    observation,
+                    operationId: partialOwner.operationId,
+                    runnerExit: "Failed",
+                    transition: ownedRegistration.entry.transition
+                  })).pipe(Effect.orDie)
+                })
+                const ownershipCheckpoint = yield* (
+                  checkpoint((observation) => ({
+                    _tag: "OwnershipRegistered",
+                    observation,
+                    transition
+                  }))
+                ).pipe(
+                  Effect.result
+                )
+                if (ownershipCheckpoint._tag === "Failure") {
+                  const failure = ownershipCheckpoint.failure
+                  if (
+                    failure._tag === "RejectDuplicateOwnership"
+                  ) {
+                    yield* isolateDuplicate(selected, key)
+                  } else {
+                    yield* rollbackFailedStart
+                    return false
+                  }
+                }
+                yield* runOwnedTransition(
+                  ownedRegistration.key,
+                  ownedRegistration.entry
+                ).pipe(
+                  Effect.forkIn(scope),
+                  Effect.onError(() => rollbackFailedStart)
+                )
+                return true
+              })
           })
-          yield* runOwnedTransition(
-            registered.key,
-            registered.entry
-          ).pipe(
-            Effect.forkIn(scope),
-            Effect.onError(() => rollbackFailedStart)
-          )
-          return true
         })
       )
   )
 
   const runPass = Effect.fn("ActivationCoordinator.runPass")(function*() {
     const frontier = yield* input.readFrontier
+    yield* checkpoint((observation) => ({
+      _tag: "FrontierDerived",
+      frontier,
+      observation
+    })).pipe(Effect.orDie)
     const selectable = yield* ownership.exclude(frontier)
+    const exclusionCheckpoint = yield* checkpoint((observation) => ({
+      _tag: "OwnedTransitionsExcluded",
+      frontier: selectable,
+      observation
+    })).pipe(Effect.result)
+    if (exclusionCheckpoint._tag === "Failure") return false
     const started = yield* handoff(selectable)
     if (!started) return false
     // Let the newly scoped child reach its first boundary before this pass

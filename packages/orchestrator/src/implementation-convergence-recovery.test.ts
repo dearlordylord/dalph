@@ -36,6 +36,7 @@ import {
   MatchingTaskWorkSessionReported,
   memoryEvidenceStoreLayer,
   memoryJournalStoreLayer,
+  NoTaskExecutionReported,
   OperationId,
   PlannedWorktreeReady,
   ProviderObservationId,
@@ -48,6 +49,7 @@ import {
   ReviewFindingsHandbackAcknowledged,
   ReviewFindingsHandbackFailure,
   RunId,
+  RunningTaskExecutionReported,
   runWorkflow,
   SealedImplementationReview,
   SemanticReviewRound,
@@ -76,7 +78,11 @@ import {
   WorktreeLocator
 } from "./index.js"
 import { intentRecordKey, outcomeRecordKey } from "./journal-record-key.js"
-import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
+import {
+  emptyManagedRecoveryActivationLayer,
+  makeManagedRecoveryActivation,
+  observeRecoveredAdmissionCapacity
+} from "./managed-activation.js"
 import {
   makeImplementationDispositionOperation,
   makeImplementationReviewOperation,
@@ -317,6 +323,8 @@ it.effect("records acceptance after a crash following durable review without inv
     expect(yield* recoverExactRunAfterCoordinatorDeath(runId)).toEqual([])
     const records = yield* (yield* JournalStore).read(runId)
     expect(reduceManagedHistory(runId, records)._tag).toBe("ValidManagedHistory")
+    const recoveredActivation = yield* makeManagedRecoveryActivation(runId)
+    expect((yield* recoveredActivation.readFrontier).transitions).toEqual([])
     const terminal = records.find(({ event }) => event._tag === "ImplementationConvergenceDispositionRecorded")?.event
     expect(
       terminal?._tag === "ImplementationConvergenceDispositionRecorded"
@@ -461,13 +469,14 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     const executor = yield* TestTaskExecutor
     const reviews = yield* TestImplementationReview
     yield* reviews.setDispositions([ImplementationReviewDisposition.cases.Accepted.make({})])
-    yield* executor.setObservations([SuccessfulTaskExecutionReported.make({
+    const successfulExecution = SuccessfulTaskExecutionReported.make({
       observationId: ProviderObservationId.make("sealed-evidence-execution-observation"),
       operationId: OperationId.make(`${operationPrefix}:7`),
       output: "implementation with durable evidence",
       processId: WorkerProcessId.make(76),
       sessionId
-    })])
+    })
+    yield* executor.setObservations([successfulExecution])
     const crashed = yield* Ref.make(false)
     const trace = WorkflowTrace.of({
       emit: (item) =>
@@ -483,7 +492,55 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     ).pipe(Effect.provideService(WorkflowTrace, trace), Effect.flip)
 
     const before = yield* (yield* JournalStore).read(runId)
+    const executionOutcomeIndex = before.findIndex(
+      ({ event }) => event._tag === "TaskExecutionOutcomeObserved"
+    )
+    const unresolvedExecutionRecords = before.slice(0, executionOutcomeIndex)
+    const journal = yield* JournalStore
+    const observeUnresolvedExecution = observeRecoveredAdmissionCapacity(
+      runId
+    ).pipe(
+      Effect.provideService(
+        JournalStore,
+        JournalStore.of({
+          ...journal,
+          read: () => Effect.succeed(unresolvedExecutionRecords)
+        })
+      )
+    )
+    yield* executor.setObservations([successfulExecution])
+    expect(yield* observeUnresolvedExecution).toEqual({
+      freshOccupiedInvocations: [],
+      freshlyReleasedOperationIds: new Set()
+    })
+    yield* executor.setObservations([
+      RunningTaskExecutionReported.make({
+        observationId: ProviderObservationId.make(
+          "sealed-evidence-running-observation"
+        ),
+        operationId: successfulExecution.operationId,
+        processId: successfulExecution.processId,
+        sessionId
+      })
+    ])
+    expect((yield* observeUnresolvedExecution).freshOccupiedInvocations)
+      .toHaveLength(1)
+    yield* executor.setObservations([
+      NoTaskExecutionReported.make({
+        observationId: ProviderObservationId.make(
+          "sealed-evidence-absent-observation"
+        ),
+        operationId: successfulExecution.operationId,
+        sessionId
+      })
+    ])
+    expect([
+      ...(yield* observeUnresolvedExecution).freshlyReleasedOperationIds
+    ]).toEqual([successfulExecution.operationId])
+    yield* executor.setObservations([successfulExecution])
     expect(before.filter(({ event }) => event._tag === "ImplementationEvidenceSealed")).toHaveLength(1)
+    const sealedActivation = yield* makeManagedRecoveryActivation(runId)
+    yield* sealedActivation.readFrontier
     const sealedEvent = before.find(({ event }) => event._tag === "ImplementationEvidenceSealed")?.event
     const executionEvent = before.find(({ event }) => event._tag === "TaskExecutionOutcomeObserved")?.event
     const plannedEvent = before.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event
@@ -512,6 +569,15 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
       operation: reviewOperation,
       version: 4
     })
+    const reviewActivation = yield* makeManagedRecoveryActivation(runId)
+    expect(
+      (yield* reviewActivation.readFrontier).transitions.some(
+        ({ _tag }) => _tag === "ContinueImplementationReview"
+      )
+    ).toBe(true)
+    expect(
+      yield* makeRecoveredImplementationConvergenceStages(runId, true)
+    ).toHaveLength(1)
     expect(yield* recoverExactRunAfterCoordinatorDeath(runId)).toEqual([])
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.filter(({ event }) => event._tag === "ImplementationEvidenceSealed")).toHaveLength(1)
@@ -649,6 +715,12 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
       version: 4
     })
     const withIntent = yield* (yield* JournalStore).read(runId)
+    const pendingActivation = yield* makeManagedRecoveryActivation(runId)
+    expect(
+      (yield* pendingActivation.readFrontier).transitions.some(
+        ({ _tag }) => _tag === "ContinueReviewFindingsHandback"
+      )
+    ).toBe(true)
     const attemptId = reviewEvent.review.manifest.plannedAttempt.attemptId
     const reworkOperationId = OperationId.make(`recovery:${runId}:${attemptId}:${withIntent.length}:0`)
     yield* executor.setObservations([SuccessfulTaskExecutionReported.make({

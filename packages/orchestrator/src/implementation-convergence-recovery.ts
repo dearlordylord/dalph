@@ -1,4 +1,4 @@
-import { Effect, Ref } from "effect"
+import { Effect, Option, Ref } from "effect"
 import { OperationId, type RunId, SemanticReviewRound } from "./domain.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
@@ -86,42 +86,48 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
         : []
     )
     const latestReview = reviews[reviews.length - 1]
-    const unresolvedReview = records.findLast(({ event }) =>
+    const unresolvedReview = records.flatMap(({ event }) =>
       event._tag === "ImplementationReviewIntended"
-      && event.operation.request._tag === "AuthorizedImplementationReview"
-      && sameAttemptId(event.operation.request.plannedAttempt, plannedAttempt)
-      && !records.some(({ event: candidate }) =>
-        candidate._tag === "ImplementationReviewCompleted"
-        && candidate.review.manifest.operationId === event.operation.request.operationId
-      )
-    )?.event
-    const unresolvedHandback = records.findLast(({ event }) =>
+        && event.operation.request._tag === "AuthorizedImplementationReview"
+        && sameAttemptId(event.operation.request.plannedAttempt, plannedAttempt)
+        && !records.some(({ event: candidate }) =>
+          candidate._tag === "ImplementationReviewCompleted"
+          && candidate.review.manifest.operationId === event.operation.request.operationId
+        )
+        ? [event]
+        : []
+    ).toReversed()[0]
+    const unresolvedHandback = records.flatMap(({ event }) =>
       event._tag === "ReviewFindingsHandbackIntended"
-      && sameAttemptId(event.operation.request.plannedAttempt, plannedAttempt)
-      && !records.some(({ event: candidate }) =>
-        candidate._tag === "ReviewFindingsHandbackCompleted"
-        && candidate.acknowledgement.operationId === event.operation.request.operationId
-      )
-    )?.event
-    const unresolvedEvidence = records.findLast(({ event }) =>
+        && sameAttemptId(event.operation.request.plannedAttempt, plannedAttempt)
+        && !records.some(({ event: candidate }) =>
+          candidate._tag === "ReviewFindingsHandbackCompleted"
+          && candidate.acknowledgement.operationId === event.operation.request.operationId
+        )
+        ? [event]
+        : []
+    ).toReversed()[0]
+    const unresolvedEvidence = records.flatMap(({ event }) =>
       event._tag === "ImplementationEvidenceSealingIntended"
-      && event.operation.execution._tag === "SuccessfulExecution"
-      && sameAttemptId(
-        event.operation.plannedAttempt,
-        plannedAttempt
-      )
-      && !records.some(({ event: candidate }) =>
-        candidate._tag === "ImplementationEvidenceSealed"
-        && candidate.operationId === event.operation.operationId
-      )
-    )?.event
+        && event.operation.execution._tag === "SuccessfulExecution"
+        && sameAttemptId(
+          event.operation.plannedAttempt,
+          plannedAttempt
+        )
+        && !records.some(({ event: candidate }) =>
+          candidate._tag === "ImplementationEvidenceSealed"
+          && candidate.operationId === event.operation.operationId
+        )
+        ? [event]
+        : []
+    ).toReversed()[0]
 
     if (
       !includeAlreadyIntended
       && (
-        unresolvedEvidence?._tag === "ImplementationEvidenceSealingIntended"
-        || unresolvedReview?._tag === "ImplementationReviewIntended"
-        || unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
+        unresolvedEvidence !== undefined
+        || unresolvedReview !== undefined
+        || unresolvedHandback !== undefined
       )
     ) continue
 
@@ -136,7 +142,7 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
           && event.operation.request.reviewOperationId === latestReview.review.manifest.operationId
         )?.event
         return intent?._tag === "ReviewFindingsHandbackIntended"
-          ? [{ intent, record }]
+          ? [{ intent, record, review: latestReview.review }]
           : []
       }).toReversed()[0]
 
@@ -178,23 +184,18 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
       completedHandback !== undefined
       && latestExecution.position < Number(completedHandback.record.position)
     ) {
-      if (latestReview === undefined) {
-        return yield* Effect.die(
-          new Error("completed findings handback requires its durable review")
-        )
-      }
       // eslint-disable-next-line functional/immutable-data -- This local collector materializes one derived stage per durable attempt.
       stages.push(
         yield* makeFreshImplementationConvergenceStage({
           allocator,
           emit: trace.emit,
           interpreter,
-          roundLimit: latestReview.review.manifest.roundLimit,
+          roundLimit: completedHandback.review.manifest.roundLimit,
           start: {
             _tag: "HandbackCompleted",
             operationId: completedHandback.intent.operation.request.operationId,
-            previousReview: latestReview.review,
-            round: latestReview.review.manifest.round
+            previousReview: completedHandback.review,
+            round: completedHandback.review.manifest.round
           },
           subject,
           task
@@ -219,50 +220,71 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
     const pendingReview = latestReview !== undefined && latestReview.position > currentExecution.position
       ? latestReview.review
       : undefined
-    const roundLimit = unresolvedReview?._tag === "ImplementationReviewIntended"
-        && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-      ? unresolvedReview.operation.request.roundLimit
-      : pendingReview?.manifest.roundLimit ?? priorReview?.manifest.roundLimit ?? defaultImplementationReviewRoundLimit
-    const round = SemanticReviewRound.make(
-      unresolvedReview?._tag === "ImplementationReviewIntended"
-        && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-        ? Number(unresolvedReview.operation.request.round)
-        : pendingReview === undefined
-        ? Number(priorReview?.manifest.round ?? 0) + 1
-        : Number(pendingReview.manifest.round)
+    const previousReviewField = Option.match(
+      Option.fromUndefinedOr(priorReview),
+      {
+        onNone: () => ({}),
+        onSome: (previousReview) => ({ previousReview })
+      }
     )
-    const start = pendingReview !== undefined
-      ? {
+    const roundLimit = Option.match(
+      Option.fromUndefinedOr(unresolvedReview),
+      {
+        onNone: () =>
+          pendingReview?.manifest.roundLimit
+            ?? priorReview?.manifest.roundLimit
+            ?? defaultImplementationReviewRoundLimit,
+        onSome: (review) => review.operation.request.roundLimit
+      }
+    )
+    const round = SemanticReviewRound.make(
+      Option.match(Option.fromUndefinedOr(unresolvedReview), {
+        onNone: () =>
+          Option.match(Option.fromUndefinedOr(pendingReview), {
+            onNone: () => Number(priorReview?.manifest.round ?? 0) + 1,
+            onSome: (review) => Number(review.manifest.round)
+          }),
+        onSome: (review) => Number(review.operation.request.round)
+      })
+    )
+    const start = Option.match(Option.fromUndefinedOr(pendingReview), {
+      onNone: () =>
+        Option.match(Option.fromUndefinedOr(unresolvedReview), {
+          onNone: () =>
+            evidence?._tag === "ImplementationEvidenceSealed"
+              ? {
+                _tag: "EvidenceSealed" as const,
+                evidence: {
+                  operationId: evidence.operationId,
+                  sealed: evidence.sealed
+                },
+                ...previousReviewField,
+                round
+              }
+              : {
+                _tag: "ExecutionOutcome" as const,
+                ...previousReviewField,
+                round
+              },
+          onSome: (review) => ({
+            _tag: "ReviewIntended" as const,
+            operation: review.operation,
+            ...previousReviewField,
+            round
+          })
+        }),
+      onSome: (review) => ({
         _tag: "ReviewCompleted" as const,
-        ...(unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
-          ? { handbackOperation: unresolvedHandback.operation }
-          : {}),
-        review: pendingReview,
+        ...Option.match(Option.fromUndefinedOr(unresolvedHandback), {
+          onNone: () => ({}),
+          onSome: (handback) => ({
+            handbackOperation: handback.operation
+          })
+        }),
+        review,
         round
-      }
-      : unresolvedReview?._tag === "ImplementationReviewIntended"
-          && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-      ? {
-        _tag: "ReviewIntended" as const,
-        operation: unresolvedReview.operation,
-        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
-        round
-      }
-      : evidence?._tag === "ImplementationEvidenceSealed"
-      ? {
-        _tag: "EvidenceSealed" as const,
-        evidence: {
-          operationId: evidence.operationId,
-          sealed: evidence.sealed
-        },
-        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
-        round
-      }
-      : {
-        _tag: "ExecutionOutcome" as const,
-        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
-        round
-      }
+      })
+    })
 
     // eslint-disable-next-line functional/immutable-data -- This local collector materializes one derived stage per durable attempt.
     stages.push(

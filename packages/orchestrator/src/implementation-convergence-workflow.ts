@@ -1,4 +1,4 @@
-import { Effect, Exit, Queue, Ref } from "effect"
+import { Effect, Exit, Option, Queue, Ref } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import {
@@ -50,10 +50,13 @@ export const runLiveImplementationConvergence = Effect.fn(
       runId: options.subject.plannedAttempt.runId,
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
-          const owned = (yield* Ref.get(stages)).find(
-            (candidate) => candidate.transition === transition
+          const owned = Option.getOrThrow(
+            Option.fromUndefinedOr(
+              (yield* Ref.get(stages)).find(
+                (candidate) => candidate.transition === transition
+              )
+            )
           )
-          if (owned === undefined) return
           const exit = yield* owned.run(execution.recordIntent).pipe(
             Effect.exit
           )
@@ -67,10 +70,10 @@ export const runLiveImplementationConvergence = Effect.fn(
             exit.value === undefined ? [] : [exit.value]
           )
           if (exit.value === undefined) {
-            const result = yield* Ref.get(completion)
-            if (result !== undefined) {
-              yield* Queue.offer(outcomes, Exit.succeed(result))
-            }
+            const completed = Option.getOrThrow(
+              Option.fromUndefinedOr(yield* Ref.get(completion))
+            )
+            yield* Queue.offer(outcomes, Exit.succeed(completed))
           }
         })
     })
@@ -81,7 +84,5 @@ export const runLiveImplementationConvergence = Effect.fn(
     }
   }))
   const result = yield* Ref.get(completion)
-  return result === undefined
-    ? yield* Effect.die("implementation convergence ended without a disposition")
-    : result
+  return Option.getOrThrow(Option.fromUndefinedOr(result))
 })

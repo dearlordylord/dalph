@@ -64,7 +64,7 @@ class TaskAdmissionPositionReleaseIssue extends Schema.TaggedErrorClass<TaskAdmi
   { operationId: OperationIdSchema }
 ) {}
 
-interface TaskAdmissionControllerSnapshot {
+export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
   readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
   readonly reservedPositions: ReadonlyArray<{
@@ -280,7 +280,6 @@ export const makeTaskAdmissionController = Effect.fn(
         let explanations = [...frontier.explanations]
 
         for (const transition of frontier.transitions) {
-          if (admitted !== undefined) break
           const attempt = tryAdmitTransition(current, transition, runId)
           if (attempt._tag === "TransitionAdmitted") {
             admitted = transition

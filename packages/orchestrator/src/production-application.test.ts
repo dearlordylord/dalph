@@ -220,11 +220,20 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
     const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({
       DALPH_JOURNAL_DATABASE: filename
     }))
-    const [firstOutcome, replayedOutcome] = yield* Effect.gen(function*() {
+    const [firstOutcome, replayedOutcome, reconciledWorktree] = yield* Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
       const first = yield* interpreter.establishTaskWorkSession(operation)
       const replayed = yield* interpreter.establishTaskWorkSession(operation)
-      return [first, replayed] as const
+      const reconciled = yield* interpreter.reconcileTaskWorktree(
+        makeTaskWorktreeReconciliationOperation({
+          operationId: OperationId.make(
+            "production-live-worktree-reconciliation"
+          ),
+          plannedAttempt,
+          predecessorOperationIds: [planOperation.operationId]
+        })
+      )
+      return [first, replayed, reconciled] as const
     }).pipe(
       Effect.provide(applicationLayer),
       Effect.provide(configLayer)
@@ -235,6 +244,7 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
       sessionId: "production-session"
     })
     expect(replayedOutcome).toEqual(firstOutcome)
+    expect(reconciledWorktree._tag).toBe("AuthoritativeTaskWorktreeReady")
     expect(yield* Ref.get(requests)).toBe(0)
     expect(yield* Ref.get(lookups)).toBe(2)
   }).pipe(Effect.provide(NodeServices.layer)))
