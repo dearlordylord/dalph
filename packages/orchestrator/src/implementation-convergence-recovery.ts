@@ -1,5 +1,5 @@
 import { Effect, Ref } from "effect"
-import { OperationId, type RunId } from "./domain.js"
+import { OperationId, type RunId, SemanticReviewRound } from "./domain.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
@@ -188,11 +188,14 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
         yield* makeFreshImplementationConvergenceStage({
           allocator,
           emit: trace.emit,
-          initialCompletedHandbackOperationId: completedHandback.intent.operation.request.operationId,
-          initialPreviousReview: latestReview.review,
-          initialRound: Number(latestReview.review.manifest.round),
           interpreter,
           roundLimit: latestReview.review.manifest.roundLimit,
+          start: {
+            _tag: "HandbackCompleted",
+            operationId: completedHandback.intent.operation.request.operationId,
+            previousReview: latestReview.review,
+            round: latestReview.review.manifest.round
+          },
           subject,
           task
         }, latestExecution.outcome)
@@ -220,33 +223,55 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
         && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
       ? unresolvedReview.operation.request.roundLimit
       : pendingReview?.manifest.roundLimit ?? priorReview?.manifest.roundLimit ?? defaultImplementationReviewRoundLimit
-    const initialRound = unresolvedReview?._tag === "ImplementationReviewIntended"
+    const round = SemanticReviewRound.make(
+      unresolvedReview?._tag === "ImplementationReviewIntended"
         && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-      ? Number(unresolvedReview.operation.request.round)
-      : pendingReview === undefined
-      ? Number(priorReview?.manifest.round ?? 0) + 1
-      : Number(pendingReview.manifest.round)
+        ? Number(unresolvedReview.operation.request.round)
+        : pendingReview === undefined
+        ? Number(priorReview?.manifest.round ?? 0) + 1
+        : Number(pendingReview.manifest.round)
+    )
+    const start = pendingReview !== undefined
+      ? {
+        _tag: "ReviewCompleted" as const,
+        ...(unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
+          ? { handbackOperation: unresolvedHandback.operation }
+          : {}),
+        review: pendingReview,
+        round
+      }
+      : unresolvedReview?._tag === "ImplementationReviewIntended"
+          && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
+      ? {
+        _tag: "ReviewIntended" as const,
+        operation: unresolvedReview.operation,
+        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
+        round
+      }
+      : evidence?._tag === "ImplementationEvidenceSealed"
+      ? {
+        _tag: "EvidenceSealed" as const,
+        evidence: {
+          operationId: evidence.operationId,
+          sealed: evidence.sealed
+        },
+        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
+        round
+      }
+      : {
+        _tag: "ExecutionOutcome" as const,
+        ...(priorReview === undefined ? {} : { previousReview: priorReview }),
+        round
+      }
 
     // eslint-disable-next-line functional/immutable-data -- This local collector materializes one derived stage per durable attempt.
     stages.push(
       yield* makeFreshImplementationConvergenceStage({
         allocator,
         emit: trace.emit,
-        ...(unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
-          ? { initialHandbackOperation: unresolvedHandback.operation }
-          : {}),
-        ...(priorReview === undefined ? {} : { initialPreviousReview: priorReview }),
-        ...(pendingReview === undefined ? {} : { initialReview: pendingReview }),
-        ...(unresolvedReview?._tag === "ImplementationReviewIntended"
-            && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-          ? { initialReviewOperation: unresolvedReview.operation }
-          : {}),
-        ...(evidence?._tag === "ImplementationEvidenceSealed"
-          ? { initialSealedEvidence: { operationId: evidence.operationId, sealed: evidence.sealed } }
-          : {}),
-        initialRound,
         interpreter,
         roundLimit,
+        start,
         subject,
         task: currentExecution.operation.request.task
       }, currentExecution.outcome)

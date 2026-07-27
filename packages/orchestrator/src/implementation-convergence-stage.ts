@@ -1,5 +1,5 @@
 import type { Effect } from "effect"
-import { type ImplementationReviewRoundLimit, type OperationId, type Task } from "./domain.js"
+import { type ImplementationReviewRoundLimit, type OperationId, type SemanticReviewRound, type Task } from "./domain.js"
 import {
   type ImplementationConvergenceSubject,
   PriorImplementationReviewEvidence
@@ -34,6 +34,43 @@ export type FreshImplementationConvergenceStageError =
   | TaskWorktreeExecutionModeContradiction
   | TraceOutputError
 
+/** The one durable convergence fact from which the next operation is rebuilt. */
+type ImplementationConvergenceStart =
+  | {
+    readonly _tag: "ExecutionOutcome"
+    readonly previousReview?: SealedImplementationReview
+    readonly round: SemanticReviewRound
+  }
+  | {
+    readonly _tag: "EvidenceSealed"
+    readonly evidence: {
+      readonly operationId: OperationId
+      readonly sealed: SealedImplementationEvidence
+    }
+    readonly previousReview?: SealedImplementationReview
+    readonly round: SemanticReviewRound
+  }
+  | {
+    readonly _tag: "ReviewIntended"
+    readonly operation: ReturnType<typeof makeImplementationReviewOperation>
+    readonly previousReview?: SealedImplementationReview
+    readonly round: SemanticReviewRound
+  }
+  | {
+    readonly _tag: "ReviewCompleted"
+    readonly handbackOperation?: ReturnType<
+      typeof makeReviewFindingsHandbackOperation
+    >
+    readonly review: SealedImplementationReview
+    readonly round: SemanticReviewRound
+  }
+  | {
+    readonly _tag: "HandbackCompleted"
+    readonly operationId: OperationId
+    readonly previousReview: SealedImplementationReview
+    readonly round: SemanticReviewRound
+  }
+
 // eslint-disable-next-line functional/no-mixed-types -- A process-local stage deliberately pairs immutable selection with its sole executable operation.
 export interface FreshImplementationConvergenceStage {
   readonly transition: RunnableFrontierTransition
@@ -49,25 +86,12 @@ export interface FreshImplementationConvergenceStage {
 export interface FreshImplementationConvergenceOptions {
   readonly allocator: OperationIdAllocatorService
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
-  readonly initialCompletedHandbackOperationId?: OperationId
-  readonly initialHandbackOperation?: ReturnType<
-    typeof makeReviewFindingsHandbackOperation
-  >
-  readonly initialPreviousReview?: SealedImplementationReview
-  readonly initialReview?: SealedImplementationReview
-  readonly initialReviewOperation?: ReturnType<
-    typeof makeImplementationReviewOperation
-  >
-  readonly initialRound?: number
-  readonly initialSealedEvidence?: {
-    readonly operationId: OperationId
-    readonly sealed: SealedImplementationEvidence
-  }
   readonly interpreter: WorkflowInterpreterService
   readonly onCompleted?: (
     result: AuthoritativeImplementationConvergenceResult
   ) => Effect.Effect<void>
   readonly roundLimit: ImplementationReviewRoundLimit
+  readonly start: ImplementationConvergenceStart
   readonly subject: ImplementationConvergenceSubject
   readonly task: Task
 }

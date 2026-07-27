@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import type { OperationId, Task } from "./domain.js"
+import { type OperationId, SemanticReviewRound, type Task } from "./domain.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
@@ -93,7 +93,7 @@ export const makeFreshTaskAttemptStage = Effect.fn(
       liveOptions:
         | Omit<
           Parameters<typeof runLiveImplementationConvergence>[0],
-          "admissionController" | "initialExecutionOutcome"
+          "admissionController" | "initialExecutionOutcome" | "start"
         >
         | undefined
     ): Effect.fn.Return<FreshWorkflowStage> {
@@ -139,7 +139,13 @@ export const makeFreshTaskAttemptStage = Effect.fn(
             }))
             return adaptLiveStage(
               yield* makeFreshImplementationConvergenceStage(
-                liveOptions,
+                {
+                  ...liveOptions,
+                  start: {
+                    _tag: "ExecutionOutcome",
+                    round: SemanticReviewRound.make(1)
+                  }
+                },
                 outcome.outcome
               )
             )

@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- One staged convergence algebra keeps its exact continuation factories together. */
 import { Effect } from "effect"
 import { ReviewerSessionId, SemanticReviewRound } from "./domain.js"
 import {
@@ -47,7 +46,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
     "Workflow.makeFreshReworkExecutionStage"
   )(function*(
     review: SealedImplementationReview,
-    round: number,
+    round: SemanticReviewRound,
     predecessorOperationId: Parameters<
       typeof makeTaskExecutionOperation
     >[0]["predecessorOperationIds"][number]
@@ -87,7 +86,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           return yield* stageForOutcome(
             observed.outcome,
             review,
-            round + 1
+            SemanticReviewRound.make(Number(round) + 1)
           )
         })
     }
@@ -97,7 +96,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
     function*(
       executionOutcome: Extract<TaskExecutionOutcome, { readonly _tag: "Succeeded" }>,
       review: SealedImplementationReview,
-      round: number,
+      round: SemanticReviewRound,
       recoveredHandback:
         | ReturnType<
           typeof makeReviewFindingsHandbackOperation
@@ -114,7 +113,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           review.manifest.operationId
         )
       }
-      if (round === Number(options.roundLimit)) {
+      if (Number(round) === Number(options.roundLimit)) {
         return yield* makeImplementationDispositionStage(
           options,
           ImplementationConvergenceDisposition.cases.ImplementationNonConvergent.make({
@@ -194,7 +193,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         typeof AuthorizedImplementationReviewRequest.make
       >[0]["evidenceSealingOperationId"],
       previousReview: SealedImplementationReview | undefined,
-      round: number,
+      round: SemanticReviewRound,
       recoveredOperation:
         | ReturnType<
           typeof makeImplementationReviewOperation
@@ -229,7 +228,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           reviewerSessionId: ReviewerSessionId.make(
             `reviewer-session:${operationId}`
           ),
-          round: SemanticReviewRound.make(round),
+          round,
           roundLimit: options.roundLimit
         })
       const operation = recoveredOperation
@@ -292,7 +291,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
     function*(
       executionOutcome: TaskExecutionOutcome,
       previousReview: SealedImplementationReview | undefined,
-      round: number
+      round: SemanticReviewRound
     ): Effect.fn.Return<FreshImplementationConvergenceStage> {
       if (executionOutcome._tag !== "Succeeded") {
         const evidence = priorImplementationReviewEvidence(previousReview)
@@ -361,73 +360,64 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
     }
   )
 
-  const round = Number(
-    options.initialRound
-      ?? options.initialReview?.manifest.round
-      ?? 1
-  )
-  if (options.initialCompletedHandbackOperationId !== undefined) {
-    if (options.initialPreviousReview === undefined) {
-      return yield* new TaskWorktreeExecutionModeContradiction({
-        operationId: options.initialCompletedHandbackOperationId
-      })
+  const start = options.start
+  switch (start._tag) {
+    case "HandbackCompleted":
+      return yield* makeReworkExecutionStage(
+        start.previousReview,
+        start.round,
+        start.operationId
+      )
+    case "ReviewCompleted":
+      if (initialExecutionOutcome._tag !== "Succeeded") {
+        return yield* new TaskWorktreeExecutionModeContradiction({
+          operationId: initialExecutionOutcome.operationId
+        })
+      }
+      return yield* stageAfterReview(
+        initialExecutionOutcome,
+        start.review,
+        start.round,
+        start.handbackOperation
+      )
+    case "ReviewIntended": {
+      const request = start.operation.request
+      if (
+        initialExecutionOutcome._tag !== "Succeeded"
+        || request._tag !== "AuthorizedImplementationReview"
+      ) {
+        return yield* new TaskWorktreeExecutionModeContradiction({
+          operationId: request.operationId
+        })
+      }
+      return yield* makeReviewStage(
+        initialExecutionOutcome,
+        request.implementationEvidence,
+        request.evidenceSealingOperationId,
+        start.previousReview,
+        start.round,
+        start.operation
+      )
     }
-    return yield* makeReworkExecutionStage(
-      options.initialPreviousReview,
-      round,
-      options.initialCompletedHandbackOperationId
-    )
+    case "EvidenceSealed":
+      if (initialExecutionOutcome._tag !== "Succeeded") {
+        return yield* new TaskWorktreeExecutionModeContradiction({
+          operationId: initialExecutionOutcome.operationId
+        })
+      }
+      return yield* makeReviewStage(
+        initialExecutionOutcome,
+        start.evidence.sealed,
+        start.evidence.operationId,
+        start.previousReview,
+        start.round,
+        undefined
+      )
+    case "ExecutionOutcome":
+      return yield* stageForOutcome(
+        initialExecutionOutcome,
+        start.previousReview,
+        start.round
+      )
   }
-  if (options.initialReview !== undefined) {
-    if (initialExecutionOutcome._tag !== "Succeeded") {
-      return yield* new TaskWorktreeExecutionModeContradiction({
-        operationId: initialExecutionOutcome.operationId
-      })
-    }
-    return yield* stageAfterReview(
-      initialExecutionOutcome,
-      options.initialReview,
-      round,
-      options.initialHandbackOperation
-    )
-  }
-  if (options.initialReviewOperation !== undefined) {
-    const request = options.initialReviewOperation.request
-    if (
-      initialExecutionOutcome._tag !== "Succeeded"
-      || request._tag !== "AuthorizedImplementationReview"
-    ) {
-      return yield* new TaskWorktreeExecutionModeContradiction({
-        operationId: request.operationId
-      })
-    }
-    return yield* makeReviewStage(
-      initialExecutionOutcome,
-      request.implementationEvidence,
-      request.evidenceSealingOperationId,
-      options.initialPreviousReview,
-      round,
-      options.initialReviewOperation
-    )
-  }
-  if (options.initialSealedEvidence !== undefined) {
-    if (initialExecutionOutcome._tag !== "Succeeded") {
-      return yield* new TaskWorktreeExecutionModeContradiction({
-        operationId: initialExecutionOutcome.operationId
-      })
-    }
-    return yield* makeReviewStage(
-      initialExecutionOutcome,
-      options.initialSealedEvidence.sealed,
-      options.initialSealedEvidence.operationId,
-      options.initialPreviousReview,
-      round,
-      undefined
-    )
-  }
-  return yield* stageForOutcome(
-    initialExecutionOutcome,
-    options.initialPreviousReview,
-    round
-  )
 })

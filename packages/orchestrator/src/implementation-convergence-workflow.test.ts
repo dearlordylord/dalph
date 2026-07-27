@@ -260,6 +260,28 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
     freshOccupiedInvocations: [],
     reconstructedReservedPositions: []
   })
+  const start = options.initialReview !== undefined
+    ? {
+      _tag: "ReviewCompleted" as const,
+      ...(options.initialHandbackOperation === undefined
+        ? {}
+        : { handbackOperation: options.initialHandbackOperation }),
+      review: options.initialReview,
+      round: options.initialReview.manifest.round
+    }
+    : options.initialReviewOperation !== undefined
+    ? {
+      _tag: "ReviewIntended" as const,
+      operation: options.initialReviewOperation,
+      round: options.initialReviewOperation.request._tag
+          === "AuthorizedImplementationReview"
+        ? options.initialReviewOperation.request.round
+        : SemanticReviewRound.make(1)
+    }
+    : {
+      _tag: "ExecutionOutcome" as const,
+      round: SemanticReviewRound.make(1)
+    }
   const result = yield* runLiveImplementationConvergence({
     admissionController,
     allocator: {
@@ -270,15 +292,9 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
     },
     emit: (item) => Ref.update(traces, (current) => [...current, item]),
     initialExecutionOutcome: options.initialExecutionOutcome ?? successfulOutcome("initial-execution"),
-    ...(options.initialHandbackOperation === undefined
-      ? {}
-      : { initialHandbackOperation: options.initialHandbackOperation }),
-    ...(options.initialReview === undefined ? {} : { initialReview: options.initialReview }),
-    ...(options.initialReviewOperation === undefined
-      ? {}
-      : { initialReviewOperation: options.initialReviewOperation }),
     interpreter,
     roundLimit: ImplementationReviewRoundLimit.make(2),
+    start,
     subject,
     task
   })
