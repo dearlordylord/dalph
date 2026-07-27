@@ -998,6 +998,40 @@ quintIt(
 )
 
 for (
+  const profile of [
+    {
+      name: "activation ownership and exact result release",
+      step: "activationOwnershipProfileStep"
+    },
+    {
+      name: "activation interruption and provider evidence",
+      step: "activationInterruptionProfileStep"
+    },
+    {
+      name: "activation crash and reconstruction",
+      step: "activationCrashReconstructionProfileStep"
+    }
+  ] as const
+) {
+  quintIt(
+    it.effect,
+    `replays generated ${profile.name} commands`,
+    {
+      backend: "typescript",
+      driverFactory: makeReconstructionDriver(2),
+      main: "frontierRecoveryCapacityTwo",
+      maxSteps: 18,
+      nTraces: 12,
+      seed: "132152",
+      spec: "specs/frontierRecovery.qnt",
+      stateCheck: reconstructionStateCheck,
+      step: profile.step
+    },
+    60_000
+  )
+}
+
+for (
   const { action: profile, seed, witness } of [
     {
       action: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",

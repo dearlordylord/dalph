@@ -202,22 +202,30 @@ export const makeActivationCoordinator = Effect.fn(
 ): Effect.fn.Return<ActivationCoordinator, never, Scope.Scope | R> {
   const scope = yield* Effect.scope
   const triggers = yield* Queue.dropping<ActivationCause>(1)
-  const closed = yield* Ref.make(false)
-  const signalAcknowledgements = yield* Ref.make<
-    ReadonlyArray<Deferred.Deferred<void, ActivationCoordinatorClosed>>
-  >([])
+  const signalState = yield* Ref.make<{
+    readonly acknowledgements: ReadonlyArray<
+      Deferred.Deferred<void, ActivationCoordinatorClosed>
+    >
+    readonly closed: boolean
+  }>({ acknowledgements: [], closed: false })
   const ownership = yield* makeActivationOwnershipRegistry(input.runId)
 
   const signal = Effect.fn("ActivationCoordinator.signal")(function*(cause: ActivationCause) {
-    if (yield* Ref.get(closed)) return yield* new ActivationCoordinatorClosed()
     const acknowledgement = yield* Deferred.make<
       void,
       ActivationCoordinatorClosed
     >()
-    yield* Ref.update(signalAcknowledgements, (current) => [
-      ...current,
-      acknowledgement
-    ])
+    const accepted = yield* Ref.modify(signalState, (current) =>
+      current.closed
+        ? [false, current] as const
+        : [
+          true,
+          {
+            ...current,
+            acknowledgements: [...current.acknowledgements, acknowledgement]
+          }
+        ] as const)
+    if (!accepted) return yield* new ActivationCoordinatorClosed()
     yield* Queue.offer(triggers, cause)
     yield* Deferred.await(acknowledgement)
   })
@@ -362,9 +370,13 @@ export const makeActivationCoordinator = Effect.fn(
         while (yield* runPass()) {
           // Each established handoff causes a fresh read before another choice.
         }
-        const acknowledgements = yield* Ref.getAndSet(
-          signalAcknowledgements,
-          []
+        const acknowledgements = yield* Ref.modify(
+          signalState,
+          (current) =>
+            [
+              current.acknowledgements,
+              { ...current, acknowledgements: [] }
+            ] as const
         )
         yield* Effect.forEach(
           acknowledgements,
@@ -378,10 +390,13 @@ export const makeActivationCoordinator = Effect.fn(
   yield* runTriggeredPasses().pipe(
     Effect.catchCause(() =>
       Effect.gen(function*() {
-        yield* Ref.set(closed, true)
-        const acknowledgements = yield* Ref.getAndSet(
-          signalAcknowledgements,
-          []
+        const acknowledgements = yield* Ref.modify(
+          signalState,
+          (current) =>
+            [
+              current.acknowledgements,
+              { acknowledgements: [], closed: true }
+            ] as const
         )
         yield* Effect.forEach(
           acknowledgements,
@@ -398,11 +413,14 @@ export const makeActivationCoordinator = Effect.fn(
   )
   yield* Effect.addFinalizer(() =>
     Effect.gen(function*() {
-      yield* Ref.set(closed, true)
       yield* Queue.shutdown(triggers)
-      const acknowledgements = yield* Ref.getAndSet(
-        signalAcknowledgements,
-        []
+      const acknowledgements = yield* Ref.modify(
+        signalState,
+        (current) =>
+          [
+            current.acknowledgements,
+            { acknowledgements: [], closed: true }
+          ] as const
       )
       yield* Effect.forEach(
         acknowledgements,

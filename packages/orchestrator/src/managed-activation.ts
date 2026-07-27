@@ -1,6 +1,8 @@
-import { Effect, Exit, Match, Queue } from "effect"
+import { Effect, Exit, Match, Queue, Ref } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
+import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
+import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { JournalStore } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition } from "./runnable-frontier.js"
@@ -179,34 +181,84 @@ export const activateRecoveredResponsibilities = Effect.fn(
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
     freshOccupiedInvocations: capacityEvidence.freshOccupiedInvocations,
+    freshlyReleasedOperationIds: capacityEvidence.freshlyReleasedOperationIds,
     reconstructedReservedPositions
   })
   const completed = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
 
   yield* Effect.scoped(Effect.gen(function*() {
+    const stages = yield* Ref.make<
+      ReadonlyArray<FreshImplementationConvergenceStage>
+    >(
+      yield* makeRecoveredImplementationConvergenceStages(runId, false)
+    )
+    const refreshStages = Effect.fn("ManagedActivation.refreshStages")(
+      function*() {
+        const current = yield* Ref.get(stages)
+        const derived = yield* makeRecoveredImplementationConvergenceStages(
+          runId,
+          false
+        )
+        const currentTaskIds = new Set(
+          current.map(({ transition }) => transition.taskId)
+        )
+        yield* Ref.set(stages, [
+          ...current,
+          ...derived.filter(({ transition }) => !currentTaskIds.has(transition.taskId))
+        ])
+      }
+    )
+    const readActivationFrontier = Effect.fn(
+      "ManagedActivation.readActivationFrontier"
+    )(function*() {
+      const recovered = yield* readRecoveredFrontier(runId)
+      const currentStages = yield* Ref.get(stages)
+      return {
+        explanations: recovered.explanations,
+        transitions: [
+          ...recovered.transitions,
+          ...currentStages.map(({ transition }) => transition)
+        ]
+      }
+    })
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
-      readFrontier: readRecoveredFrontier(runId),
+      readFrontier: readActivationFrontier(),
       runId,
-      runTransition: (transition) =>
-        recoverRunnableTransition(runId, transition).pipe(
-          Effect.asVoid,
-          Effect.exit,
-          Effect.flatMap((exit) =>
-            Queue.offer(completed, exit).pipe(
-              Effect.andThen(
-                Exit.isFailure(exit)
-                  ? Effect.failCause(exit.cause)
-                  : Effect.void
-              )
-            )
+      runTransition: (transition, execution) =>
+        Effect.gen(function*() {
+          const stage = (yield* Ref.get(stages)).find(
+            (candidate) => candidate.transition === transition
           )
-        )
+          const exit = yield* (
+            stage === undefined
+              ? recoverRunnableTransition(runId, transition).pipe(
+                Effect.asVoid
+              )
+              : Effect.gen(function*() {
+                if (transition._tag === "ContinueFreshWorkflowOperation") {
+                  yield* execution.recordIntent(transition.operationId)
+                }
+                const next = yield* stage.run()
+                yield* Ref.update(stages, (current) => [
+                  ...current.filter((candidate) => candidate !== stage),
+                  ...(next === undefined ? [] : [next])
+                ])
+              })
+          ).pipe(Effect.exit)
+          if (stage === undefined && Exit.isSuccess(exit)) {
+            yield* refreshStages()
+          }
+          yield* Queue.offer(completed, exit)
+          if (Exit.isFailure(exit)) {
+            return yield* Effect.failCause(exit.cause)
+          }
+        })
     })
 
     for (;;) {
       yield* coordinator.signal(ActivationCause.Restart())
-      if ((yield* readRecoveredFrontier(runId)).transitions.length === 0) {
+      if ((yield* readActivationFrontier()).transitions.length === 0) {
         return
       }
       const completion = yield* Queue.take(completed)

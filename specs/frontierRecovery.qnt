@@ -1513,7 +1513,8 @@ module frontierRecovery {
     {
       ...s.activation,
       derivedTransitions: derived,
-      selectedTransitions: derived.exclude(owned),
+      selectedTransitions:
+        derived.exclude(owned.union(s.activation.isolatedSubjects)),
       activationInProgress: owned,
       triggerPending: false,
     }

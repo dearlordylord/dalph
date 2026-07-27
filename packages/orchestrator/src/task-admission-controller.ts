@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Exact admission correlations and their atomic state transitions remain one domain owner. */
 import { Data, Effect, Ref, Schema } from "effect"
 import {
   OperationId as OperationIdSchema,
@@ -105,6 +106,7 @@ export interface TaskAdmissionController {
 interface MakeTaskAdmissionControllerInput {
   readonly capacity: TaskWorkCapacity
   readonly freshOccupiedInvocations: ReadonlyArray<FreshCapacityConsumingInvocation>
+  readonly freshlyReleasedOperationIds?: ReadonlySet<OperationId>
   readonly reconstructedReservedPositions: ReadonlyArray<{
     readonly operationId: OperationId
     readonly taskId: TaskId
@@ -163,6 +165,7 @@ const transitionReservation = (
 interface TaskAdmissionControllerState {
   readonly capacity: TaskWorkCapacity
   readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
+  readonly releasedOperationIds: ReadonlySet<OperationId>
   readonly reservations: ReadonlyArray<TaskAdmissionReservation>
 }
 
@@ -212,6 +215,18 @@ const tryAdmitTransition = (
   ) {
     return { _tag: "TransitionAdmitted", state: current }
   }
+  if (
+    "operationId" in transition
+    && current.occupied.some(({ operationId, taskId }) =>
+      taskId === transition.taskId
+      && operationId === transition.operationId
+    )
+  ) {
+    // A provider-observed invocation is the post-intent position for this
+    // exact operation. Restart resumes its responsibility without reserving
+    // another position or waiting for itself to release capacity.
+    return { _tag: "TransitionAdmitted", state: current }
+  }
   const taskAlreadyUsesPosition = current.reservations.some(({ taskId }) => taskId === transition.taskId)
     || current.occupied.some(({ taskId }) => taskId === transition.taskId)
   if (taskAlreadyUsesPosition || usedPositions(current) >= current.capacity) {
@@ -239,6 +254,7 @@ export const makeTaskAdmissionController = Effect.fn(
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
     occupied: [...input.freshOccupiedInvocations].sort((left, right) => left.taskId.localeCompare(right.taskId)),
+    releasedOperationIds: input.freshlyReleasedOperationIds ?? new Set(),
     reservations: [
       ...input.reconstructedReservedPositions.map(
         ({ operationId, taskId }) => ({
@@ -318,6 +334,16 @@ export const makeTaskAdmissionController = Effect.fn(
               taskId !== observation.taskId
               || operationId !== observation.operationId
             ),
+          releasedOperationIds: observation._tag === "FreshCapacityConsumed"
+            ? new Set(
+              [...current.releasedOperationIds].filter(
+                (operationId) => operationId !== observation.operationId
+              )
+            )
+            : new Set([
+              ...current.releasedOperationIds,
+              observation.operationId
+            ]),
           reservations: current.reservations.filter(({ correlation, taskId }) =>
             taskId !== observation.taskId
             || correlation._tag !== "OperationReservation"
@@ -412,7 +438,9 @@ export const makeTaskAdmissionController = Effect.fn(
           (reservation) =>
             reservation.correlation._tag === "OperationReservation"
             && reservation.correlation.operationId === operationId
-        )
+        ) || current.occupied.some(
+          (invocation) => invocation.operationId === operationId
+        ) || current.releasedOperationIds.has(operationId)
         if (!matched) {
           return [
             [
@@ -424,6 +452,15 @@ export const makeTaskAdmissionController = Effect.fn(
         }
         const next = {
           ...current,
+          occupied: current.occupied.filter(
+            (invocation) => invocation.operationId !== operationId
+          ),
+          // Retain exact release evidence so same-operation finalization is
+          // idempotent after an observed release or a duplicate completion.
+          releasedOperationIds: new Set([
+            ...current.releasedOperationIds,
+            operationId
+          ]),
           reservations: current.reservations.filter((reservation) =>
             reservation.correlation._tag !== "OperationReservation"
             || reservation.correlation.operationId !== operationId

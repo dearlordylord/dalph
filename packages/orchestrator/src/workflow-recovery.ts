@@ -1,9 +1,8 @@
-/* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
+/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
-import { recoverImplementationConvergences } from "./implementation-convergence-recovery.js"
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
 import { type JournalRecord, JournalStore } from "./journal-store.js"
@@ -376,8 +375,7 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.
           capacity,
           capacityEvidence
         )
-      ),
-      collect("Reviewer")(recoverImplementationConvergences(runId, capacity))
+      )
     ] as const
     for (const phase of phases) {
       const issues = yield* phase

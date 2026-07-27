@@ -1,7 +1,9 @@
-import { Effect, Ref } from "effect"
+import { Effect, Exit, Queue, Ref } from "effect"
+import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { defaultTaskWorkCapacity, OperationId, type RunId, type TaskWorkCapacity } from "./domain.js"
+import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
-import { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
+import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore } from "./journal-store.js"
@@ -13,18 +15,14 @@ const sameAttemptId = (
   right: { readonly attemptId: string }
 ): boolean => left.attemptId === right.attemptId
 
-/** Continues every non-terminal implementation attempt from its last exact durable stage. */
-export const recoverImplementationConvergences = Effect.fn(
-  "WorkflowRecovery.recoverImplementationConvergences"
-)(function*(runId: RunId, capacity: TaskWorkCapacity = defaultTaskWorkCapacity) {
+/** Derives process-local continuation stages from the last exact durable fact. */
+export const makeRecoveredImplementationConvergenceStages = Effect.fn(
+  "WorkflowRecovery.makeRecoveredImplementationConvergenceStages"
+)(function*(runId: RunId, includeAlreadyIntended = true) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
-  const admissionController = yield* makeTaskAdmissionController({
-    capacity,
-    freshOccupiedInvocations: [],
-    reconstructedReservedPositions: []
-  })
+  const stages = new Array<FreshImplementationConvergenceStage>()
   const initialRecords = yield* journal.read(runId)
   const attempts = initialRecords.flatMap(({ event }) =>
     event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
@@ -107,6 +105,27 @@ export const recoverImplementationConvergences = Effect.fn(
         && candidate.acknowledgement.operationId === event.operation.request.operationId
       )
     )?.event
+    const unresolvedEvidence = records.findLast(({ event }) =>
+      event._tag === "ImplementationEvidenceSealingIntended"
+      && event.operation.execution._tag === "SuccessfulExecution"
+      && sameAttemptId(
+        event.operation.plannedAttempt,
+        plannedAttempt
+      )
+      && !records.some(({ event: candidate }) =>
+        candidate._tag === "ImplementationEvidenceSealed"
+        && candidate.operationId === event.operation.operationId
+      )
+    )?.event
+
+    if (
+      !includeAlreadyIntended
+      && (
+        unresolvedEvidence?._tag === "ImplementationEvidenceSealingIntended"
+        || unresolvedReview?._tag === "ImplementationReviewIntended"
+        || unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
+      )
+    ) continue
 
     const completedHandback = latestReview === undefined
       ? undefined
@@ -166,19 +185,20 @@ export const recoverImplementationConvergences = Effect.fn(
           new Error("completed findings handback requires its durable review")
         )
       }
-      yield* runLiveImplementationConvergence({
-        admissionController,
-        allocator,
-        emit: trace.emit,
-        initialCompletedHandbackOperationId: completedHandback.intent.operation.request.operationId,
-        initialExecutionOutcome: latestExecution.outcome,
-        initialPreviousReview: latestReview.review,
-        initialRound: Number(latestReview.review.manifest.round),
-        interpreter,
-        roundLimit: latestReview.review.manifest.roundLimit,
-        subject,
-        task
-      })
+      // eslint-disable-next-line functional/immutable-data -- This local collector materializes one derived stage per durable attempt.
+      stages.push(
+        yield* makeFreshImplementationConvergenceStage({
+          allocator,
+          emit: trace.emit,
+          initialCompletedHandbackOperationId: completedHandback.intent.operation.request.operationId,
+          initialPreviousReview: latestReview.review,
+          initialRound: Number(latestReview.review.manifest.round),
+          interpreter,
+          roundLimit: latestReview.review.manifest.roundLimit,
+          subject,
+          task
+        }, latestExecution.outcome)
+      )
       continue
     }
 
@@ -209,28 +229,101 @@ export const recoverImplementationConvergences = Effect.fn(
       ? Number(priorReview?.manifest.round ?? 0) + 1
       : Number(pendingReview.manifest.round)
 
-    yield* runLiveImplementationConvergence({
-      admissionController,
-      allocator,
-      emit: trace.emit,
-      initialExecutionOutcome: currentExecution.outcome,
-      ...(unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
-        ? { initialHandbackOperation: unresolvedHandback.operation }
-        : {}),
-      ...(priorReview === undefined ? {} : { initialPreviousReview: priorReview }),
-      ...(pendingReview === undefined ? {} : { initialReview: pendingReview }),
-      ...(unresolvedReview?._tag === "ImplementationReviewIntended"
-          && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
-        ? { initialReviewOperation: unresolvedReview.operation }
-        : {}),
-      ...(evidence?._tag === "ImplementationEvidenceSealed"
-        ? { initialSealedEvidence: { operationId: evidence.operationId, sealed: evidence.sealed } }
-        : {}),
-      initialRound,
-      interpreter,
-      roundLimit,
-      subject,
-      task: currentExecution.operation.request.task
-    })
+    // eslint-disable-next-line functional/immutable-data -- This local collector materializes one derived stage per durable attempt.
+    stages.push(
+      yield* makeFreshImplementationConvergenceStage({
+        allocator,
+        emit: trace.emit,
+        ...(unresolvedHandback?._tag === "ReviewFindingsHandbackIntended"
+          ? { initialHandbackOperation: unresolvedHandback.operation }
+          : {}),
+        ...(priorReview === undefined ? {} : { initialPreviousReview: priorReview }),
+        ...(pendingReview === undefined ? {} : { initialReview: pendingReview }),
+        ...(unresolvedReview?._tag === "ImplementationReviewIntended"
+            && unresolvedReview.operation.request._tag === "AuthorizedImplementationReview"
+          ? { initialReviewOperation: unresolvedReview.operation }
+          : {}),
+        ...(evidence?._tag === "ImplementationEvidenceSealed"
+          ? { initialSealedEvidence: { operationId: evidence.operationId, sealed: evidence.sealed } }
+          : {}),
+        initialRound,
+        interpreter,
+        roundLimit,
+        subject,
+        task: currentExecution.operation.request.task
+      }, currentExecution.outcome)
+    )
   }
+  return stages
+})
+
+/**
+ * Compatibility entry point for recovery callers that do not yet contribute
+ * their reconstructed frontier to a longer-lived managed activation loop.
+ */
+export const recoverImplementationConvergences = Effect.fn(
+  "WorkflowRecovery.recoverImplementationConvergences"
+)(function*(
+  runId: RunId,
+  capacity: TaskWorkCapacity = defaultTaskWorkCapacity
+) {
+  const initialStages = yield* makeRecoveredImplementationConvergenceStages(
+    runId
+  )
+  if (initialStages.length === 0) return
+  yield* Effect.scoped(Effect.gen(function*() {
+    const stages = yield* Ref.make<
+      ReadonlyArray<FreshImplementationConvergenceStage>
+    >(initialStages)
+    const outcomes = yield* Queue.unbounded<
+      Exit.Exit<
+        void,
+        FreshImplementationConvergenceStage["run"] extends () => Effect.Effect<unknown, infer E> ? E : never
+      >
+    >()
+    const admissionController = yield* makeTaskAdmissionController({
+      capacity,
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController,
+      readFrontier: Ref.get(stages).pipe(
+        Effect.map((current) => ({
+          explanations: [],
+          transitions: current.map(({ transition }) => transition)
+        }))
+      ),
+      runId,
+      runTransition: (transition, execution) =>
+        Effect.gen(function*() {
+          const current = yield* Ref.get(stages)
+          const owned = current.find(
+            (candidate) => candidate.transition === transition
+          )
+          if (owned === undefined) return
+          if (transition._tag === "ContinueFreshWorkflowOperation") {
+            yield* execution.recordIntent(transition.operationId)
+          }
+          const exit = yield* owned.run().pipe(Effect.exit)
+          if (Exit.isFailure(exit)) {
+            yield* Queue.offer(outcomes, Exit.failCause(exit.cause))
+            return yield* Effect.failCause(exit.cause)
+          }
+          const remaining = current.filter((candidate) => candidate !== owned)
+          const next = exit.value === undefined
+            ? remaining
+            : [...remaining, exit.value]
+          yield* Ref.set(stages, next)
+          if (next.length === 0) {
+            yield* Queue.offer(outcomes, Exit.succeed(undefined))
+          }
+        })
+    })
+    yield* coordinator.signal(ActivationCause.Restart())
+    const outcome = yield* Queue.take(outcomes)
+    if (Exit.isFailure(outcome)) {
+      return yield* Effect.failCause(outcome.cause)
+    }
+  }))
 })

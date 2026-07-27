@@ -397,16 +397,13 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
     }, RunId.make("capacity-rebuild-run"))
     expect(admission.transitions).toEqual([
       {
-        _tag: "ContinueImplementationReview",
-        operationId: "capacity-A-reserved",
-        taskId: taskA
+        _tag: "ContinueTaskExecution",
+        operationId: "capacity-B-invocation",
+        taskId: taskB
       }
     ])
-    expect(admission.explanations).toEqual([{
-      _tag: "CapacityWait",
-      taskId: taskB,
-      wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-    }])
+    expect(admission.explanations).toEqual([])
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA])
 
     yield* controller.releaseTaskAdmissionPosition(
       OperationId.make("capacity-A-reserved")

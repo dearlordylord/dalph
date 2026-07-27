@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Queue, Ref } from "effect"
+import { Deferred, Effect, Exit, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
@@ -290,4 +290,39 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
 
     expect(yield* Ref.get(remaining)).toEqual([])
     expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+  })))
+
+it.effect("atomically rejects or drains signals when the coordinator closes", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const failFrontier = yield* Deferred.make<void>()
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      readFrontier: Deferred.await(failFrontier).pipe(
+        Effect.andThen(Effect.fail("controlled frontier failure"))
+      ),
+      runId: RunId.make("closing-signal-run"),
+      runTransition: () => Effect.void
+    })
+
+    const signals = Array.from({ length: 64 }, (_, index) =>
+      coordinator.signal(
+        index % 2 === 0
+          ? ActivationCause.Resume()
+          : ActivationCause.WorkflowResultRecorded()
+      ).pipe(Effect.exit))
+    const exits = yield* Effect.all([
+      Deferred.succeed(failFrontier, undefined),
+      Effect.all(signals, { concurrency: "unbounded" })
+    ], { concurrency: "unbounded" }).pipe(
+      Effect.map(([, results]) => results),
+      Effect.timeout("1 second")
+    )
+
+    expect(exits).toHaveLength(64)
+    expect(exits.every(Exit.isFailure)).toBe(true)
   })))

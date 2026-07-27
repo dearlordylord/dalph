@@ -18,7 +18,7 @@ import {
   ResponsibilityDisposition,
   type RunnableFrontier
 } from "../../src/runnable-frontier.js"
-import { makeSelectedTransitionIdentity } from "../../src/selected-transition.js"
+import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../../src/selected-transition.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
 import { TaskClaimAcquisition } from "../../src/tracker-mutation.js"
 import {
@@ -369,10 +369,19 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           activationRunners = new Set(
             [...activationRunners].filter((key) => key !== owner[0])
           )
+          const ownedOperationId = Option.getOrUndefined(
+            owner[1].operationId
+          )
+          if (ownedOperationId !== undefined) {
+            yield* activationController.releaseTaskAdmissionPosition(
+              ownedOperationId
+            )
+          } else {
+            yield* activationController.cancelReservedPosition(
+              owner[1].selected
+            )
+          }
         }
-        yield* activationController.releaseTaskAdmissionPosition(
-          yield* activationOperationFor(action.task)
-        )
         resultsRecordedTaskIds = new Set([
           ...resultsRecordedTaskIds,
           transition.taskId
@@ -698,6 +707,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             : "InitialObservation" as const
         }
       const ownershipSnapshot = yield* activationOwnership.snapshot()
+      const ownershipProjection = yield* activationOwnership.exclude(
+        activationDerived
+      )
       const controllerSnapshot = yield* activationController.snapshot()
       const projectTaskIds = (
         taskIds: Iterable<TaskId>
@@ -730,8 +742,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       return {
         activation: {
           activationInProgressModelTaskIds: yield* projectTaskIds(
-            [...ownershipSnapshot.owners.values()].map(
-              ({ transition }) => transition.taskId
+            ownershipProjection.explanations.flatMap(
+              (explanation) =>
+                explanation._tag === "ActivationInProgress"
+                  ? [explanation.taskId]
+                  : []
             )
           ),
           derivedModelTaskIds: yield* projectTaskIds(
@@ -743,7 +758,14 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           isolatedModelTaskIds: yield* projectTaskIds(
             [...ownershipSnapshot.isolatedTransitionKeys].flatMap((key) => {
               const owner = ownerByKey.get(key)
-              return owner === undefined ? [] : [owner.transition.taskId]
+              if (owner !== undefined) return [owner.transition.taskId]
+              const transition = activationDerived.transitions.find(
+                (candidate) =>
+                  selectedTransitionKey(
+                    makeSelectedTransitionIdentity(runId, candidate)
+                  ) === key
+              )
+              return transition === undefined ? [] : [transition.taskId]
             })
           ),
           owners: activationOwners,
