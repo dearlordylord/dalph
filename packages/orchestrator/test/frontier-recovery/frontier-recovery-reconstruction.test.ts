@@ -15,6 +15,14 @@ import { FrontierRecoveryModelTaskId } from "./frontier-recovery-conformance.js"
 import { frontierRecoveryRunId } from "./frontier-recovery-fixture-identities.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
+const makeScopedFrontierRecoveryReconstructionControls = (
+  ...args: Parameters<typeof makeFrontierRecoveryReconstructionControls>
+) =>
+  Effect.acquireRelease(
+    makeFrontierRecoveryReconstructionControls(...args),
+    (controls) => controls.close()
+  )
+
 const assertReconstructedPrefix = (
   state: {
     readonly coordinatorRunning: boolean
@@ -70,7 +78,7 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
     for (const afterClaimIntent of [false, true]) {
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+        const beforeCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: true,
           journal
@@ -88,7 +96,7 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
         yield* beforeCrash.crash()
         expect((yield* beforeCrash.getState()).coordinatorRunning).toBe(false)
 
-        const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+        const afterCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: false,
           journal
@@ -104,7 +112,7 @@ it.effect("reconstructs M2 P0 and P1 through fresh in-memory controls", () =>
 
 it.effect("projects one ActivationInProgress explanation and runner after own then derive", () =>
   Effect.gen(function*() {
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(2),
       coordinatorRunning: true,
       journal: yield* JournalStore
@@ -126,7 +134,7 @@ it.effect("projects one ActivationInProgress explanation and runner after own th
 
 it.effect("drives intent and result release through the production coordinator", () =>
   Effect.gen(function*() {
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(2),
       coordinatorRunning: true,
       journal: yield* JournalStore
@@ -154,7 +162,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
     for (const capacity of [1, 2]) {
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+        const beforeCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(capacity),
           coordinatorRunning: true,
           journal
@@ -176,7 +184,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
         })
         yield* beforeCrash.crash()
 
-        const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+        const afterCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(capacity),
           coordinatorRunning: false,
           journal
@@ -207,7 +215,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
 it.effect("records a fresh target-closure observation after restart", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
-    const beforeCrash = yield* makeFrontierRecoveryReconstructionControls({
+    const beforeCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
@@ -215,7 +223,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
     yield* beforeCrash.init()
     yield* beforeCrash.crash()
 
-    const afterCrash = yield* makeFrontierRecoveryReconstructionControls({
+    const afterCrash = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: false,
       journal
@@ -244,7 +252,7 @@ it.effect("records a fresh target-closure observation after restart", () =>
 it.effect("replays coverage evidence through the production graph-knowledge reducer", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
@@ -283,7 +291,7 @@ it.effect("replays coverage evidence through the production graph-knowledge redu
 it.effect("derives no fresh transition when the fresh tracker read reports no eligible task", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(2),
       coordinatorRunning: true,
       freshEligibleModelTaskIds: [],
@@ -300,7 +308,7 @@ it.effect("derives no fresh transition when the fresh tracker read reports no el
 it.effect("does not treat a causal predecessor as read coverage", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
@@ -339,7 +347,7 @@ it.effect("does not treat a causal predecessor as read coverage", () =>
 it.effect("replaces compatible membership knowledge with the fresh observation", () =>
   Effect.gen(function*() {
     const journal = yield* JournalStore
-    const controls = yield* makeFrontierRecoveryReconstructionControls({
+    const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
       capacity: TaskWorkCapacity.make(1),
       coordinatorRunning: true,
       journal
@@ -368,7 +376,7 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
       )
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: true,
           journal
@@ -384,7 +392,7 @@ it.effect("reconstructs M2 P0 and P1 after closing and reopening SQLite", () =>
 
       const state = yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(1),
           coordinatorRunning: false,
           journal
@@ -408,7 +416,7 @@ it.effect("reopens bounded first-intent selection from SQLite at capacities one 
       )
       yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(capacity),
           coordinatorRunning: true,
           journal
@@ -422,7 +430,7 @@ it.effect("reopens bounded first-intent selection from SQLite at capacities one 
 
       const restarted = yield* Effect.gen(function*() {
         const journal = yield* JournalStore
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(capacity),
           coordinatorRunning: false,
           journal
@@ -455,7 +463,7 @@ it.effect("uses current capacity and fresh provider evidence after reopening SQL
         `${directory}/${scenario.label}.sqlite`
       )
       yield* Effect.gen(function*() {
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(8),
           coordinatorRunning: true,
           journal: yield* JournalStore
@@ -480,7 +488,7 @@ it.effect("uses current capacity and fresh provider evidence after reopening SQL
             taskId: TaskId.make(`${scenario.label}-task-${index}`)
           })
         )
-        const controls = yield* makeFrontierRecoveryReconstructionControls({
+        const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(scenario.capacity),
           freshOccupiedInvocations: occupied,
           coordinatorRunning: false,

@@ -117,6 +117,9 @@ type ActivationCoordinatorCheckpoint =
   }
 
 interface ActivationCoordinatorControl {
+  readonly attemptCompetingOwnershipRegistration?: (
+    attempt: Effect.Effect<void>
+  ) => Effect.Effect<void>
   readonly checkpoint: (
     checkpoint: ActivationCoordinatorCheckpoint
   ) => Effect.Effect<void, ActivationCoordinatorCheckpointFailure>
@@ -183,8 +186,8 @@ const projectActivationOwnership = (
 
 /**
  * Internal process-local ownership registry owned by the live coordinator.
- * Deterministic adapters may observe its read-only checkpoint projection but
- * cannot register, bind, remove, or isolate ownership directly.
+ * Deterministic controls can ask the coordinator to attempt one competing
+ * registration, but cannot observe or mutate this registry directly.
  */
 const makeActivationOwnershipRegistry = Effect.fn(
   "ActivationOwnershipRegistry.make"
@@ -479,6 +482,16 @@ export const makeActivationCoordinator = Effect.fn(
             onNone: () => isolateDuplicate(selected, key).pipe(Effect.as(false)),
             onSome: (ownedRegistration) =>
               Effect.gen(function*() {
+                yield* input.control?.attemptCompetingOwnershipRegistration?.(
+                  ownership.register(transition).pipe(
+                    Effect.filterOrFail(
+                      (competingRegistration) => competingRegistration === undefined,
+                      () => new DuplicateActivationOwnershipDefect({ selected })
+                    ),
+                    Effect.orDie,
+                    Effect.andThen(isolateDuplicate(selected, key))
+                  )
+                ) ?? Effect.void
                 const rollbackFailedStart = Effect.gen(function*() {
                   const partialOwner = Option.getOrThrow(
                     Option.fromUndefinedOr(

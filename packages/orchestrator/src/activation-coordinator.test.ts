@@ -18,7 +18,6 @@ type ActivationCoordinatorCheckpoint = Parameters<ActivationCoordinatorControl["
 type ActivationCoordinatorCheckpointFailure = Effect.Error<
   ReturnType<ActivationCoordinatorControl["checkpoint"]>
 >
-
 it.effect("coalesces concurrent triggers into one owner for one exact transition", () =>
   Effect.scoped(Effect.gen(function*() {
     const taskId = TaskId.make("activation-A")
@@ -388,51 +387,63 @@ it.effect("rolls back the exact partial handoff when a controlled boundary inter
     { discard: true }
   ))
 
-it.effect("isolates a controlled duplicate while preserving its original owner", () =>
+it.effect("isolates the exact duplicate result while preserving its original owner", () =>
   Effect.scoped(Effect.gen(function*() {
     const taskId = TaskId.make("controlled-duplicate")
-    const remaining = yield* Ref.make([freshTransition(taskId)])
-    const checkpoints = yield* Ref.make<
-      ReadonlyArray<ActivationCoordinatorCheckpoint["_tag"]>
-    >([])
+    const runId = RunId.make("controlled-duplicate-run")
+    const transition = freshTransition(taskId)
+    const releaseRunner = yield* Deferred.make<void>()
+    const runnerStarted = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
       freshOccupiedInvocations: [],
       reconstructedReservedPositions: []
     })
+    const competingAttempts = yield* Ref.make(0)
+    const ownershipSnapshots = yield* Ref.make<
+      ReadonlyArray<{ readonly isolated: number; readonly owners: number }>
+    >([])
     const control: ActivationCoordinatorControl = {
+      attemptCompetingOwnershipRegistration: (attempt) =>
+        Ref.update(competingAttempts, (count) => count + 1).pipe(
+          Effect.andThen(attempt)
+        ),
       checkpoint: (checkpoint) =>
-        Ref.update(
-          checkpoints,
-          (current) => [...current, checkpoint._tag]
-        ).pipe(
-          Effect.andThen(
-            checkpoint._tag === "OwnershipRegistered"
-              ? Effect.fail(
-                {
-                  _tag: "RejectDuplicateOwnership"
-                } satisfies ActivationCoordinatorCheckpointFailure
-              )
-              : Effect.void
-          )
-        )
+        checkpoint._tag === "FrontierDerived"
+          ? Ref.update(ownershipSnapshots, (current) => [
+            ...current,
+            {
+              isolated: checkpoint.observation.ownership.isolatedTransitionKeys.size,
+              owners: checkpoint.observation.ownership.owners.size
+            }
+          ])
+          : Effect.void
     }
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
       control,
-      readFrontier: Ref.get(remaining).pipe(
-        Effect.map((transitions) => ({ explanations: [], transitions }))
-      ),
-      runId: RunId.make("controlled-duplicate-run"),
-      runTransition: () => Ref.set(remaining, [])
+      readFrontier: Effect.succeed({
+        explanations: [],
+        transitions: [transition]
+      }),
+      runId,
+      runTransition: () =>
+        Deferred.succeed(runnerStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRunner))
+        )
     })
 
     yield* coordinator.signal(ActivationCause.Startup())
-    yield* Effect.yieldNow
+    yield* Deferred.await(runnerStarted)
+    yield* coordinator.signal(ActivationCause.Resume())
 
-    expect(yield* Ref.get(remaining)).toEqual([])
-    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
-    expect(yield* Ref.get(checkpoints)).toContain("OwnershipReleased")
+    expect(yield* Ref.get(competingAttempts)).toBe(1)
+    expect((yield* Ref.get(ownershipSnapshots)).at(-1)).toEqual({
+      isolated: 1,
+      owners: 1
+    })
+    expect((yield* controller.snapshot()).reservedPositions).toHaveLength(1)
+    yield* Deferred.succeed(releaseRunner, undefined)
   })))
 
 it.effect("atomically rejects or drains signals when the coordinator closes", () =>

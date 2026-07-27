@@ -360,7 +360,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         case "Complete":
           return
         case "Interrupt":
-          return yield* Effect.die("controlled activation runner interruption")
+          return yield* Effect.interrupt
         case "RecordIntent":
           yield* execution.recordIntent(command.operationId)
       }
@@ -425,11 +425,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         "a stopped coordinator cannot derive activation"
       )
     }
-    yield* Effect.sync(() =>
-      Effect.runFork(
-        coordinator.signal(ActivationCause.Resume()).pipe(Effect.ignore)
-      )
-    ).pipe(Effect.asVoid)
+    yield* coordinator.signal(ActivationCause.Resume()).pipe(
+      Effect.ignore,
+      Effect.forkIn(scope),
+      Effect.asVoid
+    )
   })
 
   const releasePendingTerminalCheckpoints = Effect.fn(
@@ -894,8 +894,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         )
       }),
     crash: () =>
-      Effect.sync(() => {
+      Effect.gen(function*() {
+        yield* closeControlledCoordinator()
         coordinatorRunning = false
+        activationCoordinator = undefined
+        activationScope = undefined
       }),
     init: () =>
       appendTargetClosureObservation({
