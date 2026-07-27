@@ -36,9 +36,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const claimPlanner = yield* TaskClaimAcquisitionPlanner
   const planner = yield* PlannedTaskAttemptPlanner
   const trace = yield* WorkflowTrace
-  const recovery = Option.getOrUndefined(
-    yield* Effect.serviceOption(ManagedRecoveryActivation)
-  )
+  const recovery = yield* ManagedRecoveryActivation
   const graphOperation = makeTrackerGraphObservationOperation(
     yield* allocator.allocate(),
     target
@@ -54,13 +52,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: recovery?.capacityEvidence.freshOccupiedInvocations ?? [],
-    ...(recovery === undefined
-      ? {}
-      : {
-        freshlyReleasedOperationIds: recovery.capacityEvidence.freshlyReleasedOperationIds
-      }),
-    reconstructedReservedPositions: recovery?.reconstructedReservedPositions ?? []
+    freshOccupiedInvocations: recovery.capacityEvidence.freshOccupiedInvocations,
+    freshlyReleasedOperationIds: recovery.capacityEvidence.freshlyReleasedOperationIds,
+    reconstructedReservedPositions: recovery.reconstructedReservedPositions
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
   type WorkflowStage = FreshWorkflowStage
@@ -201,9 +195,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const completions = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
 
   return yield* Effect.scoped(Effect.gen(function*() {
-    const initialRecoveredFrontier = recovery === undefined
-      ? { explanations: [], transitions: [] }
-      : yield* recovery.readFrontier
+    const initialRecoveredFrontier = yield* recovery.readFrontier
     const recoveredTaskIds = new Set([
       ...initialRecoveredFrontier.explanations.flatMap(
         (explanation) => "taskId" in explanation ? [explanation.taskId] : []
@@ -218,9 +210,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     const readFrontier = Effect.fn("Workflow.readActivationFrontier")(
       function*() {
         const current = yield* Ref.get(stages)
-        const recovered = recovery === undefined
-          ? { explanations: [], transitions: [] }
-          : yield* recovery.readFrontier
+        const recovered = yield* recovery.readFrontier
         return {
           explanations: recovered.explanations,
           transitions: [
@@ -233,7 +223,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
       readFrontier: readFrontier(),
-      runId: recovery?.runId ?? RunId.make(`workflow:${target}`),
+      runId: recovery.hasRecoveredWork
+        ? recovery.runId
+        : RunId.make(`workflow:${target}`),
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
           const stage = (yield* Ref.get(stages)).find(
@@ -241,12 +233,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           )
           const exit = yield* (
             stage === undefined
-              ? recovery === undefined
-                ? Effect.void
-                : recovery.runTransition(
-                  transition,
-                  execution.recordIntent
-                )
+              ? recovery.runTransition(
+                transition,
+                execution
+              )
               : stage.run(execution.recordIntent)
           ).pipe(Effect.exit)
           if (Exit.isSuccess(exit)) {

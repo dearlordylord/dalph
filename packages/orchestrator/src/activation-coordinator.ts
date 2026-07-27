@@ -38,7 +38,12 @@ export interface ActivationCoordinator {
   ) => Effect.Effect<void, ActivationCoordinatorClosed>
 }
 
-interface OwnedTransitionExecution {
+const OwnedTransitionExecutionTypeId: unique symbol = Symbol.for("@dalph/OwnedTransitionExecution")
+
+/** Private proof that the activation coordinator owns this exact runner. */
+// eslint-disable-next-line functional/no-mixed-types -- The nominal proof and its sole intent-binding operation form one private capability.
+export interface OwnedTransitionExecution {
+  readonly [OwnedTransitionExecutionTypeId]: typeof OwnedTransitionExecutionTypeId
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
 }
 
@@ -251,7 +256,10 @@ export const makeActivationCoordinator = Effect.fn(
       }
     )
 
-    return input.runTransition(entry.transition, { recordIntent }).pipe(
+    return input.runTransition(entry.transition, {
+      [OwnedTransitionExecutionTypeId]: OwnedTransitionExecutionTypeId,
+      recordIntent
+    }).pipe(
       Effect.exit,
       Effect.flatMap((exit) =>
         Effect.gen(function*() {

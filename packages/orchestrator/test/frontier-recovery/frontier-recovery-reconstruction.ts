@@ -324,10 +324,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         if (transition === undefined || selected === undefined) return
         const owner = [...(yield* activationOwnership.snapshot()).owners]
           .find(([, entry]) => entry.transition.taskId === transition.taskId)
+        yield* activationController.cancelReservedPosition(selected)
         if (owner !== undefined) {
           yield* activationOwnership.remove(owner[0])
         }
-        yield* activationController.cancelReservedPosition(selected)
         preIntentInterruptedTaskIds = new Set([
           ...preIntentInterruptedTaskIds,
           transition.taskId
@@ -354,7 +354,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         const owner = [...(yield* activationOwnership.snapshot()).owners]
           .find(([, entry]) => entry.transition.taskId === transition.taskId)
         if (owner !== undefined) {
-          yield* activationOwnership.remove(owner[0])
           const ownedOperationId = Option.getOrUndefined(
             owner[1].operationId
           )
@@ -367,6 +366,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               owner[1].selected
             )
           }
+          yield* activationOwnership.remove(owner[0])
         }
         resultsRecordedTaskIds = new Set([
           ...resultsRecordedTaskIds,

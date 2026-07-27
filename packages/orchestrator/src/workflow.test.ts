@@ -42,6 +42,7 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 import type { TraceItem } from "./workflow.js"
 
 const fixture = (name: "singleton" | "wayfinder-105") => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
@@ -85,6 +86,7 @@ const runLayered = <A, E, R>(
   interpreterLayer = deterministicTestWorkflowInterpreterLayer
 ) =>
   effect.pipe(
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(interpreterLayer),
     Effect.provide(traceLayer),
     Effect.provide(Layer.succeed(TaskRunner, runner)),
@@ -545,6 +547,7 @@ it.effect("revalidates tracker eligibility immediately before task-work start", 
       FixtureTarget.make("revalidation-target"),
       TaskWorkCapacity.make(1)
     ).pipe(
+      Effect.provide(emptyManagedRecoveryActivationLayer),
       Effect.provide(deterministicTestWorkflowInterpreterLayer),
       Effect.provide(readerLayer),
       Effect.provide(runnerLayer),

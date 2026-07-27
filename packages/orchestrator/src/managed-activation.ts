@@ -1,6 +1,6 @@
-import { Context, Effect, Exit, Match, Queue, Ref } from "effect"
-import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
+import { Context, Effect, Exit, Layer, Match, Queue, Ref } from "effect"
+import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
+import { type OperationId, type ProviderObservationId, RunId, type TaskId, type TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { JournalStore } from "./journal-store.js"
@@ -161,6 +161,7 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction inputs with their exact recovered operation.
 interface ManagedRecoveryActivationService {
   readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
+  readonly hasRecoveredWork: boolean
   readonly readFrontier: Effect.Effect<RunnableFrontier, unknown>
   readonly reconstructedReservedPositions: ReadonlyArray<{
     readonly operationId: OperationId
@@ -169,7 +170,7 @@ interface ManagedRecoveryActivationService {
   readonly runId: RunId
   readonly runTransition: (
     transition: RunnableFrontierTransition,
-    recordIntent: (operationId: OperationId) => Effect.Effect<void>
+    execution: OwnedTransitionExecution
   ) => Effect.Effect<void, unknown>
 }
 
@@ -181,6 +182,19 @@ export class ManagedRecoveryActivation extends Context.Service<
   ManagedRecoveryActivation,
   ManagedRecoveryActivationService
 >()("@dalph/ManagedRecoveryActivation") {}
+
+/** Explicit fresh-only composition for dry-run and deterministic tests. */
+export const emptyManagedRecoveryActivationLayer = Layer.succeed(
+  ManagedRecoveryActivation,
+  ManagedRecoveryActivation.of({
+    capacityEvidence: noRecoveredAdmissionCapacityEvidence,
+    hasRecoveredWork: false,
+    readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+    reconstructedReservedPositions: [],
+    runId: RunId.make("fresh-only-activation"),
+    runTransition: () => Effect.die("fresh-only activation cannot execute a recovered transition")
+  })
+)
 
 export const makeManagedRecoveryActivation = Effect.fn(
   "ManagedActivation.makeRecoverySource"
@@ -269,10 +283,14 @@ export const makeManagedRecoveryActivation = Effect.fn(
   )
   return ManagedRecoveryActivation.of({
     capacityEvidence,
+    hasRecoveredWork: true,
     readFrontier: provideDependencies(readFrontier()),
     reconstructedReservedPositions,
     runId,
-    runTransition: (transition, recordIntent) => provideDependencies(runTransition(transition, recordIntent))
+    runTransition: (transition, execution) =>
+      provideDependencies(
+        runTransition(transition, execution.recordIntent)
+      )
   })
 })
 
@@ -308,7 +326,7 @@ export const activateRecoveredResponsibilities = Effect.fn(
         Effect.gen(function*() {
           const exit = yield* recovery.runTransition(
             transition,
-            execution.recordIntent
+            execution
           ).pipe(Effect.exit)
           yield* Queue.offer(completed, exit)
           if (Exit.isFailure(exit)) {

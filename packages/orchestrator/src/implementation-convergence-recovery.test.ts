@@ -76,6 +76,7 @@ import {
   WorktreeLocator
 } from "./index.js"
 import { intentRecordKey, outcomeRecordKey } from "./journal-record-key.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 import {
   makeImplementationDispositionOperation,
   makeImplementationReviewOperation,
@@ -450,6 +451,7 @@ it.effect("records acceptance after a crash following durable review without inv
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -528,6 +530,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -575,6 +578,7 @@ it.effect("starts the default first review from durable evidence alone", () =>
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -673,6 +677,7 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -778,6 +783,7 @@ it.effect("continues an acknowledged handback with exact same-session rework aft
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -865,6 +871,7 @@ it.effect("retains a demonstrated first-execution resource emergency without rev
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -924,6 +931,7 @@ it.effect("authorizes the exact prior review retained by a failed rework", () =>
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -1032,6 +1040,7 @@ it.effect("records reviewer technical exhaustion only after its captured schedul
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))
@@ -1123,6 +1132,7 @@ it.effect("records handback technical exhaustion separately after its captured s
     Effect.provide(evidenceLayer),
     Effect.provide(authorityPlaceholderLayer),
     Effect.provide(NodeServices.layer),
+    Effect.provide(emptyManagedRecoveryActivationLayer),
     Effect.provide(memoryJournalStoreLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   ))

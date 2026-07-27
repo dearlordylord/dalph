@@ -27,6 +27,7 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 import type { TaskRunnerService } from "./task-work-start.js"
 import type { TraceItem } from "./workflow.js"
 
@@ -85,6 +86,7 @@ const traceUnder = (
       })
     )
     const program = runWorkflow(FixtureTarget.make(target), TaskWorkCapacity.make(1)).pipe(
+      Effect.provide(emptyManagedRecoveryActivationLayer),
       Effect.provide(interpreterLayer),
       Effect.provide(traceLayer),
       Effect.provide(trackerGraphReaderFileLayer),

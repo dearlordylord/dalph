@@ -41,6 +41,7 @@ import {
   WorktreeLocator
 } from "./index.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 
 const runId = RunId.make("attempt-plan-run")
 const taskId = TaskId.make("attempt-plan-task")
@@ -258,6 +259,7 @@ it.effect("performs no session mutation when plan acknowledgement fails", () =>
       FixtureTarget.make("plan-failure-target"),
       TaskWorkCapacity.make(1)
     ).pipe(
+      Effect.provide(emptyManagedRecoveryActivationLayer),
       Effect.provide(interpreterLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("plan-failure")),
       Effect.provide(deterministicTaskClaimAcquisitionPlannerLayer({

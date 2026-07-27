@@ -5,6 +5,7 @@ import {
 } from "./implementation-convergence.js"
 import { ImplementationEvidenceSealingSimulated } from "./implementation-evidence.js"
 import { ImplementationReviewSimulated } from "./implementation-review.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskExecutionModeContradiction, TaskExecutor, taskExecutorTestLayer } from "./task-execution.js"
 import { TaskRunner } from "./task-work-start.js"
@@ -236,4 +237,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
     })
   )
 
-export const dryRunWorkflowInterpreterLayer = makeDryRunWorkflowInterpreterLayer()
+export const dryRunWorkflowInterpreterLayer = Layer.merge(
+  makeDryRunWorkflowInterpreterLayer(),
+  emptyManagedRecoveryActivationLayer
+)

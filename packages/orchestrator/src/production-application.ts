@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Startup collects preserved run issues before failing closed. */
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Result, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
 import {
   defaultTaskWorkCapacity,
@@ -29,7 +29,8 @@ import {
 import {
   makeManagedRecoveryActivation,
   ManagedRecoveryActivation,
-  observeRecoveredAdmissionCapacity
+  observeRecoveredAdmissionCapacity,
+  type RecoveredAdmissionCapacityEvidence
 } from "./managed-activation.js"
 import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
 import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
@@ -179,14 +180,19 @@ export const productionWorkflowInterpreterLayer = <
     gitWorktreeLayer,
     evidenceStoreLayer
   )
-  const workflowInterpreterLayer = Layer.effect(
-    WorkflowInterpreter,
+  return Layer.effectContext(
     Effect.gen(function*() {
       yield* CoordinatorOwnership
       const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
       const scan = yield* journal.scan()
       const issues = new Array<StartupRecoveryIssue>(...scan.issues)
+      const currentCapacityEvidence = yield* Ref.make<
+        RecoveredAdmissionCapacityEvidence
+      >({
+        freshOccupiedInvocations: [],
+        freshlyReleasedOperationIds: new Set()
+      })
       for (const history of scan.runs) {
         const reduction = reduceManagedHistory(history.runId, history.records)
         if (reduction._tag === "InvalidManagedHistory") issues.push(...reduction.issues)
@@ -213,7 +219,13 @@ export const productionWorkflowInterpreterLayer = <
           )
           continue
         }
-        if (history.runId === runId) continue
+        if (history.runId === runId) {
+          yield* Ref.set(
+            currentCapacityEvidence,
+            capacityEvidence.success
+          )
+          continue
+        }
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
           history.runId,
           history.records,
@@ -223,28 +235,19 @@ export const productionWorkflowInterpreterLayer = <
         issues.push(...runIssues)
       }
       if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
-      return interpreter
+      const recovery = yield* makeManagedRecoveryActivation(
+        runId,
+        yield* Ref.get(currentCapacityEvidence)
+      )
+      return Context.empty().pipe(
+        Context.add(WorkflowInterpreter, interpreter),
+        Context.add(ManagedRecoveryActivation, recovery)
+      )
     })
   ).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(recoveryAuthorityLayer),
     Layer.provide(journalLayer),
     Layer.provide(ownershipLayer)
-  )
-  const managedRecoveryActivationLayer = Layer.effect(
-    ManagedRecoveryActivation,
-    Effect.gen(function*() {
-      const capacityEvidence = yield* observeRecoveredAdmissionCapacity(runId)
-      return yield* makeManagedRecoveryActivation(runId, capacityEvidence)
-    })
-  ).pipe(
-    Layer.provide(interpreterLayer),
-    Layer.provide(recoveryAuthorityLayer),
-    Layer.provide(journalLayer),
-    Layer.provide(ownershipLayer)
-  )
-  return Layer.merge(
-    workflowInterpreterLayer,
-    managedRecoveryActivationLayer
   )
 }

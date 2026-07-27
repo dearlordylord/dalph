@@ -58,7 +58,6 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { ManagedRecoveryActivation } from "./managed-activation.js"
 
 const runGit = Effect.fn("ProductionApplicationTest.runGit")(function*(cwd: string, ...args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -201,15 +200,6 @@ it.effect(`recovers configured SQLite history after ${TaskWorkSessionCrashScenar
       DALPH_JOURNAL_DATABASE: filename
     }))
     const [firstOutcome, replayedOutcome] = yield* Effect.gen(function*() {
-      const recovery = yield* ManagedRecoveryActivation
-      const recoveredTransition = (yield* recovery.readFrontier).transitions[0]
-      if (recoveredTransition === undefined) {
-        return yield* Effect.die("expected current-run recovered transition")
-      }
-      yield* recovery.runTransition(
-        recoveredTransition,
-        () => Effect.void
-      )
       const interpreter = yield* WorkflowInterpreter
       const first = yield* interpreter.establishTaskWorkSession(operation)
       const replayed = yield* interpreter.establishTaskWorkSession(operation)

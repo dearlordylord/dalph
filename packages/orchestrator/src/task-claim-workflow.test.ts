@@ -34,6 +34,7 @@ import {
   WorkflowTrace,
   WorktreeLocator
 } from "./index.js"
+import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
 import type { TraceItem } from "./workflow.js"
 
 const target = FixtureTarget.make(
@@ -79,6 +80,7 @@ const collectTrace = (
   Effect.gen(function*() {
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
     yield* runWorkflow(target, TaskWorkCapacity.make(1)).pipe(
+      Effect.provide(emptyManagedRecoveryActivationLayer),
       Effect.provide(interpreterLayer),
       Effect.provide(controlledTrackerMutationLayer),
       Effect.provide(taskRunnerLayer),
@@ -173,6 +175,7 @@ it.effect("does not admit a claimed task missing from the post-claim tracker rea
       FixtureTarget.make("out-of-scope-target"),
       TaskWorkCapacity.make(1)
     ).pipe(
+      Effect.provide(emptyManagedRecoveryActivationLayer),
       Effect.provide(deterministicTestWorkflowInterpreterLayer),
       Effect.provide(readerLayer),
       Effect.provide(runnerLayer),
