@@ -236,10 +236,7 @@ export const activateRecoveredResponsibilities = Effect.fn(
                 Effect.asVoid
               )
               : Effect.gen(function*() {
-                if (transition._tag === "ContinueFreshWorkflowOperation") {
-                  yield* execution.recordIntent(transition.operationId)
-                }
-                const next = yield* stage.run()
+                const next = yield* stage.run(execution.recordIntent)
                 yield* Ref.update(stages, (current) => [
                   ...current.filter((candidate) => candidate !== stage),
                   ...(next === undefined ? [] : [next])

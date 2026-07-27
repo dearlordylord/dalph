@@ -83,7 +83,8 @@ export const makeTaskRunnerWorkflowInterpreterLayer = (
       })
       const acquireTaskClaim = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.acquireTaskClaim`
-      )(function*(operation) {
+      )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
+        yield* onIntentRecorded
         return yield* acquireTaskClaimThrough(tracker, operation)
       })
       const establishTaskWorkSession = Effect.fn(
@@ -100,12 +101,13 @@ export const makeTaskRunnerWorkflowInterpreterLayer = (
       })
       const executeTaskWork = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.executeTaskWork`
-      )(function*(operation) {
+      )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
         if (operation.request.session._tag !== "EstablishedSession") {
           return yield* new TaskExecutionModeContradiction({
             operationId: operation.request.operationId
           })
         }
+        yield* onIntentRecorded
         const outcome = yield* runTaskExecutionProtocol(
           executor,
           operation,
@@ -135,7 +137,8 @@ export const makeTaskRunnerWorkflowInterpreterLayer = (
       })
       const reviewImplementation = Effect.fn(
         `WorkflowInterpreter.${operationPrefix}.reviewImplementation`
-      )(function*(operation) {
+      )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
+        yield* onIntentRecorded
         return ImplementationReviewSimulated.make({
           operationId: operation.request.operationId,
           predecessorOperationId: operation.request.evidenceSealingOperationId,
@@ -182,7 +185,8 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
       })
       const acquireTaskClaim = Effect.fn(
         "WorkflowInterpreter.DryRun.acquireTaskClaim"
-      )(function*(operation) {
+      )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
+        yield* onIntentRecorded
         return TaskClaimAcquisitionSimulated.make({ operation })
       })
       const recordTaskAttemptPlan = Effect.fn(
@@ -206,7 +210,8 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
       })
       const reviewImplementation = Effect.fn(
         "WorkflowInterpreter.DryRun.reviewImplementation"
-      )(function*(operation) {
+      )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
+        yield* onIntentRecorded
         return ImplementationReviewSimulated.make({
           operationId: operation.request.operationId,
           predecessorOperationId: operation.request.evidenceSealingOperationId,

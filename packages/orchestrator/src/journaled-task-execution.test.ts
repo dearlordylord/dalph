@@ -217,6 +217,7 @@ it.effect("journals intent before process request and preserves exact nonzero ou
   Effect.gen(function*() {
     const journal = yield* JournalStore
     yield* seedEstablishedSession()
+    const intentBoundaries = yield* Ref.make(0)
     const requests = yield* Ref.make(0)
     const observations = yield* Ref.make(0)
     const executorLayer = Layer.succeed(
@@ -256,7 +257,19 @@ it.effect("journals intent before process request and preserves exact nonzero ou
     ).pipe(Layer.provide(supportLayer))
 
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(layer))
-    const first = yield* interpreter.executeTaskWork(operation)
+    const first = yield* interpreter.executeTaskWork(
+      operation,
+      Effect.gen(function*() {
+        const records = yield* journal.read(runId).pipe(Effect.orDie)
+        expect(records.some(({ event }) =>
+          event._tag === "TaskExecutionIntentRecorded"
+          && event.operation.request.operationId
+            === operation.request.operationId
+        )).toBe(true)
+        expect(yield* Ref.get(requests)).toBe(0)
+        yield* Ref.update(intentBoundaries, (count) => count + 1)
+      })
+    )
     const second = yield* interpreter.executeTaskWork(operation)
     expect(first).toEqual(second)
     expect(first.outcome).toMatchObject({
@@ -266,6 +279,7 @@ it.effect("journals intent before process request and preserves exact nonzero ou
       wipPreserved: true
     })
     expect(yield* Ref.get(requests)).toBe(1)
+    expect(yield* Ref.get(intentBoundaries)).toBe(1)
     expect(yield* Ref.get(observations)).toBe(1)
     expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskExecutionReported")
   }).pipe(Effect.provide(memoryJournalStoreLayer)))

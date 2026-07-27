@@ -59,8 +59,8 @@ const adaptLiveStage = (
   stage: FreshImplementationConvergenceStage
 ): FreshWorkflowStage => ({
   transition: stage.transition,
-  run: () =>
-    stage.run().pipe(
+  run: (recordActivationIntent) =>
+    stage.run(recordActivationIntent).pipe(
       Effect.map((next) => next === undefined ? undefined : adaptLiveStage(next))
     )
 })
@@ -100,11 +100,14 @@ export const makeFreshTaskAttemptStage = Effect.fn(
           task,
           true
         ),
-        run: () =>
+        run: (recordActivationIntent) =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
             yield* options.emit(TaskExecutionAdmitted.make({ operation }))
             if (liveOptions === undefined) {
+              yield* recordActivationIntent(
+                operation.request.operationId
+              )
               const outcome = yield* options.interpreter.simulateTaskExecution(
                 operation
               )
@@ -123,7 +126,10 @@ export const makeFreshTaskAttemptStage = Effect.fn(
                 })
               )
             }
-            const outcome = yield* options.interpreter.executeTaskWork(operation)
+            const outcome = yield* options.interpreter.executeTaskWork(
+              operation,
+              recordActivationIntent(operation.request.operationId)
+            )
             yield* options.emit(TaskExecutionOutcomeObserved.make({
               operation,
               outcome

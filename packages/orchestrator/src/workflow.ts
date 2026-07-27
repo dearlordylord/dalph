@@ -292,14 +292,16 @@ export interface WorkflowInterpreterService {
     ImplementationReviewWorkflowError
   >
   readonly handBackReviewFindings: (
-    operation: typeof WorkflowOperation.cases.HandBackReviewFindings.Type
+    operation: typeof WorkflowOperation.cases.HandBackReviewFindings.Type,
+    onIntentRecorded?: Effect.Effect<void>
   ) => Effect.Effect<
     typeof ReviewFindingsHandbackAcknowledged.Type,
     | ImplementationReviewWorkflowError
     | ReviewFindingsHandbackFailure
   >
   readonly acquireTaskClaim: (
-    operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
+    operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
+    onIntentRecorded?: Effect.Effect<void>
   ) => Effect.Effect<
     TaskClaimAcquisitionResult,
     | CoordinatorOwnershipError
@@ -318,7 +320,8 @@ export interface WorkflowInterpreterService {
     TaskWorkSessionProtocolFailure
   >
   readonly executeTaskWork: (
-    operation: typeof WorkflowOperation.cases.ExecuteTaskWork.Type
+    operation: typeof WorkflowOperation.cases.ExecuteTaskWork.Type,
+    onIntentRecorded?: Effect.Effect<void>
   ) => Effect.Effect<
     typeof WorkflowOutcome.cases.TaskExecutionObserved.Type,
     TaskExecutionWorkflow.TaskExecutionProtocolFailure
@@ -360,7 +363,8 @@ export interface WorkflowInterpreterService {
     | TaskWorktree.TaskWorktreeHistoryContradiction
   >
   readonly reviewImplementation: (
-    operation: typeof WorkflowOperation.cases.ReviewImplementation.Type
+    operation: typeof WorkflowOperation.cases.ReviewImplementation.Type,
+    onIntentRecorded?: Effect.Effect<void>
   ) => Effect.Effect<
     typeof SealedImplementationReview.Type | typeof ImplementationReviewSimulated.Type,
     | ImplementationReviewWorkflowError

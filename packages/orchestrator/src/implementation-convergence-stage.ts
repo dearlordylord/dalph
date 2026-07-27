@@ -33,7 +33,9 @@ export type FreshImplementationConvergenceStageError =
 // eslint-disable-next-line functional/no-mixed-types -- A process-local stage deliberately pairs immutable selection with its sole executable operation.
 export interface FreshImplementationConvergenceStage {
   readonly transition: RunnableFrontierTransition
-  readonly run: () => Effect.Effect<
+  readonly run: (
+    recordActivationIntent: (operationId: OperationId) => Effect.Effect<void>
+  ) => Effect.Effect<
     FreshImplementationConvergenceStage | undefined,
     FreshImplementationConvergenceStageError
   >

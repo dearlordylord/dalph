@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One staged convergence algebra keeps its exact continuation factories together. */
 import { Effect } from "effect"
 import { ReviewerSessionId, SemanticReviewRound } from "./domain.js"
 import {
@@ -71,11 +72,14 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         options.task,
         true
       ),
-      run: () =>
+      run: (recordActivationIntent) =>
         Effect.gen(function*() {
           yield* options.emit(OperationSelected.make({ operation }))
           yield* options.emit(TaskExecutionAdmitted.make({ operation }))
-          const observed = yield* options.interpreter.executeTaskWork(operation)
+          const observed = yield* options.interpreter.executeTaskWork(
+            operation,
+            recordActivationIntent(operation.request.operationId)
+          )
           yield* options.emit(TaskExecutionOutcomeObserved.make({
             operation,
             outcome: observed
@@ -141,13 +145,16 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
             operationId: operation.request.operationId,
             taskId: options.task.id
           }),
-        run: () =>
+        run: (recordActivationIntent) =>
           Effect.gen(function*() {
             if (recoveredHandback === undefined) {
               yield* options.emit(OperationSelected.make({ operation }))
             }
             const handback = yield* Effect.result(
-              options.interpreter.handBackReviewFindings(operation)
+              options.interpreter.handBackReviewFindings(
+                operation,
+                recordActivationIntent(operation.request.operationId)
+              )
             )
             if (handback._tag === "Failure") {
               if (!(handback.failure instanceof ReviewFindingsHandbackFailure)) {
@@ -234,13 +241,16 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
             operationId,
             taskId: options.task.id
           }),
-        run: () =>
+        run: (recordActivationIntent) =>
           Effect.gen(function*() {
             if (recoveredOperation === undefined) {
               yield* options.emit(OperationSelected.make({ operation }))
             }
             const reviewed = yield* Effect.result(
-              options.interpreter.reviewImplementation(operation)
+              options.interpreter.reviewImplementation(
+                operation,
+                recordActivationIntent(operation.request.operationId)
+              )
             )
             if (reviewed._tag === "Failure") {
               if (

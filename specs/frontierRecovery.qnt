@@ -1298,6 +1298,7 @@ module frontierRecovery {
       w.responsibility == Settled,
       w.responsibility == Relinquished,
       w.isolation != NotIsolated,
+      s.activation.isolatedSubjects.contains(task),
       taskForwardProgressPaused(s, task),
       w.responsibility == Unowned and not(freshTaskIsEligible(s, task)),
       w.responsibility == Unowned and hasSmallerEligibleFreshTask(s, task),

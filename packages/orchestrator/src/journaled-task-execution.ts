@@ -213,7 +213,10 @@ interface JournaledTaskExecutionDependencies {
 export const makeJournaledTaskExecution = (
   dependencies: JournaledTaskExecutionDependencies
 ) =>
-  Effect.fn("WorkflowInterpreter.Journaled.executeTaskWork")(function*(operation) {
+  Effect.fn("WorkflowInterpreter.Journaled.executeTaskWork")(function*(
+    operation,
+    onIntentRecorded: Effect.Effect<void> = Effect.void
+  ) {
     const { executor, journal, runId, trace } = dependencies
     if (operation.request.plannedAttempt.runId !== runId) {
       return yield* new TaskExecutionRunContradiction({
@@ -236,6 +239,7 @@ export const makeJournaledTaskExecution = (
           reason: "OutcomeWithoutIntent"
         })
       }
+      yield* onIntentRecorded
       return existing.outcome
     }
 
@@ -245,6 +249,7 @@ export const makeJournaledTaskExecution = (
       key,
       TaskExecutionIntentRecorded.make({ operation, version: workflowJournalEventVersion })
     )
+    yield* onIntentRecorded
     const durableReports = yield* durableExecutionReports(records, operation.request.operationId)
     const traceObserver = taskExecutionTraceObserver(operation, trace)
     const observer = {

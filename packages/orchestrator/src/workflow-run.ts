@@ -138,8 +138,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           Effect.gen(function*() {
             yield* emit(OperationSelected.make({ operation }))
             yield* emit(TaskClaimAcquisitionIntended.make({ operation }))
-            yield* recordActivationIntent(operation.acquisition.operationId)
-            const result = yield* interpreter.acquireTaskClaim(operation)
+            const result = yield* interpreter.acquireTaskClaim(
+              operation,
+              recordActivationIntent(operation.acquisition.operationId)
+            )
             if (result._tag === "AuthoritativeTaskClaimAcquired") {
               yield* emit(TaskClaimAcquiredTrace.make({
                 claim: result.claim,
@@ -209,9 +211,6 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             (candidate) => candidate.transition === transition
           )
           if (stage === undefined) return
-          if (transition._tag === "ContinueFreshWorkflowOperation") {
-            yield* execution.recordIntent(transition.operationId)
-          }
           const exit = yield* stage.run(execution.recordIntent).pipe(Effect.exit)
           if (Exit.isSuccess(exit)) {
             yield* Ref.update(stages, (current) =>

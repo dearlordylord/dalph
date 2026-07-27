@@ -370,7 +370,10 @@ interface JournaledImplementationReviewOptions {
 
 /** Invokes and seals one exact fresh review, idempotently returning a durable outcome. */
 export const makeJournaledImplementationReview = (options: JournaledImplementationReviewOptions) =>
-  Effect.fn("WorkflowInterpreter.Journaled.reviewImplementation")(function*(operation: ReviewOperation) {
+  Effect.fn("WorkflowInterpreter.Journaled.reviewImplementation")(function*(
+    operation: ReviewOperation,
+    onIntentRecorded: Effect.Effect<void> = Effect.void
+  ) {
     const request = operation.request
     if (request._tag !== "AuthorizedImplementationReview") {
       return yield* new ImplementationReviewModeContradiction({ operationId: request.operationId })
@@ -409,6 +412,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
       yield* requireAuthorizedReviewChain(records, outcomes[0]).pipe(
         Effect.provideService(EvidenceStore, options.evidenceStore)
       )
+      yield* onIntentRecorded
       return outcomes[0]
     }
     yield* requireReviewPredecessors(records, request, true).pipe(
@@ -434,6 +438,7 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
       intentRecordKey(request.operationId),
       ImplementationReviewIntendedEvent.make({ operation, version: workflowJournalEventVersion })
     )
+    yield* onIntentRecorded
     const disposition = yield* capturedTechnicalRetry.run(options.reviewer.createOrResume(request))
     const review = yield* sealImplementationReview(request, disposition).pipe(
       Effect.provideService(EvidenceStore, options.evidenceStore)
@@ -448,7 +453,10 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
 
 /** Returns findings only to the latest exact implementer invocation and journals acknowledgement. */
 export const makeJournaledReviewFindingsHandback = (options: JournaledImplementationReviewOptions) =>
-  Effect.fn("WorkflowInterpreter.Journaled.handBackReviewFindings")(function*(operation: HandbackOperation) {
+  Effect.fn("WorkflowInterpreter.Journaled.handBackReviewFindings")(function*(
+    operation: HandbackOperation,
+    onIntentRecorded: Effect.Effect<void> = Effect.void
+  ) {
     const request = operation.request
     if (request.plannedAttempt.runId !== options.runId) {
       return yield* failHistory(request.operationId, "RunMismatch")
@@ -504,6 +512,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
       if (!handbackAcknowledgesRequest(outcomes[0], request)) {
         return yield* failHistory(request.operationId, "ReviewMismatch")
       }
+      yield* onIntentRecorded
       return outcomes[0]
     }
     const latest = successfulExecutionsForAttempt(records, request.plannedAttempt)
@@ -531,6 +540,7 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
       intentRecordKey(request.operationId),
       ReviewFindingsHandbackIntendedEvent.make({ operation, version: workflowJournalEventVersion })
     )
+    yield* onIntentRecorded
     const acknowledgement = yield* capturedTechnicalRetry.run(options.handback.deliverOrResume(request))
     if (!handbackAcknowledgesRequest(acknowledgement, request)) {
       return yield* failHistory(request.operationId, "ReviewMismatch")

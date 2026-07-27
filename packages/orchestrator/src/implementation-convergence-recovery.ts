@@ -1,13 +1,11 @@
-import { Effect, Exit, Queue, Ref } from "effect"
-import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { defaultTaskWorkCapacity, OperationId, type RunId, type TaskWorkCapacity } from "./domain.js"
+import { Effect, Ref } from "effect"
+import { OperationId, type RunId } from "./domain.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore } from "./journal-store.js"
-import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 const sameAttemptId = (
@@ -255,75 +253,4 @@ export const makeRecoveredImplementationConvergenceStages = Effect.fn(
     )
   }
   return stages
-})
-
-/**
- * Compatibility entry point for recovery callers that do not yet contribute
- * their reconstructed frontier to a longer-lived managed activation loop.
- */
-export const recoverImplementationConvergences = Effect.fn(
-  "WorkflowRecovery.recoverImplementationConvergences"
-)(function*(
-  runId: RunId,
-  capacity: TaskWorkCapacity = defaultTaskWorkCapacity
-) {
-  const initialStages = yield* makeRecoveredImplementationConvergenceStages(
-    runId
-  )
-  if (initialStages.length === 0) return
-  yield* Effect.scoped(Effect.gen(function*() {
-    const stages = yield* Ref.make<
-      ReadonlyArray<FreshImplementationConvergenceStage>
-    >(initialStages)
-    const outcomes = yield* Queue.unbounded<
-      Exit.Exit<
-        void,
-        FreshImplementationConvergenceStage["run"] extends () => Effect.Effect<unknown, infer E> ? E : never
-      >
-    >()
-    const admissionController = yield* makeTaskAdmissionController({
-      capacity,
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
-    })
-    const coordinator = yield* makeActivationCoordinator({
-      admissionController,
-      readFrontier: Ref.get(stages).pipe(
-        Effect.map((current) => ({
-          explanations: [],
-          transitions: current.map(({ transition }) => transition)
-        }))
-      ),
-      runId,
-      runTransition: (transition, execution) =>
-        Effect.gen(function*() {
-          const current = yield* Ref.get(stages)
-          const owned = current.find(
-            (candidate) => candidate.transition === transition
-          )
-          if (owned === undefined) return
-          if (transition._tag === "ContinueFreshWorkflowOperation") {
-            yield* execution.recordIntent(transition.operationId)
-          }
-          const exit = yield* owned.run().pipe(Effect.exit)
-          if (Exit.isFailure(exit)) {
-            yield* Queue.offer(outcomes, Exit.failCause(exit.cause))
-            return yield* Effect.failCause(exit.cause)
-          }
-          const remaining = current.filter((candidate) => candidate !== owned)
-          const next = exit.value === undefined
-            ? remaining
-            : [...remaining, exit.value]
-          yield* Ref.set(stages, next)
-          if (next.length === 0) {
-            yield* Queue.offer(outcomes, Exit.succeed(undefined))
-          }
-        })
-    })
-    yield* coordinator.signal(ActivationCause.Restart())
-    const outcome = yield* Queue.take(outcomes)
-    if (Exit.isFailure(outcome)) {
-      return yield* Effect.failCause(outcome.cause)
-    }
-  }))
 })

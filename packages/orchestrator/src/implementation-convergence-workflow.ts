@@ -31,7 +31,7 @@ export const runLiveImplementationConvergence = Effect.fn(
   const admissionController = options.admissionController
   if (admissionController === undefined) {
     while (stage !== undefined) {
-      stage = yield* stage.run()
+      stage = yield* stage.run(() => Effect.void)
     }
   } else {
     const initialStage = stage
@@ -60,10 +60,9 @@ export const runLiveImplementationConvergence = Effect.fn(
               (candidate) => candidate.transition === transition
             )
             if (owned === undefined) return
-            if (transition._tag === "ContinueFreshWorkflowOperation") {
-              yield* execution.recordIntent(transition.operationId)
-            }
-            const exit = yield* owned.run().pipe(Effect.exit)
+            const exit = yield* owned.run(execution.recordIntent).pipe(
+              Effect.exit
+            )
             if (Exit.isFailure(exit)) {
               yield* Ref.set(stages, [])
               yield* Queue.offer(outcomes, Exit.failCause(exit.cause))

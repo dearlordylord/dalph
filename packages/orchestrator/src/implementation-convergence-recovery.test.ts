@@ -6,7 +6,8 @@ import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import { ImplementationConvergenceDispositionRecordedEvent } from "./implementation-convergence-journal.js"
-import { recoverImplementationConvergences } from "./implementation-convergence-recovery.js"
+import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
+import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { AuthorizedImplementationReviewRequest, ReviewFindingsHandbackRequest } from "./implementation-review.js"
 import {
   ActiveTaskClaim,
@@ -86,6 +87,21 @@ import { observeManagedRunAuthorities, recoverExactRunAfterCoordinatorDeath } fr
 const runId = RunId.make("implementation-convergence-recovery")
 const operationPrefix = "implementation-convergence-recovery"
 const sessionId = TaskWorkSessionId.make(`session:${operationPrefix}:6`)
+const runRecoveredStage = (
+  stage: FreshImplementationConvergenceStage | undefined
+): Effect.Effect<void, Effect.Error<ReturnType<FreshImplementationConvergenceStage["run"]>>> =>
+  stage === undefined
+    ? Effect.void
+    : stage.run(() => Effect.void).pipe(Effect.flatMap(runRecoveredStage))
+
+const recoverImplementationConvergences = Effect.fn(
+  "Test.recoverImplementationConvergences"
+)(function*(recoveredRunId: RunId) {
+  const stages = yield* makeRecoveredImplementationConvergenceStages(
+    recoveredRunId
+  )
+  yield* Effect.forEach(stages, runRecoveredStage, { discard: true })
+})
 
 const taskRunnerLayer = Layer.succeed(
   TaskRunner,
