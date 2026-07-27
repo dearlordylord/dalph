@@ -7,7 +7,6 @@ import {
   OperationId,
   RunId,
   TaskId,
-  TaskRevision,
   TaskWorkCapacity,
   TrackerRevision
 } from "../../../packages/orchestrator/src/domain.ts"
@@ -30,26 +29,60 @@ import {
   type RunnableFrontierTransition
 } from "../../../packages/orchestrator/src/runnable-frontier.ts"
 import { makeTaskAdmissionController } from "../../../packages/orchestrator/src/task-admission-controller.ts"
+import {
+  projectTrackerSnapshot,
+  taskRevisionFor,
+  type ProjectionIssue,
+  type TaskDagSnapshot
+} from "../../../packages/orchestrator/src/task-dag.ts"
 import { TaskClaimAcquisition } from "../../../packages/orchestrator/src/tracker-mutation.ts"
 import {
   makeTaskClaimAcquisitionOperation,
   makeTrackerGraphObservationOperation
 } from "../../../packages/orchestrator/src/workflow-operation.ts"
 
-export const TaskName = S.Literals(["A", "B", "C", "D"])
-export type TaskName = typeof TaskName.Type
+export const LabTaskLifecycle = S.Literals([
+  "Open",
+  "CompletedSuccessfully",
+  "TerminalWithoutSuccess"
+])
+export type LabTaskLifecycle = typeof LabTaskLifecycle.Type
+
+/**
+ * One raw task record in the controlled fake task tracker. The raw arrays are
+ * intentionally not sets: duplicate and otherwise invalid edges are valid Lab input.
+ */
+export const ControlledTask = S.Struct({
+  body: S.String,
+  id: S.String,
+  lifecycle: LabTaskLifecycle,
+  parentTaskId: S.NullOr(S.String),
+  prerequisiteIds: S.Array(S.String),
+  title: S.String
+})
+export interface ControlledTask extends S.Schema.Type<typeof ControlledTask> {}
+
+export const TrackerClaimState = S.Literals(["Unclaimed", "OwnedByLab", "Foreign"])
+export type TrackerClaimState = typeof TrackerClaimState.Type
+
+const TrackerClaim = S.Struct({ state: TrackerClaimState, taskId: S.String })
+export type TrackerClaim = typeof TrackerClaim.Type
+
 export const FreshFact = S.Literals(["Ready", "ForeignClaim", "MissingClaim", "Paused"])
 export type FreshFact = typeof FreshFact.Type
 
-/** One semantic input accepted by the reducer Lab driver. */
+/** One explicit, replayable input accepted by the Reducer Lab driver. */
 export const LabAction = S.Union([
-  S.TaggedStruct("EditedTrackerTask", { present: S.Boolean, task: TaskName }),
+  S.TaggedStruct("ReplacedTrackerTask", { task: ControlledTask }),
+  S.TaggedStruct("DeletedTrackerTask", { taskId: S.String }),
+  S.TaggedStruct("SetTrackerClaim", { state: TrackerClaimState, taskId: S.String }),
   S.TaggedStruct("ObservedTrackerGraph", {}),
-  S.TaggedStruct("CommittedClaimIntent", { task: TaskName }),
-  S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, task: TaskName }),
+  S.TaggedStruct("CommittedClaimIntent", { taskId: S.String }),
+  S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, taskId: S.String }),
   S.TaggedStruct("CrashedCoordinator", {}),
   S.TaggedStruct("RestartedCoordinator", {}),
-  S.TaggedStruct("ChangedCapacity", { capacity: S.Number })
+  S.TaggedStruct("ChangedCapacity", { capacity: S.Number }),
+  S.TaggedStruct("ChangedTargetSettlement", { settled: S.Boolean })
 ])
 export type LabAction = typeof LabAction.Type
 
@@ -74,7 +107,7 @@ export const LabMoveOrigin = S.Literals([
 export type LabMoveOrigin = typeof LabMoveOrigin.Type
 
 export const LabMoveSubject = S.Union([
-  S.TaggedStruct("Task", { task: TaskName }),
+  S.TaggedStruct("Task", { taskId: S.String }),
   S.TaggedStruct("TrackerTarget", {}),
   S.TaggedStruct("Coordinator", {}),
   S.TaggedStruct("Capacity", { capacity: S.Number }),
@@ -117,26 +150,32 @@ export const LabMove = S.Struct({
 })
 export interface LabMove extends S.Schema.Type<typeof LabMove> {}
 
-const Decision = S.Struct({ tag: S.String, task: TaskName })
+const Decision = S.Struct({ tag: S.String, taskId: S.String })
 const Responsibility = S.Struct({
   beganAt: S.Number,
   kind: S.String,
-  task: TaskName
+  taskId: S.String
 })
 const JournalRow = S.Struct({ position: S.Number, tag: S.String })
 const FrontierExplanation = S.Struct({
   tag: S.String,
-  task: S.NullOr(TaskName)
+  taskId: S.NullOr(S.String)
 })
 const GraphKnowledge = S.Struct({
   kind: S.String,
   observationCount: S.Number,
-  tasks: S.Array(TaskName)
+  taskIds: S.Array(S.String)
 })
+const ObservationAttempt = S.Union([
+  S.TaggedStruct("NeverAttempted", {}),
+  S.TaggedStruct("Succeeded", { revision: S.String }),
+  S.TaggedStruct("Failed", { issues: S.Array(S.String) })
+])
 
 /** Semantic result reconstructed by real production reducers plus controlled Lab inputs. */
 export const LabSnapshot = S.Struct({
   admitted: S.Array(Decision),
+  authorityIssues: S.Array(S.String),
   capacity: S.Number,
   coordinatorRunning: S.Boolean,
   errors: S.Array(S.String),
@@ -145,17 +184,21 @@ export const LabSnapshot = S.Struct({
   finalityTag: S.String,
   frontier: S.Array(Decision),
   graphKnowledge: S.Array(GraphKnowledge),
+  hasSuccessfulObservation: S.Boolean,
   input: LabInput,
   journal: S.Array(JournalRow),
-  knownTasks: S.Array(TaskName),
+  latestObservation: S.Array(ControlledTask),
   moves: S.Array(LabMove),
-  reservedTasks: S.Array(TaskName),
+  observationAttempt: ObservationAttempt,
+  reservedTaskIds: S.Array(S.String),
   responsibilities: S.Array(Responsibility),
   revision: LabSnapshotRevision,
   runPause: S.String,
   status: S.String,
+  targetSettled: S.Boolean,
   taskPause: S.String,
-  trackerTasks: S.Array(TaskName)
+  trackerClaims: S.Array(TrackerClaim),
+  trackerTasks: S.Array(ControlledTask)
 })
 export interface LabSnapshot extends S.Schema.Type<typeof LabSnapshot> {}
 
@@ -181,6 +224,11 @@ export class UnavailableLabMove extends S.TaggedErrorClass<UnavailableLabMove>()
   }
 ) {}
 
+export class InvalidLabCommand extends S.TaggedErrorClass<InvalidLabCommand>()(
+  "InvalidLabCommand",
+  { reason: S.String }
+) {}
+
 export const LabMoveExecution = S.Struct({
   input: LabAction,
   snapshot: LabSnapshot
@@ -190,16 +238,46 @@ export interface LabMoveExecution extends S.Schema.Type<typeof LabMoveExecution>
 const runId = RunId.make("reducer-lab-run")
 const target = FixtureTarget.make("reducer-lab-target")
 const owner = ClaimOwner.make("reducer-lab-owner")
-const taskIds = {
-  A: TaskId.make("task-A"),
-  B: TaskId.make("task-B"),
-  C: TaskId.make("task-C"),
-  D: TaskId.make("task-D")
-} as const
-const namesByTaskId = new Map<string, TaskName>(
-  Object.entries(taskIds).map(([name, taskId]) => [taskId, name as TaskName])
-)
-const taskName = (taskId: TaskId): TaskName => namesByTaskId.get(taskId) ?? "A"
+
+export const initialTrackerTasks: ReadonlyArray<ControlledTask> = [
+  {
+    body: "Independent runnable work.",
+    id: "A",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare A"
+  },
+  {
+    body: "Waits for A.",
+    id: "B",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: ["A"],
+    title: "Build B"
+  },
+  {
+    body: "Independent runnable work.",
+    id: "C",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare C"
+  },
+  {
+    body: "Already complete.",
+    id: "D",
+    lifecycle: "CompletedSuccessfully",
+    parentTaskId: "B",
+    prerequisiteIds: [],
+    title: "Completed child D"
+  }
+]
+
+const cloneTasks = (tasks: ReadonlyArray<ControlledTask>): Array<ControlledTask> =>
+  tasks.map((task) => ({ ...task, prerequisiteIds: [...task.prerequisiteIds] }))
+
+const taskId = (value: string): TaskId => TaskId.make(value)
 
 const appendRecord = (
   records: Array<JournalRecord>,
@@ -214,41 +292,33 @@ const appendRecord = (
   })
 }
 
-const appendGraphObservation = (
+const graphOperation = (
   records: Array<JournalRecord>,
-  operationId: OperationId,
-  returnedTasks: ReadonlyArray<TaskId>,
-  explicitlyCoveredTasks: ReadonlyArray<TaskId>
-): void => {
+  ordinal: number,
+  explicitlyCoveredTaskIds: ReadonlyArray<string>
+) => {
+  const operationId = OperationId.make(`graph-observation-${ordinal}`)
   const operation = makeTrackerGraphObservationOperation(
     operationId,
     target,
     [],
-    explicitlyCoveredTasks
+    explicitlyCoveredTaskIds.map(taskId)
   )
   appendRecord(records, intentRecordKey(operationId), trackerGraphObservationIntent(operation))
-  appendRecord(
-    records,
-    outcomeRecordKey(operationId),
-    trackerGraphOutcomeObserved(operationId, {
-      _tag: "TrackerGraphObserved",
-      revision: TrackerRevision.make(`revision-${records.length}`),
-      taskIds: returnedTasks
-    })
-  )
+  return { operationId, operation }
 }
 
 const appendClaimIntent = (
   records: Array<JournalRecord>,
-  task: TaskName,
+  subjectTaskId: string,
   predecessorOperationId: OperationId
 ): void => {
-  const operationId = OperationId.make(`claim-${task}`)
+  const operationId = OperationId.make(`claim-${subjectTaskId}-${records.length + 1}`)
   const acquisition = TaskClaimAcquisition.make({
     operationId,
     owner,
-    taskId: taskIds[task],
-    token: ClaimToken.make(`claim-token-${task}`)
+    taskId: taskId(subjectTaskId),
+    token: ClaimToken.make(`claim-token-${subjectTaskId}-${records.length + 1}`)
   })
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition,
@@ -264,35 +334,127 @@ const appendClaimIntent = (
   )
 }
 
-const buildProductionInput = (input: LabInput) => {
+const lifecycle = (tag: LabTaskLifecycle) => ({ _tag: tag } as const)
+
+const projectionInput = (
+  tasks: ReadonlyArray<ControlledTask>,
+  revision: string
+) => ({
+  revision: TrackerRevision.make(revision),
+  tasks: tasks.map((task) => ({
+    id: taskId(task.id),
+    lifecycle: lifecycle(task.lifecycle),
+    parentTaskId: task.parentTaskId === null ? null : taskId(task.parentTaskId),
+    prerequisiteIds: task.prerequisiteIds.map(taskId)
+  }))
+})
+
+const issueText = (issue: ProjectionIssue): string => {
+  switch (issue._tag) {
+    case "BoundaryDecodeFailed": return `Boundary decode failed · ${issue.detail}`
+    case "DuplicateTask": return `Duplicate task · ${issue.taskId}`
+    case "DuplicatePrerequisite":
+      return `Duplicate prerequisite · ${issue.dependant} → ${issue.prerequisite}`
+    case "MissingPrerequisite":
+      return `Missing prerequisite · ${issue.dependant} → ${issue.prerequisite}`
+    case "SelfPrerequisite": return `Self prerequisite · ${issue.taskId}`
+    case "MissingParent": return `Missing parent · ${issue.child} → ${issue.parent}`
+    case "SelfParent": return `Self parent · ${issue.taskId}`
+    case "Cycle": return `Dependency cycle · ${issue.taskIds.join(" → ")}`
+    case "ContainmentCycle": return `Containment cycle · ${issue.taskIds.join(" → ")}`
+  }
+}
+
+interface ProductionInput {
+  readonly authorityIssues: ReadonlyArray<string>
+  readonly capacity: number
+  readonly coordinatorRunning: boolean
+  readonly freshFacts: ReadonlyMap<string, FreshFact>
+  readonly hasSuccessfulObservation: boolean
+  readonly latestGraphOperationId: OperationId
+  readonly latestObservation: ReadonlyArray<ControlledTask>
+  readonly latestProjected: TaskDagSnapshot | null
+  readonly observationAttempt: LabSnapshot["observationAttempt"]
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly targetSettled: boolean
+  readonly trackerClaims: ReadonlyArray<TrackerClaim>
+  readonly trackerTasks: ReadonlyArray<ControlledTask>
+}
+
+const buildProductionInput = (input: LabInput): ProductionInput => {
   const records = new Array<JournalRecord>()
-  const freshFacts = new Map<TaskName, FreshFact>()
-  const trackerTasks = new Set<TaskName>(["A", "B", "C", "D"])
+  const freshFacts = new Map<string, FreshFact>()
+  let trackerTasks = cloneTasks(initialTrackerTasks)
+  const trackerClaims = new Map<string, TrackerClaimState>(
+    trackerTasks.map(({ id }) => [id, "Unclaimed"])
+  )
+  const allAuthorityTaskIds = new Set(trackerTasks.map(({ id }) => id))
   let coordinatorRunning = true
   let capacity = 1
+  let targetSettled = false
   let observationOrdinal = 0
   let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
+  let latestObservation: ReadonlyArray<ControlledTask> = []
+  let latestProjected: TaskDagSnapshot | null = null
+  let hasSuccessfulObservation = false
+  let observationAttempt: LabSnapshot["observationAttempt"] = { _tag: "NeverAttempted" }
+
   for (const action of input.actions) {
     switch (action._tag) {
-      case "EditedTrackerTask":
-        if (action.present) trackerTasks.add(action.task)
-        else trackerTasks.delete(action.task)
+      case "ReplacedTrackerTask": {
+        allAuthorityTaskIds.add(action.task.id)
+        const index = trackerTasks.findIndex(({ id }) => id === action.task.id)
+        trackerTasks = index === -1
+          ? [...trackerTasks, { ...action.task, prerequisiteIds: [...action.task.prerequisiteIds] }]
+          : trackerTasks.map((task, taskIndex) =>
+            taskIndex === index
+              ? { ...action.task, prerequisiteIds: [...action.task.prerequisiteIds] }
+              : task
+          )
+        if (!trackerClaims.has(action.task.id)) trackerClaims.set(action.task.id, "Unclaimed")
         break
-      case "ObservedTrackerGraph":
+      }
+      case "DeletedTrackerTask":
+        allAuthorityTaskIds.add(action.taskId)
+        trackerTasks = trackerTasks.filter(({ id }) => id !== action.taskId)
+        trackerClaims.delete(action.taskId)
+        break
+      case "SetTrackerClaim":
+        trackerClaims.set(action.taskId, action.state)
+        break
+      case "ObservedTrackerGraph": {
         observationOrdinal += 1
-        latestGraphOperationId = OperationId.make(`graph-observation-${observationOrdinal}`)
-        appendGraphObservation(
-          records,
-          latestGraphOperationId,
-          [...trackerTasks].map((task) => taskIds[task]),
-          Object.values(taskIds)
-        )
+        const operation = graphOperation(records, observationOrdinal, [...allAuthorityTaskIds])
+        latestGraphOperationId = operation.operationId
+        const revision = `tracker-revision-${observationOrdinal}`
+        const projected = projectTrackerSnapshot(projectionInput(trackerTasks, revision))
+        if (projected._tag === "Invalid") {
+          observationAttempt = {
+            _tag: "Failed",
+            issues: projected.issues.map(issueText)
+          }
+        } else {
+          appendRecord(
+            records,
+            outcomeRecordKey(operation.operationId),
+            trackerGraphOutcomeObserved(operation.operationId, {
+              _tag: "TrackerGraphObserved",
+              revision: projected.snapshot.revision,
+              taskIds: projected.snapshot.taskIds()
+            })
+          )
+          latestObservation = cloneTasks(trackerTasks)
+          latestProjected = projected.snapshot
+          hasSuccessfulObservation = true
+          observationAttempt = { _tag: "Succeeded", revision }
+        }
         break
+      }
       case "CommittedClaimIntent":
-        appendClaimIntent(records, action.task, latestGraphOperationId)
+        appendClaimIntent(records, action.taskId, latestGraphOperationId)
         break
       case "SuppliedFreshFact":
-        freshFacts.set(action.task, action.fact)
+        freshFacts.set(action.taskId, action.fact)
         break
       case "CrashedCoordinator":
         coordinatorRunning = false
@@ -303,9 +465,32 @@ const buildProductionInput = (input: LabInput) => {
       case "ChangedCapacity":
         capacity = action.capacity
         break
+      case "ChangedTargetSettlement":
+        targetSettled = action.settled
+        break
     }
   }
-  return { capacity, coordinatorRunning, freshFacts, records, trackerTasks: [...trackerTasks] }
+
+  return {
+    authorityIssues: (() => {
+      const current = projectTrackerSnapshot(
+        projectionInput(trackerTasks, "controlled-authority")
+      )
+      return current._tag === "Invalid" ? current.issues.map(issueText) : []
+    })(),
+    capacity,
+    coordinatorRunning,
+    freshFacts,
+    hasSuccessfulObservation,
+    latestGraphOperationId,
+    latestObservation,
+    latestProjected,
+    observationAttempt,
+    records,
+    targetSettled,
+    trackerClaims: [...trackerClaims].map(([taskId, state]) => ({ state, taskId })),
+    trackerTasks,
+  }
 }
 
 const revisionFor = (input: LabInput): LabSnapshotRevision => {
@@ -329,7 +514,7 @@ const dispositionFor = (fact: FreshFact) => {
 
 const decision = (transition: RunnableFrontierTransition) => ({
   tag: transition._tag,
-  task: taskName(runnableTransitionTaskId(transition))
+  taskId: runnableTransitionTaskId(transition)
 })
 
 const move = (
@@ -351,58 +536,46 @@ const frontierMove = (
   admitted: ReadonlyArray<RunnableFrontierTransition>,
   coordinatorRunning: boolean
 ): LabMove => {
-  const transitionTaskId = runnableTransitionTaskId(transition)
-  const task = taskName(transitionTaskId)
+  const subjectTaskId = runnableTransitionTaskId(transition)
   if (transition._tag !== "CommitFreshTaskClaimIntent") {
     return move(
-      `frontier:${transition._tag}:${task}`,
+      `frontier:${transition._tag}:${subjectTaskId}`,
       "FrontierTransition",
       transition._tag,
-      { _tag: "Task", task },
+      { _tag: "Task", taskId: subjectTaskId },
       {
         _tag: "DriverMissing",
-        owningIssue: "unowned prototype gap",
+        owningIssue: "prototype driver gap",
         reason: "ProductionTransitionNotDriven"
       }
     )
   }
   const isAdmitted = admitted.some((candidate) =>
     candidate._tag === transition._tag
-    && runnableTransitionTaskId(candidate) === transitionTaskId
+    && runnableTransitionTaskId(candidate) === subjectTaskId
   )
-  const availability: LabMoveAvailability = !coordinatorRunning
-    ? { _tag: "Waiting", reason: "CoordinatorStopped" }
-    : isAdmitted
-      ? { _tag: "Available", input: { _tag: "CommittedClaimIntent", task } }
-      : { _tag: "Waiting", reason: "WaitingForAdmissionCapacity" }
   return move(
-    `frontier:CommitFreshTaskClaimIntent:${task}`,
+    `frontier:CommitFreshTaskClaimIntent:${subjectTaskId}`,
     "FrontierTransition",
     transition._tag,
-    { _tag: "Task", task },
-    availability
+    { _tag: "Task", taskId: subjectTaskId },
+    !coordinatorRunning
+      ? { _tag: "Waiting", reason: "CoordinatorStopped" }
+      : isAdmitted
+        ? {
+          _tag: "Available",
+          input: { _tag: "CommittedClaimIntent", taskId: subjectTaskId }
+        }
+        : { _tag: "Waiting", reason: "WaitingForAdmissionCapacity" }
   )
 }
 
 const driverMoves = (
   coordinatorRunning: boolean,
   capacity: number,
-  trackerTasks: ReadonlyArray<TaskName>,
+  targetSettled: boolean,
   responsibilities: LabSnapshot["responsibilities"]
 ): ReadonlyArray<LabMove> => [
-  ...(["A", "B", "C", "D"] as const).map((task) => {
-    const present = trackerTasks.includes(task)
-    return move(
-      `tracker:set-presence:${task}:${!present}`,
-      "TrackerAuthority",
-      "SetTrackerTaskPresence",
-      { _tag: "Task", task },
-      {
-        _tag: "Available",
-        input: { _tag: "EditedTrackerTask", present: !present, task }
-      }
-    )
-  }),
   move(
     "tracker:observe-target",
     "TrackerAuthority",
@@ -412,16 +585,26 @@ const driverMoves = (
       ? { _tag: "Available", input: { _tag: "ObservedTrackerGraph" } }
       : { _tag: "Waiting", reason: "CoordinatorStopped" }
   ),
-  ...responsibilities.flatMap(({ task }) =>
+  move(
+    `tracker:set-target-settled:${!targetSettled}`,
+    "TrackerAuthority",
+    "SetTrackerTargetSettlement",
+    { _tag: "TrackerTarget" },
+    {
+      _tag: "Available",
+      input: { _tag: "ChangedTargetSettlement", settled: !targetSettled }
+    }
+  ),
+  ...responsibilities.flatMap(({ taskId }) =>
     (["Ready", "ForeignClaim", "MissingClaim", "Paused"] as const).map((fact) =>
       move(
-        `tracker:supply-fact:${task}:${fact}`,
+        `tracker:supply-fact:${taskId}:${fact}`,
         "TrackerAuthority",
         `Supply${fact}Fact`,
-        { _tag: "Task", task },
+        { _tag: "Task", taskId },
         {
           _tag: "Available",
-          input: { _tag: "SuppliedFreshFact", fact, task }
+          input: { _tag: "SuppliedFreshFact", fact, taskId }
         }
       )
     )
@@ -444,7 +627,7 @@ const driverMoves = (
       ? { _tag: "NotCurrent", reason: "AlreadyCurrent" }
       : { _tag: "Available", input: { _tag: "RestartedCoordinator" } }
   ),
-  ...([1, 2] as const).map((nextCapacity) =>
+  ...([1, 2, 3] as const).map((nextCapacity) =>
     move(
       `coordinator:set-capacity:${nextCapacity}`,
       "CoordinatorProcess",
@@ -473,7 +656,7 @@ const driverMoves = (
     "capability:pause-task",
     "LabCapability",
     "PauseTask",
-    { _tag: "Task", task: "A" },
+    { _tag: "Task", taskId: "A" },
     {
       _tag: "Planned",
       owningIssue: "#135",
@@ -482,83 +665,68 @@ const driverMoves = (
   )
 ]
 
-const invalidSnapshot = (
+const emptyProductionSnapshot = (
   input: LabInput,
-  records: ReadonlyArray<JournalRecord>,
-  coordinatorRunning: boolean,
-  capacity: number,
-  trackerTasks: ReadonlyArray<TaskName>,
+  built: ProductionInput,
   errors: ReadonlyArray<string>
 ): LabSnapshot => ({
   admitted: [],
-  capacity,
-  coordinatorRunning,
+  authorityIssues: built.authorityIssues,
+  capacity: built.capacity,
+  coordinatorRunning: built.coordinatorRunning,
   errors,
   explanations: [],
   finalityReason: null,
   finalityTag: "UnsafeToDecide",
   frontier: [],
   graphKnowledge: [],
+  hasSuccessfulObservation: built.hasSuccessfulObservation,
   input,
-  journal: records.map(({ event, position }) => ({ position, tag: event._tag })),
-  knownTasks: [],
-  moves: [],
-  reservedTasks: [],
+  journal: built.records.map(({ event, position }) => ({ position, tag: event._tag })),
+  latestObservation: built.latestObservation,
+  moves: driverMoves(built.coordinatorRunning, built.capacity, built.targetSettled, []),
+  observationAttempt: built.observationAttempt,
+  reservedTaskIds: [],
   responsibilities: [],
   revision: revisionFor(input),
   runPause: "Unknown",
   status: "InvalidManagedHistory",
+  targetSettled: built.targetSettled,
   taskPause: "Unknown",
-  trackerTasks
+  trackerClaims: built.trackerClaims,
+  trackerTasks: built.trackerTasks
 })
 
-/**
- * Narrow adapter around current production reconstruction and selection.
- * Issue #132 changed only this boundary; Lab moves and presentation stay independent.
- */
+/** Narrow adapter around current production reconstruction, selection, and admission. */
 const reconstructThroughProduction = (
   input: LabInput
 ): Effect.Effect<LabSnapshot> =>
   Effect.gen(function*() {
-    const { capacity, coordinatorRunning, freshFacts, records, trackerTasks } =
-      buildProductionInput(input)
-    const reduced = reduceManagedHistory(runId, records)
+    const built = buildProductionInput(input)
+    const reduced = reduceManagedHistory(runId, built.records)
     if (reduced._tag === "InvalidManagedHistory") {
-      return invalidSnapshot(
+      return emptyProductionSnapshot(
         input,
-        records,
-        coordinatorRunning,
-        capacity,
-        trackerTasks,
+        built,
         reduced.issues.map(({ detail, position }) => `#${position}: ${detail}`)
       )
     }
 
     const run = reduced.managedRun
-    const observations = run.graphKnowledge.targetClosures.flatMap((knowledge) =>
-      knowledge._tag === "TaskTrackerTargetClosureObserved"
-        ? [knowledge]
-        : knowledge.observations
-    )
-    const latestObservation = observations.at(-1)
-    const knownTasks = latestObservation?.taskIds.map(taskName) ?? []
-    const eligibleTaskIds = [taskIds.A, taskIds.C].filter((taskId) =>
-      latestObservation?.taskIds.includes(taskId) ?? false
-    )
     const responsibilityFacts = run.responsibility.entries.map((responsibility) => {
       const responsibilityTaskId = responsibility._tag === "ExecutorInvocationResponsibility"
         ? responsibility.invocation.correlation.taskId
         : responsibility.taskId
       return {
-        disposition: dispositionFor(freshFacts.get(taskName(responsibilityTaskId)) ?? "Ready"),
+        disposition: dispositionFor(built.freshFacts.get(responsibilityTaskId) ?? "Ready"),
         responsibility
       }
     })
     const frontier = deriveRunnableFrontier({
-      freshEligibleTasks: eligibleTaskIds.map((taskId) => ({
-        taskId,
-        taskRevision: TaskRevision.make(`reducer-lab:${taskName(taskId)}`)
-      })),
+      freshEligibleTasks: built.latestProjected?.eligibleTasks().map((task) => ({
+        taskId: task.id,
+        taskRevision: taskRevisionFor(task)
+      })) ?? [],
       responsibility: run.responsibility,
       responsibilityFacts
     })
@@ -566,7 +734,7 @@ const reconstructThroughProduction = (
     // Vite aliases both imports to beta.101 at runtime; this cast bridges only
     // the duplicate nominal Effect type identities seen by TypeScript.
     const controller = yield* (makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(capacity),
+      capacity: TaskWorkCapacity.make(built.capacity),
       freshOccupiedInvocations: [],
       reconstructedReservedPositions: run.responsibility.entries.flatMap((entry) =>
         entry._tag === "TaskClaimResponsibility"
@@ -581,10 +749,7 @@ const reconstructThroughProduction = (
         readonly explanations: ReadonlyArray<ProductionFrontierExplanation>
         readonly transition:
           | { readonly _tag: "None" }
-          | {
-            readonly _tag: "Some"
-            readonly value: RunnableFrontierTransition
-          }
+          | { readonly _tag: "Some"; readonly value: RunnableFrontierTransition }
       }>
       readonly snapshot: () => Effect.Effect<{
         readonly reservedTaskIds: ReadonlyArray<TaskId>
@@ -607,26 +772,29 @@ const reconstructThroughProduction = (
       )
     }
     const admissionSnapshot = yield* controller.snapshot()
-    const admitted = coordinatorRunning ? admittedPreview : []
-    const finality = deriveRunFinalityDecision(frontier, run.responsibility, false)
+    const admitted = built.coordinatorRunning ? admittedPreview : []
+    const finality = deriveRunFinalityDecision(
+      frontier,
+      run.responsibility,
+      built.targetSettled
+    )
     const responsibilities = run.responsibility.entries.map((entry) => ({
       beganAt: entry.beganAt,
       kind: entry._tag,
-      task: taskName(
-        entry._tag === "ExecutorInvocationResponsibility"
-          ? entry.invocation.correlation.taskId
-          : entry.taskId
-      )
+      taskId: entry._tag === "ExecutorInvocationResponsibility"
+        ? entry.invocation.correlation.taskId
+        : entry.taskId
     }))
 
     return {
       admitted: admitted.map(decision),
-      capacity,
-      coordinatorRunning,
+      authorityIssues: built.authorityIssues,
+      capacity: built.capacity,
+      coordinatorRunning: built.coordinatorRunning,
       errors: [],
       explanations: admissionExplanations.map((explanation) => ({
         tag: explanation._tag,
-        task: "taskId" in explanation ? taskName(explanation.taskId) : null
+        taskId: "taskId" in explanation ? explanation.taskId : null
       })),
       finalityReason: finality._tag === "RunMayTerminate" ? null : finality.reason,
       finalityTag: finality._tag,
@@ -636,30 +804,39 @@ const reconstructThroughProduction = (
           ? {
             kind: knowledge._tag,
             observationCount: 1,
-            tasks: knowledge.taskIds.map(taskName)
+            taskIds: knowledge.taskIds
           }
           : {
             kind: knowledge._tag,
             observationCount: knowledge.observations.length,
-            tasks: []
+            taskIds: []
           }
       ),
+      hasSuccessfulObservation: built.hasSuccessfulObservation,
       input,
-      journal: records.map(({ event, position }) => ({ position, tag: event._tag })),
-      knownTasks,
+      journal: built.records.map(({ event, position }) => ({ position, tag: event._tag })),
+      latestObservation: built.latestObservation,
       moves: [
         ...frontier.transitions.map((transition) =>
-          frontierMove(transition, admitted, coordinatorRunning)
+          frontierMove(transition, admitted, built.coordinatorRunning)
         ),
-        ...driverMoves(coordinatorRunning, capacity, trackerTasks, responsibilities)
+        ...driverMoves(
+          built.coordinatorRunning,
+          built.capacity,
+          built.targetSettled,
+          responsibilities
+        )
       ],
-      reservedTasks: admissionSnapshot.reservedTaskIds.map(taskName),
+      observationAttempt: built.observationAttempt,
+      reservedTaskIds: admissionSnapshot.reservedTaskIds,
       responsibilities,
       revision: revisionFor(input),
       runPause: run.pause.run._tag,
       status: reduced._tag,
+      targetSettled: built.targetSettled,
       taskPause: run.pause.tasks._tag,
-      trackerTasks
+      trackerClaims: built.trackerClaims,
+      trackerTasks: built.trackerTasks
     }
   })
 
@@ -667,6 +844,42 @@ const reconstructThroughProduction = (
 export const reconstructLabSnapshot = (
   input: LabInput
 ): Effect.Effect<LabSnapshot> => reconstructThroughProduction(input)
+
+const executeInput = (
+  snapshot: LabSnapshot,
+  input: LabAction,
+  expectedRevision: LabSnapshotRevision
+): Effect.Effect<LabMoveExecution, StaleLabSnapshot> =>
+  snapshot.revision !== expectedRevision
+    ? Effect.fail(new StaleLabSnapshot({
+      actualRevision: snapshot.revision,
+      expectedRevision,
+      moveId: LabMoveId.make("explicit-lab-command")
+    }))
+    : reconstructThroughProduction({
+      actions: [...snapshot.input.actions, input]
+    }).pipe(Effect.map((nextSnapshot) => ({ input, snapshot: nextSnapshot })))
+
+/**
+ * Applies graph-card CRUD or a separate claim control as a replayable Lab
+ * command. It changes controlled authority only; observing remains a separate move.
+ */
+export const executeLabCommand = (
+  snapshot: LabSnapshot,
+  input: LabAction,
+  expectedRevision: LabSnapshotRevision
+): Effect.Effect<LabMoveExecution, StaleLabSnapshot | InvalidLabCommand> => {
+  if (
+    input._tag !== "ReplacedTrackerTask"
+    && input._tag !== "DeletedTrackerTask"
+    && input._tag !== "SetTrackerClaim"
+  ) {
+    return Effect.fail(new InvalidLabCommand({
+      reason: `${input._tag} is not an explicit graph-editor command`
+    }))
+  }
+  return executeInput(snapshot, input, expectedRevision)
+}
 
 /**
  * Revalidates a semantic move against the exact snapshot before applying it.
@@ -696,9 +909,5 @@ export const executeLabMove = (
         moveId
       })
     }
-    const input = selected.availability.input
-    const nextSnapshot = yield* reconstructThroughProduction({
-      actions: [...snapshot.input.actions, input]
-    })
-    return { input, snapshot: nextSnapshot }
+    return yield* executeInput(snapshot, selected.availability.input, expectedRevision)
   })

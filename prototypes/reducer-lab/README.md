@@ -1,5 +1,12 @@
 # Dalph reducer lab prototype
 
+## Prototype question
+
+Can one browser-only developer environment make the authority/observation
+boundary, durable reconstruction, runnable frontier, admission, and finality
+feel concrete without becoming a second orchestrator or pretending those graph
+truths are equivalent?
+
 A browser-only FoldKit prototype for manually exploring current Dalph reducer
 behavior. It imports the real journal fold, reconstructed-run reducers, runnable
 frontier selector, finality decision, and admission controller directly from
@@ -17,10 +24,28 @@ labels, explanations, grouping, ordering, and styling intent. It distinguishes:
 - coordinator and capacity controls; and
 - planned production behavior that the driver refuses to fake.
 
-Tracker edits change the controlled external authority immediately. The
-reconstructed Dalph state changes only after **Observe tracker target closure**,
-making stale observations and re-observation visible. Capacity is an input in
-the branch history, so undo, redo, and forks restore it consistently.
+The graph workbench implements the accepted task-card interaction:
+
+- create, edit, and delete stable task identities;
+- edit normalized title/body, lifecycle, prerequisite IDs, and parent/group ID;
+- preserve deliberately invalid raw edges and endpoints;
+- control claims separately from task content and topology; and
+- keep the unsaved form draft in FoldKit.
+
+Saving appends a complete, replayable task replacement to controlled external
+authority. It does not observe. The developer must separately choose
+**Observe tracker authority**. A valid observation appends intent and outcome;
+an invalid observation appends intent, displays the real `TaskDag` projection
+issues, and leaves the latest successful observation and durable knowledge
+unchanged.
+
+The graph selector exposes `Auto`, `Latest`, `Authority`, `Durable`, and
+`Compare`. `Auto` collapses equal projections. The durable projection explicitly
+shows the current reducer limitation: target-closure membership is retained,
+but task content, lifecycle, dependency edges, and grouping edges are not.
+
+Capacity, target settlement, claims, and coordinator lifetime are inputs in the
+branch history, so undo, redo, and forks restore them consistently.
 
 FoldKit dispatches only a semantic move ID and the opaque revision of the
 snapshot it rendered. A Command asks the driver to revalidate that exact move;
@@ -34,10 +59,12 @@ until its driver coverage is classified. The view remains throwaway; this
 registry sketches the maintained test-support seam needed to prevent silent
 feature drift.
 
-The post-#133 refresh uses revision-bearing fresh tasks, exact tagged admission
+The post-#133 driver uses revision-bearing fresh tasks, exact tagged admission
 reservations, one-transition-at-a-time admission, and the generic
 executor-invocation responsibility, transition, wait, and settlement vocabulary.
-It does not add an executor driver or new Lab behavior.
+It intentionally does not fake an executor driver, Git authority, pause reducer,
+or other missing production behavior; those selected transitions remain visible
+as capability gaps.
 
 The current source boundary is not fully browser-safe: importing
 `managed-history.ts` reaches a static `@effect/platform-node` import through the
@@ -59,9 +86,11 @@ pnpm smoke
 
 ## Prototype verdict
 
-The presenter boundary materially clarifies ownership: driver types no longer
-contain display labels, prose, groups, or CSS intent, and the presenter parity
-check can prove that every semantic move is represented exactly once.
+The presenter boundary materially clarifies ownership: driver types contain no
+display labels, prose, groups, or CSS intent, and the presenter parity check
+proves that every semantic move is represented exactly once. The presenter
+also supplies the stable renderer-independent `TaskGraphProjection`; layout
+and browser events stay in the throwaway view.
 
 The opaque snapshot revision is partly redundant in this single-process
 prototype because FoldKit already ignores superseded Commands and disables

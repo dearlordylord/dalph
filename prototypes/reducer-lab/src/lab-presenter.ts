@@ -1,5 +1,6 @@
 import { Schema as S } from "effect"
 import {
+  type ControlledTask,
   type LabAction,
   type LabMove,
   LabMoveId,
@@ -29,11 +30,62 @@ const LabJournalRow = S.Struct({
   tag: S.String
 })
 
+export const GraphProjectionKey = S.Literals(["Latest", "Authority", "Durable"])
+export type GraphProjectionKey = typeof GraphProjectionKey.Type
+
+export const GraphProjectionSelection = S.Literals([
+  "Auto",
+  "Latest",
+  "Authority",
+  "Durable",
+  "Compare"
+])
+export type GraphProjectionSelection = typeof GraphProjectionSelection.Type
+
+const GraphTask = S.Struct({
+  body: S.String,
+  id: S.String,
+  lifecycle: S.String,
+  parentTaskId: S.NullOr(S.String),
+  prerequisiteIds: S.Array(S.String),
+  title: S.String
+})
+export type GraphTask = typeof GraphTask.Type
+
+const GraphEdge = S.Struct({
+  from: S.String,
+  kind: S.Literals(["Prerequisite", "Grouping"]),
+  to: S.String
+})
+export type GraphEdge = typeof GraphEdge.Type
+
+/**
+ * Stable presenter-owned graph contract. Browser renderer layout and event
+ * types stay on the view side of this boundary.
+ */
+export const TaskGraphProjection = S.Struct({
+  diagnostics: S.Array(S.String),
+  fingerprint: S.String,
+  key: GraphProjectionKey,
+  label: S.String,
+  stale: S.Boolean,
+  status: S.String,
+  tasks: S.Array(GraphTask),
+  edges: S.Array(GraphEdge)
+})
+export interface TaskGraphProjection extends S.Schema.Type<typeof TaskGraphProjection> {}
+
+const ClaimRow = S.Struct({
+  state: S.String,
+  taskId: S.String
+})
+
 /** Display-ready projection consumed by FoldKit without domain inference. */
 export const LabViewModel = S.Struct({
   actionGroups: S.Array(LabActionGroup),
   admittedRows: S.Array(S.String),
   capacityStatus: S.String,
+  claimRows: S.Array(ClaimRow),
   coordinatorClass: S.String,
   coordinatorStatus: S.String,
   errors: S.Array(S.String),
@@ -41,14 +93,17 @@ export const LabViewModel = S.Struct({
   finality: S.String,
   frontierRows: S.Array(S.String),
   graphKnowledgeRows: S.Array(S.String),
+  graphProjections: S.Array(TaskGraphProjection),
   journal: S.Array(LabJournalRow),
   knownTasksMetric: S.String,
   notes: S.Array(S.String),
+  observationStatus: S.String,
   reservedTasksMetric: S.String,
   responsibilityRows: S.Array(S.String),
   revision: S.String,
   runPause: S.String,
   status: S.String,
+  targetSettlement: S.String,
   taskPause: S.String,
   timelineLabels: S.Array(S.String),
   trackerAuthorityState: S.String
@@ -57,32 +112,36 @@ export interface LabViewModel extends S.Schema.Type<typeof LabViewModel> {}
 
 const inputLabel = (action: LabAction): string => {
   switch (action._tag) {
-    case "EditedTrackerTask": return `${action.present ? "Add" : "Remove"} ${action.task} in tracker`
+    case "ReplacedTrackerTask": return `Save tracker task ${action.task.id}`
+    case "DeletedTrackerTask": return `Delete tracker task ${action.taskId}`
+    case "SetTrackerClaim": return `Set ${action.taskId} claim to ${action.state}`
     case "ObservedTrackerGraph": return "Observe tracker target closure"
-    case "CommittedClaimIntent": return `Commit claim intent for ${action.task}`
-    case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.task}`
+    case "CommittedClaimIntent": return `Commit claim intent for ${action.taskId}`
+    case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.taskId}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
     case "ChangedCapacity": return `Set capacity to ${action.capacity}`
+    case "ChangedTargetSettlement":
+      return `Mark tracker target ${action.settled ? "settled" : "unsettled"}`
   }
 }
 
 const subjectTask = (move: LabMove): string =>
-  move.subject._tag === "Task" ? move.subject.task : ""
+  move.subject._tag === "Task" ? move.subject.taskId : ""
 
 const moveLabel = (move: LabMove): string => {
-  const task = subjectTask(move)
+  const taskId = subjectTask(move)
   switch (move.transition) {
-    case "SetTrackerTaskPresence":
-      return move.availability._tag === "Available" &&
-          move.availability.input._tag === "EditedTrackerTask"
-        ? `${move.availability.input.present ? "Add" : "Remove"} task ${task} in tracker`
-        : `Change task ${task} tracker presence`
-    case "ObserveTrackerTarget": return "Observe tracker target closure"
-    case "SupplyReadyFact": return `Ready fact · ${task}`
-    case "SupplyForeignClaimFact": return `Foreign claim fact · ${task}`
-    case "SupplyMissingClaimFact": return `Missing claim fact · ${task}`
-    case "SupplyPausedFact": return `Paused fact · ${task}`
+    case "ObserveTrackerTarget": return "Observe tracker authority"
+    case "SetTrackerTargetSettlement":
+      return move.availability._tag === "Available"
+        && move.availability.input._tag === "ChangedTargetSettlement"
+        ? `Mark target ${move.availability.input.settled ? "settled" : "unsettled"}`
+        : "Change target settlement"
+    case "SupplyReadyFact": return `Ready fact · ${taskId}`
+    case "SupplyForeignClaimFact": return `Foreign claim fact · ${taskId}`
+    case "SupplyMissingClaimFact": return `Missing claim fact · ${taskId}`
+    case "SupplyPausedFact": return `Paused fact · ${taskId}`
     case "CrashCoordinator": return "Crash coordinator"
     case "RestartCoordinator": return "Restart coordinator"
     case "SetTaskWorkCapacity":
@@ -91,8 +150,8 @@ const moveLabel = (move: LabMove): string => {
         : "Set capacity"
     case "PauseRun": return "Pause run"
     case "PauseTask": return "Pause task"
-    case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${task}`
-    default: return `${move.transition} · ${task}`
+    case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${taskId}`
+    default: return `${move.transition} · ${taskId}`
   }
 }
 
@@ -108,7 +167,7 @@ const unavailableReason = (
     case "AlreadyCurrent":
       return "The requested process or capacity state is already current."
     case "ProductionTransitionNotDriven":
-      return `The real frontier selected this move, but the Lab driver cannot execute it yet (${owningIssue ?? "unowned"}).`
+      return `Production selected this move, but the Lab driver cannot execute it yet (${owningIssue ?? "unowned"}).`
     case "ProductionPauseStateAbsent":
       return `Production reconstruction does not yet represent this pause state (${owningIssue ?? "unowned"}).`
   }
@@ -118,7 +177,7 @@ const displayAction = (move: LabMove): LabDisplayAction => {
   const status = move.availability._tag
   const reason = status === "Available"
     ? move.origin === "TrackerAuthority"
-      ? "Changes or rereads the controlled tracker boundary; reconstructed state changes only after an observation."
+      ? "Changes or rereads the controlled tracker boundary. Save and Observe remain separate."
       : move.origin === "FrontierTransition"
         ? "Selected by the real frontier and admitted within current capacity."
         : "Changes the controlled coordinator process state recorded in this branch."
@@ -143,10 +202,117 @@ const displayAction = (move: LabMove): LabDisplayAction => {
 
 const actionGroups = [
   { key: "FrontierTransition", title: "Reducer-selected moves" },
-  { key: "TrackerAuthority", title: "Controlled tracker boundary" },
+  { key: "TrackerAuthority", title: "Tracker observation + target facts" },
   { key: "CoordinatorProcess", title: "Process controls" },
   { key: "LabCapability", title: "Production capability gaps" }
 ] as const
+
+const edgesFor = (tasks: ReadonlyArray<ControlledTask>): ReadonlyArray<GraphEdge> =>
+  tasks.flatMap((task) => [
+    ...task.prerequisiteIds.map((prerequisite) => ({
+      from: prerequisite,
+      kind: "Prerequisite" as const,
+      to: task.id
+    })),
+    ...(task.parentTaskId === null
+      ? []
+      : [{
+        from: task.parentTaskId,
+        kind: "Grouping" as const,
+        to: task.id
+      }])
+  ])
+
+const fingerprint = (
+  tasks: ReadonlyArray<GraphTask>,
+  edges: ReadonlyArray<GraphEdge>,
+  diagnostics: ReadonlyArray<string>
+): string => JSON.stringify({ diagnostics, edges, tasks })
+
+const projection = (
+  key: GraphProjectionKey,
+  label: string,
+  status: string,
+  tasks: ReadonlyArray<GraphTask>,
+  edges: ReadonlyArray<GraphEdge>,
+  diagnostics: ReadonlyArray<string>,
+  stale: boolean
+): TaskGraphProjection => ({
+  diagnostics,
+  edges,
+  fingerprint: fingerprint(tasks, edges, diagnostics),
+  key,
+  label,
+  stale,
+  status,
+  tasks,
+})
+
+const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProjection> => {
+  const authorityTasks = snapshot.trackerTasks
+  const authorityEdges = edgesFor(authorityTasks)
+  const latestTasks = snapshot.latestObservation
+  const latestEdges = edgesFor(latestTasks)
+  const authorityFingerprint = fingerprint(authorityTasks, authorityEdges, snapshot.authorityIssues)
+  const latestFingerprint = fingerprint(latestTasks, latestEdges, [])
+  const durableIds = [...new Set(
+    snapshot.graphKnowledge.flatMap(({ taskIds }) => taskIds)
+  )]
+  const durableTasks = durableIds.map((id) => ({
+    body: "The current reducer retains membership only.",
+    id,
+    lifecycle: "Not retained",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: id
+  }))
+  const durableDiagnostics = snapshot.graphKnowledge.flatMap((knowledge) =>
+    knowledge.kind === "TaskTrackerTargetClosureObserved"
+      ? ["Dependency, grouping, lifecycle, title, and body are not retained in durable graph knowledge."]
+      : [`${knowledge.kind} · ${knowledge.observationCount} incomparable observations.`]
+  )
+  const latestExists = snapshot.hasSuccessfulObservation
+  const observationFailed = snapshot.observationAttempt._tag === "Failed"
+  return [
+    projection(
+      "Latest",
+      "Latest successful normalized observation",
+      latestExists
+        ? observationFailed
+          ? "Prior successful read; latest attempt failed"
+          : "Most recently seen successfully by Dalph"
+        : "No successful observation",
+      latestTasks,
+      latestEdges,
+      [],
+      !latestExists || authorityFingerprint !== latestFingerprint
+    ),
+    projection(
+      "Authority",
+      "Controlled tracker authority",
+      snapshot.authorityIssues.length === 0
+        ? "Current fake external authority"
+        : "Current fake authority is intentionally invalid",
+      authorityTasks,
+      authorityEdges,
+      snapshot.authorityIssues,
+      false
+    ),
+    projection(
+      "Durable",
+      "Best available durable graph knowledge",
+      snapshot.graphKnowledge.length === 0
+        ? "No successful graph outcome in managed history"
+        : observationFailed || authorityFingerprint !== latestFingerprint
+          ? "Prior journal knowledge; stale against current authority"
+          : "Reconstructed from successful journal outcomes",
+      durableTasks,
+      [],
+      durableDiagnostics,
+      observationFailed || authorityFingerprint !== latestFingerprint
+    )
+  ]
+}
 
 /** Converts one semantic snapshot into all wording, grouping, ordering, and styling intent. */
 export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
@@ -157,45 +323,52 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     key,
     title
   })),
-  admittedRows: snapshot.admitted.map(({ tag, task }) => `${task} · ${tag}`),
+  admittedRows: snapshot.admitted.map(({ tag, taskId }) => `${taskId} · ${tag}`),
   capacityStatus: `${snapshot.status} · capacity ${snapshot.capacity}`,
+  claimRows: snapshot.trackerClaims,
   coordinatorClass: snapshot.coordinatorRunning ? "good" : "stopped",
   coordinatorStatus: snapshot.coordinatorRunning
     ? "Coordinator running"
     : "Coordinator crashed",
   errors: snapshot.errors,
-  explanationRows: snapshot.explanations.map(({ tag, task }) =>
-    task === null ? tag : `${tag} · ${task}`
+  explanationRows: snapshot.explanations.map(({ tag, taskId }) =>
+    taskId === null ? tag : `${tag} · ${taskId}`
   ),
   finality: snapshot.finalityReason === null
     ? snapshot.finalityTag
     : `${snapshot.finalityTag} · ${snapshot.finalityReason}`,
-  frontierRows: snapshot.frontier.map(({ tag, task }) => `${task} · ${tag}`),
-  graphKnowledgeRows: snapshot.graphKnowledge.map(({ kind, observationCount, tasks }) =>
-    tasks.length > 0
-      ? `${kind} · [${tasks.join(", ")}]`
+  frontierRows: snapshot.frontier.map(({ tag, taskId }) => `${taskId} · ${tag}`),
+  graphKnowledgeRows: snapshot.graphKnowledge.map(({ kind, observationCount, taskIds }) =>
+    taskIds.length > 0
+      ? `${kind} · [${taskIds.join(", ")}]`
       : `${kind} · ${observationCount} observations`
   ),
+  graphProjections: graphProjections(snapshot),
   journal: snapshot.journal,
-  knownTasksMetric: `Known tasks: ${snapshot.knownTasks.join(", ") || "none"}`,
+  knownTasksMetric:
+    `Latest successful observation: ${snapshot.latestObservation.map(({ id }) => id).join(", ") || "none"}`,
   notes: [
-    "Eligibility [A, C] is a fresh tracker input to the selector; it is not persisted frontier state.",
-    "The pure fold still reaches a Node platform import through the all-events schema; this browser prototype shims that unused adapter.",
-    snapshot.coordinatorRunning
-      ? "The coordinator is running, so admitted transitions can be triggered."
-      : "The coordinator is stopped. Reducers still reconstruct the journal, but no transition is activated.",
-    "Pause facts can reach the selector, but production reconstructed pause state remains unimplemented."
+    "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
+    "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
+    "Durable graph knowledge currently retains target-closure membership, not dependency or grouping edges.",
+    "The browser build still uses the documented temporary Node-platform shim."
   ],
-  reservedTasksMetric: `Reserved: ${snapshot.reservedTasks.join(", ") || "none"}`,
-  responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, task }) =>
-    `${task} · ${kind} · began at journal #${beganAt}`
+  observationStatus: snapshot.observationAttempt._tag === "NeverAttempted"
+    ? "No observation attempted"
+    : snapshot.observationAttempt._tag === "Succeeded"
+      ? `Successful observation · ${snapshot.observationAttempt.revision}`
+      : `Observation failed · ${snapshot.observationAttempt.issues.join("; ")}`,
+  reservedTasksMetric: `Reserved: ${snapshot.reservedTaskIds.join(", ") || "none"}`,
+  responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, taskId }) =>
+    `${taskId} · ${kind} · began at journal #${beganAt}`
   ),
   revision: snapshot.revision,
   runPause: snapshot.runPause,
   status: snapshot.status,
+  targetSettlement: snapshot.targetSettled ? "Settled" : "Unsettled",
   taskPause: snapshot.taskPause,
   timelineLabels: snapshot.input.actions.map(inputLabel),
   trackerAuthorityState:
-    `Tracker authority now: [${snapshot.trackerTasks.join(", ") || "empty"}]. ` +
-    `Dalph last observed: [${snapshot.knownTasks.join(", ") || "nothing"}].`
+    `Authority: [${snapshot.trackerTasks.map(({ id }) => id).join(", ") || "empty"}]. ` +
+    `Observed: [${snapshot.latestObservation.map(({ id }) => id).join(", ") || "nothing"}].`
 })

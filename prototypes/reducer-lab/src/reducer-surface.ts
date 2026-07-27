@@ -23,8 +23,8 @@ const excluded = (reason: string) => ({ reason, status: "IntentionallyExcluded" 
 /** Adding an operation to the production algebra makes this prototype fail typechecking until classified. */
 export const workflowOperationCoverage = {
   AcquireTaskClaim: interactive("Selected claim intents can be committed."),
-  EstablishTaskWorkSession: excluded("The thin driver cannot execute work-session operations."),
-  ExecuteTaskWork: excluded("The thin driver does not run task executors."),
+  EstablishTaskWorkSession: excluded("The current driver cannot execute work-session operations."),
+  ExecuteTaskWork: excluded("The current driver does not run task executors."),
   HandBackReviewFindings: excluded("Review handback is outside this reducer slice."),
   ReadTrackerGraph: interactive("The controlled tracker can be observed repeatedly."),
   ReconcileTaskWorktree: excluded("Git authority is not yet controlled by this driver."),
@@ -44,7 +44,7 @@ export const workflowJournalEventCoverage = {
   ReviewFindingsHandbackCompleted: excluded("No reviewer handback driver."),
   ReviewFindingsHandbackIntended: excluded("No reviewer handback driver."),
   TaskAttemptPlanned: excluded("No attempt-planning driver."),
-  TaskClaimAcquired: excluded("Claim outcome reconciliation is not implemented in the thin driver."),
+  TaskClaimAcquired: excluded("Claim outcome reconciliation is not implemented in the current driver."),
   TaskClaimAcquisitionIntended: interactive("Produced by an admitted claim move."),
   TaskExecutionIntentRecorded: excluded("No executor driver."),
   TaskExecutionObservationFailed: excluded("No executor authority driver."),
@@ -79,10 +79,10 @@ export const responsibilityCoverage = {
 } satisfies Coverage<WorkflowResponsibilityEntry>
 
 export const dispositionCoverage = {
-  DependencyWait: observable("The real selector supports it; the thin fact editor does not construct prerequisites."),
-  ExecutorInvocationSettled: observable("The real selector supports it; the thin driver does not settle executor invocations."),
-  ExecutorInvocationWait: observable("The real selector supports it; the thin driver does not retry executor invocations."),
-  FinalOutcome: observable("The real selector supports it; the thin fact editor does not construct terminal facts."),
+  DependencyWait: observable("The graph editor constructs prerequisites; current eligibility filters blocked tasks before this selector seam."),
+  ExecutorInvocationSettled: observable("The real selector supports it; the current driver does not settle executor invocations."),
+  ExecutorInvocationWait: observable("The real selector supports it; the current driver does not retry executor invocations."),
+  FinalOutcome: observable("Tracker lifecycle is editable; this responsibility disposition requires a later production responsibility stage."),
   ForeignClaimIsolation: interactive("Available as a fresh authority fact."),
   MissingClaim: interactive("Available as a fresh authority fact."),
   Paused: interactive("Available at the selector seam, while reconstructed pause remains absent."),
