@@ -17,6 +17,7 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
+  TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   WorkerProcessId,
@@ -48,6 +49,7 @@ import {
   ReviewFindingsHandbackRequest,
   SealedImplementationReview
 } from "./implementation-review.js"
+import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionOutcome } from "./task-execution.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -253,7 +255,13 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
     simulateTaskExecution: unused,
     simulateTaskWorkSession: unused
   }
+  const admissionController = yield* makeTaskAdmissionController({
+    capacity: TaskWorkCapacity.make(1),
+    freshOccupiedInvocations: [],
+    reconstructedReservedPositions: []
+  })
   const result = yield* runLiveImplementationConvergence({
+    admissionController,
     allocator: {
       allocate: () =>
         Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(

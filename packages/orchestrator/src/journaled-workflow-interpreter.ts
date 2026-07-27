@@ -121,12 +121,14 @@ export const journaledWorkflowInterpreterLayer = <
         "WorkflowInterpreter.Journaled.acquireTaskClaim"
       )(function*(operation, onIntentRecorded: Effect.Effect<void> = Effect.void) {
         const key = intentRecordKey(operation.acquisition.operationId)
-        yield* journal.append(
-          runId,
-          key,
-          TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion })
-        )
-        yield* onIntentRecorded
+        yield* Effect.uninterruptible(Effect.gen(function*() {
+          yield* journal.append(
+            runId,
+            key,
+            TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+          )
+          yield* onIntentRecorded
+        }))
         const result = yield* interpreter.acquireTaskClaim(operation)
         if (result._tag === "AuthoritativeTaskClaimAcquired") {
           yield* journal.append(

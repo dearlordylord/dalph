@@ -433,12 +433,14 @@ export const makeJournaledImplementationReview = (options: JournaledImplementati
     const capturedTechnicalRetry = yield* captureTechnicalRetryPolicy<
       CoordinatorOwnershipError | ImplementationReviewInvocationFailure
     >(technicalRetry)
-    yield* options.journal.append(
-      options.runId,
-      intentRecordKey(request.operationId),
-      ImplementationReviewIntendedEvent.make({ operation, version: workflowJournalEventVersion })
-    )
-    yield* onIntentRecorded
+    yield* Effect.uninterruptible(Effect.gen(function*() {
+      yield* options.journal.append(
+        options.runId,
+        intentRecordKey(request.operationId),
+        ImplementationReviewIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+      )
+      yield* onIntentRecorded
+    }))
     const disposition = yield* capturedTechnicalRetry.run(options.reviewer.createOrResume(request))
     const review = yield* sealImplementationReview(request, disposition).pipe(
       Effect.provideService(EvidenceStore, options.evidenceStore)
@@ -535,12 +537,14 @@ export const makeJournaledReviewFindingsHandback = (options: JournaledImplementa
     const capturedTechnicalRetry = yield* captureTechnicalRetryPolicy<
       CoordinatorOwnershipError | ReviewFindingsHandbackFailure
     >(technicalRetry)
-    yield* options.journal.append(
-      options.runId,
-      intentRecordKey(request.operationId),
-      ReviewFindingsHandbackIntendedEvent.make({ operation, version: workflowJournalEventVersion })
-    )
-    yield* onIntentRecorded
+    yield* Effect.uninterruptible(Effect.gen(function*() {
+      yield* options.journal.append(
+        options.runId,
+        intentRecordKey(request.operationId),
+        ReviewFindingsHandbackIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+      )
+      yield* onIntentRecorded
+    }))
     const acknowledgement = yield* capturedTechnicalRetry.run(options.handback.deliverOrResume(request))
     if (!handbackAcknowledgesRequest(acknowledgement, request)) {
       return yield* failHistory(request.operationId, "ReviewMismatch")

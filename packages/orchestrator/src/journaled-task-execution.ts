@@ -244,12 +244,14 @@ export const makeJournaledTaskExecution = (
     }
 
     const key = intentRecordKey(operation.request.operationId)
-    yield* journal.append(
-      runId,
-      key,
-      TaskExecutionIntentRecorded.make({ operation, version: workflowJournalEventVersion })
-    )
-    yield* onIntentRecorded
+    yield* Effect.uninterruptible(Effect.gen(function*() {
+      yield* journal.append(
+        runId,
+        key,
+        TaskExecutionIntentRecorded.make({ operation, version: workflowJournalEventVersion })
+      )
+      yield* onIntentRecorded
+    }))
     const durableReports = yield* durableExecutionReports(records, operation.request.operationId)
     const traceObserver = taskExecutionTraceObserver(operation, trace)
     const observer = {

@@ -91,7 +91,10 @@ export const makeFreshTaskAttemptStage = Effect.fn(
     function*(
       operation: ReturnType<typeof makeTaskExecutionOperation>,
       liveOptions:
-        | Omit<Parameters<typeof runLiveImplementationConvergence>[0], "initialExecutionOutcome">
+        | Omit<
+          Parameters<typeof runLiveImplementationConvergence>[0],
+          "admissionController" | "initialExecutionOutcome"
+        >
         | undefined
     ): Effect.fn.Return<FreshWorkflowStage> {
       return {

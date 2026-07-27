@@ -716,7 +716,10 @@ const decodeReconstructionModelState = (
           decodedActivationPositions.flatMap<
             FrontierRecoveryActivationProjection["reservedPositions"][number]
           >(([task, position]) => {
-            if (position.tag === "ActivationPositionAvailable") return []
+            if (
+              position.tag === "ActivationPositionAvailable"
+              || position.tag === "ActivationPositionOccupied"
+            ) return []
             if (position.tag === "ActivationPositionReserved") {
               return [{
                 correlation: "SelectedTransition" as const,

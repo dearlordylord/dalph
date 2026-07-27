@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -283,6 +283,47 @@ it.effect("journals intent before process request and preserves exact nonzero ou
     expect(yield* Ref.get(observations)).toBe(1)
     expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskExecutionReported")
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("does not expose an interruptible cut between durable intent and activation binding", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    yield* seedEstablishedSession()
+    const bindingStarted = yield* Deferred.make<void>()
+    const releaseBinding = yield* Deferred.make<void>()
+    const requests = yield* Ref.make(0)
+    const executor = TaskExecutor.of({
+      requestTaskExecution: () =>
+        Ref.update(requests, (count) => count + 1).pipe(
+          Effect.as({
+            observationId: ProviderObservationId.make("interrupt-cut-request-observation"),
+            providerRequestId: ProviderRequestId.make("interrupt-cut-provider-request")
+          })
+        ),
+      observeTaskExecution: () => Effect.die("request must be interrupted before provider observation")
+    })
+    const interpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledLayerFor(executor))
+    )
+    const execution = yield* interpreter.executeTaskWork(
+      operation,
+      Deferred.succeed(bindingStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseBinding))
+      )
+    ).pipe(Effect.forkScoped)
+    yield* Deferred.await(bindingStarted)
+    const interruption = yield* Fiber.interrupt(execution).pipe(
+      Effect.forkScoped
+    )
+    yield* Effect.yieldNow
+    yield* Deferred.succeed(releaseBinding, undefined)
+    yield* Fiber.join(interruption)
+
+    expect((yield* journal.read(runId)).some(({ event }) =>
+      event._tag === "TaskExecutionIntentRecorded"
+      && event.operation.request.operationId === operation.request.operationId
+    )).toBe(true)
+    expect(yield* Ref.get(requests)).toBe(0)
+  }).pipe(Effect.scoped, Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects execution before any adapter effect when durable session evidence is missing", () =>
   Effect.gen(function*() {
