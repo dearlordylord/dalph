@@ -4,11 +4,10 @@ import { type Document, html } from "foldkit/html"
 import { m } from "foldkit/message"
 import {
   actionLabel,
+  type DriverAction as DriverActionType,
   LabAction,
-  type LabAction as LabActionType,
   Projection,
-  projectLab,
-  type TaskName as TaskNameType
+  projectLab
 } from "./lab-engine.ts"
 
 const Branch = S.Struct({
@@ -22,15 +21,12 @@ type Branch = typeof Branch.Type
 export const Model = S.Struct({
   activeBranchId: S.Number,
   branches: S.Array(Branch),
-  capacity: S.Number,
   nextBranchId: S.Number,
   projection: Projection,
   requestId: S.Number
 })
 export type Model = typeof Model.Type
 
-const AppendedAction = m("AppendedAction", { action: LabAction })
-const ChangedCapacity = m("ChangedCapacity", { capacity: S.Number })
 const ForkedAtCursor = m("ForkedAtCursor")
 const MovedCursor = m("MovedCursor", { cursor: S.Number })
 const ProjectionReady = m("ProjectionReady", {
@@ -38,19 +34,21 @@ const ProjectionReady = m("ProjectionReady", {
   requestId: S.Number
 })
 const SelectedBranch = m("SelectedBranch", { branchId: S.Number })
+const TriggeredDriverAction = m("TriggeredDriverAction", { actionId: S.String })
 
 export const Message = S.Union([
-  AppendedAction,
-  ChangedCapacity,
   ForkedAtCursor,
   MovedCursor,
   ProjectionReady,
-  SelectedBranch
+  SelectedBranch,
+  TriggeredDriverAction
 ])
 export type Message = typeof Message.Type
 
 const emptyProjection: Projection = {
+  actions: [],
   admitted: [],
+  capacity: 1,
   coordinatorRunning: true,
   errors: [],
   explanations: [],
@@ -64,19 +62,19 @@ const emptyProjection: Projection = {
   responsibilities: [],
   runPause: "computing",
   status: "computing",
-  taskPause: "computing"
+  taskPause: "computing",
+  trackerTasks: ["A", "B", "C", "D"]
 }
 
 const ComputeProjection = Command.define(
   "ComputeProjection",
   {
     actions: S.Array(LabAction),
-    capacity: S.Number,
     requestId: S.Number
   },
   ProjectionReady
-)(({ actions, capacity, requestId }) =>
-  projectLab(actions, capacity).pipe(
+)(({ actions, requestId }) =>
+  projectLab(actions).pipe(
     Effect.map((projection) => ProjectionReady({ projection, requestId }))
   )
 )
@@ -90,16 +88,14 @@ const replaceBranch = (model: Model, nextBranch: Branch): ReadonlyArray<Branch> 
 const recompute = (
   model: Model,
   branches: ReadonlyArray<Branch> = model.branches,
-  activeBranchId: number = model.activeBranchId,
-  capacity: number = model.capacity
+  activeBranchId: number = model.activeBranchId
 ): readonly [Model, ReadonlyArray<Command.Command<Message>>] => {
   const branch = branches.find(({ id }) => id === activeBranchId) ?? branches[0]!
   const requestId = model.requestId + 1
   return [
-    { ...model, activeBranchId, branches, capacity, requestId },
+    { ...model, activeBranchId, branches, requestId },
     [ComputeProjection({
       actions: branch.actions.slice(0, branch.cursor),
-      capacity,
       requestId
     })]
   ]
@@ -110,18 +106,18 @@ export const update = (
   message: Message
 ): readonly [Model, ReadonlyArray<Command.Command<Message>>] => {
   switch (message._tag) {
-    case "AppendedAction": {
+    case "TriggeredDriverAction": {
       const branch = activeBranch(model)
       if (branch.cursor !== branch.actions.length) return [model, []]
+      const selected = model.projection.actions.find(({ id }) => id === message.actionId)
+      if (selected?.status !== "Available" || selected.command === null) return [model, []]
       const nextBranch = {
         ...branch,
-        actions: [...branch.actions, message.action],
+        actions: [...branch.actions, selected.command],
         cursor: branch.cursor + 1
       }
       return recompute(model, replaceBranch(model, nextBranch))
     }
-    case "ChangedCapacity":
-      return recompute(model, model.branches, model.activeBranchId, message.capacity)
     case "ForkedAtCursor": {
       const branch = activeBranch(model)
       const fork: Branch = {
@@ -154,21 +150,12 @@ export const init: Runtime.ApplicationInit<Model, Message> = () => {
   const model: Model = {
     activeBranchId: 1,
     branches: [{ actions: [], cursor: 0, id: 1, name: "main" }],
-    capacity: 1,
     nextBranchId: 2,
     projection: emptyProjection,
     requestId: 1
   }
-  return [model, [ComputeProjection({ actions: [], capacity: 1, requestId: 1 })]]
+  return [model, [ComputeProjection({ actions: [], requestId: 1 })]]
 }
-
-const append = (action: LabActionType) => AppendedAction({ action })
-const hasAction = (branch: Branch, tag: LabActionType["_tag"]): boolean =>
-  branch.actions.slice(0, branch.cursor).some(({ _tag }) => _tag === tag)
-const hasClaim = (model: Model, task: TaskNameType): boolean =>
-  activeBranch(model).actions.slice(0, activeBranch(model).cursor).some((action) =>
-    action._tag === "CommittedClaimIntent" && action.task === task
-  )
 
 type HtmlFactory = ReturnType<typeof html<Message>>
 
@@ -206,21 +193,31 @@ const stateCard = (
   content
 ])
 
-const factButtons = (
+const actionButton = (
   h: HtmlFactory,
-  task: TaskNameType,
+  action: DriverActionType,
   locked: boolean
-) => h.div([h.Class("fact-row")], [
-  h.span([h.Class("task-chip")], [`Task ${task}`]),
-  ...(["Ready", "ForeignClaim", "MissingClaim", "Paused"] as const).map((fact) =>
-    button(
-      h,
-      fact === "Paused" ? "Supply paused fact" : fact,
-      append({ _tag: "SuppliedFreshFact", fact, task }),
-      locked,
-      fact === "Paused" ? "outline warning" : "outline"
-    )
-  )
+) => h.div([h.Class(`driver-action ${action.status.toLowerCase()}`)], [
+  button(
+    h,
+    action.label,
+    TriggeredDriverAction({ actionId: action.id }),
+    locked || action.status !== "Available",
+    action.origin === "Reducer" ? "accent" : action.origin === "ExternalAuthority" ? "outline" : ""
+  ),
+  h.p([h.Class("action-reason")], [`${action.status} · ${action.reason}`])
+])
+
+const actionGroup = (
+  h: HtmlFactory,
+  title: string,
+  actions: ReadonlyArray<DriverActionType>,
+  locked: boolean
+) => h.section([h.Class("action-group")], [
+  h.p([h.Class("label")], [title]),
+  actions.length === 0
+    ? h.p([h.Class("empty")], ["No moves in this category."])
+    : h.div([h.Class("action-list")], actions.map((action) => actionButton(h, action, locked)))
 ])
 
 export const view = (model: Model): Document => {
@@ -228,11 +225,8 @@ export const view = (model: Model): Document => {
   const branch = activeBranch(model)
   const atTip = branch.cursor === branch.actions.length
   const projection = model.projection
-  const initialObserved = hasAction(branch, "ObservedInitialGraph")
-  const absenceObserved = hasAction(branch, "ObservedProvenAbsence")
-  const admittedFreshClaims = projection.admitted.filter(({ tag }) =>
-    tag === "CommitFreshTaskClaimIntent"
-  )
+  const actionsByOrigin = (origin: DriverActionType["origin"]) =>
+    projection.actions.filter((action) => action.origin === origin)
 
   return {
     title: "Dalph reducer lab",
@@ -249,7 +243,7 @@ export const view = (model: Model): Document => {
           h.span([h.Class(`status ${projection.coordinatorRunning ? "good" : "stopped"}`)], [
             projection.coordinatorRunning ? "Coordinator running" : "Coordinator crashed"
           ]),
-          h.span([h.Class("status")], [`${projection.status} · capacity ${model.capacity}`])
+          h.span([h.Class("status")], [`${projection.status} · capacity ${projection.capacity}`])
         ])
       ]),
 
@@ -260,11 +254,6 @@ export const view = (model: Model): Document => {
             button(h, name, SelectedBranch({ branchId: id }), id === model.activeBranchId, "compact")
           ),
           button(h, "Fork at cursor", ForkedAtCursor(), false, "compact accent")
-        ]),
-        h.div([h.Class("toolbar-group")], [
-          h.span([h.Class("label")], ["Capacity"]),
-          button(h, "1", ChangedCapacity({ capacity: 1 }), model.capacity === 1, "compact"),
-          button(h, "2", ChangedCapacity({ capacity: 2 }), model.capacity === 2, "compact")
         ]),
         !atTip
           ? h.p([h.Class("time-travel-note")], [
@@ -301,60 +290,16 @@ export const view = (model: Model): Document => {
 
         h.div([h.Class("main-column")], [
           h.section([h.Class("card controls")], [
-            h.p([h.Class("eyebrow")], ["EVENT CONSOLE"]),
-            h.h2([], ["Give the implementation an input"]),
-            h.div([h.Class("command-grid")], [
-              button(
-                h,
-                "1. Observe graph A–D",
-                append({ _tag: "ObservedInitialGraph" }),
-                !atTip || initialObserved
-              ),
-              button(
-                h,
-                "Observe B proven absent",
-                append({ _tag: "ObservedProvenAbsence" }),
-                !atTip || !initialObserved || absenceObserved,
-                "outline"
-              ),
-              projection.coordinatorRunning
-                ? button(h, "Crash coordinator", append({ _tag: "CrashedCoordinator" }), !atTip, "danger")
-                : button(h, "Restart coordinator", append({ _tag: "RestartedCoordinator" }), !atTip, "danger")
+            h.p([h.Class("eyebrow")], ["DRIVER ACTION PALETTE"]),
+            h.h2([], ["What can happen from this state?"]),
+            h.p([h.Class("authority-state")], [
+              `Tracker authority now: [${projection.trackerTasks.join(", ") || "empty"}]. `,
+              `Dalph last observed: [${projection.knownTasks.join(", ") || "nothing"}].`
             ]),
-            h.div([h.Class("admission-actions")], [
-              h.p([h.Class("label")], ["Admitted now"]),
-              admittedFreshClaims.length === 0
-                ? h.p([h.Class("empty")], ["No fresh claim intent can be committed from this prefix."])
-                : h.div([h.Class("button-row")], admittedFreshClaims.map(({ task }) =>
-                  button(
-                    h,
-                    `Commit claim intent for ${task}`,
-                    append({ _tag: "CommittedClaimIntent", task }),
-                    !atTip || hasClaim(model, task),
-                    "accent"
-                  )
-                ))
-            ]),
-            projection.responsibilities.length === 0
-              ? null
-              : h.div([h.Class("fact-controls")], [
-                h.p([h.Class("label")], ["Supply fresh authority facts (selector seam, not journal commands)"]),
-                ...projection.responsibilities.map(({ task }) => factButtons(h, task, !atTip))
-              ]),
-            h.div([h.Class("gap-panel")], [
-              h.div([], [
-                h.p([h.Class("label warning-text")], ["KNOWN IMPLEMENTATION GAP"]),
-                h.p([], [
-                  "The production pause reducer always returns ",
-                  h.code([], ["RunUnpaused / NoTaskPauses"]),
-                  ". These controls stay disabled so the prototype cannot fake a transition."
-                ])
-              ]),
-              h.div([h.Class("button-row")], [
-                button(h, "Pause run · #62/#134", ForkedAtCursor(), true, "warning"),
-                button(h, "Pause task · #135", ForkedAtCursor(), true, "warning")
-              ])
-            ])
+            actionGroup(h, "Reducer-selected moves", actionsByOrigin("Reducer"), !atTip),
+            actionGroup(h, "External authority", actionsByOrigin("ExternalAuthority"), !atTip),
+            actionGroup(h, "Process controls", actionsByOrigin("Process"), !atTip),
+            actionGroup(h, "Planned but absent from production", actionsByOrigin("Planned"), !atTip)
           ]),
 
           h.div([h.Class("state-grid")], [

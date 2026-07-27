@@ -8,6 +8,25 @@ frontier selector, finality decision, and admission controller directly from
 No backend or persistence is used. Input history, branches, and projections live
 only in the browser tab.
 
+The action palette is returned by the exploration driver. It distinguishes:
+
+- reducer-selected moves, including runnable moves waiting for capacity;
+- external tracker edits and fresh authority facts;
+- coordinator and capacity controls; and
+- planned production behavior that the driver refuses to fake.
+
+Tracker edits change the controlled external authority immediately. The
+reconstructed Dalph state changes only after **Observe tracker target closure**,
+making stale observations and re-observation visible. Capacity is an input in
+the branch history, so undo, redo, and forks restore it consistently.
+
+`src/reducer-surface.ts` exhaustively classifies the production operation,
+journal-event, responsibility, disposition, frontier-transition, explanation,
+and finality unions. A newly added production tag breaks prototype typechecking
+until its driver coverage is classified. The view remains throwaway; this
+registry sketches the maintained test-support seam needed to prevent silent
+feature drift.
+
 The current source boundary is not fully browser-safe: importing
 `managed-history.ts` reaches a static `@effect/platform-node` import through the
 all-events schema and implementation-evidence module. Vite aliases that unused

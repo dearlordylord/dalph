@@ -39,10 +39,15 @@ p { line-height: 1.5; }
 .button.warning { background: #9b5b20; }
 .button.step { width: 100%; padding: 9px; background: transparent; color: #211f1a; font-size: 12px; }
 .button.step:disabled { opacity: 1; background: #d9cfbd; font-weight: 800; }
-.command-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.admission-actions, .fact-controls, .gap-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid #c8c1b5; }
-.fact-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; align-items: center; }
-.task-chip { min-width: 58px; font-weight: 800; }
+.authority-state { font-family: ui-monospace, monospace; background: #e5ded2; padding: 10px; }
+.action-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid #c8c1b5; }
+.action-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.driver-action { border: 1px solid #c8c1b5; padding: 10px; background: #f1ede4; }
+.driver-action .button { width: 100%; }
+.driver-action.available { border-color: #295b46; }
+.driver-action.drivermissing { border-color: #9b5b20; background: #f1e2cc; }
+.driver-action.planned { border-style: dashed; }
+.action-reason { margin: 7px 1px 0; font-size: 12px; color: #625b51; line-height: 1.35; }
 .gap-panel { display: flex; justify-content: space-between; align-items: center; gap: 20px; background: #f1e2cc; padding: 16px; }
 .warning-text { color: #934414; }
 code { font-family: ui-monospace, monospace; background: #e5ded2; padding: 2px 5px; }
@@ -63,7 +68,7 @@ th, td { border-bottom: 1px solid #c8c1b5; padding: 8px; text-align: left; }
   .shell { padding: 18px; }
   .workspace { grid-template-columns: 1fr; }
   .timeline { position: static; max-height: none; }
-  .state-grid, .command-grid { grid-template-columns: 1fr; }
+  .state-grid, .action-list { grid-template-columns: 1fr; }
   .hero, .gap-panel { flex-direction: column; }
   .status-stack { align-items: flex-start; }
 }

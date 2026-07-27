@@ -38,14 +38,40 @@ export const FreshFact = S.Literals(["Ready", "ForeignClaim", "MissingClaim", "P
 export type FreshFact = typeof FreshFact.Type
 
 export const LabAction = S.Union([
-  S.TaggedStruct("ObservedInitialGraph", {}),
-  S.TaggedStruct("ObservedProvenAbsence", {}),
+  S.TaggedStruct("EditedTrackerTask", { present: S.Boolean, task: TaskName }),
+  S.TaggedStruct("ObservedTrackerGraph", {}),
   S.TaggedStruct("CommittedClaimIntent", { task: TaskName }),
   S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, task: TaskName }),
   S.TaggedStruct("CrashedCoordinator", {}),
-  S.TaggedStruct("RestartedCoordinator", {})
+  S.TaggedStruct("RestartedCoordinator", {}),
+  S.TaggedStruct("ChangedCapacity", { capacity: S.Number })
 ])
 export type LabAction = typeof LabAction.Type
+
+export const ActionOrigin = S.Literals([
+  "Reducer",
+  "ExternalAuthority",
+  "Process",
+  "Planned"
+])
+export type ActionOrigin = typeof ActionOrigin.Type
+export const ActionStatus = S.Literals([
+  "Available",
+  "Waiting",
+  "NotCurrent",
+  "DriverMissing",
+  "Planned"
+])
+export type ActionStatus = typeof ActionStatus.Type
+export const DriverAction = S.Struct({
+  command: S.NullOr(LabAction),
+  id: S.String,
+  label: S.String,
+  origin: ActionOrigin,
+  reason: S.String,
+  status: ActionStatus
+})
+export type DriverAction = typeof DriverAction.Type
 
 const Decision = S.Struct({ tag: S.String, task: TaskName })
 const Responsibility = S.Struct({
@@ -56,7 +82,9 @@ const Responsibility = S.Struct({
 const JournalRow = S.Struct({ position: S.Number, tag: S.String })
 
 export const Projection = S.Struct({
+  actions: S.Array(DriverAction),
   admitted: S.Array(Decision),
+  capacity: S.Number,
   coordinatorRunning: S.Boolean,
   errors: S.Array(S.String),
   explanations: S.Array(S.String),
@@ -70,15 +98,14 @@ export const Projection = S.Struct({
   responsibilities: S.Array(Responsibility),
   runPause: S.String,
   status: S.String,
-  taskPause: S.String
+  taskPause: S.String,
+  trackerTasks: S.Array(TaskName)
 })
 export type Projection = typeof Projection.Type
 
 const runId = RunId.make("reducer-lab-run")
 const target = FixtureTarget.make("reducer-lab-target")
 const owner = ClaimOwner.make("reducer-lab-owner")
-const initialGraphOperationId = OperationId.make("graph-observation-initial")
-const absenceGraphOperationId = OperationId.make("graph-observation-proven-absence")
 const taskIds = {
   A: TaskId.make("task-A"),
   B: TaskId.make("task-B"),
@@ -127,7 +154,11 @@ const appendGraphObservation = (
   )
 }
 
-const appendClaimIntent = (records: Array<JournalRecord>, task: TaskName): void => {
+const appendClaimIntent = (
+  records: Array<JournalRecord>,
+  task: TaskName,
+  predecessorOperationId: OperationId
+): void => {
   const operationId = OperationId.make(`claim-${task}`)
   const acquisition = TaskClaimAcquisition.make({
     operationId,
@@ -137,7 +168,7 @@ const appendClaimIntent = (records: Array<JournalRecord>, task: TaskName): void 
   })
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition,
-    predecessorOperationIds: [initialGraphOperationId]
+    predecessorOperationIds: [predecessorOperationId]
   })
   appendRecord(
     records,
@@ -152,22 +183,29 @@ const appendClaimIntent = (records: Array<JournalRecord>, task: TaskName): void 
 const buildInput = (actions: ReadonlyArray<LabAction>) => {
   const records = new Array<JournalRecord>()
   const freshFacts = new Map<TaskName, FreshFact>()
+  const trackerTasks = new Set<TaskName>(["A", "B", "C", "D"])
   let coordinatorRunning = true
+  let capacity = 1
+  let observationOrdinal = 0
+  let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
   for (const action of actions) {
     switch (action._tag) {
-      case "ObservedInitialGraph":
-        appendGraphObservation(records, initialGraphOperationId, Object.values(taskIds), [])
+      case "EditedTrackerTask":
+        if (action.present) trackerTasks.add(action.task)
+        else trackerTasks.delete(action.task)
         break
-      case "ObservedProvenAbsence":
+      case "ObservedTrackerGraph":
+        observationOrdinal += 1
+        latestGraphOperationId = OperationId.make(`graph-observation-${observationOrdinal}`)
         appendGraphObservation(
           records,
-          absenceGraphOperationId,
-          [taskIds.A, taskIds.C, taskIds.D],
-          [taskIds.B]
+          latestGraphOperationId,
+          [...trackerTasks].map((task) => taskIds[task]),
+          Object.values(taskIds)
         )
         break
       case "CommittedClaimIntent":
-        appendClaimIntent(records, action.task)
+        appendClaimIntent(records, action.task, latestGraphOperationId)
         break
       case "SuppliedFreshFact":
         freshFacts.set(action.task, action.fact)
@@ -178,9 +216,12 @@ const buildInput = (actions: ReadonlyArray<LabAction>) => {
       case "RestartedCoordinator":
         coordinatorRunning = true
         break
+      case "ChangedCapacity":
+        capacity = action.capacity
+        break
     }
   }
-  return { coordinatorRunning, freshFacts, records }
+  return { capacity, coordinatorRunning, freshFacts, records, trackerTasks: [...trackerTasks] }
 }
 
 const dispositionFor = (fact: FreshFact) => {
@@ -200,9 +241,13 @@ const decision = (transition: { readonly _tag: string; readonly taskId: TaskId }
 const invalidProjection = (
   records: ReadonlyArray<JournalRecord>,
   coordinatorRunning: boolean,
+  capacity: number,
+  trackerTasks: ReadonlyArray<TaskName>,
   errors: ReadonlyArray<string>
 ): Projection => ({
+  actions: [],
   admitted: [],
+  capacity,
   coordinatorRunning,
   errors,
   explanations: [],
@@ -216,21 +261,150 @@ const invalidProjection = (
   responsibilities: [],
   runPause: "unknown",
   status: "InvalidManagedHistory",
-  taskPause: "unknown"
+  taskPause: "unknown",
+  trackerTasks
 })
+
+const driverAction = (
+  id: string,
+  label: string,
+  origin: ActionOrigin,
+  status: ActionStatus,
+  reason: string,
+  command: LabAction | null
+): DriverAction => ({ command, id, label, origin, reason, status })
+
+const transitionCommand = (
+  transition: { readonly _tag: string; readonly taskId: TaskId },
+  admitted: ReadonlyArray<{ readonly _tag: string; readonly taskId: TaskId }>,
+  coordinatorRunning: boolean
+): DriverAction => {
+  const task = taskName(transition.taskId)
+  if (transition._tag !== "CommitFreshTaskClaimIntent") {
+    return driverAction(
+      `reducer:${transition._tag}:${task}`,
+      `${transition._tag} · ${task}`,
+      "Reducer",
+      "DriverMissing",
+      "The real reducer selected this move, but this prototype driver cannot execute it yet.",
+      null
+    )
+  }
+  const isAdmitted = admitted.some((candidate) =>
+    candidate._tag === transition._tag && candidate.taskId === transition.taskId
+  )
+  return driverAction(
+    `reducer:claim:${task}`,
+    `Commit fresh claim intent · ${task}`,
+    "Reducer",
+    coordinatorRunning && isAdmitted ? "Available" : "Waiting",
+    coordinatorRunning
+      ? isAdmitted
+        ? "Selected by the frontier and admitted within current capacity."
+        : "Runnable, but waiting for capacity."
+      : "Runnable, but the coordinator is crashed.",
+    coordinatorRunning && isAdmitted
+      ? { _tag: "CommittedClaimIntent", task }
+      : null
+  )
+}
+
+const staticDriverActions = (
+  coordinatorRunning: boolean,
+  capacity: number,
+  trackerTasks: ReadonlyArray<TaskName>,
+  responsibilities: Projection["responsibilities"]
+): ReadonlyArray<DriverAction> => [
+  ...(["A", "B", "C", "D"] as const).map((task) => {
+    const present = trackerTasks.includes(task)
+    return driverAction(
+      `authority:toggle:${task}`,
+      `${present ? "Remove" : "Add"} task ${task} in tracker`,
+      "ExternalAuthority",
+      "Available",
+      "Changes the controlled tracker authority only; Dalph state changes after a later observation.",
+      { _tag: "EditedTrackerTask", present: !present, task }
+    )
+  }),
+  driverAction(
+    "authority:observe",
+    "Observe tracker target closure",
+    "ExternalAuthority",
+    coordinatorRunning ? "Available" : "Waiting",
+    coordinatorRunning
+      ? "Reads the current controlled tracker membership through the real graph observation fold."
+      : "The coordinator must be running to perform this read.",
+    coordinatorRunning ? { _tag: "ObservedTrackerGraph" } : null
+  ),
+  ...responsibilities.flatMap(({ task }) =>
+    (["Ready", "ForeignClaim", "MissingClaim", "Paused"] as const).map((fact) =>
+      driverAction(
+        `authority:fact:${task}:${fact}`,
+        `${fact} fact · ${task}`,
+        "ExternalAuthority",
+        "Available",
+        "Supplies a fresh authority fact to the real frontier selector; it is not a journal command.",
+        { _tag: "SuppliedFreshFact", fact, task }
+      )
+    )
+  ),
+  driverAction(
+    "process:crash",
+    "Crash coordinator",
+    "Process",
+    coordinatorRunning ? "Available" : "NotCurrent",
+    coordinatorRunning ? "Stops activation while preserving journal history." : "Coordinator is already crashed.",
+    coordinatorRunning ? { _tag: "CrashedCoordinator" } : null
+  ),
+  driverAction(
+    "process:restart",
+    "Restart coordinator",
+    "Process",
+    coordinatorRunning ? "NotCurrent" : "Available",
+    coordinatorRunning ? "Coordinator is already running." : "Reconstructs from the retained journal prefix.",
+    coordinatorRunning ? null : { _tag: "RestartedCoordinator" }
+  ),
+  ...([1, 2] as const).map((nextCapacity) =>
+    driverAction(
+      `process:capacity:${nextCapacity}`,
+      `Set capacity to ${nextCapacity}`,
+      "Process",
+      capacity === nextCapacity ? "NotCurrent" : "Available",
+      capacity === nextCapacity ? `Capacity is already ${nextCapacity}.` : "Changes bounded admission for subsequent projections.",
+      capacity === nextCapacity ? null : { _tag: "ChangedCapacity", capacity: nextCapacity }
+    )
+  ),
+  driverAction(
+    "planned:pause-run",
+    "Pause run",
+    "Planned",
+    "Planned",
+    "The production reconstructed pause reducer currently has no paused-run state.",
+    null
+  ),
+  driverAction(
+    "planned:pause-task",
+    "Pause task",
+    "Planned",
+    "Planned",
+    "The production reconstructed pause reducer currently has no paused-task state.",
+    null
+  )
+]
 
 /** Runs the real Dalph fold, reconstructed-run reducers, selector, and admission controller. */
 export const projectLab = (
-  actions: ReadonlyArray<LabAction>,
-  capacity: number
+  actions: ReadonlyArray<LabAction>
 ): Effect.Effect<Projection> =>
   Effect.gen(function*() {
-    const { coordinatorRunning, freshFacts, records } = buildInput(actions)
+    const { capacity, coordinatorRunning, freshFacts, records, trackerTasks } = buildInput(actions)
     const reduced = reduceManagedHistory(runId, records)
     if (reduced._tag === "InvalidManagedHistory") {
       return invalidProjection(
         records,
         coordinatorRunning,
+        capacity,
+        trackerTasks,
         reduced.issues.map(({ detail, position }) => `#${position}: ${detail}`)
       )
     }
@@ -281,9 +455,21 @@ export const projectLab = (
     const snapshot = yield* controller.snapshot()
     const admitted = coordinatorRunning ? preview.transitions : []
     const finality = deriveRunFinalityDecision(frontier, run.responsibility, false)
+    const responsibilities = run.responsibility.entries.map((entry) => ({
+      beganAt: entry.beganAt,
+      kind: entry._tag,
+      task: taskName(entry.taskId)
+    }))
 
     return {
+      actions: [
+        ...frontier.transitions.map((transition) =>
+          transitionCommand(transition, admitted, coordinatorRunning)
+        ),
+        ...staticDriverActions(coordinatorRunning, capacity, trackerTasks, responsibilities)
+      ],
       admitted: admitted.map(decision),
+      capacity,
       coordinatorRunning,
       errors: [],
       explanations: preview.explanations.map((explanation) =>
@@ -309,24 +495,22 @@ export const projectLab = (
         "Pause facts can be supplied to the selector seam, but the reconstructed pause reducer itself always returns unpaused."
       ],
       reservedTasks: snapshot.reservedTaskIds.map(taskName),
-      responsibilities: run.responsibility.entries.map((entry) => ({
-        beganAt: entry.beganAt,
-        kind: entry._tag,
-        task: taskName(entry.taskId)
-      })),
+      responsibilities,
       runPause: run.pause.run._tag,
       status: reduced._tag,
-      taskPause: run.pause.tasks._tag
+      taskPause: run.pause.tasks._tag,
+      trackerTasks
     }
   })
 
 export const actionLabel = (action: LabAction): string => {
   switch (action._tag) {
-    case "ObservedInitialGraph": return "Observe target closure: A, B, C, D"
-    case "ObservedProvenAbsence": return "Observe B proven absent"
+    case "EditedTrackerTask": return `${action.present ? "Add" : "Remove"} ${action.task} in tracker`
+    case "ObservedTrackerGraph": return "Observe tracker target closure"
     case "CommittedClaimIntent": return `Commit claim intent for ${action.task}`
     case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.task}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
+    case "ChangedCapacity": return `Set capacity to ${action.capacity}`
   }
 }
