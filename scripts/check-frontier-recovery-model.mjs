@@ -248,10 +248,22 @@ const exhaustiveProfiles = [
     "reconciliationProfileStep"
   ],
   [
-    "activation ownership and independent coordinator-worker lifetimes",
+    "activation ownership and result release",
     "frontierRecoveryCapacityTwo",
     "init",
-    "activationProfileStep"
+    "activationOwnershipProfileStep"
+  ],
+  [
+    "activation interruption and fresh capacity evidence",
+    "frontierRecoveryCapacityTwo",
+    "init",
+    "activationInterruptionProfileStep"
+  ],
+  [
+    "independent coordinator-worker lifetimes and reconstruction",
+    "frontierRecoveryCapacityTwo",
+    "init",
+    "activationCrashReconstructionProfileStep"
   ]
 ]
 const invariantExpression = invariants.join(" and ")
@@ -272,7 +284,7 @@ for (const [name, main, init, step] of exhaustiveProfiles) {
     "--invariant",
     invariantExpression,
     "--verbosity",
-    "1"
+    "3"
   ])
 }
 

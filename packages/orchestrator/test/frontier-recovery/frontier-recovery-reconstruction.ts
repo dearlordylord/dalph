@@ -1,5 +1,8 @@
-import { Effect } from "effect"
-import { OperationId } from "../../src/domain.js"
+/* eslint-disable max-lines -- This closed adapter keeps action execution and its journal projection together. */
+import { Effect, Option } from "effect"
+import { makeActivationOwnershipRegistry } from "../../src/activation-coordinator.js"
+import { OperationId, ProviderObservationId, TaskRevision } from "../../src/domain.js"
+import type { TaskId } from "../../src/domain.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
@@ -10,6 +13,13 @@ import {
 } from "../../src/journal-store.js"
 import { reduceManagedHistory } from "../../src/managed-history.js"
 import type { WorkflowResponsibilityState } from "../../src/reconstructed-managed-run-state.js"
+import {
+  deriveRunnableFrontier,
+  ResponsibilityDisposition,
+  type RunnableFrontier
+} from "../../src/runnable-frontier.js"
+import { makeSelectedTransitionIdentity } from "../../src/selected-transition.js"
+import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
 import { TaskClaimAcquisition } from "../../src/tracker-mutation.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -67,6 +77,84 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     tasks: taskEntries
   })
   let coordinatorRunning = options.coordinatorRunning
+  let activationController = yield* makeTaskAdmissionController({
+    capacity: options.capacity,
+    freshOccupiedInvocations: [],
+    reconstructedReservedPositions: []
+  })
+  let activationOwnership = yield* makeActivationOwnershipRegistry(runId)
+  let activationDerived: RunnableFrontier = {
+    explanations: [],
+    transitions: []
+  }
+  let activationSelected: RunnableFrontier = {
+    explanations: [],
+    transitions: []
+  }
+  let activationRunners: ReadonlySet<string> = new Set()
+  let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map()
+  let activationTriggerPending = true
+  let freshlyObservedTaskIds: ReadonlySet<TaskId> = new Set()
+  let postIntentExitedTaskIds: ReadonlySet<TaskId> = new Set()
+  let preIntentInterruptedTaskIds: ReadonlySet<TaskId> = new Set()
+  let resultsRecordedTaskIds: ReadonlySet<TaskId> = new Set()
+
+  const deriveActivationFrontier = Effect.fn(
+    "FrontierRecoveryReconstruction.deriveActivationFrontier"
+  )(function*() {
+    const reduced = reduceManagedHistory(
+      runId,
+      yield* options.journal.read(runId)
+    )
+    if (reduced._tag === "InvalidManagedHistory") {
+      return yield* frontierRecoveryReconstructionIssue(
+        "InvalidManagedHistory",
+        reduced.issues.map(({ detail }) => detail).join("; ")
+      )
+    }
+    return deriveRunnableFrontier({
+      freshEligibleTasks: taskEntries
+        .filter(({ model }) =>
+          (options.freshEligibleModelTaskIds ?? [modelTaskA, modelTaskC])
+            .includes(model)
+        )
+        .map(({ branded, model }) => ({
+          taskId: branded,
+          taskRevision: TaskRevision.make(`M2-revision:${model}`)
+        })),
+      responsibility: reduced.managedRun.responsibility,
+      responsibilityFacts: reduced.managedRun.responsibility.entries.map(
+        (responsibility) => ({
+          disposition: ResponsibilityDisposition.Ready(),
+          responsibility
+        })
+      )
+    })
+  })
+
+  const activationTransitionFor = Effect.fn(
+    "FrontierRecoveryReconstruction.activationTransitionFor"
+  )(function*(modelTaskId: FrontierRecoveryModelTaskId) {
+    const taskId = yield* identityMapping.taskFromModel(modelTaskId)
+    const transition = activationDerived.transitions.find(
+      (candidate) => candidate.taskId === taskId
+    )
+    return transition === undefined
+      ? yield* new FrontierRecoveryConformanceIssue({
+        detail: `M2 activation has no derived transition for task ${modelTaskId}`,
+        reason: "MissingMapping"
+      })
+      : transition
+  })
+
+  const activationOperationFor = (
+    modelTaskId: FrontierRecoveryModelTaskId
+  ) =>
+    identityMapping.operationFromModel(
+      modelTaskId === modelTaskA
+        ? firstClaimOperationIdentity
+        : secondClaimOperationIdentity
+    )
 
   const selectFrontier = Effect.fn(
     "FrontierRecoveryReconstruction.selectFrontier"
@@ -135,8 +223,249 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     )
   })
 
+  const runActivationAction = Effect.fn(
+    "FrontierRecoveryReconstruction.runActivationAction"
+  )(function*(action: FrontierRecoveryActivationAction) {
+    const taskAction = "task" in action ? action : undefined
+    const transition = taskAction === undefined
+      ? undefined
+      : yield* activationTransitionFor(taskAction.task)
+    const selected = transition === undefined
+      ? undefined
+      : makeSelectedTransitionIdentity(runId, transition)
+
+    switch (action._tag) {
+      case "deriveActivationPass": {
+        activationDerived = yield* deriveActivationFrontier()
+        activationSelected = yield* activationOwnership.exclude(
+          activationDerived
+        )
+        activationTriggerPending = false
+        return
+      }
+      case "excludeOwnedTransitions": {
+        activationSelected = yield* activationOwnership.exclude(
+          activationDerived
+        )
+        activationTriggerPending = false
+        return
+      }
+      case "reserveTaskAdmissionPosition": {
+        if (transition === undefined) return
+        yield* activationController.admit(
+          {
+            explanations: activationSelected.explanations,
+            transitions: [transition]
+          },
+          runId
+        )
+        activationSelected = {
+          ...activationSelected,
+          transitions: activationSelected.transitions.filter(
+            (candidate) => candidate !== transition
+          )
+        }
+        postIntentExitedTaskIds = new Set(
+          [...postIntentExitedTaskIds].filter((taskId) => taskId !== transition.taskId)
+        )
+        preIntentInterruptedTaskIds = new Set(
+          [...preIntentInterruptedTaskIds].filter((taskId) => taskId !== transition.taskId)
+        )
+        return
+      }
+      case "claimActivationOwnership": {
+        if (transition === undefined) return
+        const registered = yield* activationOwnership.register(transition)
+        if (registered !== undefined) {
+          activationSelected = {
+            ...activationSelected,
+            transitions: activationSelected.transitions.filter(
+              ({ taskId }) => taskId !== transition.taskId
+            )
+          }
+          activationRunners = new Set([
+            ...activationRunners,
+            registered.key
+          ])
+        }
+        return
+      }
+      case "rejectDuplicateOwnership": {
+        if (transition === undefined) return
+        const registered = yield* activationOwnership.register(transition)
+        const snapshot = yield* activationOwnership.snapshot()
+        const key = registered?.key
+          ?? [...snapshot.owners]
+            .find(([, entry]) => entry.transition.taskId === transition.taskId)?.[0]
+        if (key !== undefined) yield* activationOwnership.isolate(key)
+        return
+      }
+      case "recordOwnedOperationIntent": {
+        if (transition === undefined || selected === undefined) return
+        const operationId = yield* activationOperationFor(action.task)
+        yield* activationController.bindReservedPosition(
+          selected,
+          operationId
+        )
+        const owner = [...(yield* activationOwnership.snapshot()).owners]
+          .find(([, entry]) => entry.transition.taskId === transition.taskId)
+        if (owner !== undefined) {
+          yield* activationOwnership.bindOperation(owner[0], operationId)
+        }
+        return
+      }
+      case "interruptBeforeOwnership": {
+        if (selected !== undefined) {
+          yield* activationController.cancelReservedPosition(selected)
+          preIntentInterruptedTaskIds = new Set([
+            ...preIntentInterruptedTaskIds,
+            selected.subjectTaskId
+          ])
+          activationTriggerPending = true
+        }
+        return
+      }
+      case "interruptAfterOwnershipBeforeIntent": {
+        if (transition === undefined || selected === undefined) return
+        const owner = [...(yield* activationOwnership.snapshot()).owners]
+          .find(([, entry]) => entry.transition.taskId === transition.taskId)
+        if (owner !== undefined) {
+          yield* activationOwnership.remove(owner[0])
+          activationRunners = new Set(
+            [...activationRunners].filter((key) => key !== owner[0])
+          )
+        }
+        yield* activationController.cancelReservedPosition(selected)
+        preIntentInterruptedTaskIds = new Set([
+          ...preIntentInterruptedTaskIds,
+          transition.taskId
+        ])
+        activationTriggerPending = true
+        return
+      }
+      case "interruptAfterIntent": {
+        if (transition === undefined) return
+        const owner = [...(yield* activationOwnership.snapshot()).owners]
+          .find(([, entry]) => entry.transition.taskId === transition.taskId)
+        if (owner !== undefined) {
+          yield* activationOwnership.remove(owner[0])
+          activationRunners = new Set(
+            [...activationRunners].filter((key) => key !== owner[0])
+          )
+        }
+        postIntentExitedTaskIds = new Set([
+          ...postIntentExitedTaskIds,
+          transition.taskId
+        ])
+        activationTriggerPending = true
+        return
+      }
+      case "recordOwnedResultAndRelease": {
+        if (transition === undefined) return
+        const owner = [...(yield* activationOwnership.snapshot()).owners]
+          .find(([, entry]) => entry.transition.taskId === transition.taskId)
+        if (owner !== undefined) {
+          yield* activationOwnership.remove(owner[0])
+          activationRunners = new Set(
+            [...activationRunners].filter((key) => key !== owner[0])
+          )
+        }
+        yield* activationController.releaseTaskAdmissionPosition(
+          yield* activationOperationFor(action.task)
+        )
+        resultsRecordedTaskIds = new Set([
+          ...resultsRecordedTaskIds,
+          transition.taskId
+        ])
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([taskId]) => taskId !== transition.taskId)
+        )
+        activationTriggerPending = true
+        return
+      }
+      case "observeCapacityConsumed": {
+        if (transition === undefined) return
+        const operationId = yield* activationOperationFor(action.task)
+        providerWorkers = new Map([
+          ...providerWorkers,
+          [transition.taskId, operationId]
+        ])
+        freshlyObservedTaskIds = new Set([
+          ...freshlyObservedTaskIds,
+          transition.taskId
+        ])
+        activationTriggerPending = true
+        yield* activationController.applyFreshInvocationObservation({
+          _tag: "FreshCapacityConsumed",
+          observationId: ProviderObservationId.make(
+            `M2-consumed:${action.task}`
+          ),
+          operationId,
+          taskId: transition.taskId
+        })
+        return
+      }
+      case "observeCapacityReleased":
+      case "stopProviderWorker": {
+        if (transition === undefined) return
+        const operationId = yield* activationOperationFor(action.task)
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([taskId]) => taskId !== transition.taskId)
+        )
+        freshlyObservedTaskIds = new Set([
+          ...freshlyObservedTaskIds,
+          transition.taskId
+        ])
+        activationTriggerPending = true
+        yield* activationController.applyFreshInvocationObservation({
+          _tag: "FreshCapacityReleased",
+          observationId: ProviderObservationId.make(
+            `M2-released:${action.task}`
+          ),
+          operationId,
+          taskId: transition.taskId
+        })
+        return
+      }
+      case "crashCoordinatorWithActivation": {
+        coordinatorRunning = false
+        activationOwnership = yield* makeActivationOwnershipRegistry(runId)
+        activationController = yield* makeTaskAdmissionController({
+          capacity: options.capacity,
+          freshOccupiedInvocations: [],
+          reconstructedReservedPositions: []
+        })
+        activationRunners = new Set()
+        activationDerived = { explanations: [], transitions: [] }
+        activationSelected = { explanations: [], transitions: [] }
+        activationTriggerPending = false
+        return
+      }
+      case "reconstructActivation": {
+        coordinatorRunning = true
+        activationOwnership = yield* makeActivationOwnershipRegistry(runId)
+        activationController = yield* makeTaskAdmissionController({
+          capacity: options.capacity,
+          freshOccupiedInvocations: [...providerWorkers].map(
+            ([taskId, operationId], index) => ({
+              observationId: ProviderObservationId.make(
+                `M2-reconstructed:${index}`
+              ),
+              operationId,
+              taskId
+            })
+          ),
+          reconstructedReservedPositions: []
+        })
+        activationRunners = new Set()
+        activationTriggerPending = true
+        return
+      }
+    }
+  })
+
   const rawControls = {
-    activation: (_action: FrontierRecoveryActivationAction) => Effect.void,
+    activation: (action: FrontierRecoveryActivationAction) => runActivationAction(action).pipe(Effect.orDie),
     orchestratorCommitsFreshTaskClaimIntent: (modelTaskId: FrontierRecoveryModelTaskId) =>
       Effect.gen(function*() {
         if (!coordinatorRunning) {
@@ -368,7 +697,94 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             ? "CompatibleReplacement" as const
             : "InitialObservation" as const
         }
+      const ownershipSnapshot = yield* activationOwnership.snapshot()
+      const controllerSnapshot = yield* activationController.snapshot()
+      const projectTaskIds = (
+        taskIds: Iterable<TaskId>
+      ) =>
+        Effect.forEach(
+          [...taskIds].sort(),
+          identityMapping.taskToModel
+        )
+      const activationOwners = yield* Effect.forEach(
+        [...ownershipSnapshot.owners].sort(([left], [right]) => left.localeCompare(right)),
+        ([, owner]) =>
+          Effect.gen(function*() {
+            const operationId = Option.getOrUndefined(owner.operationId)
+            return {
+              ...(operationId === undefined
+                ? {}
+                : {
+                  modelOperationId: yield* identityMapping.operationToModel(operationId)
+                }),
+              modelTaskId: yield* identityMapping.taskToModel(
+                owner.transition.taskId
+              ),
+              phase: operationId === undefined
+                ? "PreIntent" as const
+                : "PostIntent" as const
+            }
+          })
+      )
+      const ownerByKey = ownershipSnapshot.owners
       return {
+        activation: {
+          derivedModelTaskIds: yield* projectTaskIds(
+            activationDerived.transitions.map(({ taskId }) => taskId)
+          ),
+          freshlyObservedModelTaskIds: yield* projectTaskIds(
+            freshlyObservedTaskIds
+          ),
+          isolatedModelTaskIds: yield* projectTaskIds(
+            [...ownershipSnapshot.isolatedTransitionKeys].flatMap((key) => {
+              const owner = ownerByKey.get(key)
+              return owner === undefined ? [] : [owner.transition.taskId]
+            })
+          ),
+          owners: activationOwners,
+          postIntentExitedModelTaskIds: yield* projectTaskIds(
+            postIntentExitedTaskIds
+          ),
+          preIntentInterruptedModelTaskIds: yield* projectTaskIds(
+            preIntentInterruptedTaskIds
+          ),
+          providerConsumingModelTaskIds: yield* projectTaskIds(
+            providerWorkers.keys()
+          ),
+          reservedPositions: yield* Effect.forEach(
+            controllerSnapshot.reservedPositions,
+            ({ correlation, taskId }) =>
+              Effect.gen(function*() {
+                const operationId = correlation._tag === "OperationReservation"
+                  ? correlation.operationId
+                  : undefined
+                return {
+                  correlation: operationId === undefined
+                    ? "SelectedTransition" as const
+                    : "Operation" as const,
+                  ...(operationId === undefined
+                    ? {}
+                    : {
+                      modelOperationId: yield* identityMapping.operationToModel(operationId)
+                    }),
+                  modelTaskId: yield* identityMapping.taskToModel(taskId)
+                }
+              })
+          ),
+          resultsRecordedModelTaskIds: yield* projectTaskIds(
+            resultsRecordedTaskIds
+          ),
+          runnerModelTaskIds: yield* projectTaskIds(
+            [...activationRunners].flatMap((key) => {
+              const owner = ownerByKey.get(key)
+              return owner === undefined ? [] : [owner.transition.taskId]
+            })
+          ),
+          selectedModelTaskIds: yield* projectTaskIds(
+            activationSelected.transitions.map(({ taskId }) => taskId)
+          ),
+          triggerPending: activationTriggerPending
+        },
         admissionCapacity: selection.admissionCapacity,
         admittedTransitionOperations: selection.admittedTransitionOperations,
         admittedModelTaskIds: selection.admittedModelTaskIds,

@@ -2,16 +2,20 @@ import { it } from "@effect/vitest"
 import { Deferred, Effect, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { OperationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
+import { OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
+
+const freshTransition = (taskId: TaskId) =>
+  RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+    taskId,
+    taskRevision: TaskRevision.make(`revision:${taskId}`)
+  })
 
 it.effect("coalesces concurrent triggers into one owner for one exact transition", () =>
   Effect.scoped(Effect.gen(function*() {
     const taskId = TaskId.make("activation-A")
-    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId
-    })
+    const transition = freshTransition(taskId)
     const releaseRunner = yield* Deferred.make<void>()
     const runnerStarted = yield* Deferred.make<void>()
     const runnerCount = yield* Ref.make(0)
@@ -51,8 +55,8 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
     const taskA = TaskId.make("overlap-A")
     const taskC = TaskId.make("overlap-C")
     const transitions = [
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskA }),
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskC })
+      freshTransition(taskA),
+      freshTransition(taskC)
     ]
     const started = yield* Queue.unbounded<TaskId>()
     const releaseRunners = yield* Deferred.make<void>()
@@ -83,9 +87,7 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
 it.effect("keeps the immutable selection correlation after intent", () =>
   Effect.scoped(Effect.gen(function*() {
     const taskId = TaskId.make("mixed-time-A")
-    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId
-    })
+    const transition = freshTransition(taskId)
     const intentRecorded = yield* Deferred.make<void>()
     const releaseRunner = yield* Deferred.make<void>()
     const runnerCount = yield* Ref.make(0)
@@ -125,12 +127,8 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
     const preIntentTask = TaskId.make("exit-before-intent")
     const postIntentTask = TaskId.make("exit-after-intent")
     const frontier = yield* Ref.make([
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId: preIntentTask
-      }),
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId: postIntentTask
-      })
+      freshTransition(preIntentTask),
+      freshTransition(postIntentTask)
     ])
     const exits = yield* Queue.unbounded<TaskId>()
     const controller = yield* makeTaskAdmissionController({
@@ -153,8 +151,7 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
           ),
           Effect.andThen(Queue.offer(exits, transition.taskId)),
           Effect.andThen(Effect.fail("controlled runner exit"))
-        ),
-      onSubjectDefect: () => Effect.void
+        )
     })
 
     yield* coordinator.signal(ActivationCause.Startup())
@@ -185,12 +182,8 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
       readFrontier: Effect.succeed({
         explanations: [],
         transitions: [
-          RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-            taskId: preIntentTask
-          }),
-          RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-            taskId: postIntentTask
-          })
+          freshTransition(preIntentTask),
+          freshTransition(postIntentTask)
         ]
       }),
       runId: RunId.make("live-owners-run"),
@@ -245,7 +238,7 @@ it.effect("records a result, releases its exact position, and rederives the next
       readFrontier: Ref.get(remaining).pipe(
         Effect.map((tasks) => ({
           explanations: [],
-          transitions: tasks.map((taskId) => RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId }))
+          transitions: tasks.map(freshTransition)
         }))
       ),
       runId: RunId.make("result-release-run"),
@@ -268,4 +261,33 @@ it.effect("records a result, releases its exact position, and rederives the next
     expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
 
     yield* Deferred.succeed(releaseC, undefined)
+  })))
+
+it.effect("finishes an owned non-capacity operation without releasing an absent position", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskId = TaskId.make("non-capacity-claim")
+    const transition = RunnableFrontierTransition.CheckTaskClaim({
+      operationId: OperationId.make("non-capacity-operation"),
+      taskId
+    })
+    const remaining = yield* Ref.make([transition])
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      readFrontier: Ref.get(remaining).pipe(
+        Effect.map((transitions) => ({ explanations: [], transitions }))
+      ),
+      runId: RunId.make("non-capacity-run"),
+      runTransition: () => Ref.set(remaining, [])
+    })
+
+    yield* coordinator.signal(ActivationCause.Startup())
+    yield* Effect.yieldNow
+
+    expect(yield* Ref.get(remaining)).toEqual([])
+    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
   })))

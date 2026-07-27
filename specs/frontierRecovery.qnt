@@ -1540,6 +1540,7 @@ module frontierRecovery {
 
   action reserveTaskAdmissionPosition(task: TaskId): bool = all {
     state.activation.selectedTransitions.contains(task),
+    state.activation.selectedTransitions.forall(candidate => task <= candidate),
     state.activation.positions.get(task) == ActivationPositionAvailable,
     activationCapacityUsage(state) < state.activation.configuredCapacity,
     state' = {
@@ -2341,6 +2342,61 @@ module frontierRecovery {
       recordOwnedResultAndRelease(task),
       observeCapacityConsumed(task),
       observeCapacityReleased(task),
+      crashCoordinatorWithActivation,
+      stopProviderWorker(task),
+      reconstructActivation,
+    }
+  }
+
+  // Focused executable prefix: derive current work, reserve the canonical
+  // first transition, establish its exact owner, then derive again before the
+  // runner records a result.
+  action activationOwnedThenDerivedPrefixStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    any {
+      deriveActivationPass,
+      reserveTaskAdmissionPosition(task),
+      claimActivationOwnership(task),
+    }
+  }
+
+  action activationOwnershipProfileStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    any {
+      deriveActivationPass,
+      excludeOwnedTransitions,
+      reserveTaskAdmissionPosition(task),
+      claimActivationOwnership(task),
+      rejectDuplicateOwnership(task),
+      recordOwnedOperationIntent(task),
+      recordOwnedResultAndRelease(task),
+    }
+  }
+
+  action activationInterruptionProfileStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    any {
+      deriveActivationPass,
+      reserveTaskAdmissionPosition(task),
+      claimActivationOwnership(task),
+      recordOwnedOperationIntent(task),
+      interruptBeforeOwnership(task),
+      interruptAfterOwnershipBeforeIntent(task),
+      interruptAfterIntent(task),
+      recordOwnedResultAndRelease(task),
+      observeCapacityConsumed(task),
+      observeCapacityReleased(task),
+    }
+  }
+
+  action activationCrashReconstructionProfileStep: bool = {
+    nondet task = Set(A, C).oneOf()
+    any {
+      deriveActivationPass,
+      reserveTaskAdmissionPosition(task),
+      claimActivationOwnership(task),
+      recordOwnedOperationIntent(task),
+      observeCapacityConsumed(task),
       crashCoordinatorWithActivation,
       stopProviderWorker(task),
       reconstructActivation,

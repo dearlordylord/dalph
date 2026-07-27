@@ -18,6 +18,7 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  TaskRevision,
   TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
@@ -46,6 +47,12 @@ import {
   makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation
 } from "./workflow-operation.js"
+
+const freshTransition = (taskId: TaskId) =>
+  RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+    taskId,
+    taskRevision: TaskRevision.make(`revision:${taskId}`)
+  })
 
 const taskId = TaskId.make("responsibility-task")
 const task = {
@@ -191,7 +198,7 @@ const responsibilities = () => {
 it("derives the exact continuation for every reconstructed responsibility", () => {
   const entries = responsibilities()
   const frontier = deriveRunnableFrontier({
-    freshEligibleTaskIds: [],
+    freshEligibleTasks: [],
     responsibility: WorkflowResponsibilityState.make({ entries }),
     responsibilityFacts: entries.map((responsibility) => ({
       disposition: ResponsibilityDisposition.Ready(),
@@ -274,7 +281,7 @@ it("derives missing-claim reconciliation and exact fact issues", () => {
   }
   expect(
     deriveRunnableFrontier({
-      freshEligibleTaskIds: [],
+      freshEligibleTasks: [],
       responsibility: state,
       responsibilityFacts: [missingClaim]
     }).transitions
@@ -285,7 +292,10 @@ it("derives missing-claim reconciliation and exact fact issues", () => {
   }])
   expect(
     deriveRunnableFrontier({
-      freshEligibleTaskIds: [taskId],
+      freshEligibleTasks: [{
+        taskId,
+        taskRevision: TaskRevision.make(`revision:${taskId}`)
+      }],
       responsibility: state,
       responsibilityFacts: []
     })
@@ -299,7 +309,7 @@ it("derives missing-claim reconciliation and exact fact issues", () => {
   })
   expect(
     deriveRunnableFrontier({
-      freshEligibleTaskIds: [],
+      freshEligibleTasks: [],
       responsibility: state,
       responsibilityFacts: [missingClaim, missingClaim]
     }).explanations
@@ -374,9 +384,7 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
           operationId: OperationId.make("capacity-A-claim"),
           taskId: taskA
         }),
-        RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-          taskId: taskC
-        }),
+        freshTransition(taskC),
         RunnableFrontierTransition.ContinueImplementationReview({
           operationId: OperationId.make("capacity-C-review"),
           taskId: taskC
@@ -408,9 +416,7 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
       (yield* controller.admit({
         explanations: [],
         transitions: [
-          RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-            taskId: taskC
-          })
+          freshTransition(taskC)
         ]
       }, capacityRunId)).transitions
     ).toHaveLength(1)
@@ -500,7 +506,7 @@ it.effect("uses current restart capacity without preempting freshly observed inv
           {
             explanations: [],
             transitions: [
-              RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId })
+              freshTransition(taskId)
             ]
           },
           RunId.make(`${scenario.label}-run`)
@@ -530,7 +536,7 @@ it.effect("returns capacity waiting and signals when exact release may permit ad
       yield* controller.admit({
         explanations: [],
         transitions: [
-          RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId: taskB })
+          freshTransition(taskB)
         ]
       }, RunId.make("capacity-return-run"))
     ).toEqual({

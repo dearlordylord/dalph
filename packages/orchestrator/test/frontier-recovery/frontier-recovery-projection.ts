@@ -120,7 +120,31 @@ export type FrontierRecoveryTransitionOperation =
     readonly modelOperationId: FrontierRecoveryModelOperationId
   }
 
+export interface FrontierRecoveryActivationProjection {
+  readonly derivedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly freshlyObservedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly isolatedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly owners: ReadonlyArray<{
+    readonly modelOperationId?: FrontierRecoveryModelOperationId
+    readonly modelTaskId: FrontierRecoveryModelTaskId
+    readonly phase: "PostIntent" | "PreIntent"
+  }>
+  readonly postIntentExitedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly preIntentInterruptedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly providerConsumingModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly reservedPositions: ReadonlyArray<{
+    readonly correlation: "Operation" | "SelectedTransition"
+    readonly modelOperationId?: FrontierRecoveryModelOperationId
+    readonly modelTaskId: FrontierRecoveryModelTaskId
+  }>
+  readonly resultsRecordedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly runnerModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly selectedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly triggerPending: boolean
+}
+
 export interface FrontierRecoveryReconstructionProjection {
+  readonly activation: FrontierRecoveryActivationProjection
   readonly admissionCapacity: FrontierRecoveryModelCapacity
   readonly admittedTransitionOperations: ReadonlyArray<FrontierRecoveryTransitionOperation>
   readonly admittedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>

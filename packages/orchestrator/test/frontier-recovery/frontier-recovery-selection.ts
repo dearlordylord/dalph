@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { TaskRevision } from "../../src/domain.js"
 import type { OperationId, TaskId, TaskWorkCapacity } from "../../src/domain.js"
 import type { WorkflowResponsibilityState } from "../../src/reconstructed-managed-run-state.js"
 import {
@@ -54,9 +55,12 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
       : []
   )
   const frontier = deriveRunnableFrontier({
-    freshEligibleTaskIds: input.taskEntries
+    freshEligibleTasks: input.taskEntries
       .filter(({ model }) => input.eligibleModelTaskIds.includes(model))
-      .map(({ branded }) => branded),
+      .map(({ branded, model }) => ({
+        taskId: branded,
+        taskRevision: TaskRevision.make(`M2-revision:${model}`)
+      })),
     responsibility: input.responsibility,
     responsibilityFacts
   })

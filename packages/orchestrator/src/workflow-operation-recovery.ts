@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import type { RunId } from "./domain.js"
+import type { OperationId, RunId } from "./domain.js"
 import { JournalStore } from "./journal-store.js"
 import { TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { TrackerGraphOutcomeObserved as TrackerGraphOutcomeObservedTrace } from "./tracker-workflow-trace.js"
@@ -18,7 +18,7 @@ import {
 /** Reconciles an unfinished tracker-graph read through the real tracker boundary. */
 export const recoverTrackerGraphObservations = Effect.fn(
   "WorkflowRecovery.recoverTrackerGraphObservations"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -29,6 +29,8 @@ export const recoverTrackerGraphObservations = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "TrackerGraphObservationIntentRecorded"
       && !observed.has(event.operation.operationId)
+      && (exactOperationId === undefined
+        || event.operation.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -46,7 +48,7 @@ export const recoverTrackerGraphObservations = Effect.fn(
 /** Reconciles exact claim intents that lack a durable authoritative outcome. */
 export const recoverTaskClaimAcquisitions = Effect.fn(
   "WorkflowRecovery.recoverTaskClaimAcquisitions"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -57,6 +59,8 @@ export const recoverTaskClaimAcquisitions = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "TaskClaimAcquisitionIntended"
       && !acquired.has(event.operation.acquisition.operationId)
+      && (exactOperationId === undefined
+        || event.operation.acquisition.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -73,7 +77,7 @@ export const recoverTaskClaimAcquisitions = Effect.fn(
 /** Reconciles exact Git intents that lack a durable Base/HEAD proof. */
 export const recoverTaskWorktreeReconciliations = Effect.fn(
   "WorkflowRecovery.recoverTaskWorktreeReconciliations"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -82,6 +86,8 @@ export const recoverTaskWorktreeReconciliations = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "TaskWorktreeReconciliationIntended"
       && !ready.has(event.operation.operationId)
+      && (exactOperationId === undefined
+        || event.operation.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -98,7 +104,7 @@ export const recoverTaskWorktreeReconciliations = Effect.fn(
 /** Reconstructs unresolved session-establishment operations from ordered history. */
 export const recoverTaskWorkSessionEstablishments = Effect.fn(
   "WorkflowRecovery.recoverTaskWorkSessionEstablishments"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -109,6 +115,8 @@ export const recoverTaskWorkSessionEstablishments = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
       && !established.has(event.operation.request.operationId)
+      && (exactOperationId === undefined
+        || event.operation.request.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -120,7 +128,7 @@ export const recoverTaskWorkSessionEstablishments = Effect.fn(
 
 /** Observes unresolved exact execution intents before any later retry policy exists. */
 export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExecutions")(
-  function*(runId: RunId) {
+  function*(runId: RunId, exactOperationId?: OperationId) {
     const interpreter = yield* WorkflowInterpreter
     const journal = yield* JournalStore
     const trace = yield* WorkflowTrace
@@ -133,6 +141,8 @@ export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExec
     const unresolved = records.flatMap(({ event }) =>
       event._tag === "TaskExecutionIntentRecorded"
         && !observed.has(event.operation.request.operationId)
+        && (exactOperationId === undefined
+          || event.operation.request.operationId === exactOperationId)
         ? [event.operation]
         : []
     )
@@ -146,7 +156,7 @@ export const recoverTaskExecutions = Effect.fn("WorkflowRecovery.recoverTaskExec
 /** Resumes one exact journaled reviewer session without allocating a semantic round. */
 export const recoverImplementationReviews = Effect.fn(
   "WorkflowRecovery.recoverImplementationReviews"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -159,6 +169,8 @@ export const recoverImplementationReviews = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "ImplementationReviewIntended"
       && !completed.has(event.operation.request.operationId)
+      && (exactOperationId === undefined
+        || event.operation.request.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -175,7 +187,7 @@ export const recoverImplementationReviews = Effect.fn(
 /** Resumes an exact findings handback under its journaled implementer binding. */
 export const recoverReviewFindingsHandbacks = Effect.fn(
   "WorkflowRecovery.recoverReviewFindingsHandbacks"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -188,6 +200,8 @@ export const recoverReviewFindingsHandbacks = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "ReviewFindingsHandbackIntended"
       && !completed.has(event.operation.request.operationId)
+      && (exactOperationId === undefined
+        || event.operation.request.operationId === exactOperationId)
       ? [event.operation]
       : []
   )
@@ -200,7 +214,7 @@ export const recoverReviewFindingsHandbacks = Effect.fn(
 /** Completes unresolved sealing intents through the same idempotent evidence protocol. */
 export const recoverImplementationEvidenceSealings = Effect.fn(
   "WorkflowRecovery.recoverImplementationEvidenceSealings"
-)(function*(runId: RunId) {
+)(function*(runId: RunId, exactOperationId?: OperationId) {
   const interpreter = yield* WorkflowInterpreter
   const journal = yield* JournalStore
   const trace = yield* WorkflowTrace
@@ -211,6 +225,8 @@ export const recoverImplementationEvidenceSealings = Effect.fn(
   const unresolved = records.flatMap(({ event }) =>
     event._tag === "ImplementationEvidenceSealingIntended"
       && !sealed.has(event.operation.operationId)
+      && (exactOperationId === undefined
+        || event.operation.operationId === exactOperationId)
       ? [event.operation]
       : []
   )

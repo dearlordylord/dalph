@@ -8,6 +8,7 @@ import {
   ProviderObservationId,
   RunId,
   TaskId,
+  TaskRevision,
   TaskWorkCapacity
 } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
@@ -447,7 +448,10 @@ it.effect("uses current capacity and fresh provider evidence after reopening SQL
             explanations: [],
             transitions: [
               RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-                taskId: freshTaskId
+                taskId: freshTaskId,
+                taskRevision: TaskRevision.make(
+                  `${scenario.label}-fresh-revision`
+                )
               })
             ]
           },

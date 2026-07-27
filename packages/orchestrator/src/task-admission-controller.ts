@@ -115,7 +115,7 @@ interface MakeTaskAdmissionControllerInput {
  * Issue #133 replaces review-name-based capacity classification with capacity
  * use declared by an executor's outer invocation protocol.
  */
-const requiresAdmissionPosition = (
+export const transitionRequiresTaskAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
   transition._tag === "CommitFreshTaskClaimIntent"
@@ -198,7 +198,7 @@ const tryAdmitTransition = (
   transition: RunnableFrontierTransition,
   runId: RunId
 ): AdmissionAttempt => {
-  if (!requiresAdmissionPosition(transition)) {
+  if (!transitionRequiresTaskAdmissionPosition(transition)) {
     return { _tag: "TransitionAdmitted", state: current }
   }
   if (

@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
+/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
@@ -7,6 +7,7 @@ import { recoverImplementationConvergences } from "./implementation-convergence-
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
 import { type JournalRecord, JournalStore } from "./journal-store.js"
+import { activateRecoveredResponsibilities } from "./managed-activation.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { NonterminalRecoveryStageTag } from "./managed-run-recovery-stage.js"
 import { TaskExecutor } from "./task-execution.js"
@@ -19,14 +20,7 @@ import {
   sessionAuthorityMatches,
   worktreeAuthorityMatches
 } from "./workflow-authority-relations.js"
-import {
-  recoverImplementationEvidenceSealings,
-  recoverTaskClaimAcquisitions,
-  recoverTaskExecutions,
-  recoverTaskWorkSessionEstablishments,
-  recoverTaskWorktreeReconciliations,
-  recoverTrackerGraphObservations
-} from "./workflow-operation-recovery.js"
+import { recoverTrackerGraphObservations } from "./workflow-operation-recovery.js"
 import {
   continuePlannedTaskAttemptStage,
   type MissingPlannedTaskAttemptOperationStage,
@@ -379,11 +373,9 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.
     }
     const phases = [
       collect("Tracker")(recoverTrackerGraphObservations(runId)),
-      collect("Tracker")(recoverTaskClaimAcquisitions(runId)),
-      collect("Git")(recoverTaskWorktreeReconciliations(runId)),
-      collect("TaskRunner")(recoverTaskWorkSessionEstablishments(runId)),
-      collect("TaskExecutor")(recoverTaskExecutions(runId)),
-      collect("Evidence")(recoverImplementationEvidenceSealings(runId)),
+      collect("TaskExecutor")(
+        activateRecoveredResponsibilities(runId, capacity)
+      ),
       collect("Reviewer")(recoverImplementationConvergences(runId, capacity))
     ] as const
     for (const phase of phases) {

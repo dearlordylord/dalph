@@ -10,6 +10,7 @@ import { deriveRunnableFrontier } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
+import { taskRevisionFor } from "./task-dag.js"
 import {
   TaskExecutionAdmitted,
   TaskExecutionOutcomeObserved,
@@ -342,7 +343,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
       readFrontier: Ref.get(remainingTasks).pipe(
         Effect.map((tasks) =>
           deriveRunnableFrontier({
-            freshEligibleTaskIds: tasks.map(({ id }) => id),
+            freshEligibleTasks: tasks.map((task) => ({
+              taskId: task.id,
+              taskRevision: taskRevisionFor(task)
+            })),
             responsibility: WorkflowResponsibilityState.make({ entries: [] }),
             responsibilityFacts: []
           })

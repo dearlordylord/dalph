@@ -13,6 +13,7 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
+  TaskRevision,
   TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
@@ -30,6 +31,10 @@ const taskB = TaskId.make("task-B")
 const taskC = TaskId.make("task-C")
 const taskD = TaskId.make("task-D")
 const frontierRunId = RunId.make("frontier-test-run")
+const freshTask = (taskId: TaskId) => ({
+  taskId,
+  taskRevision: TaskRevision.make(`revision:${taskId}`)
+})
 
 const executionResponsibilityFor = (
   taskId: TaskId,
@@ -73,7 +78,7 @@ const executionResponsibilityFor = (
 it.effect("admits only the canonical first fresh task when one position is available", () =>
   Effect.gen(function*() {
     const frontier = deriveRunnableFrontier({
-      freshEligibleTaskIds: [taskB, taskA],
+      freshEligibleTasks: [freshTask(taskB), freshTask(taskA)],
       responsibility: WorkflowResponsibilityState.make({ entries: [] }),
       responsibilityFacts: []
     })
@@ -92,7 +97,7 @@ it.effect("admits only the canonical first fresh task when one position is avail
     expect(admission.transitions).toEqual([
       {
         _tag: "CommitFreshTaskClaimIntent",
-        taskId: taskA
+        ...freshTask(taskA)
       }
     ])
     expect(yield* controller.snapshot()).toEqual({
@@ -120,7 +125,7 @@ it("orders owned work by earliest outstanding journal position before task ident
     beganAt: JournalPosition.make(1)
   }
   const frontier = deriveRunnableFrontier({
-    freshEligibleTaskIds: [],
+    freshEligibleTasks: [],
     responsibility: WorkflowResponsibilityState.make({
       entries: [laterA, earliestA, middleB]
     }),
@@ -144,7 +149,7 @@ it.effect("gives a resumed responsibility the next released position before fres
       entries: [responsibility]
     })
     const pausedFrontier = deriveRunnableFrontier({
-      freshEligibleTaskIds: [taskD],
+      freshEligibleTasks: [freshTask(taskD)],
       responsibility: responsibilityState,
       responsibilityFacts: [{
         disposition: ResponsibilityDisposition.Paused(),
@@ -152,7 +157,7 @@ it.effect("gives a resumed responsibility the next released position before fres
       }]
     })
     const resumedFrontier = deriveRunnableFrontier({
-      freshEligibleTaskIds: [taskD],
+      freshEligibleTasks: [freshTask(taskD)],
       responsibility: responsibilityState,
       responsibilityFacts: [{
         disposition: ResponsibilityDisposition.Ready(),
@@ -229,7 +234,7 @@ it.effect("continues independent work for each local constraint at capacities on
     for (const capacity of [1, 2]) {
       for (const disposition of constraints) {
         const frontier = deriveRunnableFrontier({
-          freshEligibleTaskIds: [taskC],
+          freshEligibleTasks: [freshTask(taskC)],
           responsibility: WorkflowResponsibilityState.make({
             entries: [responsibility]
           }),
@@ -244,7 +249,7 @@ it.effect("continues independent work for each local constraint at capacities on
           reconstructedReservedPositions: []
         })
         expect((yield* controller.admit(frontier, frontierRunId)).transitions).toEqual([
-          { _tag: "CommitFreshTaskClaimIntent", taskId: taskC }
+          { _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }
         ])
       }
     }
@@ -271,7 +276,7 @@ it("explains every non-runnable responsibility without treating quiescence as te
 
   const frontiers = dispositions.map((disposition) =>
     deriveRunnableFrontier({
-      freshEligibleTaskIds: [],
+      freshEligibleTasks: [],
       responsibility: state,
       responsibilityFacts: [{
         disposition,
@@ -358,7 +363,7 @@ it("explains every non-runnable responsibility without treating quiescence as te
       explanations: [],
       transitions: [{
         _tag: "CommitFreshTaskClaimIntent",
-        taskId: taskA
+        ...freshTask(taskA)
       }]
     },
     WorkflowResponsibilityState.make({ entries: [] }),

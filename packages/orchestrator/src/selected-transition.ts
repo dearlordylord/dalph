@@ -9,10 +9,8 @@ export const makeSelectedTransitionIdentity = (
   SelectedTransitionIdentity.make({
     decisionFingerprint: SelectedTransitionFingerprint.make(
       JSON.stringify({
-        operationId: "operationId" in transition ? transition.operationId : null,
         runId,
-        taskId: transition.taskId,
-        tag: transition._tag
+        transition
       })
     ),
     runId,

@@ -1,5 +1,5 @@
 import { Data, Match, Option } from "effect"
-import type { OperationId, TaskId } from "./domain.js"
+import type { OperationId, TaskId, TaskRevision } from "./domain.js"
 import {
   type WorkflowResponsibilityEntry,
   type WorkflowResponsibilityState
@@ -18,6 +18,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   CommitFreshTaskClaimIntent: {
     readonly taskId: TaskId
+    readonly taskRevision: TaskRevision
   }
   ContinueImplementationEvidenceSealing: {
     readonly operationId: OperationId
@@ -134,7 +135,10 @@ export interface ResponsibilityFreshFacts {
 }
 
 export interface RunnableFrontierInput {
-  readonly freshEligibleTaskIds: ReadonlyArray<TaskId>
+  readonly freshEligibleTasks: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly taskRevision: TaskRevision
+  }>
   readonly responsibility: WorkflowResponsibilityState
   readonly responsibilityFacts: ReadonlyArray<ResponsibilityFreshFacts>
 }
@@ -347,10 +351,16 @@ export const deriveRunnableFrontier = (
     } => decision.transition !== undefined)
     .toSorted((left, right) => left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId))
     .map(({ transition }) => transition)
-  const freshTransitions = [...new Set(input.freshEligibleTaskIds)]
-    .filter((taskId) => !responsibleTaskIds.has(taskId))
-    .sort()
-    .map((taskId) => RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId }))
+  const freshTransitions = input.freshEligibleTasks
+    .filter(({ taskId }) => !responsibleTaskIds.has(taskId))
+    .filter(({ taskId }, index, tasks) => tasks.findIndex((candidate) => candidate.taskId === taskId) === index)
+    .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    .map(({ taskId, taskRevision }) =>
+      RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision
+      })
+    )
   return {
     explanations: responsibleDecisions.flatMap(({ explanation }) => explanation === undefined ? [] : [explanation]),
     transitions: [...responsibleTransitions, ...freshTransitions]

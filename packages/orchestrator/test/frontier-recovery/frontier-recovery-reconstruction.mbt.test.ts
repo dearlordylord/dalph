@@ -14,7 +14,10 @@ import {
   FrontierRecoveryModelTaskId,
   type FrontierRecoveryReconstructionActionFields
 } from "./frontier-recovery-conformance.js"
-import type { FrontierRecoveryReconstructionProjection } from "./frontier-recovery-projection.js"
+import type {
+  FrontierRecoveryActivationProjection,
+  FrontierRecoveryReconstructionProjection
+} from "./frontier-recovery-projection.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const actionSchema = {
@@ -132,6 +135,38 @@ const ModelClaimToken = ITFVariant({
   FrontierRecoveryClaimToken: Schema.Struct({ taskId: ITFBigInt })
 })
 
+const ModelActivationOwner = ITFVariant({
+  NoActivationOwner: ITFTuple(),
+  PostIntentActivationOwner: Schema.Struct({ operationId: ITFBigInt }),
+  PreIntentActivationOwner: ITFTuple()
+})
+
+const ModelActivationPosition = ITFVariant({
+  ActivationPositionAvailable: ITFTuple(),
+  ActivationPositionOccupied: Schema.Struct({ operationId: ITFBigInt }),
+  ActivationPositionReserved: Schema.Struct({ selectedTaskId: ITFBigInt }),
+  ActivationPositionRetained: Schema.Struct({ operationId: ITFBigInt })
+})
+
+const ModelActivation = Schema.Struct({
+  configuredCapacity: ITFBigInt,
+  derivedTransitions: ITFSet(ITFBigInt),
+  duplicateReservationLeaks: ITFSet(ITFBigInt),
+  freshlyObservedCapacity: ITFSet(ITFBigInt),
+  isolatedSubjects: ITFSet(ITFBigInt),
+  lastReleaseCorrelation: Schema.Unknown,
+  ownerRegistrationCounts: ITFMap(ITFBigInt, ITFBigInt),
+  owners: ITFMap(ITFBigInt, Schema.Unknown),
+  positions: ITFMap(ITFBigInt, Schema.Unknown),
+  postIntentExited: ITFSet(ITFBigInt),
+  preIntentInterrupted: ITFSet(ITFBigInt),
+  providerConsuming: ITFSet(ITFBigInt),
+  resultsRecorded: ITFSet(ITFBigInt),
+  runners: ITFSet(ITFBigInt),
+  selectedTransitions: ITFSet(ITFBigInt),
+  triggerPending: Schema.Boolean
+})
+
 const ModelWorkflowRecord = ITFVariant({
   ReconstructionClaimIntent: Schema.Struct({
     operationId: ITFBigInt,
@@ -168,6 +203,7 @@ const ModelResponsibility = ITFVariant({
 
 const ModelProjection = Schema.Struct({
   state: Schema.Struct({
+    activation: ModelActivation,
     control: Schema.Struct({
       runPaused: Schema.Boolean,
       taskPaused: ITFMap(ITFBigInt, Schema.Boolean)
@@ -230,6 +266,7 @@ type ReconstructionComparable =
     | "workflowEventTags"
   >
   & {
+    readonly activation: FrontierRecoveryActivationProjection
     readonly pause: {
       readonly run: { readonly _tag: string }
       readonly tasks: { readonly _tag: string }
@@ -239,6 +276,7 @@ type ReconstructionComparable =
 const reconstructionComparableFrom = (
   state: FrontierRecoveryReconstructionProjection
 ): ReconstructionComparable => ({
+  activation: state.activation,
   admissionCapacity: state.admissionCapacity,
   admittedModelTaskIds: state.admittedModelTaskIds,
   admittedTransitionOperations: state.admittedTransitionOperations,
@@ -630,6 +668,74 @@ const decodeReconstructionModelState = (
         )
         const graphProfile = graphProfileFrom(graphEvidence)
         const selector = state.selectorProjection
+        const modelTaskIds = (
+          values: Iterable<bigint>
+        ): ReadonlyArray<FrontierRecoveryModelTaskId> =>
+          sortedBigInts(values).map((task) => FrontierRecoveryModelTaskId.make(task))
+        const decodedActivationOwners = yield* Effect.forEach(
+          [...state.activation.owners],
+          ([task, owner]) =>
+            Schema.decodeUnknownEffect(ModelActivationOwner)(owner).pipe(
+              Effect.map((decoded) => [task, decoded] as const)
+            )
+        )
+        const activationOwners = decodedActivationOwners
+          .flatMap(([task, owner]) =>
+            owner.tag === "NoActivationOwner"
+              ? []
+              : [{
+                ...(owner.tag === "PostIntentActivationOwner"
+                  ? {
+                    modelOperationId: FrontierRecoveryModelOperationId.make(
+                      owner.value.operationId
+                    )
+                  }
+                  : {}),
+                modelTaskId: FrontierRecoveryModelTaskId.make(task),
+                phase: owner.tag === "PostIntentActivationOwner"
+                  ? "PostIntent" as const
+                  : "PreIntent" as const
+              }]
+          )
+          .sort((left, right) =>
+            left.modelTaskId < right.modelTaskId
+              ? -1
+              : left.modelTaskId > right.modelTaskId
+              ? 1
+              : 0
+          )
+        const decodedActivationPositions = yield* Effect.forEach(
+          [...state.activation.positions],
+          ([task, position]) =>
+            Schema.decodeUnknownEffect(ModelActivationPosition)(position).pipe(
+              Effect.map((decoded) => [task, decoded] as const)
+            )
+        )
+        const activationReservedPositions: FrontierRecoveryActivationProjection["reservedPositions"] =
+          decodedActivationPositions.flatMap<
+            FrontierRecoveryActivationProjection["reservedPositions"][number]
+          >(([task, position]) => {
+            if (position.tag === "ActivationPositionAvailable") return []
+            if (position.tag === "ActivationPositionReserved") {
+              return [{
+                correlation: "SelectedTransition" as const,
+                modelTaskId: FrontierRecoveryModelTaskId.make(task)
+              }]
+            }
+            return [{
+              correlation: "Operation" as const,
+              modelOperationId: FrontierRecoveryModelOperationId.make(
+                position.value.operationId
+              ),
+              modelTaskId: FrontierRecoveryModelTaskId.make(task)
+            }]
+          }).sort((left, right) =>
+            left.modelTaskId < right.modelTaskId
+              ? -1
+              : left.modelTaskId > right.modelTaskId
+              ? 1
+              : 0
+          )
         const transitionOperationFor = (
           taskId: FrontierRecoveryModelTaskId
         ) =>
@@ -681,6 +787,36 @@ const decodeReconstructionModelState = (
             : Effect.succeed(tag)
         }
         return {
+          activation: {
+            derivedModelTaskIds: modelTaskIds(
+              state.activation.derivedTransitions
+            ),
+            freshlyObservedModelTaskIds: modelTaskIds(
+              state.activation.freshlyObservedCapacity
+            ),
+            isolatedModelTaskIds: modelTaskIds(
+              state.activation.isolatedSubjects
+            ),
+            owners: activationOwners,
+            postIntentExitedModelTaskIds: modelTaskIds(
+              state.activation.postIntentExited
+            ),
+            preIntentInterruptedModelTaskIds: modelTaskIds(
+              state.activation.preIntentInterrupted
+            ),
+            providerConsumingModelTaskIds: modelTaskIds(
+              state.activation.providerConsuming
+            ),
+            reservedPositions: activationReservedPositions,
+            resultsRecordedModelTaskIds: modelTaskIds(
+              state.activation.resultsRecorded
+            ),
+            runnerModelTaskIds: modelTaskIds(state.activation.runners),
+            selectedModelTaskIds: modelTaskIds(
+              state.activation.selectedTransitions
+            ),
+            triggerPending: state.activation.triggerPending
+          },
           admissionCapacity: FrontierRecoveryModelCapacity.make(
             selector.capacity
           ),
@@ -767,7 +903,8 @@ const compareReconstructionState = (
   model: ReconstructionComparable,
   implementation: ReconstructionComparable
 ): boolean =>
-  model.admissionCapacity === implementation.admissionCapacity
+  normalizedProjectionMatches(model.activation, implementation.activation)
+  && model.admissionCapacity === implementation.admissionCapacity
   && JSON.stringify(model.admittedTransitionOperations, (_, value) =>
       typeof value === "bigint" ? value.toString() : value)
     === JSON.stringify(implementation.admittedTransitionOperations, (_, value) =>
@@ -927,3 +1064,21 @@ for (
     30_000
   )
 }
+
+quintIt(
+  it.effect,
+  "replays a generated own-then-derive-before-result activation prefix",
+  {
+    backend: "typescript",
+    driverFactory: makeReconstructionDriver(2),
+    main: "frontierRecoveryCapacityTwo",
+    maxSteps: 4,
+    nTraces: 24,
+    seed: "132151",
+    spec: "specs/frontierRecovery.qnt",
+    stateCheck: reconstructionStateCheck,
+    step: "activationOwnedThenDerivedPrefixStep",
+    witnesses: ["activationOwnershipBeforeIntentReached"]
+  },
+  60_000
+)
