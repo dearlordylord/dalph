@@ -2397,7 +2397,10 @@ module frontierRecovery {
       claimActivationOwnership(task),
       recordOwnedOperationIntent(task),
       observeCapacityConsumed(task),
-      crashCoordinatorWithActivation,
+      all {
+        state.coordinator.crashCount < 2,
+        crashCoordinatorWithActivation,
+      },
       stopProviderWorker(task),
       reconstructActivation,
     }

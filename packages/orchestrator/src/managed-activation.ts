@@ -1,11 +1,83 @@
-import { Effect, Match, Queue } from "effect"
+import { Effect, Exit, Match, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import type { RunId, TaskWorkCapacity } from "./domain.js"
+import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { JournalStore } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition } from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import { TaskExecutor } from "./task-execution.js"
+
+export interface RecoveredAdmissionCapacityEvidence {
+  readonly freshOccupiedInvocations: ReadonlyArray<{
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }>
+  readonly freshlyReleasedOperationIds: ReadonlySet<OperationId>
+}
+
+const noRecoveredAdmissionCapacityEvidence = {
+  freshOccupiedInvocations: [],
+  freshlyReleasedOperationIds: new Set()
+} satisfies RecoveredAdmissionCapacityEvidence
+
+/**
+ * Reads current execution-provider evidence for each unresolved execution.
+ * A proved absence can free its retained position; unreadable or ambiguous
+ * evidence fails closed through the provider's typed error/result.
+ */
+export const observeRecoveredAdmissionCapacity = Effect.fn(
+  "ManagedActivation.observeRecoveredAdmissionCapacity"
+)(function*(runId: RunId) {
+  const journal = yield* JournalStore
+  const executor = yield* TaskExecutor
+  const reduction = reduceManagedHistory(runId, yield* journal.read(runId))
+  if (reduction._tag === "InvalidManagedHistory") {
+    return yield* Effect.die(reduction)
+  }
+  const records = reduction.managedRun.workflowHistory.records
+  const observations = yield* Effect.forEach(
+    reduction.managedRun.responsibility.entries,
+    (responsibility) => {
+      if (
+        responsibility._tag !== "TaskExecutionResponsibility"
+        || responsibility.operation.request.session._tag !== "EstablishedSession"
+        || records.some(({ event }) =>
+          event._tag === "TaskExecutionOutcomeObserved"
+          && event.outcome.outcome.operationId
+            === responsibility.operation.request.operationId
+        )
+      ) return Effect.succeed(undefined)
+      return executor.observeTaskExecution({
+        operationId: responsibility.operation.request.operationId,
+        plannedAttempt: responsibility.operation.request.plannedAttempt,
+        sessionId: responsibility.operation.request.session.sessionId
+      }).pipe(
+        Effect.map((report) => ({ report, responsibility }))
+      )
+    },
+    { concurrency: "unbounded" }
+  )
+  return {
+    freshOccupiedInvocations: observations.flatMap((observation) =>
+      observation?.report._tag === "RunningTaskExecutionReported"
+        ? [{
+          observationId: observation.report.observationId,
+          operationId: observation.responsibility.operation.request.operationId,
+          taskId: observation.responsibility.taskId
+        }]
+        : []
+    ),
+    freshlyReleasedOperationIds: new Set(
+      observations.flatMap((observation) =>
+        observation?.report._tag === "NoTaskExecutionReported"
+          ? [observation.responsibility.operation.request.operationId]
+          : []
+      )
+    )
+  } satisfies RecoveredAdmissionCapacityEvidence
+})
 
 const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier")(
   function*(runId: RunId) {
@@ -84,7 +156,11 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
  */
 export const activateRecoveredResponsibilities = Effect.fn(
   "ManagedActivation.activateRecoveredResponsibilities"
-)(function*(runId: RunId, capacity: TaskWorkCapacity) {
+)(function*(
+  runId: RunId,
+  capacity: TaskWorkCapacity,
+  capacityEvidence: RecoveredAdmissionCapacityEvidence = noRecoveredAdmissionCapacityEvidence
+) {
   const initial = yield* readRecoveredFrontier(runId)
   const reconstructedReservedPositions = initial.transitions.flatMap(
     (transition) =>
@@ -94,15 +170,18 @@ export const activateRecoveredResponsibilities = Effect.fn(
           || transition._tag === "ContinueImplementationReview"
           || transition._tag === "ContinueReviewFindingsHandback"
         )
+        && !capacityEvidence.freshlyReleasedOperationIds.has(
+          transition.operationId
+        )
         ? [{ operationId: transition.operationId, taskId: transition.taskId }]
         : []
   )
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: [],
+    freshOccupiedInvocations: capacityEvidence.freshOccupiedInvocations,
     reconstructedReservedPositions
   })
-  const completed = yield* Queue.unbounded<void>()
+  const completed = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
 
   yield* Effect.scoped(Effect.gen(function*() {
     const coordinator = yield* makeActivationCoordinator({
@@ -111,7 +190,17 @@ export const activateRecoveredResponsibilities = Effect.fn(
       runId,
       runTransition: (transition) =>
         recoverRunnableTransition(runId, transition).pipe(
-          Effect.ensuring(Queue.offer(completed, undefined))
+          Effect.asVoid,
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            Queue.offer(completed, exit).pipe(
+              Effect.andThen(
+                Exit.isFailure(exit)
+                  ? Effect.failCause(exit.cause)
+                  : Effect.void
+              )
+            )
+          )
         )
     })
 
@@ -120,7 +209,10 @@ export const activateRecoveredResponsibilities = Effect.fn(
       if ((yield* readRecoveredFrontier(runId)).transitions.length === 0) {
         return
       }
-      yield* Queue.take(completed)
+      const completion = yield* Queue.take(completed)
+      if (Exit.isFailure(completion)) {
+        return yield* Effect.failCause(completion.cause)
+      }
     }
   }))
 })

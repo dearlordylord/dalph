@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- Recovery keeps startup ordering and authority checks together. */
+/* eslint-disable functional/immutable-data, max-lines -- Recovery keeps startup ordering and authority checks together. */
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { defaultTaskWorkCapacity, RunId, type TaskWorkCapacity } from "./domain.js"
@@ -7,7 +7,7 @@ import { recoverImplementationConvergences } from "./implementation-convergence-
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
 import { type JournalRecord, JournalStore } from "./journal-store.js"
-import { activateRecoveredResponsibilities } from "./managed-activation.js"
+import { activateRecoveredResponsibilities, type RecoveredAdmissionCapacityEvidence } from "./managed-activation.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import { NonterminalRecoveryStageTag } from "./managed-run-recovery-stage.js"
 import { TaskExecutor } from "./task-execution.js"
@@ -344,16 +344,13 @@ export const observeManagedRunAuthorities = Effect.fn("WorkflowRecovery.observeM
     return (yield* Effect.all(checks, { concurrency: 1 })).flat()
   }
 )
-/**
- * Validates one complete history before refreshing each current authority.
- * Every authority result is collected so one unreadable boundary cannot hide
- * an independent reconciliation fact from another boundary.
- */
+/** Validates history before refreshing every current external authority. */
 export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.recoverExactRunAfterCoordinatorDeath")(
   function*(
     runId: RunId,
     discoveredRecords?: ReadonlyArray<JournalRecord>,
-    capacity: TaskWorkCapacity = defaultTaskWorkCapacity
+    capacity: TaskWorkCapacity = defaultTaskWorkCapacity,
+    capacityEvidence?: RecoveredAdmissionCapacityEvidence
   ) {
     const journal = yield* JournalStore
     const initialReduction = reduceManagedHistory(runId, discoveredRecords ?? (yield* journal.read(runId)))
@@ -374,7 +371,11 @@ export const recoverExactRunAfterCoordinatorDeath = Effect.fn("WorkflowRecovery.
     const phases = [
       collect("Tracker")(recoverTrackerGraphObservations(runId)),
       collect("TaskExecutor")(
-        activateRecoveredResponsibilities(runId, capacity)
+        activateRecoveredResponsibilities(
+          runId,
+          capacity,
+          capacityEvidence
+        )
       ),
       collect("Reviewer")(recoverImplementationConvergences(runId, capacity))
     ] as const

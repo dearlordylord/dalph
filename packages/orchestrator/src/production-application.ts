@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Startup collects preserved run issues before failing closed. */
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
 import {
   defaultTaskWorkCapacity,
@@ -26,6 +26,7 @@ import {
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
+import { observeRecoveredAdmissionCapacity } from "./managed-activation.js"
 import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
 import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
@@ -195,10 +196,24 @@ export const productionWorkflowInterpreterLayer = <
           || observationIssues.length > 0
           || scan.issues.some((issue) => issue.runId === history.runId)
         ) continue
+        const capacityEvidence = yield* Effect.result(
+          observeRecoveredAdmissionCapacity(history.runId)
+        )
+        if (Result.isFailure(capacityEvidence)) {
+          issues.push(
+            new RecoveryReconciliationIssue({
+              authority: "TaskExecutor",
+              detail: String(capacityEvidence.failure),
+              runId: history.runId
+            })
+          )
+          continue
+        }
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
           history.runId,
           history.records,
-          capacity
+          capacity,
+          capacityEvidence.success
         ).pipe(Effect.provide(interpreterLayerFor(history.runId)))
         issues.push(...runIssues)
       }

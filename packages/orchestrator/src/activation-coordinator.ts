@@ -246,7 +246,7 @@ export const makeActivationCoordinator = Effect.fn(
       Effect.exit,
       Effect.flatMap((exit) =>
         Effect.gen(function*() {
-          const owned = yield* ownership.remove(key)
+          const owned = yield* ownership.get(key)
           if (
             owned !== undefined
             && Option.isNone(owned.operationId)
@@ -264,6 +264,7 @@ export const makeActivationCoordinator = Effect.fn(
               owned.operationId.value
             ).pipe(Effect.orDie)
           }
+          yield* ownership.remove(key)
           yield* signal(ActivationCause.WorkflowResultRecorded()).pipe(
             Effect.catchTag("ActivationCoordinatorClosed", () => Effect.void)
           )
@@ -316,7 +317,7 @@ export const makeActivationCoordinator = Effect.fn(
             return false
           }
           const rollbackFailedStart = Effect.gen(function*() {
-            const partialOwner = yield* ownership.remove(registered.key)
+            const partialOwner = yield* ownership.get(registered.key)
             if (
               partialOwner !== undefined
               && Option.isNone(partialOwner.operationId)
@@ -328,6 +329,7 @@ export const makeActivationCoordinator = Effect.fn(
                 registered.entry.selected
               ).pipe(Effect.orDie)
             }
+            yield* ownership.remove(registered.key)
           })
           yield* runOwnedTransition(
             registered.key,
