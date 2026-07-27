@@ -4,9 +4,9 @@
   "modelVersion": 3,
   "source": {
     "actionSequence": [
-      "init; taskTrackerReportsProvenAbsenceInTargetClosure",
-      "init; taskTrackerReportsIncomparableTargetClosureMembership",
-      "init; taskTrackerReportsCompatibleTargetClosureReplacement"
+      "init; taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
+      "init; taskTrackerReturnsTargetClosureReadWithPredecessor",
+      "init; taskTrackerReturnsTargetClosureReadAtNextRevision"
     ],
     "backend": "quint-typescript",
     "bounds": {
@@ -15,15 +15,15 @@
     },
     "capacityProfiles": [2],
     "coverage": ["issue-144-target-closure-read-evidence"],
-    "modelBlobSha": "fa12de2e69f5cf74fb2706ed97ad5a6306fa66b5",
-    "modelCommit": "f51c5550e525bf41e2feb6ef06f0f369faf6d6d9",
+    "modelBlobSha": "c0b5112c23ab152e8a96e0a7d868a6b7fc5e6a01",
+    "modelCommit": "485433663dbd56ac0c8bfe23fa2e14b566c3ceea",
     "profile": "three-normalized-target-closure-read-outcomes",
     "seed": null,
     "toolVersions": {
       "quint": "0.32.0",
       "quintConnect": "2.0.2-effect4.1"
     },
-    "traceHash": "3579ea6de4b9544fb4b079a92f6075c7aca124fe45af4a2673045db7d520ca31"
+    "traceHash": "e8f726a9aace233825a929acaa31704c0f6dc1e16231d97397bb52fe6fd6dec7"
   },
   "initialFacts": {
     "targetClosureTasks": ["A", "B", "C", "D"],

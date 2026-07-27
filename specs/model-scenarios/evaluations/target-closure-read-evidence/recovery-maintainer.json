@@ -1,0 +1,7 @@
+{
+  "evaluator": "recovery-maintainer",
+  "scenarioId": "target-closure-read-evidence",
+  "verdict": "acceptable",
+  "confidence": "high",
+  "reason": "The retained scenario identifies three closed read profiles and compares exact normalized graph knowledge, ordered journal history, responsibility, and pause projections after replay through production reducers."
+}
