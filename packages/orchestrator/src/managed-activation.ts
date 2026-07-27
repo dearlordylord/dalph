@@ -1,14 +1,20 @@
-import { Effect, Exit, Match, Queue, Ref } from "effect"
+import { Context, Effect, Exit, Match, Queue, Ref } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import { JournalStore } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
-import { deriveRunnableFrontier, ResponsibilityDisposition } from "./runnable-frontier.js"
+import {
+  deriveRunnableFrontier,
+  ResponsibilityDisposition,
+  type RunnableFrontier,
+  type RunnableFrontierTransition
+} from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutor } from "./task-execution.js"
+import type { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 export interface RecoveredAdmissionCapacityEvidence {
   readonly freshOccupiedInvocations: ReadonlyArray<{
@@ -152,17 +158,46 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
   }
 )
 
+// eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction inputs with their exact recovered operation.
+interface ManagedRecoveryActivationService {
+  readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
+  readonly readFrontier: Effect.Effect<RunnableFrontier, unknown>
+  readonly reconstructedReservedPositions: ReadonlyArray<{
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }>
+  readonly runId: RunId
+  readonly runTransition: (
+    transition: RunnableFrontierTransition,
+    recordIntent: (operationId: OperationId) => Effect.Effect<void>
+  ) => Effect.Effect<void, unknown>
+}
+
 /**
- * Routes every already-intended recovered responsibility through the same
- * serial selector/admission/ownership loop used by fresh activation.
+ * Current-run recovered work source. It owns no selector, admission controller,
+ * or runner; a caller composes these transitions into its one activation loop.
  */
-export const activateRecoveredResponsibilities = Effect.fn(
-  "ManagedActivation.activateRecoveredResponsibilities"
+export class ManagedRecoveryActivation extends Context.Service<
+  ManagedRecoveryActivation,
+  ManagedRecoveryActivationService
+>()("@dalph/ManagedRecoveryActivation") {}
+
+export const makeManagedRecoveryActivation = Effect.fn(
+  "ManagedActivation.makeRecoverySource"
 )(function*(
   runId: RunId,
-  capacity: TaskWorkCapacity,
   capacityEvidence: RecoveredAdmissionCapacityEvidence = noRecoveredAdmissionCapacityEvidence
 ) {
+  const dependencies = yield* Effect.context<
+    JournalStore | WorkflowInterpreter | WorkflowTrace
+  >()
+  const provideDependencies = <A, E>(
+    effect: Effect.Effect<
+      A,
+      E,
+      JournalStore | WorkflowInterpreter | WorkflowTrace
+    >
+  ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
   const initial = yield* readRecoveredFrontier(runId)
   const reconstructedReservedPositions = initial.transitions.flatMap(
     (transition) =>
@@ -178,74 +213,103 @@ export const activateRecoveredResponsibilities = Effect.fn(
         ? [{ operationId: transition.operationId, taskId: transition.taskId }]
         : []
   )
+  const stages = yield* Ref.make<
+    ReadonlyArray<FreshImplementationConvergenceStage>
+  >(
+    yield* makeRecoveredImplementationConvergenceStages(runId, false)
+  )
+  const refreshStages = Effect.fn("ManagedActivation.refreshStages")(
+    function*() {
+      const current = yield* Ref.get(stages)
+      const derived = yield* makeRecoveredImplementationConvergenceStages(
+        runId,
+        false
+      )
+      const currentTaskIds = new Set(
+        current.map(({ transition }) => transition.taskId)
+      )
+      yield* Ref.set(stages, [
+        ...current,
+        ...derived.filter(({ transition }) => !currentTaskIds.has(transition.taskId))
+      ])
+    }
+  )
+  const readFrontier = Effect.fn(
+    "ManagedActivation.readActivationFrontier"
+  )(function*() {
+    const recovered = yield* readRecoveredFrontier(runId)
+    const currentStages = yield* Ref.get(stages)
+    return {
+      explanations: recovered.explanations,
+      transitions: [
+        ...recovered.transitions,
+        ...currentStages.map(({ transition }) => transition)
+      ]
+    }
+  })
+  const runTransition = Effect.fn("ManagedActivation.runTransition")(
+    function*(
+      transition: RunnableFrontierTransition,
+      recordIntent: (operationId: OperationId) => Effect.Effect<void>
+    ) {
+      const stage = (yield* Ref.get(stages)).find(
+        (candidate) => candidate.transition === transition
+      )
+      if (stage === undefined) {
+        yield* recoverRunnableTransition(runId, transition)
+        yield* refreshStages()
+        return
+      }
+      const next = yield* stage.run(recordIntent)
+      yield* Ref.update(stages, (current) => [
+        ...current.filter((candidate) => candidate !== stage),
+        ...(next === undefined ? [] : [next])
+      ])
+    }
+  )
+  return ManagedRecoveryActivation.of({
+    capacityEvidence,
+    readFrontier: provideDependencies(readFrontier()),
+    reconstructedReservedPositions,
+    runId,
+    runTransition: (transition, recordIntent) => provideDependencies(runTransition(transition, recordIntent))
+  })
+})
+
+/**
+ * Routes every already-intended recovered responsibility through the same
+ * serial selector/admission/ownership loop used by fresh activation.
+ */
+export const activateRecoveredResponsibilities = Effect.fn(
+  "ManagedActivation.activateRecoveredResponsibilities"
+)(function*(
+  runId: RunId,
+  capacity: TaskWorkCapacity,
+  capacityEvidence: RecoveredAdmissionCapacityEvidence = noRecoveredAdmissionCapacityEvidence
+) {
+  const recovery = yield* makeManagedRecoveryActivation(
+    runId,
+    capacityEvidence
+  )
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
     freshOccupiedInvocations: capacityEvidence.freshOccupiedInvocations,
     freshlyReleasedOperationIds: capacityEvidence.freshlyReleasedOperationIds,
-    reconstructedReservedPositions
+    reconstructedReservedPositions: recovery.reconstructedReservedPositions
   })
   const completed = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
 
   yield* Effect.scoped(Effect.gen(function*() {
-    const stages = yield* Ref.make<
-      ReadonlyArray<FreshImplementationConvergenceStage>
-    >(
-      yield* makeRecoveredImplementationConvergenceStages(runId, false)
-    )
-    const refreshStages = Effect.fn("ManagedActivation.refreshStages")(
-      function*() {
-        const current = yield* Ref.get(stages)
-        const derived = yield* makeRecoveredImplementationConvergenceStages(
-          runId,
-          false
-        )
-        const currentTaskIds = new Set(
-          current.map(({ transition }) => transition.taskId)
-        )
-        yield* Ref.set(stages, [
-          ...current,
-          ...derived.filter(({ transition }) => !currentTaskIds.has(transition.taskId))
-        ])
-      }
-    )
-    const readActivationFrontier = Effect.fn(
-      "ManagedActivation.readActivationFrontier"
-    )(function*() {
-      const recovered = yield* readRecoveredFrontier(runId)
-      const currentStages = yield* Ref.get(stages)
-      return {
-        explanations: recovered.explanations,
-        transitions: [
-          ...recovered.transitions,
-          ...currentStages.map(({ transition }) => transition)
-        ]
-      }
-    })
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
-      readFrontier: readActivationFrontier(),
+      readFrontier: recovery.readFrontier,
       runId,
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
-          const stage = (yield* Ref.get(stages)).find(
-            (candidate) => candidate.transition === transition
-          )
-          const exit = yield* (
-            stage === undefined
-              ? recoverRunnableTransition(runId, transition).pipe(
-                Effect.asVoid
-              )
-              : Effect.gen(function*() {
-                const next = yield* stage.run(execution.recordIntent)
-                yield* Ref.update(stages, (current) => [
-                  ...current.filter((candidate) => candidate !== stage),
-                  ...(next === undefined ? [] : [next])
-                ])
-              })
+          const exit = yield* recovery.runTransition(
+            transition,
+            execution.recordIntent
           ).pipe(Effect.exit)
-          if (stage === undefined && Exit.isSuccess(exit)) {
-            yield* refreshStages()
-          }
           yield* Queue.offer(completed, exit)
           if (Exit.isFailure(exit)) {
             return yield* Effect.failCause(exit.cause)
@@ -255,7 +319,7 @@ export const activateRecoveredResponsibilities = Effect.fn(
 
     for (;;) {
       yield* coordinator.signal(ActivationCause.Restart())
-      if ((yield* readActivationFrontier()).transitions.length === 0) {
+      if ((yield* recovery.readFrontier).transitions.length === 0) {
         return
       }
       const completion = yield* Queue.take(completed)

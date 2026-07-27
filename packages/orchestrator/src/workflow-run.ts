@@ -1,8 +1,9 @@
-import { Effect, Exit, Queue, Ref, Semaphore } from "effect"
+import { Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { type OperationId, RunId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
-import { type FreshWorkflowStage, type FreshWorkflowStageError } from "./fresh-workflow-stage.js"
+import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
+import { ManagedRecoveryActivation } from "./managed-activation.js"
 import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
@@ -35,6 +36,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const claimPlanner = yield* TaskClaimAcquisitionPlanner
   const planner = yield* PlannedTaskAttemptPlanner
   const trace = yield* WorkflowTrace
+  const recovery = Option.getOrUndefined(
+    yield* Effect.serviceOption(ManagedRecoveryActivation)
+  )
   const graphOperation = makeTrackerGraphObservationOperation(
     yield* allocator.allocate(),
     target
@@ -50,12 +54,16 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: [],
-    reconstructedReservedPositions: []
+    freshOccupiedInvocations: recovery?.capacityEvidence.freshOccupiedInvocations ?? [],
+    ...(recovery === undefined
+      ? {}
+      : {
+        freshlyReleasedOperationIds: recovery.capacityEvidence.freshlyReleasedOperationIds
+      }),
+    reconstructedReservedPositions: recovery?.reconstructedReservedPositions ?? []
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
   type WorkflowStage = FreshWorkflowStage
-  type WorkflowStageError = FreshWorkflowStageError
 
   const continued = (
     operationId: OperationId,
@@ -190,55 +198,93 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     }
   )
 
-  const completions = yield* Queue.unbounded<Exit.Exit<void, WorkflowStageError>>()
+  const completions = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
 
   return yield* Effect.scoped(Effect.gen(function*() {
-    const initialTasks = snapshot.eligibleTasks()
+    const initialRecoveredFrontier = recovery === undefined
+      ? { explanations: [], transitions: [] }
+      : yield* recovery.readFrontier
+    const recoveredTaskIds = new Set([
+      ...initialRecoveredFrontier.explanations.flatMap(
+        (explanation) => "taskId" in explanation ? [explanation.taskId] : []
+      ),
+      ...initialRecoveredFrontier.transitions.map(({ taskId }) => taskId)
+    ])
+    const initialTasks = snapshot.eligibleTasks().filter(
+      ({ id }) => !recoveredTaskIds.has(id)
+    )
     const initialStages = yield* Effect.forEach(initialTasks, makeCurrentGraphStage)
     const stages = yield* Ref.make<ReadonlyArray<WorkflowStage>>(initialStages)
+    const readFrontier = Effect.fn("Workflow.readActivationFrontier")(
+      function*() {
+        const current = yield* Ref.get(stages)
+        const recovered = recovery === undefined
+          ? { explanations: [], transitions: [] }
+          : yield* recovery.readFrontier
+        return {
+          explanations: recovered.explanations,
+          transitions: [
+            ...recovered.transitions,
+            ...current.map(({ transition }) => transition)
+          ]
+        }
+      }
+    )
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
-      readFrontier: Ref.get(stages).pipe(
-        Effect.map((current) => ({
-          explanations: [],
-          transitions: current.map(({ transition }) => transition)
-        }))
-      ),
-      runId: RunId.make(`workflow:${target}`),
+      readFrontier: readFrontier(),
+      runId: recovery?.runId ?? RunId.make(`workflow:${target}`),
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
           const stage = (yield* Ref.get(stages)).find(
             (candidate) => candidate.transition === transition
           )
-          if (stage === undefined) return
-          const exit = yield* stage.run(execution.recordIntent).pipe(Effect.exit)
+          const exit = yield* (
+            stage === undefined
+              ? recovery === undefined
+                ? Effect.void
+                : recovery.runTransition(
+                  transition,
+                  execution.recordIntent
+                )
+              : stage.run(execution.recordIntent)
+          ).pipe(Effect.exit)
           if (Exit.isSuccess(exit)) {
-            yield* Ref.update(stages, (current) =>
-              current.flatMap((candidate) =>
-                candidate !== stage
-                  ? [candidate]
-                  : exit.value === undefined
-                  ? []
-                  : [exit.value]
-              ))
-            if (exit.value === undefined) {
-              yield* Queue.offer(completions, Exit.succeed(undefined))
+            if (stage !== undefined) {
+              yield* Ref.update(stages, (current) =>
+                current.flatMap((candidate) =>
+                  candidate !== stage
+                    ? [candidate]
+                    : exit.value === undefined
+                    ? []
+                    : [exit.value]
+                ))
             }
           } else {
-            yield* Ref.update(stages, (current) => current.filter((candidate) => candidate !== stage))
-            yield* Queue.offer(completions, exit)
+            if (stage !== undefined) {
+              yield* Ref.update(stages, (current) => current.filter((candidate) => candidate !== stage))
+            }
           }
+          yield* Queue.offer(completions, Exit.asVoid(exit))
           return yield* Exit.isFailure(exit)
             ? Effect.failCause(exit.cause)
             : Effect.void
         })
     })
 
-    yield* coordinator.signal(ActivationCause.Startup())
-    for (let completed = 0; completed < initialTasks.length; completed += 1) {
-      const completion = yield* Queue.take(completions)
-      if (Exit.isFailure(completion)) {
-        return yield* Effect.failCause(completion.cause)
+    for (;;) {
+      yield* coordinator.signal(ActivationCause.Startup())
+      const pendingCompletion = yield* Queue.poll(completions)
+      if (Option.isSome(pendingCompletion)) {
+        if (Exit.isFailure(pendingCompletion.value)) {
+          return yield* Effect.failCause(pendingCompletion.value.cause)
+        }
+        continue
+      }
+      if ((yield* readFrontier()).transitions.length === 0) return
+      const awaitedCompletion = yield* Queue.take(completions)
+      if (Exit.isFailure(awaitedCompletion)) {
+        return yield* Effect.failCause(awaitedCompletion.cause)
       }
     }
   }))

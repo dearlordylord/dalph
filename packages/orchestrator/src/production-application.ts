@@ -26,7 +26,11 @@ import {
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
-import { observeRecoveredAdmissionCapacity } from "./managed-activation.js"
+import {
+  makeManagedRecoveryActivation,
+  ManagedRecoveryActivation,
+  observeRecoveredAdmissionCapacity
+} from "./managed-activation.js"
 import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
 import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
@@ -175,7 +179,7 @@ export const productionWorkflowInterpreterLayer = <
     gitWorktreeLayer,
     evidenceStoreLayer
   )
-  return Layer.effect(
+  const workflowInterpreterLayer = Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       yield* CoordinatorOwnership
@@ -209,6 +213,7 @@ export const productionWorkflowInterpreterLayer = <
           )
           continue
         }
+        if (history.runId === runId) continue
         const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
           history.runId,
           history.records,
@@ -225,5 +230,21 @@ export const productionWorkflowInterpreterLayer = <
     Layer.provide(recoveryAuthorityLayer),
     Layer.provide(journalLayer),
     Layer.provide(ownershipLayer)
+  )
+  const managedRecoveryActivationLayer = Layer.effect(
+    ManagedRecoveryActivation,
+    Effect.gen(function*() {
+      const capacityEvidence = yield* observeRecoveredAdmissionCapacity(runId)
+      return yield* makeManagedRecoveryActivation(runId, capacityEvidence)
+    })
+  ).pipe(
+    Layer.provide(interpreterLayer),
+    Layer.provide(recoveryAuthorityLayer),
+    Layer.provide(journalLayer),
+    Layer.provide(ownershipLayer)
+  )
+  return Layer.merge(
+    workflowInterpreterLayer,
+    managedRecoveryActivationLayer
   )
 }
