@@ -47,6 +47,24 @@ export type TaskId = typeof TaskId.Type
 export const OperationId = Schema.NonEmptyString.pipe(Schema.brand("OperationId"))
 export type OperationId = typeof OperationId.Type
 
+/**
+ * Identifies one exact user control command within a run's workflow journal.
+ * It is not a workflow operation, run, task, or provider request identity.
+ */
+export const ControlCommandId = Schema.NonEmptyString.pipe(
+  Schema.brand("ControlCommandId")
+)
+export type ControlCommandId = typeof ControlCommandId.Type
+
+/**
+ * Identifies the Dalph user proven by an authenticated transport boundary.
+ * It records the actor and does not grant task-claim or provider authority.
+ */
+export const AuthenticatedOperatorIdentity = Schema.NonEmptyString.pipe(
+  Schema.brand("AuthenticatedOperatorIdentity")
+)
+export type AuthenticatedOperatorIdentity = typeof AuthenticatedOperatorIdentity.Type
+
 /** Identifies the configured Dalph owner recorded in one task claim. */
 export const ClaimOwner = Schema.NonEmptyString.pipe(Schema.brand("ClaimOwner"))
 export type ClaimOwner = typeof ClaimOwner.Type

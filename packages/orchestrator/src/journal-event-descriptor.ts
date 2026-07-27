@@ -1,8 +1,16 @@
 import { Match } from "effect"
-import type { JournalRecordKey, OperationId, PlannedTaskAttempt, TaskWorkSessionId } from "./domain.js"
+import type {
+  ControlCommandId,
+  JournalRecordKey,
+  OperationId,
+  PlannedTaskAttempt,
+  RunId,
+  TaskWorkSessionId
+} from "./domain.js"
 import { TechnicalRetryOrdinal } from "./domain.js"
 import {
   attemptPlanRecordKey,
+  controlCommandRecordKey,
   implementationDispositionRecordKey,
   intentRecordKey,
   outcomeRecordKey,
@@ -40,7 +48,16 @@ interface SessionResultEventDescriptor {
   readonly expectedKey: JournalRecordKey
   readonly requiredSessionId: TaskWorkSessionId
 }
-type JournalEventDescriptor = OperationEventDescriptor | SessionResultEventDescriptor
+interface ControlCommandEventDescriptor {
+  readonly _tag: "ControlCommandEventDescriptor"
+  readonly commandId: ControlCommandId
+  readonly expectedKey: JournalRecordKey
+  readonly runId: RunId
+}
+type JournalEventDescriptor =
+  | ControlCommandEventDescriptor
+  | OperationEventDescriptor
+  | SessionResultEventDescriptor
 type PlannedAttemptFact = {
   readonly _tag: "NoPlannedAttempt"
 } | {
@@ -97,6 +114,15 @@ const sessionResultEvent = (
   expectedKey,
   requiredSessionId
 })
+const controlCommandEvent = (
+  commandId: ControlCommandId,
+  runId: RunId
+): ControlCommandEventDescriptor => ({
+  _tag: "ControlCommandEventDescriptor",
+  commandId,
+  expectedKey: controlCommandRecordKey(commandId),
+  runId
+})
 const intentEvent = (
   expectedKey: JournalRecordKey,
   operationId: OperationId,
@@ -113,6 +139,7 @@ const intentEvent = (
   })
 const describeJournalEventShape = (event: WorkflowJournalEvent): JournalEventDescriptor => {
   return Match.valueTags(event, {
+    ControlCommandRecorded: event => controlCommandEvent(event.command.commandId, event.command.runId),
     ImplementationConvergenceDispositionRecorded: event => {
       const request = event.operation.request
       const plannedAttempt = request._tag === "AuthorizedImplementationConvergenceDisposition"

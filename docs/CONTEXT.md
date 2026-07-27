@@ -886,11 +886,20 @@ command or subject is a typed contradiction. It is distinct from the
 `OperationId` of any workflow action later selected to carry out the command.
 _Avoid_: Operation identity, run identity, provider request identity
 
+**Authenticated operator identity**:
+The branded local-transport identity of the Dalph user who issued one exact
+control command. The authenticating transport supplies it to the
+transport-independent control service; decoding a client payload does not
+authenticate the user. Recording the identity provides command attribution and
+does not grant task-claim, Git, executor, or provider authority.
+_Avoid_: Claim owner identity, provider-user identity, client-supplied username
+
 **Dalph user**:
 The single human actor who issues pause, resume, interruption, cancellation, and
-other control commands to Dalph. The current domain model does not distinguish
-multiple user identities or transfer command authority between users.
-_Avoid_: Claim owner identity, provider-user identity, multi-user authorization
+other control commands to Dalph. V1 records the authenticated operator identity
+on each command but does not define roles, multi-user authorization policy, or
+transfer command authority between users.
+_Avoid_: Claim owner identity, provider-user identity, authorization role
 
 **User-requested run pause**:
 The durable pause of one exact `RunId` requested by the Dalph user. Dalph

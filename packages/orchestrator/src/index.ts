@@ -1,5 +1,7 @@
 export { ActivationCause, type ActivationCoordinator, ActivationCoordinatorClosed } from "./activation-coordinator.js"
 export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
+export { ControlCommand, ControlCommandRecordedEvent, ControlCommandRequest } from "./control-command.js"
+export { ControlCommandIdentityContradiction, ControlService, controlServiceLayer } from "./control-service.js"
 export {
   ControlledCoordinatorLock,
   controlledCoordinatorLockLayer,
@@ -12,8 +14,10 @@ export {
 } from "./coordinator-lock.js"
 export {
   AttemptId,
+  AuthenticatedOperatorIdentity,
   ClaimOwner,
   ClaimToken,
+  ControlCommandId,
   EvidenceStoreLocator,
   FailedProcessExitCode,
   FixtureTarget,

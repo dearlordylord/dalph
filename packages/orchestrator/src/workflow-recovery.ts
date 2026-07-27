@@ -355,6 +355,7 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
         ImplementationEvidenceSealingIntended: ignoreAuthorityRefresh,
         ImplementationReviewIntended: ignoreAuthorityRefresh,
         ReviewFindingsHandbackIntended: ignoreAuthorityRefresh,
+        ControlCommandRecorded: ignoreAuthorityRefresh,
         TrackerGraphOutcomeObserved: ignoreAuthorityRefresh,
         TaskWorktreeReady: ignoreAuthorityRefresh,
         TaskClaimAcquired: ignoreAuthorityRefresh,

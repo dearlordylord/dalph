@@ -1,5 +1,9 @@
-import type { AttemptId, OperationId, ProviderObservationId } from "./domain.js"
+import type { AttemptId, ControlCommandId, OperationId, ProviderObservationId } from "./domain.js"
 import { JournalRecordKey } from "./domain.js"
+
+export const controlCommandRecordKey = (
+  commandId: ControlCommandId
+): JournalRecordKey => JournalRecordKey.make(`control-command:${commandId}`)
 
 export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:intent`)
