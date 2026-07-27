@@ -1,4 +1,4 @@
-import { Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
+import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { type OperationId, RunId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
@@ -192,12 +192,15 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     }
   )
 
-  const completions = yield* Queue.unbounded<
-    Exit.Exit<
-      void,
+  interface WorkflowOperationCompletion {
+    readonly acknowledged: Deferred.Deferred<void>
+    readonly exit: Exit.Exit<
+      FreshWorkflowStage | undefined,
       FreshWorkflowStageError | ManagedRecoveryActivationError
     >
-  >()
+    readonly stage: FreshWorkflowStage | undefined
+  }
+  const completions = yield* Queue.unbounded<WorkflowOperationCompletion>()
 
   return yield* Effect.scoped(Effect.gen(function*() {
     const initialRecoveredFrontier = yield* recovery.readFrontier
@@ -278,43 +281,45 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             )
             : stage.run(execution.recordIntent)
           const exit = yield* Effect.exit(operation)
-          if (Exit.isSuccess(exit)) {
-            if (stage !== undefined) {
-              yield* Ref.update(stages, (current) =>
-                current.flatMap((candidate) =>
-                  candidate !== stage
-                    ? [candidate]
-                    : exit.value === undefined
-                    ? []
-                    : [exit.value]
-                ))
-            }
-          } else {
-            if (stage !== undefined) {
-              yield* Ref.update(stages, (current) => current.filter((candidate) => candidate !== stage))
-            }
-          }
-          yield* Queue.offer(completions, Exit.asVoid(exit))
+          const acknowledged = yield* Deferred.make<void>()
+          yield* Queue.offer(completions, { acknowledged, exit, stage })
+          yield* Deferred.await(acknowledged)
           return yield* Exit.isFailure(exit)
             ? Effect.failCause(exit.cause)
             : Effect.void
         })
     })
 
+    const applyCompletion = Effect.fn("Workflow.applyOperationCompletion")(
+      function*(completion: WorkflowOperationCompletion) {
+        const { exit, stage } = completion
+        if (stage !== undefined) {
+          yield* Ref.update(stages, (current) =>
+            current.flatMap((candidate) =>
+              candidate !== stage
+                ? [candidate]
+                : Exit.isFailure(exit) || exit.value === undefined
+                ? []
+                : [exit.value]
+            ))
+        }
+        yield* Deferred.succeed(completion.acknowledged, undefined)
+        if (Exit.isFailure(exit)) {
+          return yield* Effect.failCause(exit.cause)
+        }
+      }
+    )
+
     for (;;) {
       yield* coordinator.signal(ActivationCause.Startup())
       const pendingCompletion = yield* Queue.poll(completions)
       if (Option.isSome(pendingCompletion)) {
-        if (Exit.isFailure(pendingCompletion.value)) {
-          return yield* Effect.failCause(pendingCompletion.value.cause)
-        }
+        yield* applyCompletion(pendingCompletion.value)
         continue
       }
       if ((yield* readFrontier()).transitions.length === 0) return
       const awaitedCompletion = yield* Queue.take(completions)
-      if (Exit.isFailure(awaitedCompletion)) {
-        return yield* Effect.failCause(awaitedCompletion.cause)
-      }
+      yield* applyCompletion(awaitedCompletion)
     }
   }))
 })
