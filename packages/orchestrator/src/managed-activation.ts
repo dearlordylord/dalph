@@ -1,11 +1,8 @@
-import { Context, Effect, Exit, Layer, Match, Queue, Ref } from "effect"
+import { Context, Effect, Exit, Layer, Match, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
 import { type OperationId, type ProviderObservationId, RunId, type TaskId, type TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
-import type {
-  FreshImplementationConvergenceStage,
-  FreshImplementationConvergenceStageError
-} from "./implementation-convergence-stage.js"
+import type { FreshImplementationConvergenceStageError } from "./implementation-convergence-stage.js"
 import { JournalStore, type JournalStoreError } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import {
@@ -15,6 +12,7 @@ import {
   type RunnableFrontierTransition
 } from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
+import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutor } from "./task-execution.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -256,37 +254,16 @@ export const makeManagedRecoveryActivation = Effect.fn(
         ? [{ operationId: transition.operationId, taskId: transition.taskId }]
         : []
   )
-  const stages = yield* Ref.make<
-    ReadonlyArray<FreshImplementationConvergenceStage>
-  >(
-    yield* makeRecoveredImplementationConvergenceStages(runId, false)
-  )
-  const refreshStages = Effect.fn("ManagedActivation.refreshStages")(
-    function*() {
-      const current = yield* Ref.get(stages)
-      const derived = yield* makeRecoveredImplementationConvergenceStages(
-        runId,
-        false
-      )
-      const currentTaskIds = new Set(
-        current.map(({ transition }) => transition.taskId)
-      )
-      yield* Ref.set(stages, [
-        ...current,
-        ...derived.filter(({ transition }) => !currentTaskIds.has(transition.taskId))
-      ])
-    }
-  )
   const readFrontier = Effect.fn(
     "ManagedActivation.readActivationFrontier"
   )(function*() {
     const recovered = yield* readRecoveredFrontier(runId)
-    const currentStages = yield* Ref.get(stages)
+    const reconstructedStages = yield* makeRecoveredImplementationConvergenceStages(runId, false)
     return {
       explanations: recovered.explanations,
       transitions: [
         ...recovered.transitions,
-        ...currentStages.map(({ transition }) => transition)
+        ...reconstructedStages.map(({ transition }) => transition)
       ]
     }
   })
@@ -295,19 +272,22 @@ export const makeManagedRecoveryActivation = Effect.fn(
       transition: RunnableFrontierTransition,
       recordIntent: (operationId: OperationId) => Effect.Effect<void>
     ) {
-      const stage = (yield* Ref.get(stages)).find(
-        (candidate) => candidate.transition === transition
+      const selectedKey = selectedTransitionKey(
+        makeSelectedTransitionIdentity(runId, transition)
+      )
+      const stage = (
+        yield* makeRecoveredImplementationConvergenceStages(runId, false)
+      ).find(
+        (candidate) =>
+          selectedTransitionKey(
+            makeSelectedTransitionIdentity(runId, candidate.transition)
+          ) === selectedKey
       )
       if (stage === undefined) {
         yield* recoverRunnableTransition(runId, transition)
-        yield* refreshStages()
         return
       }
-      const next = yield* stage.run(recordIntent)
-      yield* Ref.update(stages, (current) => [
-        ...current.filter((candidate) => candidate !== stage),
-        ...(next === undefined ? [] : [next])
-      ])
+      yield* stage.run(recordIntent)
     }
   )
   return ManagedRecoveryActivation.of({
