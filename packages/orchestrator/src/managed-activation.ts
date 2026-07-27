@@ -2,8 +2,11 @@ import { Context, Effect, Exit, Layer, Match, Queue, Ref } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
 import { type OperationId, type ProviderObservationId, RunId, type TaskId, type TaskWorkCapacity } from "./domain.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
-import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
-import { JournalStore } from "./journal-store.js"
+import type {
+  FreshImplementationConvergenceStage,
+  FreshImplementationConvergenceStageError
+} from "./implementation-convergence-stage.js"
+import { JournalStore, type JournalStoreError } from "./journal-store.js"
 import { reduceManagedHistory } from "./managed-history.js"
 import {
   deriveRunnableFrontier,
@@ -14,7 +17,22 @@ import {
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutor } from "./task-execution.js"
-import type { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
+import type { TraceOutputError } from "./trace-output.js"
+import type { WorkflowInterpreter, WorkflowInterpreterService, WorkflowTrace } from "./workflow.js"
+
+type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
+
+type InvalidManagedHistory = Extract<
+  ReturnType<typeof reduceManagedHistory>,
+  { readonly _tag: "InvalidManagedHistory" }
+>
+
+export type ManagedRecoveryActivationError =
+  | Effect.Error<ReturnType<InterpreterOperation>>
+  | FreshImplementationConvergenceStageError
+  | InvalidManagedHistory
+  | JournalStoreError
+  | TraceOutputError
 
 export interface RecoveredAdmissionCapacityEvidence {
   readonly freshOccupiedInvocations: ReadonlyArray<{
@@ -42,7 +60,7 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
   const executor = yield* TaskExecutor
   const reduction = reduceManagedHistory(runId, yield* journal.read(runId))
   if (reduction._tag === "InvalidManagedHistory") {
-    return yield* Effect.die(reduction)
+    return yield* Effect.fail(reduction)
   }
   const records = reduction.managedRun.workflowHistory.records
   const observations = yield* Effect.forEach(
@@ -92,7 +110,7 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
     const journal = yield* JournalStore
     const reduction = reduceManagedHistory(runId, yield* journal.read(runId))
     if (reduction._tag === "InvalidManagedHistory") {
-      return yield* Effect.die(reduction)
+      return yield* Effect.fail(reduction)
     }
     const records = reduction.managedRun.workflowHistory.records
     const isUnresolved = (
@@ -168,7 +186,11 @@ interface ManagedRecoveryActivationService {
     | { readonly _tag: "AuthoritativeManagedRun"; readonly runId: RunId }
     | { readonly _tag: "SyntheticFreshOnly"; readonly runId: RunId }
   readonly capacityEvidence: RecoveredAdmissionCapacityEvidence
-  readonly readFrontier: Effect.Effect<RunnableFrontier, unknown>
+  readonly readFrontier: Effect.Effect<
+    RunnableFrontier,
+    ManagedRecoveryActivationError,
+    never
+  >
   readonly reconstructedReservedPositions: ReadonlyArray<{
     readonly operationId: OperationId
     readonly taskId: TaskId
@@ -176,7 +198,7 @@ interface ManagedRecoveryActivationService {
   readonly runTransition: (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
-  ) => Effect.Effect<void, unknown>
+  ) => Effect.Effect<void, ManagedRecoveryActivationError, never>
 }
 
 /**

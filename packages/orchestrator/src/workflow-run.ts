@@ -2,8 +2,8 @@ import { Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { type OperationId, RunId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
-import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
-import { ManagedRecoveryActivation } from "./managed-activation.js"
+import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-workflow-stage.js"
+import { ManagedRecoveryActivation, type ManagedRecoveryActivationError } from "./managed-activation.js"
 import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
@@ -192,7 +192,12 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     }
   )
 
-  const completions = yield* Queue.unbounded<Exit.Exit<void, unknown>>()
+  const completions = yield* Queue.unbounded<
+    Exit.Exit<
+      void,
+      FreshWorkflowStageError | ManagedRecoveryActivationError
+    >
+  >()
 
   return yield* Effect.scoped(Effect.gen(function*() {
     const initialRecoveredFrontier = yield* recovery.readFrontier
@@ -261,14 +266,18 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           const stage = (yield* Ref.get(stages)).find(
             (candidate) => candidate.transition === transition
           )
-          const exit = yield* (
-            stage === undefined
-              ? recovery.runTransition(
-                transition,
-                execution
-              )
-              : stage.run(execution.recordIntent)
-          ).pipe(Effect.exit)
+          const operation: Effect.Effect<
+            FreshWorkflowStage | undefined,
+            FreshWorkflowStageError | ManagedRecoveryActivationError
+          > = stage === undefined
+            ? recovery.runTransition(
+              transition,
+              execution
+            ).pipe(
+              Effect.as<FreshWorkflowStage | undefined>(undefined)
+            )
+            : stage.run(execution.recordIntent)
+          const exit = yield* Effect.exit(operation)
           if (Exit.isSuccess(exit)) {
             if (stage !== undefined) {
               yield* Ref.update(stages, (current) =>

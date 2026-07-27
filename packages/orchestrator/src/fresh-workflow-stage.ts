@@ -10,7 +10,7 @@ import type { WorkflowInterpreterService } from "./workflow.js"
 
 type InterpreterOperation = WorkflowInterpreterService[keyof WorkflowInterpreterService]
 
-type FreshWorkflowStageError =
+export type FreshWorkflowStageError =
   | Effect.Error<ReturnType<InterpreterOperation>>
   | FreshImplementationConvergenceStageError
   | PlannedTaskAttemptError
