@@ -46,7 +46,7 @@
   },
   "packages/orchestrator/src/journaled-task-execution.ts": {
     "complexity": {
-      "count": 1
+      "count": 2
     }
   },
   "packages/orchestrator/src/managed-history.ts": {
@@ -60,6 +60,11 @@
     }
   },
   "packages/orchestrator/src/node-git-worktree.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/production-application.ts": {
     "complexity": {
       "count": 1
     }
