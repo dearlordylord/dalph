@@ -1,9 +1,9 @@
 # Why the Quint recovery gate reached 420 seconds
 
-**Date:** 2026-07-27  
-**Repository revision studied:** `40ba4f73488fb8cefb6cfd550a84b0ee895c358f`  
-**Quint:** `@informalsystems/quint@0.32.0`  
-**Quint Connect:** `@firfi/quint-connect@2.0.2-effect4.1`  
+**Date:** 2026-07-27
+**Repository revision studied:** `40ba4f73488fb8cefb6cfd550a84b0ee895c358f`
+**Quint:** `@informalsystems/quint@0.32.0`
+**Quint Connect:** `@firfi/quint-connect@2.0.2-effect4.1`
 **quint-llm-kit:** `520e563613c25abac4c631ea2aa3181ba76ba193`
 
 ## Decision
