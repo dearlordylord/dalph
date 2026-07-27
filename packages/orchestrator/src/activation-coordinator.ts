@@ -3,7 +3,13 @@ import { Data, Deferred, Effect, Exit, Option, Queue, Ref, Schema } from "effect
 import type * as Scope from "effect/Scope"
 import { SelectedTransitionIdentity as SelectedTransitionIdentitySchema } from "./domain.js"
 import type { OperationId, RunId, SelectedTransitionIdentity } from "./domain.js"
-import { FrontierExplanation, type RunnableFrontier, type RunnableFrontierTransition } from "./runnable-frontier.js"
+import {
+  FrontierExplanation,
+  type RunnableFrontier,
+  type RunnableFrontierTransition,
+  runnableTransitionOperationId,
+  runnableTransitionTaskId
+} from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import {
   type TaskAdmissionController,
@@ -160,17 +166,18 @@ const projectActivationOwnership = (
   ownership: ReadonlyMap<string, ActivationOwnershipEntry>
 ): RunnableFrontier => {
   const projected = frontier.transitions.map((transition) => {
+    const operationId = runnableTransitionOperationId(transition)
     const entry = ownership.get(ownedTransitionKey(runId, transition))
       ?? [...ownership.values()].find((candidate) =>
-        "operationId" in transition
-        && Option.getOrUndefined(candidate.operationId) === transition.operationId
+        operationId !== undefined
+        && Option.getOrUndefined(candidate.operationId) === operationId
       )
     return entry === undefined
       ? { explanation: null, transition }
       : {
         explanation: FrontierExplanation.ActivationInProgress({
           operationId: entry.operationId,
-          taskId: transition.taskId
+          taskId: runnableTransitionTaskId(transition)
         }),
         transition: null
       }
@@ -248,10 +255,11 @@ const makeActivationOwnershipRegistry = Effect.fn(
         const key = selectedTransitionKey(selected)
         return Option.match(Option.fromUndefinedOr(current.get(key)), {
           onNone: () => {
+            const operationId = runnableTransitionOperationId(transition)
             const entry: ActivationOwnershipEntry = {
-              operationId: "operationId" in transition
-                  && transition._tag !== "ContinueFreshWorkflowOperation"
-                ? Option.some(transition.operationId)
+              operationId: operationId !== undefined
+                  && transition._tag === "ContinueExecutorInvocation"
+                ? Option.some(operationId)
                 : Option.none(),
               selected,
               transition

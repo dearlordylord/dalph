@@ -27,9 +27,31 @@ module frontierRecovery {
   type Claim = Unclaimed | ActiveClaim | CompletionClaim | ForeignClaim
   type Availability = Missing | Available
   type Invocation = NoInvocation | RunningInvocation | AcceptedInvocation | InterruptedInvocation
+  type ExecutorOuterInvocationResourceUse =
+    | DoesNotUseTaskWorkCapacity
+    | UsesOneTaskWorkCapacityPosition
   type Readability = Readable | Unreadable | Conflicting
   type Observation = NeverObserved | UsableObservation | UnreadableObservation | ConflictingObservation
   type Responsibility = Unowned | Outstanding | Settled | Relinquished
+
+  // Capacity is declared by the executor's outer invocation. Internal
+  // protocol names and artifacts cannot change this projection.
+  pure def executorOuterInvocationCapacityPositions(
+    resourceUse: ExecutorOuterInvocationResourceUse
+  ): int =
+    match resourceUse {
+      | DoesNotUseTaskWorkCapacity => 0
+      | UsesOneTaskWorkCapacityPosition => 1
+    }
+
+  val executorOuterInvocationCapacityUseIsDeclared: bool = and {
+    executorOuterInvocationCapacityPositions(
+      DoesNotUseTaskWorkCapacity
+    ) == 0,
+    executorOuterInvocationCapacityPositions(
+      UsesOneTaskWorkCapacityPosition
+    ) == 1,
+  }
   type Isolation =
     | NotIsolated
     | ClaimAuthorityIsolated
@@ -166,6 +188,7 @@ module frontierRecovery {
     isolation: Isolation,
     attemptOutcome: AttemptOutcome,
     settlement: TaskSettlement,
+    executorResourceUse: ExecutorOuterInvocationResourceUse,
   }
 
   // Durable user commands. Pause phases and grouping coverage are derived.
@@ -232,6 +255,7 @@ module frontierRecovery {
     capacity: int,
     frontierTaskIds: Set[TaskId],
     admittedTaskIds: Set[TaskId],
+    executorResourceUses: TaskId -> ExecutorOuterInvocationResourceUse,
     transitionTags: TaskId -> str,
     transitionOperations: TaskId -> TransitionOperation,
     explanations: Set[{
@@ -329,6 +353,7 @@ module frontierRecovery {
     isolation: NotIsolated,
     attemptOutcome: AttemptPending,
     settlement: TaskUnsettled,
+    executorResourceUse: UsesOneTaskWorkCapacityPosition,
   }
 
   pure def initialControl: Control = {
@@ -491,9 +516,14 @@ module frontierRecovery {
     val responsible = selected.filter(task =>
       workflow.get(task).responsibility == Outstanding
     )
-    val admitted =
-      if (selected.size() <= CAPACITY)
-        selected
+    val capacityFree = selected.filter(task =>
+      workflow.get(task).executorResourceUse
+        == DoesNotUseTaskWorkCapacity
+    )
+    val capacityUsing = selected.exclude(capacityFree)
+    val admittedUsing =
+      if (capacityUsing.size() <= CAPACITY)
+        capacityUsing
       else if (responsible.contains(A))
         Set(A)
       else if (responsible.contains(C))
@@ -502,11 +532,14 @@ module frontierRecovery {
         Set(A)
       else
         Set(C)
+    val admitted = capacityFree.union(admittedUsing)
     val waiting = selected.exclude(admitted)
     {
       capacity: CAPACITY,
       frontierTaskIds: selected,
       admittedTaskIds: admitted,
+      executorResourceUses:
+        TASKS.mapBy(task => workflow.get(task).executorResourceUse),
       transitionTags: TASKS.mapBy(task =>
         if (workflow.get(task).responsibility == Outstanding)
           "CheckTaskClaim"
@@ -526,7 +559,7 @@ module frontierRecovery {
         tag: "CapacityWait",
         wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
       }),
-      reservationTaskIds: admitted,
+      reservationTaskIds: admittedUsing,
       occupiedTaskIds: Set(),
     }
   }
@@ -1883,9 +1916,16 @@ module frontierRecovery {
 
   val boundedCapacity: bool = and {
     initialReservedCount(state) <= CAPACITY,
-    state.selectorProjection.admittedTaskIds.size() <= CAPACITY,
+    state.selectorProjection.admittedTaskIds.filter(task =>
+      state.selectorProjection.executorResourceUses.get(task)
+        == UsesOneTaskWorkCapacityPosition
+    ).size() <= CAPACITY,
     state.selectorProjection.reservationTaskIds.size() <= CAPACITY,
   }
+  val declaredExecutorResourceUseIsProjected: bool =
+    TASKS.forall(task =>
+      state.selectorProjection.executorResourceUses.get(task)
+        == state.workflow.get(task).executorResourceUse)
   val oneOwnerPerExactTransition: bool =
     TASKS.forall(task => and {
       state.activation.ownerRegistrationCounts.get(task) <= 1,

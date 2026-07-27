@@ -22,7 +22,8 @@ import {
   deriveRunnableFrontier,
   ResponsibilityDisposition,
   type RunnableFrontier,
-  type RunnableFrontierTransition
+  type RunnableFrontierTransition,
+  runnableTransitionTaskId
 } from "../../src/runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../../src/selected-transition.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
@@ -214,7 +215,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       selectedFrontierObservation = {
         ...selectedFrontierObservation,
         transitions: selectedFrontierObservation.transitions.filter(
-          ({ taskId }) => taskId !== checkpoint.transition.taskId
+          (candidate) =>
+            runnableTransitionTaskId(candidate)
+              !== runnableTransitionTaskId(checkpoint.transition)
         )
       }
       selectedAtOwnershipExclusion = false
@@ -245,7 +248,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         taskId === undefined
         || (
           "transition" in pending.checkpoint
-          && pending.checkpoint.transition.taskId === taskId
+          && runnableTransitionTaskId(pending.checkpoint.transition) === taskId
         )
       )
 
@@ -352,7 +355,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     >()
     runnerCommands = new Map([
       ...runnerCommands,
-      [transition.taskId, commands]
+      [runnableTransitionTaskId(transition), commands]
     ])
     for (;;) {
       const command = yield* Queue.take(commands)
@@ -730,7 +733,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         const intended = heldActivationCheckpoints.find(
           ({ checkpoint }) =>
             checkpoint._tag === "IntentBound"
-            && checkpoint.transition.taskId === taskId
+            && runnableTransitionTaskId(checkpoint.transition) === taskId
         )
         if (intended !== undefined) yield* settleCheckpoint(intended)
         let commands = runnerCommands.get(taskId)
@@ -949,7 +952,9 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ({ _tag }) => _tag === "CommitFreshTaskClaimIntent"
         )
         if (transition !== undefined) {
-          yield* identityMapping.taskToModel(transition.taskId).pipe(
+          yield* identityMapping.taskToModel(
+            runnableTransitionTaskId(transition)
+          ).pipe(
             Effect.flatMap(
               rawControls.orchestratorCommitsFreshTaskClaimIntent
             )
@@ -1111,7 +1116,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             && !history.slice(index + 1).some(
               (candidate) =>
                 candidate._tag === "AdmissionReserved"
-                && candidate.transition.taskId === checkpoint.transition.taskId
+                && runnableTransitionTaskId(candidate.transition)
+                  === runnableTransitionTaskId(checkpoint.transition)
             )
             ? [checkpoint]
             : []
@@ -1122,9 +1128,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             && !history.slice(index + 1).some(
               (candidate) =>
                 candidate._tag === "AdmissionReserved"
-                && candidate.transition.taskId === checkpoint.transition.taskId
+                && runnableTransitionTaskId(candidate.transition)
+                  === runnableTransitionTaskId(checkpoint.transition)
             )
-            ? [checkpoint.transition.taskId]
+            ? [runnableTransitionTaskId(checkpoint.transition)]
             : []
         )
       const projectTaskIds = (
@@ -1146,7 +1153,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
                   modelOperationId: yield* identityMapping.operationToModel(operationId)
                 }),
               modelTaskId: yield* identityMapping.taskToModel(
-                owner.transition.taskId
+                runnableTransitionTaskId(owner.transition)
               ),
               phase: operationId === undefined
                 ? "PreIntent" as const
@@ -1159,11 +1166,13 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         activation: {
           activationInProgressModelTaskIds: yield* projectTaskIds(
             [...ownershipSnapshot.owners.values()].map(
-              ({ transition }) => transition.taskId
+              ({ transition }) => runnableTransitionTaskId(transition)
             )
           ),
           derivedModelTaskIds: yield* projectTaskIds(
-            derivedFrontierObservation.transitions.map(({ taskId }) => taskId)
+            derivedFrontierObservation.transitions.map(
+              runnableTransitionTaskId
+            )
           ),
           freshlyObservedModelTaskIds: yield* projectTaskIds(
             providerObservationTaskIds
@@ -1171,14 +1180,18 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           isolatedModelTaskIds: yield* projectTaskIds(
             [...ownershipSnapshot.isolatedTransitionKeys].flatMap((key) => {
               const owner = ownerByKey.get(key)
-              if (owner !== undefined) return [owner.transition.taskId]
+              if (owner !== undefined) {
+                return [runnableTransitionTaskId(owner.transition)]
+              }
               const transition = derivedFrontierObservation.transitions.find(
                 (candidate) =>
                   selectedTransitionKey(
                     makeSelectedTransitionIdentity(runId, candidate)
                   ) === key
               )
-              return transition === undefined ? [] : [transition.taskId]
+              return transition === undefined
+                ? []
+                : [runnableTransitionTaskId(transition)]
             })
           ),
           owners: activationOwners,
@@ -1187,7 +1200,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               currentAttemptReleasedCheckpoints.flatMap((checkpoint) =>
                 checkpoint.runnerExit === "Failed"
                   && Option.isSome(checkpoint.operationId)
-                  ? [checkpoint.transition.taskId]
+                  ? [runnableTransitionTaskId(checkpoint.transition)]
                   : []
               )
             )
@@ -1199,7 +1212,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
                 ...currentAttemptReleasedCheckpoints.flatMap((checkpoint) =>
                   checkpoint.runnerExit === "Failed"
                     && Option.isNone(checkpoint.operationId)
-                    ? [checkpoint.transition.taskId]
+                    ? [runnableTransitionTaskId(checkpoint.transition)]
                     : []
                 )
               ]
@@ -1232,7 +1245,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             new Set(
               releasedCheckpoints.flatMap((checkpoint) =>
                 checkpoint.runnerExit === "Succeeded"
-                  ? [checkpoint.transition.taskId]
+                  ? [runnableTransitionTaskId(checkpoint.transition)]
                   : []
               )
             )
@@ -1241,11 +1254,13 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             runnerCommands.keys()
           ),
           selectedModelTaskIds: yield* projectTaskIds(
-            selectedFrontierObservation.transitions.filter(({ taskId }) =>
+            selectedFrontierObservation.transitions.filter((transition) =>
               selectedAtOwnershipExclusion
-              || !controllerSnapshot.reservedTaskIds.includes(taskId)
+              || !controllerSnapshot.reservedTaskIds.includes(
+                runnableTransitionTaskId(transition)
+              )
             )
-              .map(({ taskId }) => taskId)
+              .map(runnableTransitionTaskId)
           ),
           triggerPending: activationProjectionEvents.toReversed()[0]
             === "ReactivationRequested"

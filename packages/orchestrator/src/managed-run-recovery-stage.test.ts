@@ -53,6 +53,7 @@ import {
 import { reduceManagedHistory } from "./managed-history.js"
 import { deriveManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
 import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import { selectedExecutorReconstructionProtocol } from "./selected-executor-protocol.js"
 import { taskRevisionFor } from "./task-dag.js"
 import {
   SuccessfulTaskExecutionReported,
@@ -186,11 +187,15 @@ it("derives a distinct recovery stage for every early legal crash gap", () => {
     event: TaskExecutionIntentRecorded.make({ operation: executionOperation, version: 4 }),
     key: intentRecordKey(executionOperation.request.operationId)
   } as const
-  expect(reconstructManagedRunState(runId, records(executionIntent))).toMatchObject({
+  expect(reconstructManagedRunState(
+    runId,
+    records(executionIntent),
+    selectedExecutorReconstructionProtocol
+  )).toMatchObject({
     _tag: "ValidReconstructedManagedRun",
     state: {
       responsibility: {
-        entries: [{ _tag: "TaskExecutionResponsibility" }]
+        entries: [{ _tag: "ExecutorInvocationResponsibility" }]
       }
     }
   })

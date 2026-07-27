@@ -38,6 +38,8 @@ module frontierRecoveryTest {
     init
       .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .expect(and {
+        executorOuterInvocationCapacityUseIsDeclared,
+        declaredExecutorResourceUseIsProjected,
         state.workflow.get(A).responsibility == Outstanding,
         state.workflow.get(C).responsibility == Unowned,
       })

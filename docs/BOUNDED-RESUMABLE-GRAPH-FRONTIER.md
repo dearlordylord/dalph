@@ -111,9 +111,31 @@ task order. Fresh-task selection creates responsibility only when the
 orchestrator records that task's first exact operation intent.
 
 One process-local capacity controller represents reserved and occupied task
-admission positions. A worker occupies capacity only while a fresh provider
-observation says its exact invocation consumes capacity. Paused worktrees and
+admission positions. Each executor outer invocation declares whether it uses
+one task-work capacity position. The controller reads that declared resource
+use; it never infers capacity from an internal stage or operation name. A
+provider-observed invocation remains occupied only while a fresh provider
+observation says its exact correlation consumes capacity. Paused worktrees and
 sessions do not consume capacity by themselves.
+
+### Executor outer protocol
+
+The selected executor adapter translates its internal implementation,
+restoration, evidence, review, and findings algorithm into opaque outer
+invocations. Generic reconstruction and activation retain only each
+invocation's exact task-and-invocation correlation, declared resource use,
+named wait or interruption, and normalized outcome. They do not inspect logs,
+output, evidence manifests, or executor artifacts to infer a current worker or
+reviewer.
+
+The current adapter retains same-session findings return, an independent
+reviewer identity for each semantic round, separate technical and semantic
+retry scopes, bounded non-convergence, and immutable evidence. Continuing an
+unresolved outer invocation calls the selected adapter with its exact
+correlation; the adapter freshly asks the provider to create, discover, or
+resume the bound worker or reviewer rather than deriving provider state from
+the Dalph journal. Configurable executor pipelines remain outside this
+protocol's scope.
 
 ### Recovery activation
 

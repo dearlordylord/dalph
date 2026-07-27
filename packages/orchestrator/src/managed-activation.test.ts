@@ -1,14 +1,18 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { FixtureTarget, OperationId, RunId, TrackerRevision } from "./domain.js"
+import { FixtureTarget, OperationId, RunId, TaskWorkCapacity, TrackerRevision } from "./domain.js"
 import {
   JournalStore,
   memoryJournalStoreLayer,
   outcomeRecordKey,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { makeManagedRecoveryActivation, observeRecoveredAdmissionCapacity } from "./managed-activation.js"
+import {
+  activateRecoveredResponsibilities,
+  makeManagedRecoveryActivation,
+  observeRecoveredAdmissionCapacity
+} from "./managed-activation.js"
 import { TaskExecutor } from "./task-execution.js"
 import { makeTrackerGraphObservationOperation } from "./workflow-operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
@@ -68,4 +72,34 @@ it.effect("rejects invalid managed history before capacity observation or fronti
     expect(capacityExit._tag).toBe("Failure")
     expect(frontierExit._tag).toBe("Failure")
   }).pipe(Effect.provide(memoryJournalStoreLayer))
+})
+
+it.effect("finishes recovered activation when no responsibility or executor deadline remains", () => {
+  const runId = RunId.make("empty-managed-activation")
+  const interpreter = WorkflowInterpreter.of({
+    acquireTaskClaim: unused,
+    establishTaskWorkSession: unused,
+    executeTaskWork: unused,
+    handBackReviewFindings: unused,
+    readTrackerGraph: unused,
+    reconcileTaskWorktree: unused,
+    recordImplementationDisposition: unused,
+    recordTaskAttemptPlan: unused,
+    reviewImplementation: unused,
+    sealImplementationEvidence: unused,
+    simulateTaskExecution: unused,
+    simulateTaskWorkSession: unused
+  })
+
+  return activateRecoveredResponsibilities(
+    runId,
+    TaskWorkCapacity.make(1)
+  ).pipe(
+    Effect.provideService(WorkflowInterpreter, interpreter),
+    Effect.provideService(
+      WorkflowTrace,
+      WorkflowTrace.of({ emit: () => Effect.void })
+    ),
+    Effect.provide(memoryJournalStoreLayer)
+  )
 })

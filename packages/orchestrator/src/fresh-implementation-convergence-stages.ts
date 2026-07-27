@@ -1,9 +1,12 @@
 import { Effect } from "effect"
 import { ReviewerSessionId, SemanticReviewRound } from "./domain.js"
 import {
+  continuedImplementationTransition,
   type FreshImplementationConvergenceOptions,
   type FreshImplementationConvergenceStage,
   freshImplementationTransition,
+  noTaskWorkCapacityUse as noCapacity,
+  oneTaskWorkCapacityPosition as usesCapacity,
   priorImplementationReviewEvidence
 } from "./implementation-convergence-stage.js"
 import { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
@@ -20,7 +23,6 @@ import {
   ReviewFindingsHandbackRequest,
   type SealedImplementationReview
 } from "./implementation-review.js"
-import { RunnableFrontierTransition as FrontierTransition } from "./runnable-frontier.js"
 import { TaskExecutionAdmitted, TaskExecutionOutcomeObserved } from "./task-execution-trace.js"
 import { type TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -32,16 +34,12 @@ import {
   makeTaskExecutionOperation
 } from "./workflow-operation.js"
 
-/** Builds process-local selector stages; durable journal facts remain the recovery authority. */
 export const makeFreshImplementationConvergenceStage = Effect.fn(
   "Workflow.makeFreshImplementationConvergenceStage"
 )(function*(
   options: FreshImplementationConvergenceOptions,
   initialExecutionOutcome: TaskExecutionOutcome
-): Effect.fn.Return<
-  FreshImplementationConvergenceStage,
-  TaskWorktreeExecutionModeContradiction
-> {
+) {
   const makeReworkExecutionStage = Effect.fn(
     "Workflow.makeFreshReworkExecutionStage"
   )(function*(
@@ -69,7 +67,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
       transition: freshImplementationTransition(
         operation.request.operationId,
         options.task,
-        true
+        usesCapacity
       ),
       run: (recordActivationIntent) =>
         Effect.gen(function*() {
@@ -138,12 +136,13 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           ? freshImplementationTransition(
             operation.request.operationId,
             options.task,
-            true
+            usesCapacity
           )
-          : FrontierTransition.ContinueReviewFindingsHandback({
-            operationId: operation.request.operationId,
-            taskId: options.task.id
-          }),
+          : continuedImplementationTransition(
+            operation.request.operationId,
+            options.task,
+            usesCapacity
+          ),
         run: (recordActivationIntent) =>
           Effect.gen(function*() {
             if (recoveredHandback === undefined) {
@@ -232,11 +231,16 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         ?? makeImplementationReviewOperation(request)
       return {
         transition: recoveredOperation === undefined
-          ? freshImplementationTransition(operationId, options.task, true)
-          : FrontierTransition.ContinueImplementationReview({
+          ? freshImplementationTransition(
             operationId,
-            taskId: options.task.id
-          }),
+            options.task,
+            usesCapacity
+          )
+          : continuedImplementationTransition(
+            operationId,
+            options.task,
+            usesCapacity
+          ),
         run: (recordActivationIntent) =>
           Effect.gen(function*() {
             if (recoveredOperation === undefined) {
@@ -327,7 +331,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         transition: freshImplementationTransition(
           operation.operationId,
           options.task,
-          false
+          noCapacity
         ),
         run: () =>
           Effect.gen(function*() {

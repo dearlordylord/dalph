@@ -1,12 +1,8 @@
 import { Effect, Match } from "effect"
-import type { RunId } from "./domain.js"
+import type { OperationId, RunId } from "./domain.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
 import {
-  recoverImplementationEvidenceSealings,
-  recoverImplementationReviews,
-  recoverReviewFindingsHandbacks,
   recoverTaskClaimAcquisitions,
-  recoverTaskExecutions,
   recoverTaskWorkSessionEstablishments,
   recoverTaskWorktreeReconciliations
 } from "./workflow-operation-recovery.js"
@@ -18,18 +14,26 @@ import {
  */
 export const recoverRunnableTransition = Effect.fn(
   "WorkflowRecovery.recoverRunnableTransition"
-)(function*(runId: RunId, transition: RunnableFrontierTransition) {
+)(function*<E, R>(
+  runId: RunId,
+  transition: RunnableFrontierTransition,
+  recoverExecutorInvocation: (
+    runId: RunId,
+    invocationId: OperationId
+  ) => Effect.Effect<void, E, R>
+) {
   yield* Match.value(transition).pipe(
     Match.tagsExhaustive({
       CheckTaskClaim: ({ operationId }) => recoverTaskClaimAcquisitions(runId, operationId),
       CheckTaskWorkSession: ({ operationId }) => recoverTaskWorkSessionEstablishments(runId, operationId),
       CommitFreshTaskClaimIntent: () => Effect.void,
       ContinueFreshWorkflowOperation: () => Effect.void,
-      ContinueImplementationEvidenceSealing: ({ operationId }) =>
-        recoverImplementationEvidenceSealings(runId, operationId),
-      ContinueImplementationReview: ({ operationId }) => recoverImplementationReviews(runId, operationId),
-      ContinueReviewFindingsHandback: ({ operationId }) => recoverReviewFindingsHandbacks(runId, operationId),
-      ContinueTaskExecution: ({ operationId }) => recoverTaskExecutions(runId, operationId),
+      StartExecutorInvocation: () => Effect.void,
+      ContinueExecutorInvocation: ({ invocation }) =>
+        recoverExecutorInvocation(
+          runId,
+          invocation.correlation.invocationId
+        ),
       ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimAcquisitions(runId, operationId),
       ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeReconciliations(runId, operationId)
     })

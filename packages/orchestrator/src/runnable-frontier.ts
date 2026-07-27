@@ -1,16 +1,16 @@
 import { Data, Match, Option } from "effect"
 import type { OperationId, TaskId, TaskRevision } from "./domain.js"
+import type {
+  ExecutorOuterInvocation,
+  ExecutorOuterInvocationOutcome,
+  ExecutorOuterInvocationWait
+} from "./executor-boundary.js"
 import {
   type WorkflowResponsibilityEntry,
+  workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "./reconstructed-managed-run-state.js"
 
-/**
- * Issue #133 replaces the evidence-sealing-, review-, and handback-specific
- * variants below with executor-declared outer transitions. They preserve only
- * the current fixed executor protocol and are not universal Dalph
- * orchestration vocabulary.
- */
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: {
     readonly operationId: OperationId
@@ -22,24 +22,13 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   ContinueFreshWorkflowOperation: {
     readonly operationId: OperationId
-    readonly requiresTaskAdmission: boolean
     readonly taskId: TaskId
   }
-  ContinueImplementationEvidenceSealing: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
+  StartExecutorInvocation: {
+    readonly invocation: ExecutorOuterInvocation
   }
-  ContinueImplementationReview: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  ContinueReviewFindingsHandback: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  ContinueTaskExecution: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
+  ContinueExecutorInvocation: {
+    readonly invocation: ExecutorOuterInvocation
   }
   CheckTaskWorkSession: {
     readonly operationId: OperationId
@@ -57,12 +46,36 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
 
 export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransition>()
 
+export const runnableTransitionTaskId = (
+  transition: RunnableFrontierTransition
+): TaskId =>
+  transition._tag === "ContinueExecutorInvocation"
+    || transition._tag === "StartExecutorInvocation"
+    ? transition.invocation.correlation.taskId
+    : transition.taskId
+
+export const runnableTransitionOperationId = (
+  transition: RunnableFrontierTransition
+): OperationId | undefined =>
+  transition._tag === "ContinueExecutorInvocation"
+    || transition._tag === "StartExecutorInvocation"
+    ? transition.invocation.correlation.invocationId
+    : "operationId" in transition
+    ? transition.operationId
+    : undefined
+
 export type ResponsibilityDisposition = Data.TaggedEnum<{
   DependencyWait: {
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
   }
   FinalOutcome: {
     readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed"
+  }
+  ExecutorInvocationWait: {
+    readonly wait: ExecutorOuterInvocationWait
+  }
+  ExecutorInvocationSettled: {
+    readonly outcome: ExecutorOuterInvocationOutcome
   }
   ForeignClaimIsolation: Record<never, never>
   MissingClaim: Record<never, never>
@@ -95,6 +108,16 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
     readonly taskId: TaskId
     readonly wakeCondition: "TaskGraphFactsUpdated"
+  }
+  ExecutorInvocationWait: {
+    readonly taskId: TaskId
+    readonly wait: ExecutorOuterInvocationWait
+    readonly wakeCondition: "ExecutorRetryDeadlineReached"
+  }
+  ExecutorInvocationSettlement: {
+    readonly operationId: OperationId
+    readonly outcome: ExecutorOuterInvocationOutcome
+    readonly taskId: TaskId
   }
   FinalOutcome: {
     readonly operationId: OperationId
@@ -165,21 +188,12 @@ export type RunFinalityDecision = Data.TaggedEnum<{
 
 export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
 
-const responsibilityOperationId = (
+const workflowResponsibilityTaskId = (
   responsibility: WorkflowResponsibilityEntry
-): OperationId =>
-  Match.value(responsibility).pipe(
-    Match.tags({
-      ImplementationEvidenceResponsibility: ({ operation }) => operation.operationId,
-      ImplementationReviewResponsibility: ({ operation }) => operation.request.operationId,
-      ReviewFindingsHandbackResponsibility: ({ operation }) => operation.request.operationId,
-      TaskClaimResponsibility: ({ acquisition }) => acquisition.operationId,
-      TaskExecutionResponsibility: ({ operation }) => operation.request.operationId,
-      TaskWorkSessionResponsibility: ({ operation }) => operation.request.operationId,
-      TaskWorktreeResponsibility: ({ operation }) => operation.operationId
-    }),
-    Match.exhaustive
-  )
+): TaskId =>
+  responsibility._tag === "ExecutorInvocationResponsibility"
+    ? responsibility.invocation.correlation.taskId
+    : responsibility.taskId
 
 /** Run termination requires tracker settlement and no runnable or unsettled responsibility. */
 export const deriveRunFinalityDecision = (
@@ -193,6 +207,7 @@ export const deriveRunFinalityDecision = (
   const terminalOperationIds = new Set(
     frontier.explanations.flatMap((explanation) =>
       explanation._tag === "FinalOutcome"
+        || explanation._tag === "ExecutorInvocationSettlement"
         || explanation._tag === "Relinquishment"
         || explanation._tag === "Settlement"
         ? [explanation.operationId]
@@ -200,7 +215,7 @@ export const deriveRunFinalityDecision = (
     )
   )
   if (
-    responsibility.entries.some((entry) => !terminalOperationIds.has(responsibilityOperationId(entry)))
+    responsibility.entries.some((entry) => !terminalOperationIds.has(workflowResponsibilityOperationId(entry)))
   ) {
     return RunFinalityDecision.RunMustRemainActive({
       reason: "UnsettledResponsibility"
@@ -216,40 +231,24 @@ const readyTransition = (
 ): RunnableFrontierTransition =>
   Match.value(facts.responsibility).pipe(
     Match.tags({
-      ImplementationEvidenceResponsibility: ({ operation }) =>
-        RunnableFrontierTransition.ContinueImplementationEvidenceSealing({
-          operationId: operation.operationId,
-          taskId: facts.responsibility.taskId
-        }),
-      ImplementationReviewResponsibility: ({ operation }) =>
-        RunnableFrontierTransition.ContinueImplementationReview({
-          operationId: operation.request.operationId,
-          taskId: facts.responsibility.taskId
-        }),
-      ReviewFindingsHandbackResponsibility: ({ operation }) =>
-        RunnableFrontierTransition.ContinueReviewFindingsHandback({
-          operationId: operation.request.operationId,
-          taskId: facts.responsibility.taskId
+      ExecutorInvocationResponsibility: ({ invocation }) =>
+        RunnableFrontierTransition.ContinueExecutorInvocation({
+          invocation
         }),
       TaskClaimResponsibility: ({ acquisition }) =>
         RunnableFrontierTransition.CheckTaskClaim({
           operationId: acquisition.operationId,
-          taskId: facts.responsibility.taskId
-        }),
-      TaskExecutionResponsibility: ({ operation }) =>
-        RunnableFrontierTransition.ContinueTaskExecution({
-          operationId: operation.request.operationId,
-          taskId: facts.responsibility.taskId
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
         }),
       TaskWorkSessionResponsibility: ({ operation }) =>
         RunnableFrontierTransition.CheckTaskWorkSession({
           operationId: operation.request.operationId,
-          taskId: facts.responsibility.taskId
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
         }),
       TaskWorktreeResponsibility: ({ operation }) =>
         RunnableFrontierTransition.ReconcileTaskWorktree({
           operationId: operation.operationId,
-          taskId: facts.responsibility.taskId
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
         })
     }),
     Match.exhaustive
@@ -264,58 +263,72 @@ const decisionFor = (
   ResponsibilityDisposition.$match(facts.disposition, {
     DependencyWait: ({ prerequisiteTaskIds }) => ({
       explanation: FrontierExplanation.DependencyWait({
-        operationId: responsibilityOperationId(facts.responsibility),
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
         prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
-        taskId: facts.responsibility.taskId,
+        taskId: workflowResponsibilityTaskId(facts.responsibility),
         wakeCondition: "TaskGraphFactsUpdated"
       })
     }),
     FinalOutcome: ({ outcome }) => ({
       explanation: FrontierExplanation.FinalOutcome({
-        operationId: responsibilityOperationId(facts.responsibility),
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
         outcome,
-        taskId: facts.responsibility.taskId
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
+      })
+    }),
+    ExecutorInvocationWait: ({ wait }) => ({
+      explanation: FrontierExplanation.ExecutorInvocationWait({
+        taskId: workflowResponsibilityTaskId(facts.responsibility),
+        wait,
+        wakeCondition: "ExecutorRetryDeadlineReached"
+      })
+    }),
+    ExecutorInvocationSettled: ({ outcome }) => ({
+      explanation: FrontierExplanation.ExecutorInvocationSettlement({
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
+        outcome,
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     ForeignClaimIsolation: () => ({
       explanation: FrontierExplanation.Isolation({
-        operationId: responsibilityOperationId(facts.responsibility),
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
         reason: "ForeignClaim",
-        taskId: facts.responsibility.taskId
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     MissingClaim: () => ({
       transition: RunnableFrontierTransition.ReconcileTaskClaim({
-        operationId: responsibilityOperationId(facts.responsibility),
-        taskId: facts.responsibility.taskId
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     Paused: () => ({
       explanation: FrontierExplanation.Pause({
-        operationId: responsibilityOperationId(facts.responsibility),
-        taskId: facts.responsibility.taskId
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     Ready: () => ({ transition: readyTransition(facts) }),
     Relinquished: ({ reason }) => ({
       explanation: FrontierExplanation.Relinquishment({
-        operationId: responsibilityOperationId(facts.responsibility),
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
         reason,
-        taskId: facts.responsibility.taskId
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     Settled: ({ outcome }) => ({
       explanation: FrontierExplanation.Settlement({
-        operationId: responsibilityOperationId(facts.responsibility),
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
         outcome,
-        taskId: facts.responsibility.taskId
+        taskId: workflowResponsibilityTaskId(facts.responsibility)
       })
     }),
     UnreadableFactWait: ({ boundary }) => ({
       explanation: FrontierExplanation.UnreadableFactWait({
         boundary,
-        operationId: responsibilityOperationId(facts.responsibility),
-        taskId: facts.responsibility.taskId,
+        operationId: workflowResponsibilityOperationId(facts.responsibility),
+        taskId: workflowResponsibilityTaskId(facts.responsibility),
         wakeCondition: "BoundaryRereadSucceeded"
       })
     })
@@ -327,9 +340,9 @@ export const deriveRunnableFrontier = (
 ): RunnableFrontier => {
   const responsibleDecisions = input.responsibility.entries
     .map((responsibility) => {
-      const operationId = responsibilityOperationId(responsibility)
+      const operationId = workflowResponsibilityOperationId(responsibility)
       const matchingFacts = input.responsibilityFacts.filter((facts) =>
-        responsibilityOperationId(facts.responsibility) === operationId
+        workflowResponsibilityOperationId(facts.responsibility) === operationId
       )
       const decision = matchingFacts.length === 1
         ? decisionFor(Option.getOrThrow(Option.fromUndefinedOr(matchingFacts[0])))
@@ -344,11 +357,11 @@ export const deriveRunnableFrontier = (
       return {
         ...decision,
         beganAt: responsibility.beganAt,
-        taskId: responsibility.taskId
+        taskId: workflowResponsibilityTaskId(responsibility)
       }
     })
   const responsibleTaskIds = new Set(
-    input.responsibility.entries.map(({ taskId }) => taskId)
+    input.responsibility.entries.map(workflowResponsibilityTaskId)
   )
   const responsibleTransitions = responsibleDecisions
     .filter((decision): decision is typeof decision & {

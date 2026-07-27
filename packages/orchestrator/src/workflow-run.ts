@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, Match, Option, Queue, Ref, Semaphore } from "effect"
+import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { type OperationId, RunId, type TaskId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
@@ -7,7 +7,8 @@ import { ManagedRecoveryActivation, type ManagedRecoveryActivationError } from "
 import {
   type RunnableFrontier,
   type RunnableFrontierTransition,
-  RunnableFrontierTransition as FrontierTransition
+  RunnableFrontierTransition as FrontierTransition,
+  runnableTransitionTaskId
 } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
@@ -34,6 +35,26 @@ const explanationTaskIds = (
   Option.toArray(
     Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId"))
   )
+
+export const watchExecutorDeadlines = Effect.fn(
+  "Workflow.watchExecutorDeadlines"
+)(function*<WaitError, WaitRequirements, SignalError, SignalRequirements>(
+  waitForNextExecutorWake: Effect.Effect<
+    boolean,
+    WaitError,
+    WaitRequirements
+  >,
+  signal: Effect.Effect<void, SignalError, SignalRequirements>
+): Effect.fn.Return<
+  void,
+  WaitError | SignalError,
+  WaitRequirements | SignalRequirements
+> {
+  const woke = yield* waitForNextExecutorWake
+  if (!woke) return
+  yield* signal
+  yield* watchExecutorDeadlines(waitForNextExecutorWake, signal)
+})
 
 export const runWorkflow = Effect.fn("Workflow.run")(function*(
   target: TrackerTarget,
@@ -73,7 +94,6 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   ): RunnableFrontierTransition =>
     FrontierTransition.ContinueFreshWorkflowOperation({
       operationId,
-      requiresTaskAdmission: false,
       taskId: task.id
     })
 
@@ -214,7 +234,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     const initialRecoveredFrontier = yield* recovery.readFrontier
     const recoveredTaskIds = new Set([
       ...initialRecoveredFrontier.explanations.flatMap(explanationTaskIds),
-      ...initialRecoveredFrontier.transitions.map(({ taskId }) => taskId)
+      ...initialRecoveredFrontier.transitions.map(runnableTransitionTaskId)
     ])
     const initialTasks = snapshot.eligibleTasks().filter(
       ({ id }) => !recoveredTaskIds.has(id)
@@ -229,7 +249,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         const recovered = yield* recovery.readFrontier
         const recoveredTaskIds = new Set([
           ...recovered.explanations.flatMap(explanationTaskIds),
-          ...recovered.transitions.map(({ taskId }) => taskId)
+          ...recovered.transitions.map(runnableTransitionTaskId)
         ])
         const alreadyScheduled = yield* Ref.get(scheduledFreshTaskIds)
         const newlyFresh = snapshot.eligibleTasks().filter(
@@ -278,22 +298,16 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             FreshWorkflowStageError | ManagedRecoveryActivationError
           > = Option.match(Option.fromUndefinedOr(stage), {
             onNone: () =>
-              Match.value(recovery).pipe(
-                Match.tags({
-                  AuthoritativeManagedRunActivation: (authoritative) =>
-                    authoritative.runTransition(
-                      transition,
-                      execution
-                    ).pipe(
-                      Effect.as<FreshWorkflowStage | undefined>(undefined)
-                    ),
-                  SyntheticFreshOnlyActivation: () =>
-                    Effect.die(
-                      "synthetic activation cannot derive a recovered transition"
-                    )
-                }),
-                Match.exhaustive
-              ),
+              recovery._tag === "AuthoritativeManagedRunActivation"
+                ? recovery.runTransition(
+                  transition,
+                  execution
+                ).pipe(
+                  Effect.as<FreshWorkflowStage | undefined>(undefined)
+                )
+                : Effect.die(
+                  "synthetic activation cannot derive a recovered transition"
+                ),
             onSome: (fresh) => fresh.run(execution.recordIntent)
           })
           const exit = yield* Effect.exit(operation)
@@ -305,6 +319,14 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             : Effect.void
         })
     })
+    yield* Effect.forkScoped(
+      watchExecutorDeadlines(
+        recovery.waitForNextExecutorWake,
+        coordinator.signal(
+          ActivationCause.AdmissionMayNowBePossible()
+        )
+      ).pipe(Effect.orDie)
+    )
 
     const applyCompletion = Effect.fn("Workflow.applyOperationCompletion")(
       function*(completion: WorkflowOperationCompletion) {
@@ -333,7 +355,13 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         yield* applyCompletion(pendingCompletion.value)
         continue
       }
-      if ((yield* readFrontier()).transitions.length === 0) return
+      const currentFrontier = yield* readFrontier()
+      if (
+        currentFrontier.transitions.length === 0
+        && !currentFrontier.explanations.some(
+          ({ _tag }) => _tag === "ExecutorInvocationWait"
+        )
+      ) return
       const awaitedCompletion = yield* Queue.take(completions)
       yield* applyCompletion(awaitedCompletion)
     }

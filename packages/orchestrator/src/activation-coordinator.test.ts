@@ -3,7 +3,7 @@ import { Deferred, Effect, Exit, Queue, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
 import { OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
-import { RunnableFrontierTransition } from "./runnable-frontier.js"
+import { RunnableFrontierTransition, runnableTransitionTaskId } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 
 const freshTransition = (taskId: TaskId) =>
@@ -76,7 +76,7 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
       readFrontier: Effect.succeed({ explanations: [], transitions }),
       runId: RunId.make("overlap-run"),
       runTransition: (transition) =>
-        Queue.offer(started, transition.taskId).pipe(
+        Queue.offer(started, runnableTransitionTaskId(transition)).pipe(
           Effect.andThen(Deferred.await(releaseRunners))
         )
     })
@@ -149,13 +149,22 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
       ),
       runId: RunId.make("runner-exit-run"),
       runTransition: (transition, execution) =>
-        Ref.update(frontier, (current) => current.filter((candidate) => candidate.taskId !== transition.taskId)).pipe(
+        Ref.update(
+          frontier,
+          (current) =>
+            current.filter((candidate) =>
+              runnableTransitionTaskId(candidate)
+                !== runnableTransitionTaskId(transition)
+            )
+        ).pipe(
           Effect.andThen(
-            transition.taskId === postIntentTask
+            runnableTransitionTaskId(transition) === postIntentTask
               ? execution.recordIntent(OperationId.make("post-intent-operation"))
               : Effect.void
           ),
-          Effect.andThen(Queue.offer(exits, transition.taskId)),
+          Effect.andThen(
+            Queue.offer(exits, runnableTransitionTaskId(transition))
+          ),
           Effect.andThen(Effect.fail("controlled runner exit"))
         )
     })
@@ -196,15 +205,18 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
       runTransition: (transition, execution) =>
         Ref.update(runnerCounts, (counts) => {
           const next = new Map(counts)
-          next.set(transition.taskId, (next.get(transition.taskId) ?? 0) + 1)
+          const selectedTaskId = runnableTransitionTaskId(transition)
+          next.set(selectedTaskId, (next.get(selectedTaskId) ?? 0) + 1)
           return next
         }).pipe(
           Effect.andThen(
-            transition.taskId === postIntentTask
+            runnableTransitionTaskId(transition) === postIntentTask
               ? execution.recordIntent(OperationId.make("live-post-intent-operation"))
               : Effect.void
           ),
-          Effect.andThen(Queue.offer(started, transition.taskId)),
+          Effect.andThen(
+            Queue.offer(started, runnableTransitionTaskId(transition))
+          ),
           Effect.andThen(Deferred.await(releaseRunners))
         )
     })
@@ -250,11 +262,15 @@ it.effect("records a result, releases its exact position, and rederives the next
       runId: RunId.make("result-release-run"),
       runTransition: (transition, execution) =>
         execution.recordIntent(
-          OperationId.make(`result-operation:${transition.taskId}`)
+          OperationId.make(
+            `result-operation:${runnableTransitionTaskId(transition)}`
+          )
         ).pipe(
-          Effect.andThen(Queue.offer(started, transition.taskId)),
           Effect.andThen(
-            transition.taskId === taskA
+            Queue.offer(started, runnableTransitionTaskId(transition))
+          ),
+          Effect.andThen(
+            runnableTransitionTaskId(transition) === taskA
               ? Ref.update(remaining, (tasks) => tasks.filter((taskId) => taskId !== taskA))
               : Deferred.await(releaseC)
           )

@@ -14,8 +14,7 @@ export const encodeTaskRevisionFingerprint = (normalizedTaskJson: string): TaskR
 export const upcastLegacyTaskRevisionFingerprint = (value: unknown): unknown => {
   if (typeof value !== "string" || !value.startsWith("{")) return value
   try {
-    const candidate: unknown = JSON.parse(value)
-    if (candidate === null || Array.isArray(candidate) || typeof candidate !== "object") return value
+    JSON.parse(value)
     return encodeTaskRevisionFingerprint(value)
   } catch {
     return value

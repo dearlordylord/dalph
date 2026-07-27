@@ -26,6 +26,42 @@ including its coding-agent invocations, review strategy, internal restoration,
 and internal implementation or review artifacts.
 _Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
 
+**Executor outer invocation**:
+One executor-declared unit that Dalph may start, continue, wait for, interrupt,
+or normalize into an outcome without learning the executor's internal stage.
+_Avoid_: Review stage, worker state, workflow phase
+
+**Executor outer invocation correlation**:
+The exact task and invocation identities that Dalph uses across intent,
+provider observation, interruption, continuation, and outcome.
+_Avoid_: Task identity alone, log correlation, artifact identity
+
+**Executor outer invocation resource use**:
+The task-work capacity positions that the selected executor declares for one
+outer invocation independently of that invocation's internal purpose or name.
+_Avoid_: Review capacity, operation-name capacity
+
+**Executor outer invocation wait**:
+The selected executor's named reason and exact correlation for why Dalph
+cannot yet continue one outer invocation. A scheduled wait carries the branded
+absolute retry deadline.
+_Avoid_: Internal executor stage, inferred log state
+
+**Executor outer invocation interruption**:
+The exact correlated invocation and provider observation proving that its
+outer execution was interrupted.
+_Avoid_: Process exit alone, coordinator cancellation
+
+**Executor outer invocation outcome**:
+The selected executor's normalized completed, failed, interrupted, or
+non-convergent result for one exact outer invocation.
+_Avoid_: Internal review result, raw provider response
+
+**Executor outer invocation projection**:
+The selected executor's current declaration that one exact outer invocation
+is ready, waiting, or complete with a normalized outcome.
+_Avoid_: Generic inspection of executor-specific journal events
+
 **Historical Ralph harness**:
 The one-off `scripts/ralph-run.sh` experiment and its execution formats.
 _Avoid_: Ralph architecture, compatibility baseline, legacy runtime

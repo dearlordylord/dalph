@@ -2,9 +2,11 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { OperationId, RunId, TaskId, TaskRevision } from "./domain.js"
+import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
 import { memoryJournalStoreLayer } from "./journal-store.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
+import { recoverSelectedExecutorInvocation } from "./selected-executor-protocol.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
@@ -22,22 +24,22 @@ it.effect("routes every recovered transition variant through its exact empty-his
     }),
     RunnableFrontierTransition.ContinueFreshWorkflowOperation({
       operationId,
-      requiresTaskAdmission: true,
       taskId
     }),
-    RunnableFrontierTransition.ContinueImplementationEvidenceSealing({
-      operationId,
-      taskId
+    RunnableFrontierTransition.StartExecutorInvocation({
+      invocation: makeExecutorOuterInvocation(
+        operationId,
+        taskId,
+        oneTaskWorkCapacityPosition
+      )
     }),
-    RunnableFrontierTransition.ContinueImplementationReview({
-      operationId,
-      taskId
+    RunnableFrontierTransition.ContinueExecutorInvocation({
+      invocation: makeExecutorOuterInvocation(
+        operationId,
+        taskId,
+        oneTaskWorkCapacityPosition
+      )
     }),
-    RunnableFrontierTransition.ContinueReviewFindingsHandback({
-      operationId,
-      taskId
-    }),
-    RunnableFrontierTransition.ContinueTaskExecution({ operationId, taskId }),
     RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId }),
     RunnableFrontierTransition.ReconcileTaskWorktree({ operationId, taskId })
   ]
@@ -45,7 +47,12 @@ it.effect("routes every recovered transition variant through its exact empty-his
   return Effect.gen(function*() {
     const results = yield* Effect.forEach(
       transitions,
-      (transition) => recoverRunnableTransition(runId, transition)
+      (transition) =>
+        recoverRunnableTransition(
+          runId,
+          transition,
+          recoverSelectedExecutorInvocation
+        )
     )
     expect(results).toEqual(Array.from({ length: transitions.length }))
   }).pipe(

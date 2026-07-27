@@ -1,12 +1,13 @@
 import { Effect } from "effect"
 import type { OperationId } from "./domain.js"
+import { noTaskWorkCapacityUse } from "./executor-boundary.js"
 import type {
   FreshImplementationConvergenceOptions,
   FreshImplementationConvergenceStage
 } from "./implementation-convergence-stage.js"
+import { freshImplementationTransition } from "./implementation-convergence-stage.js"
 import { ImplementationConvergenceDispositionRecordedTrace } from "./implementation-convergence-trace.js"
 import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
-import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import { OperationSelected } from "./tracker-workflow-trace.js"
 import { makeImplementationDispositionOperation } from "./workflow-operation.js"
@@ -28,11 +29,11 @@ export const makeImplementationDispositionStage = Effect.fn(
     predecessorOperationId
   )
   return {
-    transition: RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-      operationId: operation.request.operationId,
-      requiresTaskAdmission: false,
-      taskId: options.task.id
-    }),
+    transition: freshImplementationTransition(
+      operation.request.operationId,
+      options.task,
+      noTaskWorkCapacityUse
+    ),
     run: () =>
       Effect.gen(function*() {
         yield* options.emit(OperationSelected.make({ operation }))

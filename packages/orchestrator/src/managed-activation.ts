@@ -1,10 +1,18 @@
-import { Context, Effect, Exit, Layer, Match, Option, Queue } from "effect"
+import { Clock, Context, Duration, Effect, Exit, Layer, Match, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
-import type { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
-import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
-import type { FreshImplementationConvergenceStageError } from "./implementation-convergence-stage.js"
+import {
+  type OperationId,
+  type ProviderObservationId,
+  type RunId,
+  type TaskId,
+  type TaskWorkCapacity,
+  TechnicalRetryNotBefore
+} from "./domain.js"
+import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore, type JournalStoreError } from "./journal-store.js"
+import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
 import { reduceManagedHistory } from "./managed-history.js"
+import { workflowResponsibilityOperationId } from "./reconstructed-managed-run-state.js"
 import {
   deriveRunnableFrontier,
   ResponsibilityDisposition,
@@ -12,6 +20,13 @@ import {
   type RunnableFrontierTransition
 } from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
+import {
+  makeRecoveredSelectedExecutorStages,
+  recoverSelectedExecutorInvocation,
+  selectedExecutorProjectionFor,
+  type SelectedExecutorStageError,
+  selectedExecutorTaskExecutionLookup
+} from "./selected-executor-protocol.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutor } from "./task-execution.js"
@@ -29,7 +44,7 @@ type InvalidManagedHistory = Extract<
 >
 
 export type ManagedRecoveryActivationError =
-  | FreshImplementationConvergenceStageError
+  | SelectedExecutorStageError
   | InvalidManagedHistory
   | InterpreterError
   | JournalStoreError
@@ -79,18 +94,19 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
   const observations = yield* Effect.forEach(
     reduction.managedRun.responsibility.entries,
     (responsibility) => {
+      if (responsibility._tag !== "ExecutorInvocationResponsibility") {
+        return Effect.succeed(undefined)
+      }
+      const invocationId = responsibility.invocation.correlation.invocationId
+      const lookup = selectedExecutorTaskExecutionLookup(
+        records,
+        invocationId
+      )
       if (
-        responsibility._tag !== "TaskExecutionResponsibility"
-        || responsibility.operation.request.session._tag !== "EstablishedSession"
-        || settledExecutionOperationIds.has(
-          responsibility.operation.request.operationId
-        )
+        lookup === undefined
+        || settledExecutionOperationIds.has(invocationId)
       ) return Effect.succeed(undefined)
-      return executor.observeTaskExecution({
-        operationId: responsibility.operation.request.operationId,
-        plannedAttempt: responsibility.operation.request.plannedAttempt,
-        sessionId: responsibility.operation.request.session.sessionId
-      }).pipe(
+      return executor.observeTaskExecution(lookup).pipe(
         Effect.map((report) => ({ report, responsibility }))
       )
     },
@@ -104,8 +120,8 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
           Match.value(candidate.report).pipe(
             Match.tag("RunningTaskExecutionReported", (report) => [{
               observationId: report.observationId,
-              operationId: candidate.responsibility.operation.request.operationId,
-              taskId: candidate.responsibility.taskId
+              operationId: candidate.responsibility.invocation.correlation.invocationId,
+              taskId: candidate.responsibility.invocation.correlation.taskId
             }]),
             Match.orElse(noOccupiedInvocations)
           )
@@ -118,7 +134,7 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
           onSome: (candidate) =>
             Match.value(candidate.report).pipe(
               Match.tag("NoTaskExecutionReported", () => [
-                candidate.responsibility.operation.request.operationId
+                candidate.responsibility.invocation.correlation.invocationId
               ]),
               Match.orElse(noOperationIds)
             )
@@ -136,57 +152,53 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
       return yield* Effect.fail(reduction)
     }
     const records = reduction.managedRun.workflowHistory.records
-    const settledOperationIds = new Set(
-      records.flatMap(({ event }) =>
-        Match.value(event).pipe(
-          Match.tags({
-            ImplementationEvidenceSealed: ({ operationId }) => [operationId],
-            ImplementationReviewCompleted: ({ review }) => [
-              review.manifest.operationId
-            ],
-            ReviewFindingsHandbackCompleted: ({ acknowledgement }) => [
-              acknowledgement.operationId
-            ],
-            TaskClaimAcquired: ({ claim }) => [claim.operationId],
-            TaskExecutionOutcomeObserved: ({ outcome }) => [
-              outcome.outcome.operationId
-            ],
-            TaskWorkSessionEstablished: ({ outcome }) => [
-              outcome.operationId
-            ],
-            TaskWorktreeReady: ({ operationId }) => [operationId]
-          }),
-          Match.orElse(noOperationIds)
-        )
-      )
+    const now = TechnicalRetryNotBefore.make(
+      yield* Clock.currentTimeMillis
     )
-    const isUnresolved = (
+    const settledOperationIds = new Set(records.flatMap(({ event }) => {
+      const transition = managedHistoryTransitionRuleFor(event._tag)
+      const descriptor = describeJournalEvent(event)
+      return (
+          transition?._tag === "Outcome"
+          || transition?._tag === "ProviderOutcome"
+        )
+          && descriptor._tag === "OperationEventDescriptor"
+        ? [descriptor.operationId]
+        : []
+    }))
+    const dispositionFor = (
       responsibility: typeof reduction.managedRun.responsibility.entries[number]
-    ): boolean =>
-      Match.value(responsibility).pipe(
-        Match.tags({
-          ImplementationEvidenceResponsibility: ({ operation }) => !settledOperationIds.has(operation.operationId),
-          ImplementationReviewResponsibility: ({ operation }) =>
-            !settledOperationIds.has(operation.request.operationId),
-          ReviewFindingsHandbackResponsibility: ({ operation }) =>
-            !settledOperationIds.has(operation.request.operationId),
-          TaskClaimResponsibility: ({ acquisition }) => !settledOperationIds.has(acquisition.operationId),
-          TaskExecutionResponsibility: ({ operation }) => !settledOperationIds.has(operation.request.operationId),
-          TaskWorkSessionResponsibility: ({ operation }) => !settledOperationIds.has(operation.request.operationId),
-          TaskWorktreeResponsibility: ({ operation }) => !settledOperationIds.has(operation.operationId)
-        }),
-        Match.exhaustive
-      )
+    ) => {
+      if (responsibility._tag === "ExecutorInvocationResponsibility") {
+        const projection = selectedExecutorProjectionFor(
+          records,
+          responsibility.invocation,
+          now
+        )
+        return projection._tag === "Ready"
+          ? ResponsibilityDisposition.Ready()
+          : projection._tag === "Waiting"
+          ? ResponsibilityDisposition.ExecutorInvocationWait({
+            wait: projection.wait
+          })
+          : ResponsibilityDisposition.ExecutorInvocationSettled({
+            outcome: projection.outcome
+          })
+      }
+      return !settledOperationIds.has(
+          workflowResponsibilityOperationId(responsibility)
+        )
+        ? ResponsibilityDisposition.Ready()
+        : ResponsibilityDisposition.Settled({
+          outcome: "ResponsibilityCompleted"
+        })
+    }
     return deriveRunnableFrontier({
       freshEligibleTasks: [],
       responsibility: reduction.managedRun.responsibility,
       responsibilityFacts: reduction.managedRun.responsibility.entries.map(
         (responsibility) => ({
-          disposition: isUnresolved(responsibility)
-            ? ResponsibilityDisposition.Ready()
-            : ResponsibilityDisposition.Settled({
-              outcome: "ResponsibilityCompleted"
-            }),
+          disposition: dispositionFor(responsibility),
           responsibility
         })
       )
@@ -205,6 +217,11 @@ interface ManagedActivationSource {
     readonly operationId: OperationId
     readonly taskId: TaskId
   }>
+  readonly waitForNextExecutorWake: Effect.Effect<
+    boolean,
+    ManagedRecoveryActivationError,
+    never
+  >
 }
 
 /** A journal-backed source can execute recovered transitions for its exact run. */
@@ -243,7 +260,8 @@ export const emptyManagedRecoveryActivationLayer = Layer.succeed(
     _tag: "SyntheticFreshOnlyActivation",
     capacityEvidence: noRecoveredAdmissionCapacityEvidence,
     readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-    reconstructedReservedPositions: []
+    reconstructedReservedPositions: [],
+    waitForNextExecutorWake: Effect.succeed(false)
   })
 )
 
@@ -266,23 +284,26 @@ export const makeManagedRecoveryActivation = Effect.fn(
   const initial = yield* readRecoveredFrontier(runId)
   const reconstructedReservedPositions = initial.transitions.flatMap(
     (transition) =>
-      "operationId" in transition
-        && (
-          transition._tag === "ContinueTaskExecution"
-          || transition._tag === "ContinueImplementationReview"
-          || transition._tag === "ContinueReviewFindingsHandback"
-        )
+      transition._tag === "ContinueExecutorInvocation"
+        && transition.invocation.resourceUse._tag
+          === "UsesTaskWorkCapacity"
         && !capacityEvidence.freshlyReleasedOperationIds.has(
-          transition.operationId
+          transition.invocation.correlation.invocationId
         )
-        ? [{ operationId: transition.operationId, taskId: transition.taskId }]
+        ? [{
+          operationId: transition.invocation.correlation.invocationId,
+          taskId: transition.invocation.correlation.taskId
+        }]
         : []
   )
   const readFrontier = Effect.fn(
     "ManagedActivation.readActivationFrontier"
   )(function*() {
     const recovered = yield* readRecoveredFrontier(runId)
-    const reconstructedStages = yield* makeRecoveredImplementationConvergenceStages(runId, false)
+    const reconstructedStages = yield* makeRecoveredSelectedExecutorStages(
+      runId,
+      false
+    )
     return {
       explanations: recovered.explanations,
       transitions: [
@@ -290,6 +311,21 @@ export const makeManagedRecoveryActivation = Effect.fn(
         ...reconstructedStages.map(({ transition }) => transition)
       ]
     }
+  })
+  const waitForNextExecutorWake = Effect.fn(
+    "ManagedActivation.waitForNextExecutorWake"
+  )(function*() {
+    const frontier = yield* readRecoveredFrontier(runId)
+    const deadlines = frontier.explanations.flatMap((explanation) =>
+      explanation._tag === "ExecutorInvocationWait"
+        ? [explanation.wait.notBefore]
+        : []
+    )
+    const next = deadlines.toSorted((left, right) => left - right)[0]
+    if (next === undefined) return false
+    const now = yield* Clock.currentTimeMillis
+    yield* Effect.sleep(Duration.millis(Math.max(0, next - now)))
+    return true
   })
   const runTransition = Effect.fn("ManagedActivation.runTransition")(
     function*(
@@ -300,7 +336,7 @@ export const makeManagedRecoveryActivation = Effect.fn(
         makeSelectedTransitionIdentity(runId, transition)
       )
       const stage = (
-        yield* makeRecoveredImplementationConvergenceStages(runId, false)
+        yield* makeRecoveredSelectedExecutorStages(runId, false)
       ).find(
         (candidate) =>
           selectedTransitionKey(
@@ -308,7 +344,11 @@ export const makeManagedRecoveryActivation = Effect.fn(
           ) === selectedKey
       )
       if (stage === undefined) {
-        yield* recoverRunnableTransition(runId, transition)
+        yield* recoverRunnableTransition(
+          runId,
+          transition,
+          recoverSelectedExecutorInvocation
+        )
         return
       }
       yield* stage.run(recordIntent)
@@ -323,7 +363,8 @@ export const makeManagedRecoveryActivation = Effect.fn(
     runTransition: (transition, execution) =>
       provideDependencies(
         runTransition(transition, execution.recordIntent)
-      )
+      ),
+    waitForNextExecutorWake: provideDependencies(waitForNextExecutorWake())
   } satisfies AuthoritativeManagedRunActivation
 })
 
@@ -386,15 +427,18 @@ export const activateRecoveredResponsibilities = Effect.fn(
         yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
         const next = (yield* recovery.readFrontier).transitions[0]
         yield* Option.match(Option.fromUndefinedOr(next), {
-          onNone: () => Effect.void,
+          onNone: () =>
+            recovery.waitForNextExecutorWake.pipe(
+              Effect.flatMap((woke) =>
+                woke
+                  ? drainRecoveredResponsibilities()
+                  : Effect.void
+              )
+            ),
           onSome: () =>
             Queue.take(completed).pipe(
-              Effect.flatMap((completion) =>
-                Exit.match(completion, {
-                  onFailure: Effect.failCause,
-                  onSuccess: drainRecoveredResponsibilities
-                })
-              )
+              Effect.flatten,
+              Effect.andThen(drainRecoveredResponsibilities)
             )
         })
       })

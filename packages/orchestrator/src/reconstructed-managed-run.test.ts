@@ -32,7 +32,8 @@ import {
   TaskTrackerTargetClosureKnowledgeConflict,
   TaskTrackerTargetClosureObservation
 } from "./reconstructed-managed-run-state.js"
-import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import { reconstructManagedRunState as reconstructManagedRunStateWith } from "./reconstructed-managed-run.js"
+import { selectedExecutorReconstructionProtocol } from "./selected-executor-protocol.js"
 import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
@@ -42,6 +43,15 @@ import {
 } from "./workflow-operation.js"
 
 const runId = RunId.make("reconstructed-run")
+const reconstructManagedRunState = (
+  selectedRunId: RunId,
+  selectedRecords: ReadonlyArray<JournalRecord>
+) =>
+  reconstructManagedRunStateWith(
+    selectedRunId,
+    selectedRecords,
+    selectedExecutorReconstructionProtocol
+  )
 const target = FixtureTarget.make("reconstructed-run-target")
 const taskA = TaskId.make("A")
 const taskB = TaskId.make("B")
@@ -94,7 +104,7 @@ it("does not create a review responsibility without its evidence-sealing subject
   expect(reconstructed).toEqual({
     _tag: "InvalidReconstructedManagedRun",
     issues: [{
-      _tag: "UnresolvedReviewSubject",
+      _tag: "UnresolvedExecutorInvocationSubject",
       operationId,
       position: JournalPosition.make(1)
     }]

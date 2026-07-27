@@ -12,7 +12,13 @@ import type {
   TaskId,
   TaskWorkCapacity
 } from "./domain.js"
-import { FrontierExplanation, type RunnableFrontier, type RunnableFrontierTransition } from "./runnable-frontier.js"
+import {
+  FrontierExplanation,
+  type RunnableFrontier,
+  type RunnableFrontierTransition,
+  runnableTransitionOperationId,
+  runnableTransitionTaskId
+} from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 
 /** A fresh provider observation that one task invocation currently occupies capacity. */
@@ -114,21 +120,18 @@ interface MakeTaskAdmissionControllerInput {
   }>
 }
 
-/**
- * Issue #133 replaces review-name-based capacity classification with capacity
- * use declared by an executor's outer invocation protocol.
- */
+/** Applies capacity from the transition's declared outer resource use. */
 export const transitionRequiresTaskAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
   transition._tag === "CommitFreshTaskClaimIntent"
   || (
-    transition._tag === "ContinueFreshWorkflowOperation"
-    && transition.requiresTaskAdmission
+    (
+      transition._tag === "ContinueExecutorInvocation"
+      || transition._tag === "StartExecutorInvocation"
+    )
+    && transition.invocation.resourceUse._tag === "UsesTaskWorkCapacity"
   )
-  || transition._tag === "ContinueTaskExecution"
-  || transition._tag === "ContinueImplementationReview"
-  || transition._tag === "ContinueReviewFindingsHandback"
 
 interface TaskAdmissionReservation {
   readonly correlation: TaskAdmissionReservationCorrelation
@@ -155,14 +158,16 @@ const operationReservation = (
 const transitionReservation = (
   transition: RunnableFrontierTransition,
   runId: RunId
-): TaskAdmissionReservationCorrelation =>
-  "operationId" in transition
-    && transition._tag !== "ContinueFreshWorkflowOperation"
-    ? operationReservation(transition.operationId)
+): TaskAdmissionReservationCorrelation => {
+  const operationId = runnableTransitionOperationId(transition)
+  return operationId !== undefined
+      && transition._tag === "ContinueExecutorInvocation"
+    ? operationReservation(operationId)
     : {
       _tag: "SelectedTransitionReservation",
       selected: makeSelectedTransitionIdentity(runId, transition)
     }
+}
 interface TaskAdmissionControllerState {
   readonly capacity: TaskWorkCapacity
   readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
@@ -175,12 +180,13 @@ const sameReservation = (
   transition: RunnableFrontierTransition,
   runId: RunId
 ): boolean =>
-  reservation.taskId === transition.taskId
+  reservation.taskId === runnableTransitionTaskId(transition)
   && (
-    "operationId" in transition
-      && transition._tag !== "ContinueFreshWorkflowOperation"
+    runnableTransitionOperationId(transition) !== undefined
+      && transition._tag === "ContinueExecutorInvocation"
       ? reservation.correlation._tag === "OperationReservation"
-        && reservation.correlation.operationId === transition.operationId
+        && reservation.correlation.operationId
+          === runnableTransitionOperationId(transition)
       : reservation.correlation._tag === "SelectedTransitionReservation"
         && selectedTransitionKey(reservation.correlation.selected)
           === selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
@@ -217,10 +223,10 @@ const tryAdmitTransition = (
     return { _tag: "TransitionAdmitted", state: current }
   }
   if (
-    "operationId" in transition
+    runnableTransitionOperationId(transition) !== undefined
     && current.occupied.some(({ operationId, taskId }) =>
-      taskId === transition.taskId
-      && operationId === transition.operationId
+      taskId === runnableTransitionTaskId(transition)
+      && operationId === runnableTransitionOperationId(transition)
     )
   ) {
     // A provider-observed invocation is the post-intent position for this
@@ -228,8 +234,12 @@ const tryAdmitTransition = (
     // another position or waiting for itself to release capacity.
     return { _tag: "TransitionAdmitted", state: current }
   }
-  const taskAlreadyUsesPosition = current.reservations.some(({ taskId }) => taskId === transition.taskId)
-    || current.occupied.some(({ taskId }) => taskId === transition.taskId)
+  const taskAlreadyUsesPosition = current.reservations.some(
+    ({ taskId }) => taskId === runnableTransitionTaskId(transition)
+  )
+    || current.occupied.some(
+      ({ taskId }) => taskId === runnableTransitionTaskId(transition)
+    )
   if (taskAlreadyUsesPosition || usedPositions(current) >= current.capacity) {
     return { _tag: "CapacityUnavailable" }
   }
@@ -241,7 +251,7 @@ const tryAdmitTransition = (
         ...current.reservations,
         {
           correlation: transitionReservation(transition, runId),
-          taskId: transition.taskId
+          taskId: runnableTransitionTaskId(transition)
         }
       ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
     }
@@ -290,7 +300,7 @@ export const makeTaskAdmissionController = Effect.fn(
           explanations = [
             ...explanations,
             FrontierExplanation.CapacityWait({
-              taskId: transition.taskId,
+              taskId: runnableTransitionTaskId(transition),
               wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
             })
           ]

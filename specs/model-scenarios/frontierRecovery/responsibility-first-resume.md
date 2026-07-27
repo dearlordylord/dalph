@@ -11,6 +11,11 @@ task, exact continuation tag, explanations, and controller reservations. Dalph
 does not infer that A is still running merely because its worktree and session
 remain.
 
+The selected executor declares whether A's opaque outer invocation uses the
+available task-work position. The controller follows that declaration; the
+executor's internal implementation, restoration, evidence, or review name
+cannot change capacity use.
+
 Common-sense question: after capacity becomes available, does Dalph resume the
 work it already owns before claiming unrelated new work without duplicating the
 stopped invocation?

@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import fc from "fast-check"
 import { expect, it } from "vitest"
 import { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
+import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 
@@ -42,9 +43,12 @@ it("generated controller commands never create more new positions than configure
               yield* controller.admit({
                 explanations: [],
                 transitions: [
-                  RunnableFrontierTransition.ContinueImplementationReview({
-                    operationId,
-                    taskId
+                  RunnableFrontierTransition.ContinueExecutorInvocation({
+                    invocation: makeExecutorOuterInvocation(
+                      operationId,
+                      taskId,
+                      oneTaskWorkCapacityPosition
+                    )
                   })
                 ]
               }, RunId.make("generated-run"))

@@ -62,9 +62,13 @@ import {
   TaskWorkSessionLocator,
   TechnicalRetryDelayMillis,
   TechnicalRetryLimit,
+  TechnicalRetryNotBefore,
+  TechnicalRetryOrdinal,
   TechnicalRetryPolicy,
   TechnicalRetryPolicyCapturedEvent,
   technicalRetryPolicyRecordKey,
+  TechnicalRetryScheduledEvent,
+  technicalRetryScheduledRecordKey,
   TechnicalRetryScope,
   TestImplementationReview,
   TestTaskExecutor,
@@ -572,7 +576,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     const reviewActivation = yield* makeManagedRecoveryActivation(runId)
     expect(
       (yield* reviewActivation.readFrontier).transitions.some(
-        ({ _tag }) => _tag === "ContinueImplementationReview"
+        ({ _tag }) => _tag === "ContinueExecutorInvocation"
       )
     ).toBe(true)
     expect(
@@ -714,11 +718,33 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
       operation: handbackOperation,
       version: 4
     })
+    const retryOrdinal = TechnicalRetryOrdinal.make(1)
+    yield* (yield* JournalStore).append(
+      runId,
+      technicalRetryScheduledRecordKey(handbackRetryScope, retryOrdinal),
+      TechnicalRetryScheduledEvent.make({
+        delayMillis: TechnicalRetryDelayMillis.make(100),
+        notBefore: TechnicalRetryNotBefore.make(100),
+        retryOrdinal,
+        scope: handbackRetryScope,
+        version: 4
+      })
+    )
     const withIntent = yield* (yield* JournalStore).read(runId)
     const pendingActivation = yield* makeManagedRecoveryActivation(runId)
     expect(
+      (yield* pendingActivation.readFrontier).explanations.some(
+        ({ _tag }) => _tag === "ExecutorInvocationWait"
+      )
+    ).toBe(true)
+    const wake = yield* pendingActivation.waitForNextExecutorWake.pipe(
+      Effect.forkScoped
+    )
+    yield* TestClock.adjust("100 millis")
+    expect(yield* Fiber.join(wake)).toBe(true)
+    expect(
       (yield* pendingActivation.readFrontier).transitions.some(
-        ({ _tag }) => _tag === "ContinueReviewFindingsHandback"
+        ({ _tag }) => _tag === "ContinueExecutorInvocation"
       )
     ).toBe(true)
     const attemptId = reviewEvent.review.manifest.plannedAttempt.attemptId
@@ -741,6 +767,7 @@ it.effect("resumes an exact pending findings handback after reviewer completion"
     )).toBe(true)
     expect(yield* reviews.handbacks()).toHaveLength(1)
   }).pipe(
+    Effect.scoped,
     Effect.provide(interpreterLayer),
     Effect.provide(planningLayer),
     Effect.provide(taskRunnerLayer),
@@ -1061,6 +1088,19 @@ it.effect("records reviewer technical exhaustion only after its captured schedul
         : yield* observeManagedRunAuthorities(runId, [terminalRecord])
     ).toEqual([])
     expect(yield* reviews.requests()).toHaveLength(4)
+    const recovered = yield* makeManagedRecoveryActivation(runId)
+    expect((yield* recovered.readFrontier).explanations).toContainEqual({
+      _tag: "ExecutorInvocationSettlement",
+      operationId: reviewOperationId,
+      outcome: {
+        _tag: "Failed",
+        correlation: {
+          invocationId: reviewOperationId,
+          taskId: "implementation-convergence-recovery-task"
+        }
+      },
+      taskId: "implementation-convergence-recovery-task"
+    })
 
     if (
       terminalRecord === undefined

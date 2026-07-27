@@ -5,7 +5,9 @@ import type { WorkflowResponsibilityState } from "../../src/reconstructed-manage
 import {
   deriveRunnableFrontier,
   ResponsibilityDisposition,
-  type RunnableFrontierTransition
+  type RunnableFrontierTransition,
+  runnableTransitionOperationId,
+  runnableTransitionTaskId
 } from "../../src/runnable-frontier.js"
 import { makeTaskAdmissionController } from "../../src/task-admission-controller.js"
 import {
@@ -100,9 +102,10 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     transitions: admittedProductionTransitions
   }
   const controllerSnapshot = yield* controller.snapshot()
-  const operationToModel = (transition: RunnableFrontierTransition) =>
-    "operationId" in transition
-      ? input.identityMapping.operationToModel(transition.operationId).pipe(
+  const operationToModel = (transition: RunnableFrontierTransition) => {
+    const operationId = runnableTransitionOperationId(transition)
+    return operationId !== undefined
+      ? input.identityMapping.operationToModel(operationId).pipe(
         Effect.map((modelOperationId) => ({
           _tag: "DurableTransitionOperation" as const,
           modelOperationId
@@ -113,15 +116,22 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
           _tag: "FreshTransitionWithoutOperation" as const
         } satisfies FrontierRecoveryTransitionOperation
       )
+  }
   const projectTransitions = (
     transitions: ReadonlyArray<RunnableFrontierTransition>
   ) =>
     Effect.forEach(
-      transitions.toSorted((left, right) => left.taskId.localeCompare(right.taskId)),
+      transitions.toSorted((left, right) =>
+        runnableTransitionTaskId(left).localeCompare(
+          runnableTransitionTaskId(right)
+        )
+      ),
       (transition) =>
         Effect.all({
           transitionOperation: operationToModel(transition),
-          modelTaskId: input.identityMapping.taskToModel(transition.taskId)
+          modelTaskId: input.identityMapping.taskToModel(
+            runnableTransitionTaskId(transition)
+          )
         }).pipe(
           Effect.map(({ modelTaskId, transitionOperation }) => ({
             modelTaskId,

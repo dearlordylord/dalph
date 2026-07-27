@@ -1,6 +1,12 @@
 import type { Effect } from "effect"
 import { type ImplementationReviewRoundLimit, type OperationId, type SemanticReviewRound, type Task } from "./domain.js"
 import {
+  type ExecutorOuterInvocationResourceUse,
+  makeExecutorOuterInvocation,
+  noTaskWorkCapacityUse,
+  oneTaskWorkCapacityPosition
+} from "./executor-boundary.js"
+import {
   type ImplementationConvergenceSubject,
   PriorImplementationReviewEvidence
 } from "./implementation-convergence.js"
@@ -33,6 +39,8 @@ export type FreshImplementationConvergenceStageError =
   | InterpreterError
   | TaskWorktreeExecutionModeContradiction
   | TraceOutputError
+
+export { noTaskWorkCapacityUse, oneTaskWorkCapacityPosition }
 
 /** The one durable convergence fact from which the next operation is rebuilt. */
 type ImplementationConvergenceStart =
@@ -99,12 +107,27 @@ export interface FreshImplementationConvergenceOptions {
 export const freshImplementationTransition = (
   operationId: OperationId,
   task: Task,
-  requiresTaskAdmission: boolean
+  resourceUse: ExecutorOuterInvocationResourceUse
 ): RunnableFrontierTransition =>
-  FrontierTransition.ContinueFreshWorkflowOperation({
-    operationId,
-    requiresTaskAdmission,
-    taskId: task.id
+  FrontierTransition.StartExecutorInvocation({
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      task.id,
+      resourceUse
+    )
+  })
+
+export const continuedImplementationTransition = (
+  operationId: OperationId,
+  task: Task,
+  resourceUse: ExecutorOuterInvocationResourceUse
+): RunnableFrontierTransition =>
+  FrontierTransition.ContinueExecutorInvocation({
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      task.id,
+      resourceUse
+    )
   })
 
 export const priorImplementationReviewEvidence = (

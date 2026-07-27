@@ -1,5 +1,11 @@
 import { Effect } from "effect"
 import { type OperationId, type PlannedTaskAttempt, SemanticReviewRound, type Task } from "./domain.js"
+import {
+  type ExecutorOuterInvocationResourceUse,
+  makeExecutorOuterInvocation,
+  noTaskWorkCapacityUse,
+  oneTaskWorkCapacityPosition
+} from "./executor-boundary.js"
 import { ImplementationConvergenceSimulatedTrace } from "./implementation-convergence-trace.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { ImplementationReviewRequest } from "./implementation-review.js"
@@ -51,12 +57,14 @@ interface SimulatedImplementationConvergenceOptions {
 const freshTransition = (
   operationId: OperationId,
   task: Task,
-  requiresTaskAdmission: boolean
+  resourceUse: ExecutorOuterInvocationResourceUse
 ) =>
-  FrontierTransition.ContinueFreshWorkflowOperation({
-    operationId,
-    requiresTaskAdmission,
-    taskId: task.id
+  FrontierTransition.StartExecutorInvocation({
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      task.id,
+      resourceUse
+    )
   })
 
 /** Builds the three exact simulated convergence operations as separate selector stages. */
@@ -83,7 +91,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
       transition: freshTransition(
         operation.request.operationId,
         options.task,
-        false
+        noTaskWorkCapacityUse
       ),
       run: () =>
         Effect.gen(function*() {
@@ -119,7 +127,11 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
         })
       )
       return {
-        transition: freshTransition(operationId, options.task, true),
+        transition: freshTransition(
+          operationId,
+          options.task,
+          oneTaskWorkCapacityPosition
+        ),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -150,7 +162,11 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
     plannedAttempt: options.plannedAttempt
   })
   return {
-    transition: freshTransition(operation.operationId, options.task, false),
+    transition: freshTransition(
+      operation.operationId,
+      options.task,
+      noTaskWorkCapacityUse
+    ),
     run: () =>
       Effect.gen(function*() {
         yield* options.emit(OperationSelected.make({ operation }))

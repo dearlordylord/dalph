@@ -2,34 +2,28 @@ import { it } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
-  AttemptId,
-  GitCommitSha,
   JournalPosition,
   OperationId,
-  PlannedTaskAttempt,
   ProviderObservationId,
   RunId,
-  TaskBranchRef,
-  TaskExecutorLocator,
   TaskId,
-  TaskLifecycle,
   TaskRevision,
-  TaskWorkCapacity,
-  TaskWorkSessionId,
-  TaskWorkSessionLocator,
-  WorktreeLocator
+  TaskWorkCapacity
 } from "./domain.js"
+import {
+  ExecutorOuterInvocationOutcome,
+  makeExecutorOuterInvocation,
+  oneTaskWorkCapacityPosition
+} from "./executor-boundary.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import {
   deriveRunFinalityDecision,
   deriveRunnableFrontier,
   ResponsibilityDisposition,
-  type RunnableFrontierTransition
+  type RunnableFrontierTransition,
+  runnableTransitionTaskId
 } from "./runnable-frontier.js"
 import { makeTaskAdmissionController, type NextAdmissionDecision } from "./task-admission-controller.js"
-import { taskRevisionFor } from "./task-dag.js"
-import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import { makeTaskExecutionOperation } from "./workflow-operation.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
@@ -49,38 +43,14 @@ const executionResponsibilityFor = (
   taskId: TaskId,
   operationIdentity: string = taskId
 ) => {
-  const task = {
-    id: taskId,
-    lifecycle: TaskLifecycle.cases.Open.make({}),
-    parentTaskId: null,
-    prerequisiteIds: []
-  }
   const operationId = OperationId.make(`execute-${operationIdentity}`)
-  const plannedAttempt = PlannedTaskAttempt.make({
-    attemptId: AttemptId.make(`attempt-${taskId}`),
-    baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
-    branch: TaskBranchRef.make(`refs/heads/dalph/${taskId}`),
-    executor: TaskExecutorLocator.make("executor:frontier-test"),
-    runId: RunId.make("frontier-test-run"),
-    session: TaskWorkSessionLocator.make(`session:${taskId}`),
-    taskId,
-    taskRevision: taskRevisionFor(task),
-    worktree: WorktreeLocator.make(`/tmp/dalph-${taskId}`)
-  })
-  return WorkflowResponsibilityEntry.cases.TaskExecutionResponsibility.make({
+  return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility.make({
     beganAt: JournalPosition.make(1),
-    taskId,
-    operation: makeTaskExecutionOperation({
-      predecessorOperationIds: [OperationId.make(`session-${taskId}`)],
-      request: TaskExecutionRequest.make({
-        operationId,
-        plannedAttempt,
-        session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-          sessionId: TaskWorkSessionId.make(`provider-session-${taskId}`)
-        }),
-        task
-      })
-    })
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      taskId,
+      oneTaskWorkCapacityPosition
+    )
   })
 }
 
@@ -99,7 +69,7 @@ it.effect("admits only the canonical first fresh task when one position is avail
 
     const admission = yield* controller.admit(frontier, frontierRunId)
 
-    expect(frontier.transitions.map(({ taskId }) => taskId)).toEqual([
+    expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([
       taskA,
       taskB
     ])
@@ -144,11 +114,43 @@ it("orders owned work by earliest outstanding journal position before task ident
     }))
   })
 
-  expect(frontier.transitions.map(({ taskId }) => taskId)).toEqual([
+  expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([
     taskA,
     taskB,
     taskA
   ])
+})
+
+it("retains an executor interruption as the exact outer settlement", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const interruption = ExecutorOuterInvocationOutcome.cases.Interrupted.make({
+    interruption: {
+      correlation: responsibility.invocation.correlation,
+      observationId: ProviderObservationId.make("interrupted-observation")
+    }
+  })
+  const frontier = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({
+      entries: [responsibility]
+    }),
+    responsibilityFacts: [{
+      disposition: ResponsibilityDisposition.ExecutorInvocationSettled({
+        outcome: interruption
+      }),
+      responsibility
+    }]
+  })
+
+  expect(frontier).toEqual({
+    explanations: [{
+      _tag: "ExecutorInvocationSettlement",
+      operationId: responsibility.invocation.correlation.invocationId,
+      outcome: interruption,
+      taskId: taskA
+    }],
+    transitions: []
+  })
 })
 
 it.effect("gives a resumed responsibility the next released position before fresh work", () =>
@@ -221,9 +223,17 @@ it.effect("gives a resumed responsibility the next released position before fres
       expect(yield* restartedController.admit(resumedFrontier, frontierRunId)).toEqual(afterInterruption)
       expect(admittedTransitions(afterInterruption)).toEqual([
         {
-          _tag: "ContinueTaskExecution",
-          operationId: "execute-task-A",
-          taskId: taskA
+          _tag: "ContinueExecutorInvocation",
+          invocation: {
+            correlation: {
+              invocationId: "execute-task-A",
+              taskId: taskA
+            },
+            resourceUse: {
+              _tag: "UsesTaskWorkCapacity",
+              positions: 1
+            }
+          }
         }
       ])
     }

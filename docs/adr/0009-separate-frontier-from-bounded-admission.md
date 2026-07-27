@@ -19,13 +19,11 @@ External response and completion timing may change the state seen by a later
 decision, but the admission set is deterministic for one exact derived state.
 
 One process-local capacity controller reserves positions for freshly committed
-task preparation. Under the current review-capable executor protocol, it
-occupies positions for outer invocations currently named implementation,
-review, handback, and resumed task work. The durable rule is that capacity
-follows resource use declared by the selected executor's outer invocation;
-issue #133 removes those current protocol names from generic orchestration.
-Capacity waits, reservations, and frontier values are recomputed after restart
-and are never journal authority.
+task preparation. Each executor outer invocation declares whether it uses one
+task-work capacity position. Generic orchestration applies that resource use
+without knowing whether the selected executor is implementing, restoring,
+reviewing, or handling artifacts internally. Capacity waits, reservations, and
+frontier values are recomputed after restart and are never journal authority.
 
 When the process-local controller's snapshot changes so future admission may be
 possible—including after it records fresh provider evidence of non-consumption

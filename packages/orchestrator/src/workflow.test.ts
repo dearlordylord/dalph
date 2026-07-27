@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
+import { Clock, Deferred, Duration, Effect, Fiber, Layer, Queue, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
 import {
@@ -35,6 +36,7 @@ import {
   TaskWorkSessionId,
   TaskWorkSessionLocator,
   TaskWorktreeExecutionModeContradiction,
+  TechnicalRetryNotBefore,
   TraceOutputError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer,
@@ -46,9 +48,34 @@ import {
 } from "./index.js"
 import { emptyManagedRecoveryActivationLayer, ManagedRecoveryActivation } from "./managed-activation.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
+import { watchExecutorDeadlines } from "./workflow-run.js"
 import type { TraceItem } from "./workflow.js"
 
 const fixture = (name: "singleton" | "wayfinder-105") => new URL(`../fixtures/${name}.json`, import.meta.url).pathname
+
+it.effect("watches consecutive recovered executor deadlines", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const deadlines = yield* Ref.make<ReadonlyArray<number>>([100, 200])
+    const signals = yield* Ref.make(0)
+    const wait = Effect.gen(function*() {
+      const deadline = (yield* Ref.get(deadlines))[0]
+      if (deadline === undefined) return false
+      yield* Ref.update(deadlines, (current) => current.slice(1))
+      const now = yield* Clock.currentTimeMillis
+      yield* Effect.sleep(Duration.millis(Math.max(0, deadline - now)))
+      return true
+    })
+    const watcher = yield* watchExecutorDeadlines(
+      wait,
+      Ref.update(signals, (count) => count + 1)
+    ).pipe(Effect.forkScoped)
+
+    yield* TestClock.adjust("100 millis")
+    expect(yield* Ref.get(signals)).toBe(1)
+    yield* TestClock.adjust("100 millis")
+    yield* Fiber.join(watcher)
+    expect(yield* Ref.get(signals)).toBe(2)
+  })))
 
 const planningLayers = [
   deterministicOperationIdAllocatorLayer("workflow-test"),
@@ -143,11 +170,13 @@ it.effect("simulates task-work establishment without provider protocol effects",
   }))
 
 it.effect("adds a recovered task to fresh eligibility after its responsibility settles", () =>
-  Effect.gen(function*() {
+  Effect.scoped(Effect.gen(function*() {
     const pending = yield* Ref.make(true)
     const taskId = TaskId.make("task-only")
+    const operationId = OperationId.make("recovered-claim")
+    const deadline = TechnicalRetryNotBefore.make(100)
     const transition = RunnableFrontierTransition.CheckTaskClaim({
-      operationId: OperationId.make("recovered-claim"),
+      operationId,
       taskId
     })
     const recovery = ManagedRecoveryActivation.of({
@@ -156,18 +185,35 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
         freshOccupiedInvocations: [],
         freshlyReleasedOperationIds: new Set()
       },
-      readFrontier: Ref.get(pending).pipe(
-        Effect.map((isPending) => ({
-          explanations: [],
-          transitions: isPending ? [transition] : []
-        }))
-      ),
+      readFrontier: Effect.gen(function*() {
+        const isPending = yield* Ref.get(pending)
+        const now = yield* Clock.currentTimeMillis
+        return {
+          explanations: isPending && now < deadline
+            ? [{
+              _tag: "ExecutorInvocationWait" as const,
+              taskId,
+              wait: {
+                _tag: "RetryScheduled" as const,
+                correlation: { invocationId: operationId, taskId },
+                notBefore: deadline
+              },
+              wakeCondition: "ExecutorRetryDeadlineReached" as const
+            }]
+            : [],
+          transitions: isPending && now >= deadline ? [transition] : []
+        }
+      }),
       reconstructedReservedPositions: [],
       runId: RunId.make("recovered-then-fresh"),
-      runTransition: () => Ref.set(pending, false)
+      runTransition: () => Ref.set(pending, false),
+      waitForNextExecutorWake: Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) => Effect.sleep(Duration.millis(Math.max(0, deadline - now)))),
+        Effect.as(true)
+      )
     })
     const items = yield* Ref.make<ReadonlyArray<TraceItem>>([])
-    yield* runLayered(
+    const workflow = yield* runLayered(
       runWorkflow(
         FixtureTarget.make(fixture("singleton")),
         TaskWorkCapacity.make(1)
@@ -180,12 +226,51 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
           emit: (item) => Ref.update(items, (current) => [...current, item])
         })
       )
-    )
+    ).pipe(Effect.forkScoped)
 
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(pending)).toBe(true)
+    yield* TestClock.adjust("100 millis")
+    yield* Fiber.join(workflow)
     expect(yield* Ref.get(pending)).toBe(false)
     expect((yield* Ref.get(items)).map(({ _tag }) => _tag)).toContain(
       "TaskClaimAcquisitionIntended"
     )
+  })))
+
+it.effect("rejects a recovered transition from the fresh-only composition", () =>
+  Effect.gen(function*() {
+    const taskId = TaskId.make("task-only")
+    const recovery = ManagedRecoveryActivation.of({
+      _tag: "SyntheticFreshOnlyActivation",
+      capacityEvidence: {
+        freshOccupiedInvocations: [],
+        freshlyReleasedOperationIds: new Set()
+      },
+      readFrontier: Effect.succeed({
+        explanations: [],
+        transitions: [RunnableFrontierTransition.CheckTaskClaim({
+          operationId: OperationId.make("impossible-synthetic-recovery"),
+          taskId
+        })]
+      }),
+      reconstructedReservedPositions: [],
+      waitForNextExecutorWake: Effect.succeed(false)
+    })
+    const exit = yield* runLayered(
+      runWorkflow(
+        FixtureTarget.make(fixture("singleton")),
+        TaskWorkCapacity.make(1)
+      ).pipe(
+        Effect.provideService(ManagedRecoveryActivation, recovery)
+      ),
+      Layer.succeed(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      )
+    ).pipe(Effect.exit)
+
+    expect(exit._tag).toBe("Failure")
   }))
 
 it.effect("rejects authoritative implementation artifacts in simulated execution", () =>

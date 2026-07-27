@@ -62,6 +62,7 @@ const gateStartedAt = performance.now()
 const phaseDurations = new Map()
 const invariants = [
   "boundedCapacity",
+  "declaredExecutorResourceUseIsProjected",
   "everyEffectHasIntent",
   "noDuplicateAuthorityEffect",
   "everyRequestUsesItsIntentIdentity",
@@ -516,6 +517,11 @@ expectInvariantFailure(
   "weakenedCapacityStep",
   "boundedCapacity",
   "frontierRecoveryCapacityCounterexample"
+)
+expectInvariantFailure(
+  "operation-name capacity counterexample",
+  "projectCapacityFromOperationName",
+  "declaredExecutorResourceUseIsProjected"
 )
 expectInvariantFailure(
   "duplicate exact activation owner counterexample",

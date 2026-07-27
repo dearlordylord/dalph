@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { type OperationId, SemanticReviewRound, type Task } from "./domain.js"
+import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
@@ -44,14 +45,24 @@ interface FreshTaskAttemptStageOptions {
   readonly planner: PlannedTaskAttemptPlannerService
 }
 
-const freshTransition = (
+const freshExecutorTransition = (
   operationId: OperationId,
-  task: Task,
-  requiresTaskAdmission: boolean
+  task: Task
+) =>
+  FrontierTransition.StartExecutorInvocation({
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      task.id,
+      oneTaskWorkCapacityPosition
+    )
+  })
+
+const freshWorkflowTransition = (
+  operationId: OperationId,
+  task: Task
 ) =>
   FrontierTransition.ContinueFreshWorkflowOperation({
     operationId,
-    requiresTaskAdmission,
     taskId: task.id
   })
 
@@ -98,10 +109,9 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         | undefined
     ): Effect.fn.Return<FreshWorkflowStage> {
       return {
-        transition: freshTransition(
+        transition: freshExecutorTransition(
           operation.request.operationId,
-          task,
-          true
+          task
         ),
         run: (recordActivationIntent) =>
           Effect.gen(function*() {
@@ -178,10 +188,9 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         })
       })
       return {
-        transition: freshTransition(
+        transition: freshWorkflowTransition(
           operation.request.operationId,
-          task,
-          false
+          task
         ),
         run: () =>
           Effect.gen(function*() {
@@ -281,7 +290,7 @@ export const makeFreshTaskAttemptStage = Effect.fn(
         predecessorOperationIds: [planOperationId]
       })
       return {
-        transition: freshTransition(operation.operationId, task, false),
+        transition: freshWorkflowTransition(operation.operationId, task),
         run: () =>
           Effect.gen(function*() {
             yield* options.emit(OperationSelected.make({ operation }))
@@ -315,7 +324,7 @@ export const makeFreshTaskAttemptStage = Effect.fn(
     predecessorOperationIds: [predecessorOperationId]
   })
   return {
-    transition: freshTransition(operation.operationId, task, false),
+    transition: freshWorkflowTransition(operation.operationId, task),
     run: () =>
       Effect.gen(function*() {
         yield* options.emit(OperationSelected.make({ operation }))

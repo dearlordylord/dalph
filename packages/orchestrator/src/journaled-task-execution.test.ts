@@ -72,7 +72,11 @@ import {
   TaskWorkSessionReported,
   taskWorkSessionReportedRecordKey
 } from "./journal-store.js"
-import { activateRecoveredResponsibilities, observeRecoveredAdmissionCapacity } from "./managed-activation.js"
+import {
+  activateRecoveredResponsibilities,
+  makeManagedRecoveryActivation,
+  observeRecoveredAdmissionCapacity
+} from "./managed-activation.js"
 import { recordReadyWorktreeEvidence } from "./task-worktree-evidence.js"
 
 const runId = RunId.make("journaled-execution-run")
@@ -424,6 +428,34 @@ it.effect("reconciles a surviving provider invocation through managed activation
       event._tag === "TaskExecutionOutcomeObserved"
       && event.outcome.outcome.operationId === operation.request.operationId
     )).toBe(true)
+    expect(
+      yield* observeRecoveredAdmissionCapacity(runId).pipe(
+        Effect.provideService(TaskExecutor, executor)
+      )
+    ).toEqual({
+      freshOccupiedInvocations: [],
+      freshlyReleasedOperationIds: new Set()
+    })
+    expect(yield* Ref.get(observations)).toBe(2)
+    const recovered = yield* makeManagedRecoveryActivation(runId).pipe(
+      Effect.provideService(WorkflowInterpreter, interpreter),
+      Effect.provideService(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      )
+    )
+    expect((yield* recovered.readFrontier).explanations).toContainEqual({
+      _tag: "ExecutorInvocationSettlement",
+      operationId: operation.request.operationId,
+      outcome: {
+        _tag: "Failed",
+        correlation: {
+          invocationId: operation.request.operationId,
+          taskId: task.id
+        }
+      },
+      taskId: task.id
+    })
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects execution before any adapter effect when durable session evidence is missing", () =>

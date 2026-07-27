@@ -1,8 +1,8 @@
 import { Schema } from "effect"
-import { JournalPosition, OperationId, PlannedTaskAttempt, TaskId, TrackerRevision, TrackerTarget } from "./domain.js"
+import { JournalPosition, OperationId, TaskId, TrackerRevision, TrackerTarget } from "./domain.js"
 import type { RunId } from "./domain.js"
+import { ExecutorOuterInvocation } from "./executor-boundary.js"
 import type { JournalRecord } from "./journal-store.js"
-import { samePlannedTaskAttempt } from "./planned-task-attempt.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
@@ -88,14 +88,7 @@ export const BestAvailableDurableGraphKnowledge = Schema.Struct({
 })
 export type BestAvailableDurableGraphKnowledge = typeof BestAvailableDurableGraphKnowledge.Type
 
-/**
- * One exact workflow subject whose obligation remains outstanding.
- *
- * Issue #133 moves evidence sealing, review strategy, and handback behind the
- * executor boundary. The evidence-, review-, and handback-specific variants
- * below describe only the current fixed executor protocol; they are not
- * generic orchestrator domain types.
- */
+/** One exact workflow subject whose obligation remains outstanding. */
 const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
   TaskClaimResponsibility: {
     acquisition: TaskClaimAcquisition,
@@ -112,53 +105,38 @@ const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
     operation: WorkflowOperation.cases.EstablishTaskWorkSession,
     taskId: TaskId
   },
-  TaskExecutionResponsibility: {
+  ExecutorInvocationResponsibility: {
     beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.ExecuteTaskWork,
-    taskId: TaskId
-  },
-  ImplementationEvidenceResponsibility: {
-    beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.SealImplementationEvidence,
-    taskId: TaskId
-  },
-  ImplementationReviewResponsibility: {
-    beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.ReviewImplementation,
-    plannedAttempt: PlannedTaskAttempt,
-    taskId: TaskId
-  },
-  ReviewFindingsHandbackResponsibility: {
-    beganAt: JournalPosition,
-    operation: WorkflowOperation.cases.HandBackReviewFindings,
-    taskId: TaskId
+    invocation: ExecutorOuterInvocation
   }
 })
 export const WorkflowResponsibilityEntry = WorkflowResponsibilityEntryShape.check(
   Schema.makeFilter((entry) => {
+    if (entry._tag === "ExecutorInvocationResponsibility") return undefined
     const embeddedTaskId = WorkflowResponsibilityEntryShape.match(entry, {
-      ImplementationEvidenceResponsibility: ({ operation }) => operation.plannedAttempt.taskId,
-      ImplementationReviewResponsibility: ({ plannedAttempt }) => plannedAttempt.taskId,
-      ReviewFindingsHandbackResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
+      ExecutorInvocationResponsibility: ({ invocation }) => invocation.correlation.taskId,
       TaskClaimResponsibility: ({ acquisition }) => acquisition.taskId,
-      TaskExecutionResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
       TaskWorkSessionResponsibility: ({ operation }) => operation.request.plannedAttempt.taskId,
       TaskWorktreeResponsibility: ({ operation }) => operation.plannedAttempt.taskId
     })
     if (embeddedTaskId !== entry.taskId) {
       return "responsibility task identity must match its exact operation subject"
     }
-    if (
-      entry._tag === "ImplementationReviewResponsibility"
-      && entry.operation.request._tag === "AuthorizedImplementationReview"
-      && !samePlannedTaskAttempt(entry.plannedAttempt, entry.operation.request.plannedAttempt)
-    ) {
-      return "review responsibility attempt must match its exact operation subject"
-    }
     return undefined
   })
 )
 export type WorkflowResponsibilityEntry = typeof WorkflowResponsibilityEntry.Type
+
+/** The exact operation identity shared by reconstruction and frontier rules. */
+export const workflowResponsibilityOperationId = (
+  entry: WorkflowResponsibilityEntry
+): OperationId =>
+  WorkflowResponsibilityEntryShape.match(entry, {
+    ExecutorInvocationResponsibility: ({ invocation }) => invocation.correlation.invocationId,
+    TaskClaimResponsibility: ({ acquisition }) => acquisition.operationId,
+    TaskWorkSessionResponsibility: ({ operation }) => operation.request.operationId,
+    TaskWorktreeResponsibility: ({ operation }) => operation.operationId
+  })
 
 export const WorkflowResponsibilityState = Schema.Struct({
   entries: Schema.Array(WorkflowResponsibilityEntry)
@@ -197,7 +175,7 @@ export const ReconstructedManagedRunInvariantIssue = Schema.TaggedUnion({
     operationId: OperationId,
     position: JournalPosition
   },
-  UnresolvedReviewSubject: {
+  UnresolvedExecutorInvocationSubject: {
     operationId: OperationId,
     position: JournalPosition
   }

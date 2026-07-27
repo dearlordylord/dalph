@@ -64,6 +64,17 @@ export {
   WorktreeLocator
 } from "./domain.js"
 export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
+export {
+  ExecutorOuterInvocation,
+  ExecutorOuterInvocationCorrelation,
+  ExecutorOuterInvocationInterruption,
+  ExecutorOuterInvocationOutcome,
+  ExecutorOuterInvocationResourceUse,
+  ExecutorOuterInvocationWait,
+  makeExecutorOuterInvocation,
+  noTaskWorkCapacityUse,
+  oneTaskWorkCapacityPosition
+} from "./executor-boundary.js"
 export { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
 export {
   CompetingWorktreeRegistrations,

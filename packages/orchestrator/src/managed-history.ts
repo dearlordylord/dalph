@@ -20,6 +20,7 @@ import { deriveManagedRunRecoveryStage, type ManagedRunRecoveryStage } from "./m
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import type { ReconstructedManagedRunState } from "./reconstructed-managed-run-state.js"
 import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import { selectedExecutorReconstructionProtocol } from "./selected-executor-protocol.js"
 import { analyzeTechnicalRetryTemporalFacts } from "./technical-retry-temporal.js"
 import { analyzeTechnicalRetryFacts, type TechnicalRetryJournalEvent } from "./technical-retry.js"
 import { isExactTaskClaim } from "./tracker-mutation.js"
@@ -662,7 +663,11 @@ export const reduceManagedHistory = (
   if (issues.length > 0) {
     return { _tag: "InvalidManagedHistory", issues, records, runId }
   }
-  const reconstruction = reconstructManagedRunState(runId, records)
+  const reconstruction = reconstructManagedRunState(
+    runId,
+    records,
+    selectedExecutorReconstructionProtocol
+  )
   if (reconstruction._tag === "InvalidReconstructedManagedRun") {
     return {
       _tag: "InvalidManagedHistory",

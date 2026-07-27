@@ -1,5 +1,5 @@
 import { type RunId, SelectedTransitionFingerprint, SelectedTransitionIdentity } from "./domain.js"
-import type { RunnableFrontierTransition } from "./runnable-frontier.js"
+import { type RunnableFrontierTransition, runnableTransitionTaskId } from "./runnable-frontier.js"
 
 /** Builds the exact structural identity of one immutable selector result. */
 export const makeSelectedTransitionIdentity = (
@@ -14,7 +14,7 @@ export const makeSelectedTransitionIdentity = (
       })
     ),
     runId,
-    subjectTaskId: transition.taskId,
+    subjectTaskId: runnableTransitionTaskId(transition),
     transitionTag: transition._tag
   })
 

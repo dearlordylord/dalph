@@ -45,6 +45,7 @@ import {
 } from "./journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import { selectedExecutorReconstructionProtocol } from "./selected-executor-protocol.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionOutcome, TaskExecutionRequest, taskExecutorTestLayer } from "./task-execution.js"
 import { taskRunnerTestLayer } from "./task-work-start.js"
@@ -104,11 +105,11 @@ it("reconstructs outstanding evidence responsibility from its exact intent", () 
     key: intentRecordKey(operation.operationId),
     position: JournalPosition.make(1),
     runId
-  }])).toMatchObject({
+  }], selectedExecutorReconstructionProtocol)).toMatchObject({
     _tag: "ValidReconstructedManagedRun",
     state: {
       responsibility: {
-        entries: [{ _tag: "ImplementationEvidenceResponsibility" }]
+        entries: [{ _tag: "ExecutorInvocationResponsibility" }]
       }
     }
   })

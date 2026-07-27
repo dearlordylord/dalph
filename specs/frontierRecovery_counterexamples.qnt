@@ -221,6 +221,20 @@ module frontierRecoveryCounterexamples {
       },
     }
 
+  // Deliberately changes an executor declaration without re-projecting it,
+  // representing an adapter that derives capacity from an operation name.
+  action projectCapacityFromOperationName: bool = {
+    val current = state.workflow.get(A)
+    state' = {
+      ...state,
+      workflow:
+        state.workflow.put(A, {
+          ...current,
+          executorResourceUse: DoesNotUseTaskWorkCapacity,
+        }),
+    }
+  }
+
   action duplicateOwnershipStep: bool =
     deriveActivationPass
       .then(reserveTaskAdmissionPosition(A))

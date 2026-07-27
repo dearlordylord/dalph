@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -24,9 +24,9 @@ import {
   TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
-import { EvidenceDigest, EvidenceReference, SealedImplementationEvidence } from "./implementation-evidence.js"
+import { makeExecutorOuterInvocation, noTaskWorkCapacityUse, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { EvidenceDigest, EvidenceReference } from "./implementation-evidence.js"
 import {
-  AuthorizedImplementationReviewRequest,
   ImplementationReviewDisposition,
   ImplementationReviewRequest,
   ReviewFindingsHandbackRequest,
@@ -53,6 +53,37 @@ const freshTransition = (taskId: TaskId) =>
   RunnableFrontierTransition.CommitFreshTaskClaimIntent({
     taskId,
     taskRevision: TaskRevision.make(`revision:${taskId}`)
+  })
+
+const continuedExecutorInvocation = (
+  operationId: OperationId,
+  subjectTaskId: TaskId,
+  usesTaskWorkCapacity = true
+) =>
+  RunnableFrontierTransition.ContinueExecutorInvocation({
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      subjectTaskId,
+      usesTaskWorkCapacity
+        ? oneTaskWorkCapacityPosition
+        : noTaskWorkCapacityUse
+    )
+  })
+
+const executorResponsibility = (
+  beganAt: typeof JournalPosition.Type,
+  operationId: OperationId,
+  usesTaskWorkCapacity = true
+) =>
+  WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility.make({
+    beganAt,
+    invocation: makeExecutorOuterInvocation(
+      operationId,
+      taskId,
+      usesTaskWorkCapacity
+        ? oneTaskWorkCapacityPosition
+        : noTaskWorkCapacityUse
+    )
   })
 
 const admittedTransitions = (
@@ -176,27 +207,23 @@ const responsibilities = () => {
       operation: sessionOperation,
       taskId
     }),
-    WorkflowResponsibilityEntry.cases.TaskExecutionResponsibility.make({
-      beganAt: JournalPosition.make(4),
-      operation: executionOperation,
-      taskId
-    }),
-    WorkflowResponsibilityEntry.cases.ImplementationEvidenceResponsibility.make({
-      beganAt: JournalPosition.make(5),
-      operation: evidenceOperation,
-      taskId
-    }),
-    WorkflowResponsibilityEntry.cases.ImplementationReviewResponsibility.make({
-      beganAt: JournalPosition.make(6),
-      operation: reviewOperation,
-      plannedAttempt,
-      taskId
-    }),
-    WorkflowResponsibilityEntry.cases.ReviewFindingsHandbackResponsibility.make({
-      beganAt: JournalPosition.make(7),
-      operation: handbackOperation,
-      taskId
-    })
+    executorResponsibility(
+      JournalPosition.make(4),
+      executionOperation.request.operationId
+    ),
+    executorResponsibility(
+      JournalPosition.make(5),
+      evidenceOperation.operationId,
+      false
+    ),
+    executorResponsibility(
+      JournalPosition.make(6),
+      reviewOperation.request.operationId
+    ),
+    executorResponsibility(
+      JournalPosition.make(7),
+      handbackOperation.request.operationId
+    )
   ] as const
 }
 
@@ -215,64 +242,11 @@ it("derives the exact continuation for every reconstructed responsibility", () =
     "CheckTaskClaim",
     "ReconcileTaskWorktree",
     "CheckTaskWorkSession",
-    "ContinueTaskExecution",
-    "ContinueImplementationEvidenceSealing",
-    "ContinueImplementationReview",
-    "ContinueReviewFindingsHandback"
+    "ContinueExecutorInvocation",
+    "ContinueExecutorInvocation",
+    "ContinueExecutorInvocation",
+    "ContinueExecutorInvocation"
   ])
-})
-
-it("rejects a responsibility whose routing task disagrees with its operation", () => {
-  const responsibility = responsibilities()[3]
-  expect(() =>
-    Schema.decodeUnknownSync(WorkflowResponsibilityEntry)({
-      ...responsibility,
-      taskId: TaskId.make("different-task")
-    })
-  ).toThrow("responsibility task identity must match its exact operation subject")
-})
-
-it("rejects a review responsibility that combines two attempts for one task", () => {
-  const alternateAttempt = PlannedTaskAttempt.make({
-    ...plannedAttempt,
-    attemptId: AttemptId.make("different-review-attempt")
-  })
-  const operation = makeImplementationReviewOperation(
-    AuthorizedImplementationReviewRequest.make({
-      evidenceSealingOperationId: OperationId.make("review-evidence-operation"),
-      findingHistory: [],
-      implementationEvidence: SealedImplementationEvidence.make({
-        manifest: {
-          diff: evidenceReference,
-          implementationOutput: evidenceReference,
-          plannedBaseSha: plannedAttempt.baseSha,
-          predecessorOperationId: OperationId.make("review-execution-operation"),
-          runId: plannedAttempt.runId,
-          stage: "Implementation",
-          taskId
-        },
-        manifestReference: evidenceReference
-      }),
-      implementerInvocationId: OperationId.make("review-execution-operation"),
-      implementerSessionId: sessionId,
-      operationId: OperationId.make("authorized-review-responsibility"),
-      plannedAttempt,
-      predecessorEvidenceReference: evidenceReference,
-      reviewerSessionId: ReviewerSessionId.make("authorized-responsibility-reviewer"),
-      round,
-      roundLimit
-    })
-  )
-
-  expect(() =>
-    Schema.decodeUnknownSync(WorkflowResponsibilityEntry)({
-      _tag: "ImplementationReviewResponsibility",
-      beganAt: JournalPosition.make(6),
-      operation,
-      plannedAttempt: alternateAttempt,
-      taskId
-    })
-  ).toThrow("review responsibility attempt must match its exact operation subject")
 })
 
 it("derives missing-claim reconciliation and exact fact issues", () => {
@@ -377,36 +351,35 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
     const admission = yield* controller.admit({
       explanations: [],
       transitions: [
-        RunnableFrontierTransition.ContinueTaskExecution({
-          operationId: OperationId.make("capacity-B-invocation"),
-          taskId: taskB
-        }),
-        RunnableFrontierTransition.ContinueImplementationReview({
-          operationId: OperationId.make("capacity-A-reserved"),
-          taskId: taskA
-        }),
+        continuedExecutorInvocation(
+          OperationId.make("capacity-B-invocation"),
+          taskB
+        ),
+        continuedExecutorInvocation(
+          OperationId.make("capacity-A-reserved"),
+          taskA
+        ),
         RunnableFrontierTransition.CheckTaskClaim({
           operationId: OperationId.make("capacity-A-claim"),
           taskId: taskA
         }),
         freshTransition(taskC),
-        RunnableFrontierTransition.ContinueImplementationReview({
-          operationId: OperationId.make("capacity-C-review"),
-          taskId: taskC
-        }),
-        RunnableFrontierTransition.ContinueReviewFindingsHandback({
-          operationId: OperationId.make("capacity-D-handback"),
-          taskId: taskD
-        })
+        continuedExecutorInvocation(
+          OperationId.make("capacity-C-review"),
+          taskC
+        ),
+        continuedExecutorInvocation(
+          OperationId.make("capacity-D-handback"),
+          taskD
+        )
       ]
     }, RunId.make("capacity-rebuild-run"))
     expect(admission).toEqual({
       explanations: [],
-      transition: Option.some({
-        _tag: "ContinueTaskExecution",
-        operationId: "capacity-B-invocation",
-        taskId: taskB
-      })
+      transition: Option.some(continuedExecutorInvocation(
+        OperationId.make("capacity-B-invocation"),
+        taskB
+      ))
     })
     expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA])
 
@@ -644,14 +617,14 @@ it.effect("cancels one exact fresh reservation and rejects stale repeats", () =>
 it.effect("reserves at most one exact operation for a task in one admission decision", () =>
   Effect.gen(function*() {
     const taskId = TaskId.make("same-task")
-    const first = RunnableFrontierTransition.ContinueImplementationReview({
-      operationId: OperationId.make("same-task-review"),
+    const first = continuedExecutorInvocation(
+      OperationId.make("same-task-review"),
       taskId
-    })
-    const second = RunnableFrontierTransition.ContinueReviewFindingsHandback({
-      operationId: OperationId.make("same-task-handback"),
+    )
+    const second = continuedExecutorInvocation(
+      OperationId.make("same-task-handback"),
       taskId
-    })
+    )
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
       freshOccupiedInvocations: [],
@@ -667,7 +640,9 @@ it.effect("reserves at most one exact operation for a task in one admission deci
       )
     ).toEqual([first])
 
-    yield* controller.releaseTaskAdmissionPosition(first.operationId)
+    yield* controller.releaseTaskAdmissionPosition(
+      first.invocation.correlation.invocationId
+    )
     expect(
       admittedTransitions(
         yield* controller.admit({
@@ -693,16 +668,14 @@ it.effect("correlates both operation-backed and pre-intent reservations exactly"
         taskId
       }]
     })
-    const exactOperation = RunnableFrontierTransition.ContinueImplementationReview({
-      operationId: reservedOperationId,
+    const exactOperation = continuedExecutorInvocation(
+      reservedOperationId,
       taskId
-    })
-    const differentOperation = RunnableFrontierTransition.ContinueImplementationReview({
-      operationId: OperationId.make(
-        "reservation-correlation-other-operation"
-      ),
+    )
+    const differentOperation = continuedExecutorInvocation(
+      OperationId.make("reservation-correlation-other-operation"),
       taskId
-    })
+    )
     expect(
       admittedTransitions(
         yield* operationController.admit(
