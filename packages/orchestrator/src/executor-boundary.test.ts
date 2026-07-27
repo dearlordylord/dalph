@@ -2,39 +2,63 @@ import { it } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
+  AttemptId,
   FailedProcessExitCode,
+  GitCommitSha,
   JournalPosition,
   JournalRecordKey,
   OperationId,
+  PlannedTaskAttempt,
   ProviderObservationId,
   ReviewerSessionId,
   RunId,
   SemanticReviewRound,
+  TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
+  TaskLifecycle,
   TaskWorkCapacity,
   TaskWorkSessionId,
+  TaskWorkSessionLocator,
   TechnicalRetryDelayMillis,
   TechnicalRetryNotBefore,
   TechnicalRetryOrdinal,
-  WorkerProcessId
+  WorkerProcessId,
+  WorktreeLocator
 } from "./domain.js"
 import { makeExecutorOuterInvocation, noTaskWorkCapacityUse, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
-import { type JournalRecord, TaskExecutionOutcomeObservedEvent } from "./journal-store.js"
-import { RunnableFrontierTransition } from "./runnable-frontier.js"
+import {
+  intentRecordKey,
+  type JournalRecord,
+  outcomeRecordKey,
+  TaskExecutionIntentRecorded,
+  TaskExecutionOutcomeObservedEvent
+} from "./journal-store.js"
+import { WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
+import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import {
+  deriveRunFinalityDecision,
+  deriveRunnableFrontier,
+  ResponsibilityDisposition,
+  RunnableFrontierTransition
+} from "./runnable-frontier.js"
 import {
   selectedExecutorProjectionFor,
+  selectedExecutorReconstructionProtocol,
   selectedExecutorTaskExecutionLookup,
   selectedExecutorTerminalFailureForTag,
   selectedExecutorTerminalFailureOutcome
 } from "./selected-executor-protocol.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
-import { TaskExecutionOutcome } from "./task-execution.js"
+import { taskRevisionFor } from "./task-dag.js"
+import { TaskExecutionOutcome, TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import {
   TechnicalRetryDeferralSupersededEvent,
   TechnicalRetryScheduledEvent,
   technicalRetryScheduledRecordKey,
   TechnicalRetryScope
 } from "./technical-retry.js"
+import { makeTaskExecutionOperation } from "./workflow-operation.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 
 it.effect("admits executor invocations from declared capacity use, independent of protocol operation names", () =>
@@ -82,6 +106,204 @@ it.effect("admits executor invocations from declared capacity use, independent o
       taskId: waitingTaskId,
       wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
     })
+  }))
+
+it.effect("keeps two tasks within capacity as opaque invocation purposes change", () =>
+  Effect.gen(function*() {
+    const runId = RunId.make("two-task-declared-resource-use")
+    const tasks = [
+      TaskId.make("two-task-A"),
+      TaskId.make("two-task-B")
+    ] as const
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const capacityUsing = tasks.map((taskId, index) =>
+      RunnableFrontierTransition.ContinueExecutorInvocation({
+        invocation: makeExecutorOuterInvocation(
+          OperationId.make(
+            index === 0
+              ? "name-that-looks-like-evidence-but-is-opaque"
+              : "name-that-looks-like-handback-but-is-opaque"
+          ),
+          taskId,
+          oneTaskWorkCapacityPosition
+        )
+      })
+    )
+
+    for (const transition of capacityUsing) {
+      expect(
+        (yield* controller.admit({
+          explanations: [],
+          transitions: [transition]
+        }, runId)).transition
+      ).toEqual(Option.some(transition))
+    }
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual(tasks)
+
+    const capacityFree = tasks.map((taskId, index) =>
+      RunnableFrontierTransition.ContinueExecutorInvocation({
+        invocation: makeExecutorOuterInvocation(
+          OperationId.make(
+            index === 0
+              ? "name-that-looks-like-execution-but-is-free"
+              : "name-that-looks-like-review-but-is-free"
+          ),
+          taskId,
+          noTaskWorkCapacityUse
+        )
+      })
+    )
+    for (const transition of capacityFree) {
+      expect(
+        (yield* controller.admit({
+          explanations: [],
+          transitions: [transition]
+        }, runId)).transition
+      ).toEqual(Option.some(transition))
+    }
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual(tasks)
+  }))
+
+it.effect("reconstructs hundreds of completed outer invocations idempotently without reserving capacity", () =>
+  Effect.gen(function*() {
+    const runId = RunId.make("high-cardinality-completed-invocations")
+    const taskId = TaskId.make("high-cardinality-task")
+    const sessionId = TaskWorkSessionId.make("high-cardinality-session")
+    const task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("high-cardinality-attempt"),
+      baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+      branch: TaskBranchRef.make("refs/heads/dalph/high-cardinality"),
+      executor: TaskExecutorLocator.make("executor:high-cardinality"),
+      runId,
+      session: TaskWorkSessionLocator.make("session:high-cardinality"),
+      taskId,
+      taskRevision: taskRevisionFor(task),
+      worktree: WorktreeLocator.make("/tmp/dalph-high-cardinality")
+    })
+    const invocationCount = 512
+    const records = Array.from({ length: invocationCount }, (_, index) => {
+      const operationId = OperationId.make(`completed-invocation-${index}`)
+      const operation = makeTaskExecutionOperation({
+        predecessorOperationIds: [],
+        request: TaskExecutionRequest.make({
+          operationId,
+          plannedAttempt,
+          session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
+            sessionId
+          }),
+          task
+        })
+      })
+      return [
+        {
+          event: TaskExecutionIntentRecorded.make({ operation, version: 4 }),
+          key: intentRecordKey(operationId),
+          position: JournalPosition.make(index * 2 + 1),
+          runId
+        },
+        {
+          event: TaskExecutionOutcomeObservedEvent.make({
+            outcome: WorkflowOutcome.cases.TaskExecutionObserved.make({
+              outcome: TaskExecutionOutcome.cases.Succeeded.make({
+                observationId: ProviderObservationId.make(
+                  `completed-observation-${index}`
+                ),
+                operationId,
+                output: "completed",
+                processId: WorkerProcessId.make(index + 1),
+                sessionId
+              })
+            }),
+            version: 4
+          }),
+          key: outcomeRecordKey(operationId),
+          position: JournalPosition.make(index * 2 + 2),
+          runId
+        }
+      ] as const
+    }).flat()
+    const reconstructed = reconstructManagedRunState(
+      runId,
+      records,
+      selectedExecutorReconstructionProtocol
+    )
+    expect(reconstructed._tag).toBe("ValidReconstructedManagedRun")
+    if (reconstructed._tag !== "ValidReconstructedManagedRun") return
+    expect(reconstructed.state.responsibility.entries).toHaveLength(
+      invocationCount
+    )
+    const responsibilityFacts = reconstructed.state.responsibility.entries.flatMap(
+      (responsibility) => {
+        if (responsibility._tag !== "ExecutorInvocationResponsibility") {
+          return []
+        }
+        const projection = selectedExecutorProjectionFor(
+          records,
+          responsibility.invocation,
+          TechnicalRetryNotBefore.make(0)
+        )
+        if (projection._tag !== "Completed") {
+          return []
+        }
+        return [{
+          disposition: ResponsibilityDisposition.ExecutorInvocationSettled({
+            outcome: projection.outcome
+          }),
+          responsibility
+        }]
+      }
+    )
+    expect(responsibilityFacts).toHaveLength(invocationCount)
+    const derive = () =>
+      deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: reconstructed.state.responsibility,
+        responsibilityFacts
+      })
+    const first = derive()
+    const second = derive()
+    expect(second).toEqual(first)
+    expect(first.transitions).toEqual([])
+    expect(first.explanations).toHaveLength(invocationCount)
+    expect(
+      deriveRunFinalityDecision(
+        first,
+        reconstructed.state.responsibility,
+        true
+      )
+    ).toEqual({ _tag: "RunMayTerminate" })
+
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: first.transitions.flatMap(
+        (transition) =>
+          transition._tag === "ContinueExecutorInvocation"
+            && transition.invocation.resourceUse._tag
+              === "UsesTaskWorkCapacity"
+            ? [{
+              operationId: transition.invocation.correlation.invocationId,
+              taskId: transition.invocation.correlation.taskId
+            }]
+            : []
+      )
+    })
+    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+    expect(
+      WorkflowResponsibilityState.make({
+        entries: reconstructed.state.responsibility.entries
+      })
+    ).toEqual(reconstructed.state.responsibility)
   }))
 
 it("projects a pending selected-executor retry as an exact outer wait", () => {
