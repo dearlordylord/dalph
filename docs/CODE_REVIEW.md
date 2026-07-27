@@ -3,6 +3,35 @@
 Review changes against the applicable accepted implementation specification,
 accepted tooling requirements, and these implementation constraints.
 
+## Operational scenario gate
+
+Missing operational scenarios or a missing scenario-to-test mapping are a hard
+review failure for behavior-changing work. Read
+[OPERATIONAL-SCENARIOS.md](OPERATIONAL-SCENARIOS.md), then verify:
+
+- each scenario tells a chronological story using the affected person when one
+  exists, concrete facts from the relevant GitHub/Git/executor/journal systems,
+  actual boundary calls, applicable crash and retry outcomes, and the visible
+  result;
+- a scenario that omits a boundary, crash, or retry says concretely why it
+  cannot affect that behavior instead of adding ritual filler;
+- each changed command, workflow decision, external request, durable fact,
+  retry, recovery rule, concurrency rule, cleanup action, and visible outcome
+  appears in at least one scenario;
+- each scenario maps to a named acceptance test or model check;
+- the code does not add behavior absent from the scenarios;
+- the handoff reports the result scenario by scenario rather than substituting
+  aggregate gate totals; and
+- any tooling-only or documentation-only exemption gives a concrete reason no
+  Dalph runtime behavior can change.
+
+Reject a scenario that merely replaces one abstraction with another. “Alice's
+browser retries the pause command after losing Dalph's response” is an event;
+“the client repeats an idempotent control operation” is not an adequate
+operational explanation.
+
+## Implementation checklist
+
 - Domain language passes the literal reading test in
   [DEVELOPMENT.md](DEVELOPMENT.md): each important sentence names the actor,
   action, changed state, and the exact boundary reread for evidence. Standalone

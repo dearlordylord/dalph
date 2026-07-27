@@ -6,6 +6,25 @@
 - Work on `master` unless a task explicitly requires an isolated task branch or
   worktree.
 
+## Operational scenario gate
+
+- Read `docs/OPERATIONAL-SCENARIOS.md` before planning behavior-changing work.
+- Implementation must not begin until the accepted issue, specification, or a
+  file under `docs/scenarios/` explains the behavior as chronological
+  operational scenarios. Each scenario names the person affected when one
+  exists, the relevant systems, relevant starting
+  GitHub/Git/executor/journal facts, concrete trigger, boundary calls, visible
+  result, forbidden result, and acceptance test. For a person, boundary, crash,
+  or retry that does not apply, state the concrete reason instead of inventing
+  filler.
+- Start plans and explanations with those real events. Introduce canonical
+  terms only after the concrete behavior is understandable without them.
+- Every implementation plan and handoff must contain a scenario-to-test
+  mapping. Passing aggregate test or coverage totals is not a substitute.
+- Treat a missing or abstract scenario as blocked implementation work, not as a
+  documentation improvement to defer. A tooling-only or documentation-only
+  change may instead state why it changes no Dalph runtime behavior.
+
 ## Architecture
 
 - Read `docs/CONTEXT.md` and `docs/ARCHITECTURE.md` before changing domain or
