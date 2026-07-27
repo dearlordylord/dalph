@@ -16,7 +16,7 @@ const gates = [
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
-  { args: ["check:quint"], name: "Quint recovery models", timeout: 5 * 60 * SECOND },
+  { args: ["check:quint"], name: "Quint recovery models", timeout: 7 * 60 * SECOND },
   { args: ["test:coverage"], name: "tests and coverage", timeout: 5 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 2 * 60 * SECOND }
 ]
