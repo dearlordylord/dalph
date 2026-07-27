@@ -31,11 +31,20 @@ module frontierRecoveryCounterexamples {
   }
 
   action duplicateAppliedEffect(task: TaskId): bool = {
-    val workflow = state.workflow.get(task)
-    all {
-      workflow.intentCommitted,
-      state.effects.get(task).get(workflow.boundary) == 1,
-      state' = applyRequestWithEffect(state, task),
+    val boundary = state.workflow.get(task).boundary
+    val operationId = state.workflow.get(task).operationId
+    val taskOperationIds = state.effectOperationIds.get(task)
+    state' = {
+      ...state,
+      effectOperationIds:
+        state.effectOperationIds.put(
+          task,
+          taskOperationIds.put(
+            boundary,
+            taskOperationIds.get(boundary).union(Set(operationId))
+          )
+        ),
+      duplicateEffectViolations: state.duplicateEffectViolations + 1,
     }
   }
 
