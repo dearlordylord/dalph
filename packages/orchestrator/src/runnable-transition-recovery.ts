@@ -24,6 +24,7 @@ export const recoverRunnableTransition = Effect.fn(
       CheckTaskClaim: ({ operationId }) => recoverTaskClaimAcquisitions(runId, operationId),
       CheckTaskWorkSession: ({ operationId }) => recoverTaskWorkSessionEstablishments(runId, operationId),
       CommitFreshTaskClaimIntent: () => Effect.void,
+      ContinueFreshWorkflowOperation: () => Effect.void,
       ContinueImplementationEvidenceSealing: ({ operationId }) =>
         recoverImplementationEvidenceSealings(runId, operationId),
       ContinueImplementationReview: ({ operationId }) => recoverImplementationReviews(runId, operationId),

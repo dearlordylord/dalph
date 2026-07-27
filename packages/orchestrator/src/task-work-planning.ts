@@ -55,7 +55,7 @@ export class PlannedTaskAttemptError extends Schema.TaggedErrorClass<PlannedTask
   { detail: Schema.String }
 ) {}
 
-interface PlannedTaskAttemptPlannerService {
+export interface PlannedTaskAttemptPlannerService {
   readonly plan: (task: Task) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 

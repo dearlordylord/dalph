@@ -1,45 +1,24 @@
 import { Effect, Exit, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { type OperationId, RunId, SemanticReviewRound, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
-import { ImplementationConvergenceSimulatedTrace } from "./implementation-convergence-trace.js"
-import { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
-import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
-import { ImplementationReviewRequest } from "./implementation-review.js"
-import { WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
-import { deriveRunnableFrontier } from "./runnable-frontier.js"
+import { type OperationId, RunId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
+import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
+import { type FreshWorkflowStage, type FreshWorkflowStageError } from "./fresh-workflow-stage.js"
+import {
+  type RunnableFrontierTransition,
+  RunnableFrontierTransition as FrontierTransition
+} from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
-import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
 import { taskRevisionFor } from "./task-dag.js"
-import {
-  TaskExecutionAdmitted,
-  TaskExecutionOutcomeObserved,
-  TaskExecutionSimulated,
-  TaskWorkSessionEstablishmentSimulatedTrace
-} from "./task-execution-trace.js"
-import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
-import { TaskWorkStartRequest } from "./task-work-start.js"
-import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
+import type { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
-  ImplementationEvidenceSealingSimulatedTrace,
-  ImplementationReviewSimulatedTrace,
-  makeImplementationDispositionOperation,
-  makeImplementationEvidenceSealingOperation,
-  makeImplementationReviewOperation,
-  makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskExecutionOperation,
-  makeTaskWorkSessionEstablishmentOperation,
-  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   makeTrackerGraphObservedOutcome,
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
-  TaskWorkSessionEstablishedTrace,
-  TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulatedTrace,
   type TraceItem,
   TrackerExecutionAdmitted,
   TrackerGraphOutcomeObserved,
@@ -74,299 +53,178 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     freshOccupiedInvocations: [],
     reconstructedReservedPositions: []
   })
-  const establishRunnableTaskSession = Effect.fn(
-    "Workflow.establishRunnableTaskSession"
+  type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
+  type WorkflowStage = FreshWorkflowStage
+  type WorkflowStageError = FreshWorkflowStageError
+
+  const continued = (
+    operationId: OperationId,
+    task: Task
+  ): RunnableFrontierTransition =>
+    FrontierTransition.ContinueFreshWorkflowOperation({
+      operationId,
+      taskId: task.id
+    })
+
+  const makeAttemptStage = (
+    task: Task,
+    activeClaim: ActiveTaskClaim | undefined,
+    predecessorOperationId: OperationId
+  ) =>
+    makeFreshTaskAttemptStage(
+      { allocator, emit, interpreter, planner },
+      task,
+      activeClaim,
+      predecessorOperationId
+    )
+
+  const makeAdmissionObservationStage = Effect.fn(
+    "Workflow.makeAdmissionObservationStage"
   )(function*(
-    task: ReturnType<typeof snapshot.eligibleTasks>[number],
-    recordActivationIntent: (operationId: OperationId) => Effect.Effect<void>
-  ) {
-    const currentGraphOperation = makeTrackerGraphObservationOperation(
+    task: Task,
+    claim: ActiveTaskClaim,
+    claimOperation: ReturnType<typeof makeTaskClaimAcquisitionOperation>
+  ): Effect.fn.Return<WorkflowStage> {
+    const operation = makeTrackerGraphObservationOperation(
       yield* allocator.allocate(),
-      target
+      target,
+      [claimOperation.acquisition.operationId],
+      [task.id]
     )
-    yield* emit(OperationSelected.make({ operation: currentGraphOperation }))
-    const currentSnapshot = yield* interpreter.readTrackerGraph(currentGraphOperation)
-    yield* emit(TrackerGraphOutcomeObserved.make({
-      operation: currentGraphOperation,
-      outcome: makeTrackerGraphObservedOutcome(currentSnapshot)
-    }))
-    const currentTask = currentSnapshot.eligibleTasks().find(
-      (candidate) => candidate.id === task.id
-    )
-    if (currentTask === undefined) return
-
-    const claimOperationId = yield* allocator.allocate()
-    const claimOperation = makeTaskClaimAcquisitionOperation({
-      acquisition: yield* claimPlanner.plan(claimOperationId, currentTask.id),
-      predecessorOperationIds: [currentGraphOperation.operationId]
-    })
-    yield* emit(OperationSelected.make({ operation: claimOperation }))
-    yield* emit(TaskClaimAcquisitionIntended.make({ operation: claimOperation }))
-    yield* recordActivationIntent(claimOperation.acquisition.operationId)
-    const claimResult = yield* interpreter.acquireTaskClaim(claimOperation)
-    const activeClaim = claimResult._tag === "AuthoritativeTaskClaimAcquired"
-      ? claimResult.claim
-      : undefined
-    let taskForAttempt = currentTask
-    let taskPredecessorOperationId = currentGraphOperation.operationId
-    if (claimResult._tag === "AuthoritativeTaskClaimAcquired") {
-      yield* emit(TaskClaimAcquiredTrace.make({
-        claim: claimResult.claim,
-        operation: claimOperation
-      }))
-      const admissionObservation = makeTrackerGraphObservationOperation(
-        yield* allocator.allocate(),
-        target,
-        [claimOperation.acquisition.operationId],
-        [currentTask.id]
-      )
-      yield* emit(OperationSelected.make({ operation: admissionObservation }))
-      const admissionSnapshot = yield* interpreter.readTrackerGraph(
-        admissionObservation
-      )
-      yield* emit(TrackerGraphOutcomeObserved.make({
-        operation: admissionObservation,
-        outcome: makeTrackerGraphObservedOutcome(admissionSnapshot)
-      }))
-      const admittedTask = admissionSnapshot.eligibleTasks().find(
-        (candidate) => candidate.id === currentTask.id
-      )
-      if (admittedTask === undefined) return
-      yield* emit(TrackerExecutionAdmitted.make({
-        claimOperation,
-        observationOperation: admissionObservation
-      }))
-      taskForAttempt = admittedTask
-      taskPredecessorOperationId = admissionObservation.operationId
-    }
-
-    const plannedAttempt = yield* planner.plan(taskForAttempt)
-    const planOperation = makeTaskAttemptPlanOperation({
-      operationId: yield* allocator.allocate(),
-      plannedAttempt,
-      predecessorOperationIds: [taskPredecessorOperationId]
-    })
-    yield* emit(OperationSelected.make({ operation: planOperation }))
-    const planResult = yield* interpreter.recordTaskAttemptPlan(planOperation)
-    yield* emit(
-      planResult._tag === "TaskAttemptPlanRecordAcknowledged"
-        ? TaskAttemptPlanAcknowledged.make({ operation: planOperation })
-        : TaskAttemptPlanRecordingSimulated.make({ operation: planOperation })
-    )
-    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
-      operationId: yield* allocator.allocate(),
-      plannedAttempt,
-      predecessorOperationIds: [planOperation.operationId]
-    })
-    yield* emit(OperationSelected.make({ operation: worktreeOperation }))
-    const worktreeResult = yield* interpreter.reconcileTaskWorktree(
-      worktreeOperation
-    )
-    yield* emit(
-      worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
-        ? TaskWorktreeReadyTrace.make({
-          operation: worktreeOperation,
-          proof: worktreeResult.proof
+    return {
+      transition: continued(operation.operationId, task),
+      run: () =>
+        Effect.gen(function*() {
+          yield* emit(OperationSelected.make({ operation }))
+          const admissionSnapshot = yield* interpreter.readTrackerGraph(operation)
+          yield* emit(TrackerGraphOutcomeObserved.make({
+            operation,
+            outcome: makeTrackerGraphObservedOutcome(admissionSnapshot)
+          }))
+          const admittedTask = admissionSnapshot.eligibleTasks().find(
+            (candidate) => candidate.id === task.id
+          )
+          if (admittedTask === undefined) return
+          yield* emit(TrackerExecutionAdmitted.make({
+            claimOperation,
+            observationOperation: operation
+          }))
+          return yield* makeAttemptStage(
+            admittedTask,
+            claim,
+            operation.operationId
+          )
         })
-        : TaskWorktreeReconciliationSimulatedTrace.make({
-          operation: worktreeOperation
-        })
-    )
-    const request = TaskWorkStartRequest.make({
-      operationId: yield* allocator.allocate(),
-      plannedAttempt,
-      task: taskForAttempt
-    })
-    const operation = makeTaskWorkSessionEstablishmentOperation({
-      predecessorOperationIds: [
-        planOperation.operationId,
-        worktreeOperation.operationId
-      ],
-      request
-    })
-    yield* emit(OperationSelected.make({ operation }))
-    if (
-      planResult._tag === "TaskAttemptPlanRecordAcknowledged"
-      && worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
-    ) {
-      const outcome = yield* interpreter.establishTaskWorkSession(operation)
-      yield* emit(TaskWorkSessionEstablishedTrace.make({ operation, outcome }))
-      const executionOperation = makeTaskExecutionOperation({
-        predecessorOperationIds: [operation.request.operationId],
-        request: TaskExecutionRequest.make({
-          operationId: yield* allocator.allocate(),
-          plannedAttempt,
-          session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-            sessionId: outcome.sessionId
-          }),
-          task: taskForAttempt
-        })
-      })
-      yield* emit(OperationSelected.make({ operation: executionOperation }))
-      yield* emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
-      const executionOutcome = yield* interpreter.executeTaskWork(
-        executionOperation
-      )
-      yield* emit(TaskExecutionOutcomeObserved.make({
-        operation: executionOperation,
-        outcome: executionOutcome
-      }))
-      if (activeClaim === undefined) {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: executionOperation.request.operationId
-        })
-      }
-      yield* runLiveImplementationConvergence({
-        allocator,
-        emit,
-        initialExecutionOutcome: executionOutcome.outcome,
-        interpreter,
-        roundLimit: defaultImplementationReviewRoundLimit,
-        subject: {
-          claim: activeClaim,
-          plannedAttempt,
-          sessionEstablishmentOperationId: operation.request.operationId,
-          sessionId: outcome.sessionId,
-          worktreeOperationId: worktreeOperation.operationId,
-          worktreeProof: worktreeResult.proof
-        },
-        task: taskForAttempt
-      })
-    } else if (
-      planResult._tag === "TaskAttemptPlanRecordingSimulated"
-      && worktreeResult._tag === "TaskWorktreeReconciliationSimulated"
-    ) {
-      const outcome = yield* interpreter.simulateTaskWorkSession(operation)
-      yield* emit(
-        TaskWorkSessionEstablishmentSimulatedTrace.make({ operation, outcome })
-      )
-      const executionOperation = makeTaskExecutionOperation({
-        predecessorOperationIds: [operation.request.operationId],
-        request: TaskExecutionRequest.make({
-          operationId: yield* allocator.allocate(),
-          plannedAttempt,
-          session: TaskExecutionSessionBinding.cases.PlannedSession.make({
-            session: outcome.session
-          }),
-          task: taskForAttempt
-        })
-      })
-      yield* emit(OperationSelected.make({ operation: executionOperation }))
-      yield* emit(TaskExecutionAdmitted.make({ operation: executionOperation }))
-      const executionOutcome = yield* interpreter.simulateTaskExecution(executionOperation)
-      yield* emit(TaskExecutionSimulated.make({
-        operation: executionOperation,
-        outcome: executionOutcome
-      }))
-      const evidenceOperation = makeImplementationEvidenceSealingOperation({
-        operationId: yield* allocator.allocate(),
-        execution: {
-          _tag: "SimulatedExecution",
-          predecessorOperationId: executionOperation.request.operationId
-        },
-        plannedAttempt
-      })
-      yield* emit(OperationSelected.make({ operation: evidenceOperation }))
-      const simulation = yield* interpreter.sealImplementationEvidence(evidenceOperation)
-      if (simulation._tag === "SealedImplementationEvidence") {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: evidenceOperation.operationId
-        })
-      }
-      yield* emit(ImplementationEvidenceSealingSimulatedTrace.make({
-        operation: evidenceOperation,
-        simulation
-      }))
-      const reviewOperationId = yield* allocator.allocate()
-      const reviewOperation = makeImplementationReviewOperation(
-        ImplementationReviewRequest.make({
-          _tag: "SimulatedImplementationReview",
-          evidenceSealingOperationId: evidenceOperation.operationId,
-          operationId: reviewOperationId,
-          round: SemanticReviewRound.make(1),
-          roundLimit: defaultImplementationReviewRoundLimit
-        })
-      )
-      yield* emit(OperationSelected.make({ operation: reviewOperation }))
-      const reviewSimulation = yield* interpreter.reviewImplementation(reviewOperation)
-      if (reviewSimulation._tag !== "ImplementationReviewSimulated") {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: reviewOperation.request.operationId
-        })
-      }
-      yield* emit(ImplementationReviewSimulatedTrace.make({
-        operation: reviewOperation,
-        simulation: reviewSimulation
-      }))
-      const dispositionOperation = makeImplementationDispositionOperation(
-        {
-          _tag: "SimulatedImplementationConvergenceDisposition",
-          operationId: yield* allocator.allocate(),
-          plannedAttempt,
-          roundLimit: defaultImplementationReviewRoundLimit
-        },
-        reviewOperationId
-      )
-      yield* emit(OperationSelected.make({ operation: dispositionOperation }))
-      const dispositionSimulation = yield* interpreter.recordImplementationDisposition(
-        dispositionOperation
-      )
-      if (dispositionSimulation._tag !== "ImplementationConvergenceSimulated") {
-        return yield* new TaskWorktreeExecutionModeContradiction({
-          operationId: dispositionOperation.request.operationId
-        })
-      }
-      yield* emit(ImplementationConvergenceSimulatedTrace.make({
-        operation: dispositionOperation,
-        result: dispositionSimulation
-      }))
-    } else {
-      return yield* new TaskWorktreeExecutionModeContradiction({
-        operationId: worktreeOperation.operationId
-      })
     }
   })
 
-  type EstablishRunnableTaskSession = ReturnType<typeof establishRunnableTaskSession>
-  const completions = yield* Queue.unbounded<
-    Exit.Exit<
-      Effect.Success<EstablishRunnableTaskSession>,
-      Effect.Error<EstablishRunnableTaskSession>
-    >
-  >()
+  const makeClaimStage = Effect.fn("Workflow.makeClaimStage")(
+    function*(task: Task, predecessorOperationId: OperationId): Effect.fn.Return<
+      WorkflowStage,
+      Effect.Error<ReturnType<typeof claimPlanner.plan>>
+    > {
+      const operationId = yield* allocator.allocate()
+      const operation = makeTaskClaimAcquisitionOperation({
+        acquisition: yield* claimPlanner.plan(operationId, task.id),
+        predecessorOperationIds: [predecessorOperationId]
+      })
+      return {
+        transition: FrontierTransition.CommitFreshTaskClaimIntent({
+          taskId: task.id,
+          taskRevision: taskRevisionFor(task)
+        }),
+        run: (recordActivationIntent) =>
+          Effect.gen(function*() {
+            yield* emit(OperationSelected.make({ operation }))
+            yield* emit(TaskClaimAcquisitionIntended.make({ operation }))
+            yield* recordActivationIntent(operation.acquisition.operationId)
+            const result = yield* interpreter.acquireTaskClaim(operation)
+            if (result._tag === "AuthoritativeTaskClaimAcquired") {
+              yield* emit(TaskClaimAcquiredTrace.make({
+                claim: result.claim,
+                operation
+              }))
+              return yield* makeAdmissionObservationStage(
+                task,
+                result.claim,
+                operation
+              )
+            }
+            return yield* makeAttemptStage(
+              task,
+              undefined,
+              operation.acquisition.operationId
+            )
+          })
+      }
+    }
+  )
+
+  const makeCurrentGraphStage = Effect.fn("Workflow.makeCurrentGraphStage")(
+    function*(task: Task): Effect.fn.Return<WorkflowStage> {
+      const operation = makeTrackerGraphObservationOperation(
+        yield* allocator.allocate(),
+        target
+      )
+      return {
+        transition: continued(operation.operationId, task),
+        run: () =>
+          Effect.gen(function*() {
+            yield* emit(OperationSelected.make({ operation }))
+            const currentSnapshot = yield* interpreter.readTrackerGraph(operation)
+            yield* emit(TrackerGraphOutcomeObserved.make({
+              operation,
+              outcome: makeTrackerGraphObservedOutcome(currentSnapshot)
+            }))
+            const currentTask = currentSnapshot.eligibleTasks().find(
+              (candidate) => candidate.id === task.id
+            )
+            return currentTask === undefined
+              ? undefined
+              : yield* makeClaimStage(currentTask, operation.operationId)
+          })
+      }
+    }
+  )
+
+  const completions = yield* Queue.unbounded<Exit.Exit<void, WorkflowStageError>>()
 
   return yield* Effect.scoped(Effect.gen(function*() {
     const initialTasks = snapshot.eligibleTasks()
-    const remainingTasks = yield* Ref.make(initialTasks)
+    const initialStages = yield* Effect.forEach(initialTasks, makeCurrentGraphStage)
+    const stages = yield* Ref.make<ReadonlyArray<WorkflowStage>>(initialStages)
     const coordinator = yield* makeActivationCoordinator({
       admissionController,
-      readFrontier: Ref.get(remainingTasks).pipe(
-        Effect.map((tasks) =>
-          deriveRunnableFrontier({
-            freshEligibleTasks: tasks.map((task) => ({
-              taskId: task.id,
-              taskRevision: taskRevisionFor(task)
-            })),
-            responsibility: WorkflowResponsibilityState.make({ entries: [] }),
-            responsibilityFacts: []
-          })
-        )
+      readFrontier: Ref.get(stages).pipe(
+        Effect.map((current) => ({
+          explanations: [],
+          transitions: current.map(({ transition }) => transition)
+        }))
       ),
       runId: RunId.make(`workflow:${target}`),
       runTransition: (transition, execution) =>
         Effect.gen(function*() {
-          const task = (yield* Ref.get(remainingTasks)).find(
-            ({ id }) => id === transition.taskId
+          const stage = (yield* Ref.get(stages)).find(
+            (candidate) => candidate.transition === transition
           )
-          if (task === undefined) return
-          const exit = yield* establishRunnableTaskSession(
-            task,
-            execution.recordIntent
-          ).pipe(Effect.exit)
+          if (stage === undefined) return
+          const exit = yield* stage.run(execution.recordIntent).pipe(Effect.exit)
           if (Exit.isSuccess(exit)) {
-            yield* Ref.update(remainingTasks, (tasks) => tasks.filter(({ id }) => id !== task.id))
+            yield* Ref.update(stages, (current) =>
+              current.flatMap((candidate) =>
+                candidate !== stage
+                  ? [candidate]
+                  : exit.value === undefined
+                  ? []
+                  : [exit.value]
+              ))
+            if (exit.value === undefined) {
+              yield* Queue.offer(completions, Exit.succeed(undefined))
+            }
+          } else {
+            yield* Ref.update(stages, (current) => current.filter((candidate) => candidate !== stage))
+            yield* Queue.offer(completions, exit)
           }
-          yield* Queue.offer(completions, exit)
           return yield* Exit.isFailure(exit)
             ? Effect.failCause(exit.cause)
             : Effect.void
