@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from "node:child_process"
-import { clearTimeout, setTimeout } from "node:timers"
+import { quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
+import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const SECOND = 1_000
 const pnpmEntryPoint = process.env.npm_execpath
@@ -16,59 +16,16 @@ const gates = [
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
-  { args: ["check:quint"], name: "Quint recovery models", timeout: 7 * 60 * SECOND },
+  { args: ["check:quint"], name: "Quint recovery models", timeout: quintGateSafetyTimeoutMilliseconds },
   { args: ["test:coverage"], name: "tests and coverage", timeout: 5 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 2 * 60 * SECOND }
 ]
 
-const terminate = (child, signal) => {
-  if (child.pid === undefined) return
-
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" })
-    return
-  }
-
-  try {
-    process.kill(-child.pid, signal)
-  } catch (error) {
-    if (error.code !== "ESRCH") throw error
-  }
-}
-
-const runGate = ({ args, name, timeout }) =>
-  new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [pnpmEntryPoint, ...args], {
-      detached: process.platform !== "win32",
-      stdio: "inherit"
-    })
-    let timedOut = false
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      terminate(child, "SIGTERM")
-      if (process.platform !== "win32") {
-        setTimeout(() => terminate(child, "SIGKILL"), 5 * SECOND)
-      }
-    }, timeout)
-
-    child.once("error", (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer)
-
-      if (timedOut) {
-        reject(new Error(`Quality gate '${name}' exceeded ${timeout / SECOND} seconds`))
-      } else if (code !== 0) {
-        reject(new Error(`Quality gate '${name}' failed with ${signal ?? `exit ${code}`}`))
-      } else {
-        resolve()
-      }
-    })
-  })
-
 for (const gate of gates) {
-  await runGate(gate)
+  await runBoundedCommand({
+    args: [pnpmEntryPoint, ...gate.args],
+    executable: process.execPath,
+    name: `Quality gate '${gate.name}'`,
+    timeoutMilliseconds: gate.timeout
+  })
 }

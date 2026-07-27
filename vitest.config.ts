@@ -23,6 +23,7 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "packages/**/*.test.ts",
+      "scripts/**/*.test.ts",
       "test/**/*.test.ts"
     ],
     maxWorkers: 4,
