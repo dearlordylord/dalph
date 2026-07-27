@@ -52,7 +52,8 @@ const expectInvariantFailure = (
   name,
   step,
   invariant,
-  main = "frontierRecoveryCounterexamples"
+  main = "frontierRecoveryCounterexamples",
+  init
 ) => {
   process.stdout.write(`\n== ${name} (expected invariant failure) ==\n`)
   const result = spawnSync(
@@ -64,6 +65,7 @@ const expectInvariantFailure = (
       counterexamples,
       "--main",
       main,
+      ...(init === undefined ? [] : ["--init", init]),
       "--step",
       step,
       "--invariants",
@@ -301,7 +303,9 @@ expectInvariantFailure(
 expectInvariantFailure(
   "stale knowledge counterexample",
   "staleKnowledgeStep",
-  "noStaleAuthorityUse"
+  "noStaleAuthorityUse",
+  "frontierRecoveryCounterexamples",
+  "initStaleKnowledgeCounterexample"
 )
 expectInvariantFailure(
   "configured capacity counterexample",

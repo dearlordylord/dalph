@@ -58,6 +58,17 @@ module frontierRecoveryCounterexamples {
     }
   }
 
+  // Start after an intent survived a coordinator restart. The retained
+  // observation names the previous activation, so using it for the request is
+  // necessarily stale rather than merely one possible sampled path.
+  action initStaleKnowledgeCounterexample: bool = {
+    val committed =
+      refreshSelectorProjection(applyCommitFirstIntent(initialState, A))
+    val restarted =
+      refreshSelectorProjection(applyRestart(applyCrash(committed)))
+    state' = restarted
+  }
+
   action missingIntentStep: bool = {
     nondet task = TASKS.oneOf()
     any {
@@ -75,13 +86,7 @@ module frontierRecoveryCounterexamples {
   }
 
   action staleKnowledgeStep: bool = {
-    nondet task = TASKS.oneOf()
-    any {
-      orchestratorCommitsFreshTaskClaimIntent(task),
-      crash,
-      restart,
-      requestUsingStaleKnowledge(task),
-    }
+    requestUsingStaleKnowledge(A)
   }
 
   action duplicateExactOwner(task: TaskId): bool = all {
