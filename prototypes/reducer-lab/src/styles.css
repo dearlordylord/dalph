@@ -54,7 +54,11 @@ p { line-height: 1.5; }
 .graph-projection h3 { margin: 2px 0 8px; font-family: Georgia, serif; font-size: 20px; }
 .projection-status { min-height: 38px; color: #625b51; font-size: 13px; }
 .diagnostics { background: #f5d2bd; border-left: 4px solid #9b4b20; padding: 9px 9px 9px 28px; font-family: ui-monospace, monospace; font-size: 12px; }
-.graph-canvas { display: grid; gap: 9px; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 9px 0 12px; color: #625b51; font: 10px ui-monospace, monospace; }
+.graph-legend span { border: 1px solid #aaa092; background: #f8f3ea; padding: 4px 7px; }
+.graph-legend .legend-prerequisite { color: #295b46; border-color: #295b46; }
+.graph-legend .legend-grouping { color: #9b5b20; border-color: #9b5b20; border-style: dashed; }
+.task-card-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 9px; max-height: 245px; overflow: auto; padding: 3px; }
 .graph-task { background: #f9f5ed; border: 1px solid #9d9486; padding: 11px; cursor: pointer; }
 .graph-task:hover, .graph-task.selected { border-color: #295b46; box-shadow: 2px 2px 0 #295b46; }
 .graph-task h3 { font-family: inherit; font-size: 15px; margin: 2px 0; }

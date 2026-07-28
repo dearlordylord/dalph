@@ -44,6 +44,13 @@ The graph selector exposes `Auto`, `Latest`, `Authority`, `Durable`, and
 shows the current reducer limitation: target-closure membership is retained,
 but task content, lifecycle, dependency edges, and grouping edges are not.
 
+Each projection is rendered as an actual view-only Cytoscape graph through a
+FoldKit custom-element adapter. Dagre lays tasks out left-to-right; solid arrow
+edges mean “blocks,” dashed diamond edges mean “contains,” and invalid missing
+endpoints appear as explicit placeholder nodes. Cytoscape data, layout, and
+browser events remain private to the adapter; the presenter still exposes only
+the stable `TaskGraphProjection`.
+
 Capacity, target settlement, claims, and coordinator lifetime are inputs in the
 branch history, so undo, redo, and forks restore them consistently.
 

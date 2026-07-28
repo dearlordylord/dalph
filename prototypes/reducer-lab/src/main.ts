@@ -2,6 +2,7 @@ import { Effect, Schema as S } from "effect"
 import { Command, Runtime } from "foldkit"
 import { type Document, html } from "foldkit/html"
 import { m } from "foldkit/message"
+import { reducerLabGraph } from "./graph-element.ts"
 import {
   ControlledTask,
   executeLabCommand,
@@ -469,6 +470,7 @@ export const init: Runtime.ApplicationInit<Model, Message> = () => {
 }
 
 type HtmlFactory = ReturnType<typeof html<Message>>
+const graphElement = reducerLabGraph.withMessage<Message>()
 
 const button = (
   h: HtmlFactory,
@@ -694,22 +696,20 @@ const graphProjection = (
     : h.ul([h.Class("diagnostics")], projection.diagnostics.map((diagnostic) =>
       h.li([], [diagnostic])
     )),
+  graphElement([
+    graphElement.Projection(projection),
+    graphElement.SelectedTaskId(selectedTaskId),
+    graphElement.OnTaskSelected(({ taskId }) => SelectedGraphTask({ taskId }))
+  ], []),
+  h.div([h.Class("graph-legend")], [
+    h.span([h.Class("legend-prerequisite")], ["→ blocks"]),
+    h.span([h.Class("legend-grouping")], ["◇ contains"]),
+    h.span([], ["Drag to pan · scroll to zoom · select a node to synchronize projections"])
+  ]),
   projection.tasks.length === 0
-    ? h.p([h.Class("empty")], ["No tasks in this projection."])
-    : h.div([h.Class("graph-canvas")], projection.tasks.map((task) =>
+    ? null
+    : h.div([h.Class("task-card-strip")], projection.tasks.map((task) =>
       graphTaskCard(h, task, projection, selectedTaskId, canEdit)
-    )),
-  projection.edges.length === 0
-    ? h.p([h.Class("edge-empty")], ["No retained edges."])
-    : h.div([h.Class("edge-list")], projection.edges.map((edge, index) =>
-      h.span([h.Class(`edge edge-${edge.kind.toLowerCase()}`)], [
-        `${edge.from} ${edge.kind === "Prerequisite" ? "blocks" : "contains"} ${edge.to}`,
-        projection.edges.filter((candidate) =>
-          candidate.from === edge.from
-          && candidate.to === edge.to
-          && candidate.kind === edge.kind
-        ).length > 1 ? ` · duplicate ${index + 1}` : ""
-      ])
     ))
 ])
 
