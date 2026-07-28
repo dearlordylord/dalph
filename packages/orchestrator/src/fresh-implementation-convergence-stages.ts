@@ -5,8 +5,8 @@ import {
   type FreshImplementationConvergenceOptions,
   type FreshImplementationConvergenceStage,
   freshImplementationTransition,
-  noTaskWorkCapacityUse as noCapacity,
-  oneTaskWorkCapacityPosition as usesCapacity,
+  noTaskWorkCapacityRequirement as noCapacity,
+  oneTaskWorkCapacityRequirement as usesCapacity,
   priorImplementationReviewEvidence
 } from "./implementation-convergence-stage.js"
 import { ImplementationConvergenceDisposition } from "./implementation-convergence.js"

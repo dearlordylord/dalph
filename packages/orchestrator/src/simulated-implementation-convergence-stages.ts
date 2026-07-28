@@ -1,11 +1,6 @@
 import { Effect } from "effect"
 import { type OperationId, type PlannedTaskAttempt, SemanticReviewRound, type Task } from "./domain.js"
-import {
-  type ExecutorOuterInvocationResourceUse,
-  makeExecutorOuterInvocation,
-  noTaskWorkCapacityUse,
-  oneTaskWorkCapacityPosition
-} from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { ImplementationConvergenceSimulatedTrace } from "./implementation-convergence-trace.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { ImplementationReviewRequest } from "./implementation-review.js"
@@ -13,6 +8,11 @@ import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
 } from "./runnable-frontier.js"
+import {
+  noTaskWorkCapacityRequirement,
+  oneTaskWorkCapacityRequirement,
+  type TaskWorkCapacityRequirement
+} from "./task-work-capacity.js"
 import type { OperationIdAllocatorService } from "./task-work-planning.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -57,13 +57,13 @@ interface SimulatedImplementationConvergenceOptions {
 const freshTransition = (
   operationId: OperationId,
   task: Task,
-  resourceUse: ExecutorOuterInvocationResourceUse
+  capacityRequirement: TaskWorkCapacityRequirement
 ) =>
   FrontierTransition.StartExecutorInvocation({
+    capacityRequirement,
     invocation: makeExecutorOuterInvocation(
       operationId,
-      task.id,
-      resourceUse
+      task.id
     )
   })
 
@@ -91,7 +91,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
       transition: freshTransition(
         operation.request.operationId,
         options.task,
-        noTaskWorkCapacityUse
+        noTaskWorkCapacityRequirement
       ),
       run: () =>
         Effect.gen(function*() {
@@ -130,7 +130,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
         transition: freshTransition(
           operationId,
           options.task,
-          oneTaskWorkCapacityPosition
+          oneTaskWorkCapacityRequirement
         ),
         run: () =>
           Effect.gen(function*() {
@@ -165,7 +165,7 @@ export const makeSimulatedImplementationConvergenceStage = Effect.fn(
     transition: freshTransition(
       operation.operationId,
       options.task,
-      noTaskWorkCapacityUse
+      noTaskWorkCapacityRequirement
     ),
     run: () =>
       Effect.gen(function*() {

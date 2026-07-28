@@ -28,8 +28,12 @@ import {
   selectedExecutorTaskExecutionLookup
 } from "./selected-executor-protocol.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
-import { makeTaskAdmissionController } from "./task-admission-controller.js"
-import { TaskExecutor } from "./task-execution.js"
+import {
+  makeTaskAdmissionController,
+  type MultipleCurrentTaskCapacityOperations,
+  validateCurrentTaskCapacityFacts
+} from "./task-admission-controller.js"
+import { type TaskExecutionReport, TaskExecutor } from "./task-execution.js"
 import type { WorkflowInterpreter, WorkflowInterpreterService, WorkflowTrace } from "./workflow.js"
 
 type InterpreterError = {
@@ -48,6 +52,7 @@ export type ManagedRecoveryActivationError =
   | InvalidManagedHistory
   | InterpreterError
   | JournalStoreError
+  | MultipleCurrentTaskCapacityOperations
 
 export interface RecoveredAdmissionCapacityEvidence {
   readonly freshOccupiedInvocations: ReadonlyArray<{
@@ -65,6 +70,14 @@ const noRecoveredAdmissionCapacityEvidence = {
 
 const noOccupiedInvocations = (): RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"] => []
 const noOperationIds = (): ReadonlyArray<OperationId> => []
+const releasedOperationId = (
+  report: TaskExecutionReport
+): ReadonlyArray<OperationId> =>
+  report._tag === "RunningTaskExecutionReported"
+    || report._tag === "AmbiguousTaskExecutionReported"
+    || report._tag === "TaskExecutionSessionConflictReported"
+    ? []
+    : [report.operationId]
 
 /**
  * Reads current execution-provider evidence for each unresolved execution.
@@ -120,7 +133,7 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
           Match.value(candidate.report).pipe(
             Match.tag("RunningTaskExecutionReported", (report) => [{
               observationId: report.observationId,
-              operationId: candidate.responsibility.invocation.correlation.invocationId,
+              operationId: report.operationId,
               taskId: candidate.responsibility.invocation.correlation.taskId
             }]),
             Match.orElse(noOccupiedInvocations)
@@ -131,13 +144,7 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
       observations.flatMap((observation) =>
         Option.match(Option.fromUndefinedOr(observation), {
           onNone: noOperationIds,
-          onSome: (candidate) =>
-            Match.value(candidate.report).pipe(
-              Match.tag("NoTaskExecutionReported", () => [
-                candidate.responsibility.invocation.correlation.invocationId
-              ]),
-              Match.orElse(noOperationIds)
-            )
+          onSome: ({ report }) => releasedOperationId(report)
         })
       )
     )
@@ -148,9 +155,7 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
   function*(runId: RunId) {
     const journal = yield* JournalStore
     const reduction = reduceManagedHistory(runId, yield* journal.read(runId))
-    if (reduction._tag === "InvalidManagedHistory") {
-      return yield* Effect.fail(reduction)
-    }
+    if (reduction._tag === "InvalidManagedHistory") return yield* Effect.fail(reduction)
     const records = reduction.managedRun.workflowHistory.records
     const now = TechnicalRetryNotBefore.make(
       yield* Clock.currentTimeMillis
@@ -193,15 +198,17 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
           outcome: "ResponsibilityCompleted"
         })
     }
+    const responsibilityFacts = reduction.managedRun.responsibility.entries.map(
+      (responsibility) => ({
+        disposition: dispositionFor(responsibility),
+        responsibility
+      })
+    )
+    yield* validateCurrentTaskCapacityFacts(responsibilityFacts)
     return deriveRunnableFrontier({
       freshEligibleTasks: [],
       responsibility: reduction.managedRun.responsibility,
-      responsibilityFacts: reduction.managedRun.responsibility.entries.map(
-        (responsibility) => ({
-          disposition: dispositionFor(responsibility),
-          responsibility
-        })
-      )
+      responsibilityFacts
     })
   }
 )
@@ -285,8 +292,7 @@ export const makeManagedRecoveryActivation = Effect.fn(
   const reconstructedReservedPositions = initial.transitions.flatMap(
     (transition) =>
       transition._tag === "ContinueExecutorInvocation"
-        && transition.invocation.resourceUse._tag
-          === "UsesTaskWorkCapacity"
+        && transition.capacityRequirement._tag === "OneTaskWorkPosition"
         && !capacityEvidence.freshlyReleasedOperationIds.has(
           transition.invocation.correlation.invocationId
         )

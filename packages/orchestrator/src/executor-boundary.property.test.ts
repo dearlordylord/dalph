@@ -2,23 +2,24 @@ import { Effect, Option } from "effect"
 import fc from "fast-check"
 import { expect, it } from "vitest"
 import { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
-import { makeExecutorOuterInvocation, noTaskWorkCapacityUse, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import { noTaskWorkCapacityRequirement, oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 
-it("generated executor invocations use capacity exactly when their declaration says so", async () => {
+it("generated Dalph transitions use capacity exactly when their requirement says so", async () => {
   await fc.assert(fc.asyncProperty(
     fc.boolean(),
     async (usesTaskWorkCapacity) => {
       const taskId = TaskId.make("generated-executor-boundary-task")
       const transition = RunnableFrontierTransition
         .ContinueExecutorInvocation({
+          capacityRequirement: usesTaskWorkCapacity
+            ? oneTaskWorkCapacityRequirement
+            : noTaskWorkCapacityRequirement,
           invocation: makeExecutorOuterInvocation(
             OperationId.make("generated-executor-boundary-invocation"),
-            taskId,
-            usesTaskWorkCapacity
-              ? oneTaskWorkCapacityPosition
-              : noTaskWorkCapacityUse
+            taskId
           )
         })
       const decision = await Effect.runPromise(Effect.gen(function*() {

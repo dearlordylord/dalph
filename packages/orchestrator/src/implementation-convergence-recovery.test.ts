@@ -11,6 +11,7 @@ import type { FreshImplementationConvergenceStage } from "./implementation-conve
 import { AuthorizedImplementationReviewRequest, ReviewFindingsHandbackRequest } from "./implementation-review.js"
 import {
   ActiveTaskClaim,
+  AmbiguousTaskExecutionReported,
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
   ClaimOwner,
@@ -56,6 +57,7 @@ import {
   SuccessfulTaskExecutionReported,
   TaskExecutorLocator,
   taskExecutorTestLayer,
+  TaskId,
   TaskRunner,
   TaskWorkCapacity,
   TaskWorkSessionId,
@@ -515,7 +517,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     yield* executor.setObservations([successfulExecution])
     expect(yield* observeUnresolvedExecution).toEqual({
       freshOccupiedInvocations: [],
-      freshlyReleasedOperationIds: new Set()
+      freshlyReleasedOperationIds: new Set([successfulExecution.operationId])
     })
     yield* executor.setObservations([
       RunningTaskExecutionReported.make({
@@ -529,6 +531,42 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     ])
     expect((yield* observeUnresolvedExecution).freshOccupiedInvocations)
       .toHaveLength(1)
+    const differentlyCorrelatedOperationId = OperationId.make(
+      "fresh-differently-correlated-operation"
+    )
+    yield* executor.setObservations([
+      RunningTaskExecutionReported.make({
+        observationId: ProviderObservationId.make(
+          "fresh-differently-correlated-observation"
+        ),
+        operationId: differentlyCorrelatedOperationId,
+        processId: successfulExecution.processId,
+        sessionId
+      })
+    ])
+    expect((yield* observeUnresolvedExecution).freshOccupiedInvocations)
+      .toEqual([{
+        observationId: "fresh-differently-correlated-observation",
+        operationId: differentlyCorrelatedOperationId,
+        taskId: TaskId.make("implementation-convergence-recovery-task")
+      }])
+    yield* executor.setObservations([
+      AmbiguousTaskExecutionReported.make({
+        detail: "provider lookup cannot determine the current outcome",
+        observationId: ProviderObservationId.make(
+          "ambiguous-capacity-observation"
+        ),
+        operationId: successfulExecution.operationId,
+        partialOutput: "preserved partial output",
+        processId: successfulExecution.processId,
+        sessionId,
+        wipPreserved: true
+      })
+    ])
+    expect(yield* observeUnresolvedExecution).toEqual({
+      freshOccupiedInvocations: [],
+      freshlyReleasedOperationIds: new Set()
+    })
     yield* executor.setObservations([
       NoTaskExecutionReported.make({
         observationId: ProviderObservationId.make(

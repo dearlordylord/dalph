@@ -2,7 +2,8 @@
 import { Data, Effect, Option, Ref, Schema } from "effect"
 import {
   OperationId as OperationIdSchema,
-  SelectedTransitionIdentity as SelectedTransitionIdentitySchema
+  SelectedTransitionIdentity as SelectedTransitionIdentitySchema,
+  TaskId as TaskIdSchema
 } from "./domain.js"
 import type {
   OperationId,
@@ -14,6 +15,7 @@ import type {
 } from "./domain.js"
 import {
   FrontierExplanation,
+  type ResponsibilityFreshFacts,
   type RunnableFrontier,
   type RunnableFrontierTransition,
   runnableTransitionOperationId,
@@ -36,7 +38,25 @@ type FreshInvocationCapacityObservation =
     readonly taskId: TaskId
   }
   | {
+    readonly _tag: "FreshCapacityAbsent"
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }
+  | {
+    readonly _tag: "FreshCapacityInterrupted"
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }
+  | {
     readonly _tag: "FreshCapacityReleased"
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+  }
+  | {
+    readonly _tag: "FreshCapacityUnknown"
     readonly observationId: ProviderObservationId
     readonly operationId: OperationId
     readonly taskId: TaskId
@@ -70,9 +90,64 @@ class TaskAdmissionPositionReleaseIssue extends Schema.TaggedErrorClass<TaskAdmi
   { operationId: OperationIdSchema }
 ) {}
 
+/**
+ * Two current workflow operations cannot both hold the one task-local
+ * admission position. Reconstruction rejects this history before admission.
+ */
+export class MultipleCurrentTaskCapacityOperations
+  extends Schema.TaggedErrorClass<MultipleCurrentTaskCapacityOperations>()(
+    "MultipleCurrentTaskCapacityOperations",
+    {
+      operationIds: Schema.Array(OperationIdSchema),
+      taskId: TaskIdSchema
+    }
+  )
+{}
+
+type TaskAdmissionReservationCorrelation =
+  | {
+    readonly _tag: "SelectedTransitionReservation"
+    readonly selected: SelectedTransitionIdentity
+  }
+  | {
+    readonly _tag: "OperationReservation"
+    readonly operationId: OperationId
+  }
+
+/**
+ * One task's process-local capacity evidence. Absence from the controller is
+ * `NotUsing`; every represented variant consumes exactly one position.
+ */
+type TaskCapacityState = Data.TaggedEnum<{
+  AwaitingProviderEvidence: {
+    readonly operationId: OperationId
+  }
+  CorrelationConflict: {
+    readonly expectedOperationId: OperationId
+    readonly observationId: ProviderObservationId
+    readonly observedOperationId: OperationId
+  }
+  Reserved: {
+    readonly selected: SelectedTransitionIdentity
+  }
+  Working: {
+    readonly observationId: ProviderObservationId
+    readonly operationId: OperationId
+  }
+}>
+
+const TaskCapacityState = Data.taggedEnum<TaskCapacityState>()
+
+interface TaskCapacityEntry {
+  readonly state: TaskCapacityState
+  readonly taskId: TaskId
+}
+
 export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
+  /** Fresh active reports, derived from the task-keyed states for presentation. */
   readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
+  /** Held expected-operation or pre-intent correlations, derived for activation handoff. */
   readonly reservedPositions: ReadonlyArray<{
     readonly correlation: TaskAdmissionReservationCorrelation
     readonly taskId: TaskId
@@ -108,6 +183,7 @@ export interface TaskAdmissionController {
     operationId: OperationId
   ) => Effect.Effect<AdmissionAvailabilityChange, TaskAdmissionPositionReleaseIssue>
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
+  readonly taskStates: () => Effect.Effect<ReadonlyArray<TaskCapacityEntry>>
 }
 
 interface MakeTaskAdmissionControllerInput {
@@ -120,7 +196,7 @@ interface MakeTaskAdmissionControllerInput {
   }>
 }
 
-/** Applies capacity from the transition's declared outer resource use. */
+/** Applies Dalph's zero-or-one capacity requirement for the selected transition. */
 export const transitionRequiresTaskAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
@@ -130,69 +206,61 @@ export const transitionRequiresTaskAdmissionPosition = (
       transition._tag === "ContinueExecutorInvocation"
       || transition._tag === "StartExecutorInvocation"
     )
-    && transition.invocation.resourceUse._tag === "UsesTaskWorkCapacity"
+    && transition.capacityRequirement._tag === "OneTaskWorkPosition"
   )
 
-interface TaskAdmissionReservation {
-  readonly correlation: TaskAdmissionReservationCorrelation
-  readonly taskId: TaskId
-}
-
-type TaskAdmissionReservationCorrelation =
-  | {
-    readonly _tag: "SelectedTransitionReservation"
-    readonly selected: SelectedTransitionIdentity
-  }
-  | {
-    readonly _tag: "OperationReservation"
-    readonly operationId: OperationId
-  }
-
-const operationReservation = (
-  operationId: OperationId
-): TaskAdmissionReservationCorrelation => ({
-  _tag: "OperationReservation",
-  operationId
-})
-
-const transitionReservation = (
-  transition: RunnableFrontierTransition,
-  runId: RunId
-): TaskAdmissionReservationCorrelation => {
-  const operationId = runnableTransitionOperationId(transition)
-  return operationId !== undefined
-      && transition._tag === "ContinueExecutorInvocation"
-    ? operationReservation(operationId)
-    : {
-      _tag: "SelectedTransitionReservation",
-      selected: makeSelectedTransitionIdentity(runId, transition)
-    }
-}
 interface TaskAdmissionControllerState {
   readonly capacity: TaskWorkCapacity
-  readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
   readonly releasedOperationIds: ReadonlySet<OperationId>
-  readonly reservations: ReadonlyArray<TaskAdmissionReservation>
+  readonly taskStates: ReadonlyArray<TaskCapacityEntry>
 }
 
-const sameReservation = (
-  reservation: TaskAdmissionReservation,
+const stateForTask = (
+  state: TaskAdmissionControllerState,
+  taskId: TaskId
+): TaskCapacityState | undefined => state.taskStates.find((entry) => entry.taskId === taskId)?.state
+
+const replaceTaskState = (
+  current: TaskAdmissionControllerState,
+  taskId: TaskId,
+  taskState: TaskCapacityState | undefined
+): TaskAdmissionControllerState => ({
+  ...current,
+  taskStates: [
+    ...current.taskStates.filter((entry) => entry.taskId !== taskId),
+    ...(taskState === undefined ? [] : [{ state: taskState, taskId }])
+  ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+})
+
+const expectedOperationId = (
+  taskState: TaskCapacityState
+): OperationId | undefined => {
+  switch (taskState._tag) {
+    case "AwaitingProviderEvidence":
+    case "Working":
+      return taskState.operationId
+    case "CorrelationConflict":
+      return taskState.expectedOperationId
+    case "Reserved":
+      return undefined
+  }
+}
+
+const positionMatchesTransition = (
+  taskState: TaskCapacityState,
   transition: RunnableFrontierTransition,
   runId: RunId
-): boolean =>
-  reservation.taskId === runnableTransitionTaskId(transition)
-  && (
-    runnableTransitionOperationId(transition) !== undefined
-      && transition._tag === "ContinueExecutorInvocation"
-      ? reservation.correlation._tag === "OperationReservation"
-        && reservation.correlation.operationId
-          === runnableTransitionOperationId(transition)
-      : reservation.correlation._tag === "SelectedTransitionReservation"
-        && selectedTransitionKey(reservation.correlation.selected)
-          === selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
-  )
+): boolean => {
+  const operationId = runnableTransitionOperationId(transition)
+  if (operationId !== undefined && transition._tag === "ContinueExecutorInvocation") {
+    return expectedOperationId(taskState) === operationId
+  }
+  return taskState._tag === "Reserved"
+    && selectedTransitionKey(taskState.selected)
+      === selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
+}
 
-const usedPositions = (state: TaskAdmissionControllerState): number => state.occupied.length + state.reservations.length
+const usedPositions = (state: TaskAdmissionControllerState): number => state.taskStates.length
 
 const changeAfterUsageDecrease = (
   before: TaskAdmissionControllerState,
@@ -217,70 +285,278 @@ const tryAdmitTransition = (
   if (!transitionRequiresTaskAdmissionPosition(transition)) {
     return { _tag: "TransitionAdmitted", state: current }
   }
+  const taskId = runnableTransitionTaskId(transition)
+  const currentTaskState = stateForTask(current, taskId)
   if (
-    current.reservations.some((reservation) => sameReservation(reservation, transition, runId))
+    currentTaskState !== undefined
+    && positionMatchesTransition(currentTaskState, transition, runId)
   ) {
     return { _tag: "TransitionAdmitted", state: current }
   }
-  if (
-    runnableTransitionOperationId(transition) !== undefined
-    && current.occupied.some(({ operationId, taskId }) =>
-      taskId === runnableTransitionTaskId(transition)
-      && operationId === runnableTransitionOperationId(transition)
-    )
-  ) {
-    // A provider-observed invocation is the post-intent position for this
-    // exact operation. Restart resumes its responsibility without reserving
-    // another position or waiting for itself to release capacity.
-    return { _tag: "TransitionAdmitted", state: current }
-  }
-  const taskAlreadyUsesPosition = current.reservations.some(
-    ({ taskId }) => taskId === runnableTransitionTaskId(transition)
-  )
-    || current.occupied.some(
-      ({ taskId }) => taskId === runnableTransitionTaskId(transition)
-    )
-  if (taskAlreadyUsesPosition || usedPositions(current) >= current.capacity) {
+  if (currentTaskState !== undefined || usedPositions(current) >= current.capacity) {
     return { _tag: "CapacityUnavailable" }
   }
+  const operationId = runnableTransitionOperationId(transition)
   return {
     _tag: "TransitionAdmitted",
-    state: {
-      ...current,
-      reservations: [
-        ...current.reservations,
-        {
-          correlation: transitionReservation(transition, runId),
-          taskId: runnableTransitionTaskId(transition)
-        }
-      ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
-    }
+    state: replaceTaskState(
+      current,
+      taskId,
+      operationId !== undefined && transition._tag === "ContinueExecutorInvocation"
+        ? TaskCapacityState.AwaitingProviderEvidence({
+          operationId
+        })
+        : TaskCapacityState.Reserved({
+          selected: makeSelectedTransitionIdentity(runId, transition)
+        })
+    )
   }
 }
 
-/** Creates the one process-local owner of reserved and occupied admission positions. */
+const duplicateCurrentOperations = (
+  positions: MakeTaskAdmissionControllerInput["reconstructedReservedPositions"]
+): MultipleCurrentTaskCapacityOperations | undefined => {
+  for (const position of positions) {
+    const operationIds = positions
+      .filter(({ taskId }) => taskId === position.taskId)
+      .map(({ operationId }) => operationId)
+    if (operationIds.length > 1) {
+      return new MultipleCurrentTaskCapacityOperations({
+        operationIds,
+        taskId: position.taskId
+      })
+    }
+  }
+  return undefined
+}
+
+const validateCurrentTaskCapacityOperations = (
+  positions: MakeTaskAdmissionControllerInput["reconstructedReservedPositions"]
+): Effect.Effect<void, MultipleCurrentTaskCapacityOperations> => {
+  const duplicate = duplicateCurrentOperations(positions)
+  return duplicate === undefined ? Effect.void : Effect.fail(duplicate)
+}
+
+export const validateCurrentTaskCapacityFacts = (
+  facts: ReadonlyArray<ResponsibilityFreshFacts>
+): Effect.Effect<void, MultipleCurrentTaskCapacityOperations> =>
+  validateCurrentTaskCapacityOperations(
+    facts.flatMap(({ disposition, responsibility }) =>
+      disposition._tag === "Ready"
+        && responsibility._tag === "ExecutorInvocationResponsibility"
+        && responsibility.capacityRequirement._tag === "OneTaskWorkPosition"
+        ? [{
+          operationId: responsibility.invocation.correlation.invocationId,
+          taskId: responsibility.invocation.correlation.taskId
+        }]
+        : []
+    )
+  )
+
+const reconstructedTaskStates = (
+  input: MakeTaskAdmissionControllerInput
+): ReadonlyArray<TaskCapacityEntry> => {
+  const released = input.freshlyReleasedOperationIds ?? new Set()
+  const reconstructed = input.reconstructedReservedPositions.flatMap(
+    ({ operationId, taskId }): ReadonlyArray<TaskCapacityEntry> => {
+      const observed = input.freshOccupiedInvocations.find(
+        (invocation) => invocation.taskId === taskId
+      )
+      if (observed === undefined) {
+        return released.has(operationId)
+          ? []
+          : [{
+            state: TaskCapacityState.AwaitingProviderEvidence({ operationId }),
+            taskId
+          }]
+      }
+      return [{
+        state: observed.operationId === operationId
+          ? TaskCapacityState.Working({
+            observationId: observed.observationId,
+            operationId
+          })
+          : TaskCapacityState.CorrelationConflict({
+            expectedOperationId: operationId,
+            observationId: observed.observationId,
+            observedOperationId: observed.operationId
+          }),
+        taskId
+      }]
+    }
+  )
+  const reconstructedTaskIds = new Set(
+    input.reconstructedReservedPositions.map(({ taskId }) => taskId)
+  )
+  return [
+    ...reconstructed,
+    ...input.freshOccupiedInvocations.flatMap(
+      (observed): ReadonlyArray<TaskCapacityEntry> =>
+        reconstructedTaskIds.has(observed.taskId)
+          ? []
+          : [{
+            state: TaskCapacityState.Working({
+              observationId: observed.observationId,
+              operationId: observed.operationId
+            }),
+            taskId: observed.taskId
+          }]
+    )
+  ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+}
+
+const applyActiveObservation = (
+  current: TaskAdmissionControllerState,
+  observation: Extract<
+    FreshInvocationCapacityObservation,
+    { readonly _tag: "FreshCapacityConsumed" }
+  >
+): TaskAdmissionControllerState => {
+  const taskState = stateForTask(current, observation.taskId)
+  if (taskState?._tag === "Reserved") return current
+  const expected = taskState === undefined
+    ? undefined
+    : expectedOperationId(taskState)
+  if (expected === undefined || expected === observation.operationId) {
+    return replaceTaskState(
+      current,
+      observation.taskId,
+      TaskCapacityState.Working({
+        observationId: observation.observationId,
+        operationId: observation.operationId
+      })
+    )
+  }
+  return replaceTaskState(
+    current,
+    observation.taskId,
+    TaskCapacityState.CorrelationConflict({
+      expectedOperationId: expected,
+      observationId: observation.observationId,
+      observedOperationId: observation.operationId
+    })
+  )
+}
+
+const applyInactiveObservation = (
+  current: TaskAdmissionControllerState,
+  observation: Exclude<
+    FreshInvocationCapacityObservation,
+    { readonly _tag: "FreshCapacityConsumed" | "FreshCapacityUnknown" }
+  >
+): TaskAdmissionControllerState => {
+  const taskState = stateForTask(current, observation.taskId)
+  if (taskState === undefined || taskState._tag === "Reserved") return current
+  if (taskState._tag === "CorrelationConflict") {
+    if (taskState.observedOperationId === observation.operationId) {
+      return replaceTaskState(
+        current,
+        observation.taskId,
+        TaskCapacityState.AwaitingProviderEvidence({
+          operationId: taskState.expectedOperationId
+        })
+      )
+    }
+    if (taskState.expectedOperationId === observation.operationId) {
+      return replaceTaskState(
+        current,
+        observation.taskId,
+        TaskCapacityState.Working({
+          observationId: taskState.observationId,
+          operationId: taskState.observedOperationId
+        })
+      )
+    }
+    return current
+  }
+  return taskState.operationId === observation.operationId
+    ? replaceTaskState(current, observation.taskId, undefined)
+    : current
+}
+
+const applyUnknownObservation = (
+  current: TaskAdmissionControllerState,
+  observation: Extract<
+    FreshInvocationCapacityObservation,
+    { readonly _tag: "FreshCapacityUnknown" }
+  >
+): TaskAdmissionControllerState => {
+  const taskState = stateForTask(current, observation.taskId)
+  if (
+    taskState === undefined
+    || taskState._tag === "Reserved"
+    || taskState._tag === "CorrelationConflict"
+  ) return current
+  return replaceTaskState(
+    current,
+    observation.taskId,
+    TaskCapacityState.AwaitingProviderEvidence({
+      operationId: taskState.operationId
+    })
+  )
+}
+
+const derivedSnapshot = (
+  current: TaskAdmissionControllerState
+): TaskAdmissionControllerSnapshot => {
+  const occupied = current.taskStates.flatMap(
+    ({ state, taskId }): ReadonlyArray<FreshCapacityConsumingInvocation> =>
+      state._tag === "Working"
+        ? [{
+          observationId: state.observationId,
+          operationId: state.operationId,
+          taskId
+        }]
+        : state._tag === "CorrelationConflict"
+        ? [{
+          observationId: state.observationId,
+          operationId: state.observedOperationId,
+          taskId
+        }]
+        : []
+  )
+  const reservedPositions = current.taskStates.flatMap(
+    ({ state, taskId }): TaskAdmissionControllerSnapshot["reservedPositions"] =>
+      state._tag === "Reserved"
+        ? [{
+          correlation: {
+            _tag: "SelectedTransitionReservation",
+            selected: state.selected
+          },
+          taskId
+        }]
+        : state._tag === "AwaitingProviderEvidence"
+            || state._tag === "CorrelationConflict"
+        ? [{
+          correlation: {
+            _tag: "OperationReservation",
+            operationId: state._tag === "CorrelationConflict"
+              ? state.expectedOperationId
+              : state.operationId
+          },
+          taskId
+        }]
+        : []
+  )
+  return {
+    capacity: current.capacity,
+    occupied,
+    reservedPositions,
+    reservedTaskIds: reservedPositions.map(({ taskId }) => taskId)
+  }
+}
+
+/** Creates the one process-local owner of task-keyed admission positions. */
 export const makeTaskAdmissionController = Effect.fn(
   "TaskAdmissionController.make"
 )(function*(input: MakeTaskAdmissionControllerInput) {
+  yield* validateCurrentTaskCapacityOperations(
+    input.reconstructedReservedPositions
+  )
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
-    occupied: [...input.freshOccupiedInvocations].sort((left, right) => left.taskId.localeCompare(right.taskId)),
     releasedOperationIds: input.freshlyReleasedOperationIds ?? new Set(),
-    reservations: [
-      ...input.reconstructedReservedPositions.map(
-        ({ operationId, taskId }) => ({
-          correlation: operationReservation(operationId),
-          taskId
-        })
-      ).filter(({ correlation, taskId }) =>
-        !input.freshOccupiedInvocations.some((invocation) =>
-          invocation.taskId === taskId
-          && correlation._tag === "OperationReservation"
-          && invocation.operationId === correlation.operationId
-        )
-      )
-    ]
-      .sort((left, right) => left.taskId.localeCompare(right.taskId))
+    taskStates: reconstructedTaskStates(input)
   })
 
   const admit = Effect.fn("TaskAdmissionController.admit")(
@@ -306,13 +582,10 @@ export const makeTaskAdmissionController = Effect.fn(
           ]
         }
 
-        return [
-          {
-            explanations,
-            transition: Option.fromUndefinedOr(admitted)
-          },
-          next
-        ] as const
+        return [{
+          explanations,
+          transition: Option.fromUndefinedOr(admitted)
+        }, next] as const
       })
   )
 
@@ -320,36 +593,25 @@ export const makeTaskAdmissionController = Effect.fn(
     admit,
     applyFreshInvocationObservation: (observation) =>
       Ref.modify(state, (current) => {
+        const observed = observation._tag === "FreshCapacityConsumed"
+          ? applyActiveObservation(current, observation)
+          : observation._tag === "FreshCapacityUnknown"
+          ? applyUnknownObservation(current, observation)
+          : applyInactiveObservation(current, observation)
         const next = {
-          ...current,
-          occupied: observation._tag === "FreshCapacityConsumed"
-            ? [
-              ...current.occupied.filter(({ taskId }) => taskId !== observation.taskId),
-              {
-                observationId: observation.observationId,
-                operationId: observation.operationId,
-                taskId: observation.taskId
-              }
-            ].sort((left, right) => left.taskId.localeCompare(right.taskId))
-            : current.occupied.filter(({ operationId, taskId }) =>
-              taskId !== observation.taskId
-              || operationId !== observation.operationId
-            ),
+          ...observed,
           releasedOperationIds: observation._tag === "FreshCapacityConsumed"
             ? new Set(
-              [...current.releasedOperationIds].filter(
+              [...observed.releasedOperationIds].filter(
                 (operationId) => operationId !== observation.operationId
               )
             )
+            : observation._tag === "FreshCapacityUnknown"
+            ? observed.releasedOperationIds
             : new Set([
-              ...current.releasedOperationIds,
+              ...observed.releasedOperationIds,
               observation.operationId
-            ]),
-          reservations: current.reservations.filter(({ correlation, taskId }) =>
-            taskId !== observation.taskId
-            || correlation._tag !== "OperationReservation"
-            || correlation.operationId !== observation.operationId
-          )
+            ])
         }
         return [changeAfterUsageDecrease(current, next), next] as const
       }),
@@ -357,28 +619,19 @@ export const makeTaskAdmissionController = Effect.fn(
       function*(selected, operationId) {
         const found = yield* Ref.modify(state, (current) => {
           const key = selectedTransitionKey(selected)
-          const matched = current.reservations.some((reservation) =>
-            reservation.correlation._tag === "SelectedTransitionReservation"
-            && selectedTransitionKey(reservation.correlation.selected) === key
+          const entry = current.taskStates.find(({ state }) =>
+            state._tag === "Reserved"
+            && selectedTransitionKey(state.selected) === key
           )
           return [
-            matched,
-            matched
-              ? {
-                ...current,
-                reservations: current.reservations.map((reservation) =>
-                  reservation.correlation._tag
-                      === "SelectedTransitionReservation"
-                    && selectedTransitionKey(reservation.correlation.selected)
-                      === key
-                    ? {
-                      ...reservation,
-                      correlation: operationReservation(operationId)
-                    }
-                    : reservation
-                )
-              }
-              : current
+            entry !== undefined,
+            entry === undefined
+              ? current
+              : replaceTaskState(
+                current,
+                entry.taskId,
+                TaskCapacityState.AwaitingProviderEvidence({ operationId })
+              )
           ] as const
         })
         if (!found) {
@@ -398,11 +651,11 @@ export const makeTaskAdmissionController = Effect.fn(
           readonly [AdmissionAvailabilityChange, boolean],
           TaskAdmissionControllerState
         ] => {
-          const matched = current.reservations.some((reservation) =>
-            reservation.correlation._tag === "SelectedTransitionReservation"
-            && selectedTransitionKey(reservation.correlation.selected) === key
+          const entry = current.taskStates.find(({ state }) =>
+            state._tag === "Reserved"
+            && selectedTransitionKey(state.selected) === key
           )
-          if (!matched) {
+          if (entry === undefined) {
             return [
               [
                 AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged(),
@@ -411,13 +664,7 @@ export const makeTaskAdmissionController = Effect.fn(
               current
             ] as const
           }
-          const next = {
-            ...current,
-            reservations: current.reservations.filter((reservation) =>
-              reservation.correlation._tag !== "SelectedTransitionReservation"
-              || selectedTransitionKey(reservation.correlation.selected) !== key
-            )
-          }
+          const next = replaceTaskState(current, entry.taskId, undefined)
           return [[changeAfterUsageDecrease(current, next), true] as const, next] as const
         })
         if (!found) {
@@ -435,14 +682,17 @@ export const makeTaskAdmissionController = Effect.fn(
         readonly [AdmissionAvailabilityChange, boolean],
         TaskAdmissionControllerState
       ] => {
-        const matched = current.reservations.some(
-          (reservation) =>
-            reservation.correlation._tag === "OperationReservation"
-            && reservation.correlation.operationId === operationId
-        ) || current.occupied.some(
-          (invocation) => invocation.operationId === operationId
-        ) || current.releasedOperationIds.has(operationId)
-        if (!matched) {
+        const entry = current.taskStates.find(({ state }) =>
+          state._tag !== "Reserved"
+          && (
+            expectedOperationId(state) === operationId
+            || (
+              state._tag === "CorrelationConflict"
+              && state.observedOperationId === operationId
+            )
+          )
+        )
+        if (entry === undefined && !current.releasedOperationIds.has(operationId)) {
           return [
             [
               AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged(),
@@ -451,21 +701,24 @@ export const makeTaskAdmissionController = Effect.fn(
             current
           ] as const
         }
+        const nextTaskState = entry?.state._tag === "CorrelationConflict"
+          ? entry.state.expectedOperationId === operationId
+            ? TaskCapacityState.Working({
+              observationId: entry.state.observationId,
+              operationId: entry.state.observedOperationId
+            })
+            : TaskCapacityState.AwaitingProviderEvidence({
+              operationId: entry.state.expectedOperationId
+            })
+          : undefined
         const next = {
-          ...current,
-          occupied: current.occupied.filter(
-            (invocation) => invocation.operationId !== operationId
-          ),
-          // Retain exact release evidence so same-operation finalization is
-          // idempotent after an observed release or a duplicate completion.
+          ...(entry === undefined
+            ? current
+            : replaceTaskState(current, entry.taskId, nextTaskState)),
           releasedOperationIds: new Set([
             ...current.releasedOperationIds,
             operationId
-          ]),
-          reservations: current.reservations.filter((reservation) =>
-            reservation.correlation._tag !== "OperationReservation"
-            || reservation.correlation.operationId !== operationId
-          )
+          ])
         }
         return [[changeAfterUsageDecrease(current, next), true] as const, next] as const
       })
@@ -474,14 +727,7 @@ export const makeTaskAdmissionController = Effect.fn(
       }
       return change
     }),
-    snapshot: () =>
-      Ref.get(state).pipe(
-        Effect.map((current) => ({
-          capacity: current.capacity,
-          occupied: current.occupied,
-          reservedPositions: current.reservations,
-          reservedTaskIds: current.reservations.map(({ taskId }) => taskId)
-        }))
-      )
+    snapshot: () => Ref.get(state).pipe(Effect.map(derivedSnapshot)),
+    taskStates: () => Ref.get(state).pipe(Effect.map(({ taskStates }) => taskStates))
   } satisfies TaskAdmissionController
 })

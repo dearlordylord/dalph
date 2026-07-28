@@ -10,6 +10,7 @@ import {
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "./reconstructed-managed-run-state.js"
+import { type TaskWorkCapacityRequirement } from "./task-work-capacity.js"
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: {
@@ -25,9 +26,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   StartExecutorInvocation: {
+    readonly capacityRequirement: TaskWorkCapacityRequirement
     readonly invocation: ExecutorOuterInvocation
   }
   ContinueExecutorInvocation: {
+    readonly capacityRequirement: TaskWorkCapacityRequirement
     readonly invocation: ExecutorOuterInvocation
   }
   CheckTaskWorkSession: {
@@ -231,8 +234,9 @@ const readyTransition = (
 ): RunnableFrontierTransition =>
   Match.value(facts.responsibility).pipe(
     Match.tags({
-      ExecutorInvocationResponsibility: ({ invocation }) =>
+      ExecutorInvocationResponsibility: ({ capacityRequirement, invocation }) =>
         RunnableFrontierTransition.ContinueExecutorInvocation({
+          capacityRequirement,
           invocation
         }),
       TaskClaimResponsibility: ({ acquisition }) =>

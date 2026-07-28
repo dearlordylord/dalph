@@ -1,11 +1,6 @@
 import type { Effect } from "effect"
 import { type ImplementationReviewRoundLimit, type OperationId, type SemanticReviewRound, type Task } from "./domain.js"
-import {
-  type ExecutorOuterInvocationResourceUse,
-  makeExecutorOuterInvocation,
-  noTaskWorkCapacityUse,
-  oneTaskWorkCapacityPosition
-} from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import {
   type ImplementationConvergenceSubject,
   PriorImplementationReviewEvidence
@@ -16,6 +11,11 @@ import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
 } from "./runnable-frontier.js"
+import {
+  noTaskWorkCapacityRequirement,
+  oneTaskWorkCapacityRequirement,
+  type TaskWorkCapacityRequirement
+} from "./task-work-capacity.js"
 import type { OperationIdAllocatorService } from "./task-work-planning.js"
 import type { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -40,7 +40,7 @@ export type FreshImplementationConvergenceStageError =
   | TaskWorktreeExecutionModeContradiction
   | TraceOutputError
 
-export { noTaskWorkCapacityUse, oneTaskWorkCapacityPosition }
+export { noTaskWorkCapacityRequirement, oneTaskWorkCapacityRequirement }
 
 /** The one durable convergence fact from which the next operation is rebuilt. */
 type ImplementationConvergenceStart =
@@ -107,26 +107,26 @@ export interface FreshImplementationConvergenceOptions {
 export const freshImplementationTransition = (
   operationId: OperationId,
   task: Task,
-  resourceUse: ExecutorOuterInvocationResourceUse
+  capacityRequirement: TaskWorkCapacityRequirement
 ): RunnableFrontierTransition =>
   FrontierTransition.StartExecutorInvocation({
+    capacityRequirement,
     invocation: makeExecutorOuterInvocation(
       operationId,
-      task.id,
-      resourceUse
+      task.id
     )
   })
 
 export const continuedImplementationTransition = (
   operationId: OperationId,
   task: Task,
-  resourceUse: ExecutorOuterInvocationResourceUse
+  capacityRequirement: TaskWorkCapacityRequirement
 ): RunnableFrontierTransition =>
   FrontierTransition.ContinueExecutorInvocation({
+    capacityRequirement,
     invocation: makeExecutorOuterInvocation(
       operationId,
-      task.id,
-      resourceUse
+      task.id
     )
   })
 

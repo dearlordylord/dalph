@@ -26,6 +26,17 @@ import {
   RecoveryTaskEligibilityIssue,
   refreshPlannedAttemptEligibility
 } from "./workflow-stage-recovery.js"
+
+const capacityReleasingExecutionReportTags: ReadonlySet<
+  TaskExecutionReport["_tag"]
+> = new Set([
+  "NoTaskExecutionReported",
+  "SuccessfulTaskExecutionReported",
+  "FailedTaskExecutionReported",
+  "InterruptedTaskExecutionReported",
+  "ResourceEmergencyTaskExecutionReported"
+])
+
 /** A valid history's fresh authority read could not determine a safe next step. */
 export class RecoveryReconciliationIssue
   extends Schema.TaggedErrorClass<RecoveryReconciliationIssue>()("RecoveryReconciliationIssue", {
@@ -274,12 +285,14 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
                   if (observed._tag === "RunningTaskExecutionReported") {
                     freshOccupiedInvocations.push({
                       observationId: observed.observationId,
-                      operationId: event.operation.request.operationId,
+                      operationId: observed.operationId,
                       taskId: event.operation.request.plannedAttempt.taskId
                     })
-                  } else if (observed._tag === "NoTaskExecutionReported") {
+                  } else if (
+                    capacityReleasingExecutionReportTags.has(observed._tag)
+                  ) {
                     freshlyReleasedOperationIds.add(
-                      event.operation.request.operationId
+                      observed.operationId
                     )
                   }
                   return Effect.void

@@ -2,9 +2,10 @@ import { Effect } from "effect"
 import fc from "fast-check"
 import { expect, it } from "vitest"
 import { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
-import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import { oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 
 const taskArbitrary = fc.integer({ min: 0, max: 3 })
 const operationArbitrary = fc.integer({ min: 0, max: 7 })
@@ -44,10 +45,10 @@ it("generated controller commands never create more new positions than configure
                 explanations: [],
                 transitions: [
                   RunnableFrontierTransition.ContinueExecutorInvocation({
+                    capacityRequirement: oneTaskWorkCapacityRequirement,
                     invocation: makeExecutorOuterInvocation(
                       operationId,
-                      taskId,
-                      oneTaskWorkCapacityPosition
+                      taskId
                     )
                   })
                 ]

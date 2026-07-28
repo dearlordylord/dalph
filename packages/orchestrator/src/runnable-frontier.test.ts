@@ -10,11 +10,7 @@ import {
   TaskRevision,
   TaskWorkCapacity
 } from "./domain.js"
-import {
-  ExecutorOuterInvocationOutcome,
-  makeExecutorOuterInvocation,
-  oneTaskWorkCapacityPosition
-} from "./executor-boundary.js"
+import { ExecutorOuterInvocationOutcome, makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import {
   deriveRunFinalityDecision,
@@ -24,6 +20,7 @@ import {
   runnableTransitionTaskId
 } from "./runnable-frontier.js"
 import { makeTaskAdmissionController, type NextAdmissionDecision } from "./task-admission-controller.js"
+import { oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
@@ -46,10 +43,10 @@ const executionResponsibilityFor = (
   const operationId = OperationId.make(`execute-${operationIdentity}`)
   return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility.make({
     beganAt: JournalPosition.make(1),
+    capacityRequirement: oneTaskWorkCapacityRequirement,
     invocation: makeExecutorOuterInvocation(
       operationId,
-      taskId,
-      oneTaskWorkCapacityPosition
+      taskId
     )
   })
 }
@@ -224,14 +221,13 @@ it.effect("gives a resumed responsibility the next released position before fres
       expect(admittedTransitions(afterInterruption)).toEqual([
         {
           _tag: "ContinueExecutorInvocation",
+          capacityRequirement: {
+            _tag: "OneTaskWorkPosition"
+          },
           invocation: {
             correlation: {
               invocationId: "execute-task-A",
               taskId: taskA
-            },
-            resourceUse: {
-              _tag: "UsesTaskWorkCapacity",
-              positions: 1
             }
           }
         }

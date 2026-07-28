@@ -2,11 +2,12 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { OperationId, RunId, TaskId, TaskRevision } from "./domain.js"
-import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { memoryJournalStoreLayer } from "./journal-store.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { recoverRunnableTransition } from "./runnable-transition-recovery.js"
 import { recoverSelectedExecutorInvocation } from "./selected-executor-protocol.js"
+import { oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
@@ -27,17 +28,17 @@ it.effect("routes every recovered transition variant through its exact empty-his
       taskId
     }),
     RunnableFrontierTransition.StartExecutorInvocation({
+      capacityRequirement: oneTaskWorkCapacityRequirement,
       invocation: makeExecutorOuterInvocation(
         operationId,
-        taskId,
-        oneTaskWorkCapacityPosition
+        taskId
       )
     }),
     RunnableFrontierTransition.ContinueExecutorInvocation({
+      capacityRequirement: oneTaskWorkCapacityRequirement,
       invocation: makeExecutorOuterInvocation(
         operationId,
-        taskId,
-        oneTaskWorkCapacityPosition
+        taskId
       )
     }),
     RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId }),

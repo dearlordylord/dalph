@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { type OperationId, SemanticReviewRound, type Task } from "./domain.js"
-import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
@@ -19,6 +19,7 @@ import {
   TaskWorkSessionEstablishmentSimulatedTrace
 } from "./task-execution-trace.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
+import { oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import type { OperationIdAllocatorService, PlannedTaskAttemptPlannerService } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -50,10 +51,10 @@ const freshExecutorTransition = (
   task: Task
 ) =>
   FrontierTransition.StartExecutorInvocation({
+    capacityRequirement: oneTaskWorkCapacityRequirement,
     invocation: makeExecutorOuterInvocation(
       operationId,
-      task.id,
-      oneTaskWorkCapacityPosition
+      task.id
     )
   })
 

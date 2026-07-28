@@ -18,7 +18,7 @@ import {
   TechnicalRetryOrdinal,
   WorkerProcessId
 } from "./domain.js"
-import { makeExecutorOuterInvocation, noTaskWorkCapacityUse, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { type JournalRecord, TaskExecutionOutcomeObservedEvent } from "./journal-store.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import {
@@ -29,6 +29,7 @@ import {
 } from "./selected-executor-protocol.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskExecutionOutcome } from "./task-execution.js"
+import { noTaskWorkCapacityRequirement, oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import {
   TechnicalRetryDeferralSupersededEvent,
   TechnicalRetryScheduledEvent,
@@ -37,7 +38,7 @@ import {
 } from "./technical-retry.js"
 import { WorkflowOutcome } from "./workflow-outcome.js"
 
-it.effect("uses each executor invocation's declared task-work capacity", () =>
+it.effect("uses each Dalph transition's task-work capacity requirement", () =>
   Effect.gen(function*() {
     const occupiedTaskId = TaskId.make("occupied-task")
     const waitingTaskId = TaskId.make("waiting-task")
@@ -53,18 +54,18 @@ it.effect("uses each executor invocation's declared task-work capacity", () =>
     })
     const consumesCapacity = RunnableFrontierTransition
       .ContinueExecutorInvocation({
+        capacityRequirement: oneTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           OperationId.make("opaque-capacity-user"),
-          waitingTaskId,
-          oneTaskWorkCapacityPosition
+          waitingTaskId
         )
       })
     const doesNotConsumeCapacity = RunnableFrontierTransition
       .ContinueExecutorInvocation({
+        capacityRequirement: noTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           OperationId.make("opaque-capacity-free"),
-          freeTaskId,
-          noTaskWorkCapacityUse
+          freeTaskId
         )
       })
 
@@ -84,12 +85,25 @@ it.effect("uses each executor invocation's declared task-work capacity", () =>
     })
   }))
 
+it("executor cannot declare task-work capacity", () => {
+  expect(
+    makeExecutorOuterInvocation(
+      OperationId.make("capacity-free-executor-boundary"),
+      TaskId.make("capacity-free-executor-task")
+    )
+  ).toEqual({
+    correlation: {
+      invocationId: "capacity-free-executor-boundary",
+      taskId: "capacity-free-executor-task"
+    }
+  })
+})
+
 it("projects a pending selected-executor retry as an exact outer wait", () => {
   const operationId = OperationId.make("retrying-outer-invocation")
   const invocation = makeExecutorOuterInvocation(
     operationId,
-    TaskId.make("retrying-task"),
-    oneTaskWorkCapacityPosition
+    TaskId.make("retrying-task")
   )
   const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
     operationId,
@@ -157,8 +171,7 @@ it("normalizes terminal worker outcomes without inspecting output", () => {
   const taskId = TaskId.make("terminal-task")
   const invocation = makeExecutorOuterInvocation(
     operationId,
-    taskId,
-    oneTaskWorkCapacityPosition
+    taskId
   )
   const sessionId = TaskWorkSessionId.make("terminal-session")
   const processId = WorkerProcessId.make(42)

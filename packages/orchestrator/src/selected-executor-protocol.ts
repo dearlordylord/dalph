@@ -4,9 +4,7 @@ import {
   ExecutorOuterInvocationOutcome,
   ExecutorOuterInvocationProjection,
   ExecutorOuterInvocationWait,
-  makeExecutorOuterInvocation,
-  noTaskWorkCapacityUse,
-  oneTaskWorkCapacityPosition
+  makeExecutorOuterInvocation
 } from "./executor-boundary.js"
 import type { ExecutorOuterInvocation } from "./executor-boundary.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
@@ -15,6 +13,7 @@ import { implementationConvergencePredecessorOperationId } from "./implementatio
 import type { JournalRecord } from "./journal-store.js"
 import { WorkflowResponsibilityEntry, type WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import type { ExecutorReconstructionProtocol } from "./reconstructed-managed-run.js"
+import { noTaskWorkCapacityRequirement, oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import {
   recoverImplementationEvidenceSealings,
   recoverImplementationReviews,
@@ -43,7 +42,7 @@ const plannedAttemptFor = (
 /**
  * The selected executor owns this fixed evidence and semantic-review
  * algorithm. Generic reconstruction receives only its declared outer
- * invocation identity and resource use.
+ * invocation identity and Dalph's capacity requirement.
  */
 const selectedExecutorResponsibilityFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -57,10 +56,10 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
+        capacityRequirement: oneTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           event.operation.request.operationId,
-          event.operation.request.plannedAttempt.taskId,
-          oneTaskWorkCapacityPosition
+          event.operation.request.plannedAttempt.taskId
         )
       })
   }
@@ -70,10 +69,10 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
+        capacityRequirement: noTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           event.operation.operationId,
-          event.operation.plannedAttempt.taskId,
-          noTaskWorkCapacityUse
+          event.operation.plannedAttempt.taskId
         )
       })
   }
@@ -88,10 +87,10 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
+        capacityRequirement: oneTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           event.operation.request.operationId,
-          plannedAttempt.taskId,
-          oneTaskWorkCapacityPosition
+          plannedAttempt.taskId
         )
       })
   }
@@ -101,10 +100,10 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
+        capacityRequirement: oneTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
           event.operation.request.operationId,
-          event.operation.request.plannedAttempt.taskId,
-          oneTaskWorkCapacityPosition
+          event.operation.request.plannedAttempt.taskId
         )
       })
   }

@@ -11,20 +11,9 @@ export const ExecutorOuterInvocationCorrelation = Schema.Struct({
 })
 export type ExecutorOuterInvocationCorrelation = typeof ExecutorOuterInvocationCorrelation.Type
 
-/**
- * The task-work capacity used by one executor-declared outer invocation.
- * The current admission protocol allocates at most one position per task.
- */
-export const ExecutorOuterInvocationResourceUse = Schema.TaggedUnion({
-  DoesNotUseTaskWorkCapacity: {},
-  UsesTaskWorkCapacity: { positions: Schema.Literal(1) }
-})
-export type ExecutorOuterInvocationResourceUse = typeof ExecutorOuterInvocationResourceUse.Type
-
-/** One opaque outer invocation declared by the selected Dalph executor. */
+/** One opaque outer invocation reported by the selected Dalph executor. */
 export const ExecutorOuterInvocation = Schema.Struct({
-  correlation: ExecutorOuterInvocationCorrelation,
-  resourceUse: ExecutorOuterInvocationResourceUse
+  correlation: ExecutorOuterInvocationCorrelation
 })
 export type ExecutorOuterInvocation = typeof ExecutorOuterInvocation.Type
 
@@ -76,18 +65,10 @@ export const ExecutorOuterInvocationProjection = Schema.TaggedUnion({
 })
 export type ExecutorOuterInvocationProjection = typeof ExecutorOuterInvocationProjection.Type
 
-export const noTaskWorkCapacityUse = ExecutorOuterInvocationResourceUse.cases.DoesNotUseTaskWorkCapacity.make({})
-
-export const oneTaskWorkCapacityPosition = ExecutorOuterInvocationResourceUse.cases.UsesTaskWorkCapacity.make({
-  positions: 1
-})
-
 export const makeExecutorOuterInvocation = (
   invocationId: typeof OperationId.Type,
-  taskId: typeof TaskId.Type,
-  resourceUse: ExecutorOuterInvocationResourceUse
+  taskId: typeof TaskId.Type
 ): ExecutorOuterInvocation =>
   ExecutorOuterInvocation.make({
-    correlation: { invocationId, taskId },
-    resourceUse
+    correlation: { invocationId, taskId }
   })

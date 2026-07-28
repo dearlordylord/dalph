@@ -73,11 +73,8 @@ export {
   ExecutorOuterInvocationCorrelation,
   ExecutorOuterInvocationInterruption,
   ExecutorOuterInvocationOutcome,
-  ExecutorOuterInvocationResourceUse,
   ExecutorOuterInvocationWait,
-  makeExecutorOuterInvocation,
-  noTaskWorkCapacityUse,
-  oneTaskWorkCapacityPosition
+  makeExecutorOuterInvocation
 } from "./executor-boundary.js"
 export { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
 export {
@@ -192,6 +189,11 @@ export {
 } from "./task-execution-trace.js"
 export { TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
 export * from "./task-execution.js"
+export {
+  noTaskWorkCapacityRequirement,
+  oneTaskWorkCapacityRequirement,
+  TaskWorkCapacityRequirement
+} from "./task-work-capacity.js"
 export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,

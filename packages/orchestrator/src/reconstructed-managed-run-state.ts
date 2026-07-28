@@ -3,6 +3,7 @@ import { JournalPosition, OperationId, TaskId, TrackerRevision, TrackerTarget } 
 import type { RunId } from "./domain.js"
 import { ExecutorOuterInvocation } from "./executor-boundary.js"
 import type { JournalRecord } from "./journal-store.js"
+import { TaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
@@ -107,6 +108,7 @@ const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
   },
   ExecutorInvocationResponsibility: {
     beganAt: JournalPosition,
+    capacityRequirement: TaskWorkCapacityRequirement,
     invocation: ExecutorOuterInvocation
   }
 })

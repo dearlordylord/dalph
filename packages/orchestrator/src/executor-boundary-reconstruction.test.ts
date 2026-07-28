@@ -173,8 +173,7 @@ it.effect("reconstructs hundreds of completed outer invocations idempotently wit
       reconstructedReservedPositions: first.transitions.flatMap(
         (transition) =>
           transition._tag === "ContinueExecutorInvocation"
-            && transition.invocation.resourceUse._tag
-              === "UsesTaskWorkCapacity"
+            && transition.capacityRequirement._tag === "OneTaskWorkPosition"
             ? [{
               operationId: transition.invocation.correlation.invocationId,
               taskId: transition.invocation.correlation.taskId
