@@ -94,13 +94,23 @@ meaning from production unions.
 FoldKit renders the presenter output and owns view-local interaction:
 
 - branch and cursor navigation;
-- undo, redo, and history forks;
+- undo, redo, and immutable history forks;
 - panel and graph-projection selection;
 - graph-card edit drafts; and
 - dispatch of a selected semantic move or explicit Lab command.
 
 FoldKit does not manufacture journal input or decide production transition
 availability.
+
+Selecting an action while inspecting an earlier cursor automatically creates a
+new branch from the exact displayed input prefix. FoldKit appends the action
+only after selecting that branch; it never truncates or overwrites the
+previously recorded future. The explicit fork control is optional navigation,
+not a prerequisite for acting. Cursor navigation clears the current snapshot
+and presenter output until reconstruction finishes, so a move or explicit Lab
+command cannot combine an earlier input prefix with a later snapshot. This
+behavior is specified and mapped to its acceptance tests in
+[`docs/scenarios/reducer-lab-immutable-history-branching.md`](../../docs/scenarios/reducer-lab-immutable-history-branching.md).
 
 ## Available moves and execution contract
 

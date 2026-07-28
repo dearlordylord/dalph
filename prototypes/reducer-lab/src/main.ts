@@ -248,7 +248,9 @@ const recompute = (
       editorError: null,
       interactionError: null,
       requestId,
-      taskDraft: null
+      snapshot: null,
+      taskDraft: null,
+      viewModel: emptyViewModel
     },
     [ComputeSnapshot({
       input: { actions: branch.actions.slice(0, branch.cursor) },
@@ -294,20 +296,42 @@ const atBranchTip = (model: Model): boolean => {
   return branch.cursor === branch.actions.length
 }
 
+/** Preserves the existing future and selects an immutable prefix branch for a new action. */
+const forkAtActiveCursor = (model: Model): Model => {
+  const branch = activeBranch(model)
+  const fork: Branch = {
+    actions: branch.actions.slice(0, branch.cursor),
+    cursor: branch.cursor,
+    id: model.nextBranchId,
+    name: `branch ${model.nextBranchId}`
+  }
+  return {
+    ...model,
+    activeBranchId: fork.id,
+    branches: [...model.branches, fork],
+    nextBranchId: model.nextBranchId + 1
+  }
+}
+
+const branchForAction = (model: Model): Model =>
+  atBranchTip(model) ? model : forkAtActiveCursor(model)
+
 const triggerCommand = (
   model: Model,
   input: LabAction,
   expectedRevision: LabSnapshotRevision
 ): readonly [Model, ReadonlyArray<Command.Command<Message>>] => {
-  if (!atBranchTip(model) || model.snapshot === null) return [model, []]
-  const requestId = model.requestId + 1
+  if (model.snapshot === null) return [model, []]
+  const snapshot = model.snapshot
+  const actionModel = branchForAction(model)
+  const requestId = actionModel.requestId + 1
   return [
-    { ...model, editorError: null, interactionError: null, requestId },
+    { ...actionModel, editorError: null, interactionError: null, requestId },
     [ExecuteLabCommand({
       expectedRevision,
       input,
       requestId,
-      snapshot: model.snapshot
+      snapshot
     })]
   ]
 }
@@ -318,12 +342,12 @@ export const update = (
 ): readonly [Model, ReadonlyArray<Command.Command<Message>>] => {
   switch (message._tag) {
     case "StartedNewTask":
-      return atBranchTip(model)
-        ? [{ ...model, editorError: null, taskDraft: blankTaskDraft() }, []]
-        : [model, []]
+      return model.snapshot === null
+        ? [model, []]
+        : [{ ...model, editorError: null, taskDraft: blankTaskDraft() }, []]
     case "StartedEditingTask": {
       const task = model.snapshot?.trackerTasks.find(({ id }) => id === message.taskId)
-      return task === undefined || !atBranchTip(model)
+      return task === undefined
         ? [model, []]
         : [{
           ...model,
@@ -374,18 +398,17 @@ export const update = (
     case "TriggeredLabCommand":
       return triggerCommand(model, message.input, message.snapshotRevision)
     case "TriggeredLabMove": {
-      const branch = activeBranch(model)
-      if (branch.cursor !== branch.actions.length || model.snapshot === null) {
-        return [model, []]
-      }
-      const requestId = model.requestId + 1
+      if (model.snapshot === null) return [model, []]
+      const snapshot = model.snapshot
+      const actionModel = branchForAction(model)
+      const requestId = actionModel.requestId + 1
       return [
-        { ...model, interactionError: null, requestId },
+        { ...actionModel, interactionError: null, requestId },
         [ExecuteLabMove({
           expectedRevision: message.snapshotRevision,
           moveId: message.moveId,
           requestId,
-          snapshot: model.snapshot
+          snapshot
         })]
       ]
     }
@@ -420,18 +443,7 @@ export const update = (
       }, []]
     }
     case "ForkedAtCursor": {
-      const branch = activeBranch(model)
-      const fork: Branch = {
-        actions: branch.actions.slice(0, branch.cursor),
-        cursor: branch.cursor,
-        id: model.nextBranchId,
-        name: `branch ${model.nextBranchId}`
-      }
-      return recompute(
-        { ...model, nextBranchId: model.nextBranchId + 1 },
-        [...model.branches, fork],
-        fork.id
-      )
+      return recompute(forkAtActiveCursor(model))
     }
     case "MovedCursor": {
       const branch = activeBranch(model)
@@ -511,8 +523,7 @@ const stateCard = (
 const actionButton = (
   h: HtmlFactory,
   action: LabDisplayAction,
-  snapshotRevision: LabSnapshotRevision | null,
-  locked: boolean
+  snapshotRevision: LabSnapshotRevision | null
 ) => h.div([h.Class(`driver-action ${action.cssClass}`)], [
   button(
     h,
@@ -521,7 +532,7 @@ const actionButton = (
       moveId: action.moveId,
       snapshotRevision: snapshotRevision ?? LabSnapshotRevision.make("snapshot-unavailable")
     }),
-    locked || !action.enabled || snapshotRevision === null,
+    !action.enabled || snapshotRevision === null,
     action.buttonKind
   ),
   h.p([h.Class("action-reason")], [`${action.status} · ${action.reason}`])
@@ -531,15 +542,14 @@ const actionGroup = (
   h: HtmlFactory,
   title: string,
   actions: ReadonlyArray<LabDisplayAction>,
-  snapshotRevision: LabSnapshotRevision | null,
-  locked: boolean
+  snapshotRevision: LabSnapshotRevision | null
 ) => h.section([h.Class("action-group")], [
   h.p([h.Class("label")], [title]),
   actions.length === 0
     ? h.p([h.Class("empty")], ["No moves in this category."])
     : h.div(
       [h.Class("action-list")],
-      actions.map((action) => actionButton(h, action, snapshotRevision, locked))
+      actions.map((action) => actionButton(h, action, snapshotRevision))
     )
 ])
 
@@ -557,14 +567,14 @@ const field = (
 
 const taskEditor = (
   h: HtmlFactory,
-  model: Model,
-  locked: boolean
+  model: Model
 ) => {
+  const snapshotUnavailable = model.snapshot === null
   const draft = model.taskDraft
   if (draft === null) {
     return h.div([h.Class("editor-empty")], [
       h.p([], ["Select a tracker-authority task card to edit it, or create a task."]),
-      button(h, "New tracker task", StartedNewTask(), locked, "accent")
+      button(h, "New tracker task", StartedNewTask(), snapshotUnavailable, "accent")
     ])
   }
   const change = (
@@ -614,7 +624,7 @@ const taskEditor = (
     ]),
     model.editorError === null ? null : h.p([h.Class("error")], [model.editorError]),
     h.div([h.Class("button-row")], [
-      button(h, "Save to tracker authority", SavedTaskDraft(), locked, "accent"),
+      button(h, "Save to tracker authority", SavedTaskDraft(), snapshotUnavailable, "accent"),
       draft.originalTaskId === null || model.snapshot === null
         ? null
         : button(
@@ -624,7 +634,7 @@ const taskEditor = (
             input: { _tag: "DeletedTrackerTask", taskId: draft.id },
             snapshotRevision: model.snapshot.revision
           }),
-          locked,
+          false,
           "danger"
         )
     ]),
@@ -652,8 +662,7 @@ const graphTaskCard = (
   h: HtmlFactory,
   task: GraphTask,
   projection: TaskGraphProjection,
-  selectedTaskId: string | null,
-  canEdit: boolean
+  selectedTaskId: string | null
 ) => h.article([
   h.Class(`graph-task ${selectedTaskId === task.id ? "selected" : ""}`),
   h.OnClick(SelectedGraphTask({ taskId: task.id }))
@@ -672,7 +681,7 @@ const graphTaskCard = (
     h.dt([], ["Parent"]),
     h.dd([], [task.parentTaskId ?? "none"])
   ]),
-  canEdit && projection.key === "Authority"
+  projection.key === "Authority"
     ? button(h, "Edit tracker record", StartedEditingTask({ taskId: task.id }), false, "compact outline")
     : null
 ])
@@ -680,8 +689,7 @@ const graphTaskCard = (
 const graphProjection = (
   h: HtmlFactory,
   projection: TaskGraphProjection,
-  selectedTaskId: string | null,
-  canEdit: boolean
+  selectedTaskId: string | null
 ) => h.section([h.Class(`graph-projection projection-${projection.key.toLowerCase()}`)], [
   h.div([h.Class("projection-heading")], [
     h.div([], [
@@ -711,14 +719,13 @@ const graphProjection = (
   projection.tasks.length === 0
     ? null
     : h.div([h.Class("task-card-strip")], projection.tasks.map((task) =>
-      graphTaskCard(h, task, projection, selectedTaskId, canEdit)
+      graphTaskCard(h, task, projection, selectedTaskId)
     ))
 ])
 
 const claimControls = (
   h: HtmlFactory,
-  model: Model,
-  locked: boolean
+  model: Model
 ) => {
   const revision = model.snapshot?.revision
   return h.div([h.Class("claim-grid")], model.viewModel.claimRows.map(({ state, taskId }) =>
@@ -737,7 +744,7 @@ const claimControls = (
             input: { _tag: "SetTrackerClaim", state: nextState, taskId },
             snapshotRevision: revision ?? LabSnapshotRevision.make("snapshot-unavailable")
           }),
-          locked || revision === undefined || state === nextState,
+          revision === undefined || state === nextState,
           "compact outline"
         )
       ))
@@ -783,7 +790,7 @@ export const view = (model: Model): Document => {
         ]),
         !atTip
           ? h.p([h.Class("time-travel-note")], [
-            "Inspecting history. Fork here before adding another input."
+            "Inspecting immutable history. Your next action creates a new branch automatically."
           ])
           : null
       ]),
@@ -837,7 +844,7 @@ export const view = (model: Model): Document => {
             )),
             h.div([h.Class(`projection-grid projection-count-${projections.length}`)],
               projections.map((projection) =>
-                graphProjection(h, projection, model.selectedTaskId, atTip)
+                graphProjection(h, projection, model.selectedTaskId)
               )
             ),
             h.section([h.Class("coverage-panel")], [
@@ -857,7 +864,7 @@ export const view = (model: Model): Document => {
               h.section([h.Class("editor-panel")], [
                 h.p([h.Class("eyebrow")], ["FOLDKIT-OWNED DRAFT"]),
                 h.h2([], ["Task-card CRUD"]),
-                taskEditor(h, model, !atTip)
+                taskEditor(h, model)
               ]),
               h.section([h.Class("claims-panel")], [
                 h.p([h.Class("eyebrow")], ["SEPARATE TRACKER FACT"]),
@@ -865,7 +872,7 @@ export const view = (model: Model): Document => {
                 h.p([], [
                   "Claims are not task-work content or graph edges. These controls change fake authority only."
                 ]),
-                claimControls(h, model, !atTip)
+                claimControls(h, model)
               ])
             ])
           ]),
@@ -874,7 +881,7 @@ export const view = (model: Model): Document => {
             h.p([h.Class("eyebrow")], ["SEMANTIC MOVE PALETTE"]),
             h.h2([], ["What can happen from this state?"]),
             ...viewModel.actionGroups.map(({ actions, title }) =>
-              actionGroup(h, title, actions, snapshotRevision, !atTip)
+              actionGroup(h, title, actions, snapshotRevision)
             ),
             model.interactionError === null
               ? null

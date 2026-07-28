@@ -1,4 +1,5 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
+import { Scene } from "foldkit/test"
 import {
   executeLabCommand,
   executeLabMove,
@@ -230,6 +231,195 @@ const preclaimRead = await Effect.runPromise(executeLabMove(
   availableMoveId(observation.snapshot, "RecheckTaskBeforeClaim", "A"),
   observation.snapshot.revision
 ))
+const tipModel: Model = {
+  ...initialModel,
+  branches: [{
+    actions: [observation.input, preclaimRead.input],
+    cursor: 2,
+    id: 1,
+    name: "main"
+  }],
+  snapshot: preclaimRead.snapshot,
+  viewModel: presentLab(preclaimRead.snapshot)
+}
+const [recomputingHistoricalModel] = update(tipModel, {
+  _tag: "MovedCursor",
+  cursor: 1
+})
+const recomputingBody = view(recomputingHistoricalModel).body
+assert(
+  recomputingHistoricalModel.snapshot === null,
+  "Undo must remove the later snapshot until the displayed input prefix is reconstructed"
+)
+assert(
+  recomputingBody !== null
+    && Option.isSome(Scene.getByRole("button", {
+      disabled: true,
+      name: "New tracker task"
+    })(recomputingBody)),
+  "Task editing must be unavailable while Undo reconstructs the selected prefix"
+)
+const [stillRecomputingModel, prematureCommands] = update(recomputingHistoricalModel, {
+  _tag: "TriggeredLabMove",
+  moveId: availableMoveId(preclaimRead.snapshot, "RecheckTaskBeforeClaim", "C"),
+  snapshotRevision: preclaimRead.snapshot.revision
+})
+assert(
+  prematureCommands.length === 0 && stillRecomputingModel.branches.length === 1,
+  "A click during Undo reconstruction must neither execute a later move nor create a branch"
+)
+const reconstructedHistoricalSnapshot = await reconstruct(
+  tipModel.branches[0]!.actions.slice(0, 1)
+)
+const [historicalModel] = update(recomputingHistoricalModel, {
+  _tag: "SnapshotReady",
+  requestId: recomputingHistoricalModel.requestId,
+  snapshot: reconstructedHistoricalSnapshot,
+  viewModel: presentLab(reconstructedHistoricalSnapshot)
+})
+const rereadCMoveId = availableMoveId(
+  observation.snapshot,
+  "RecheckTaskBeforeClaim",
+  "C"
+)
+const historicalView = view(historicalModel)
+const historicalBody = historicalView.body
+const hasEnabledHistoricalButton = (name: string): boolean =>
+  historicalBody !== null
+  && Option.isSome(Scene.getByRole("button", { disabled: false, name })(historicalBody))
+assert(
+  hasEnabledHistoricalButton("Reread current task before claim · C")
+    && hasEnabledHistoricalButton("Reread current task before claim · A"),
+  "Semantic controls must be enabled after Undo reconstruction"
+)
+assert(
+  hasEnabledHistoricalButton("New tracker task"),
+  "Task creation must be enabled after Undo reconstruction"
+)
+const [historicalAuthorityModel] = update(historicalModel, {
+  _tag: "SelectedGraphProjection",
+  selection: "Authority"
+})
+const historicalAuthorityBody = view(historicalAuthorityModel).body
+assert(
+  historicalAuthorityBody !== null
+    && Option.isSome(Scene.getByRole("button", {
+      disabled: false,
+      name: "Edit tracker record"
+    })(historicalAuthorityBody)),
+  "Task editing must be enabled after Undo reconstruction"
+)
+assert(
+  hasEnabledHistoricalButton("Foreign"),
+  "Claim controls must be enabled after Undo reconstruction"
+)
+const [editingHistoricalModel] = update(historicalModel, {
+  _tag: "StartedEditingTask",
+  taskId: "A"
+})
+const [savingHistoricalModel, saveCommands] = update(editingHistoricalModel, {
+  _tag: "SavedTaskDraft"
+})
+const [claimingHistoricalModel, claimCommands] = update(historicalModel, {
+  _tag: "TriggeredLabCommand",
+  input: { _tag: "SetTrackerClaim", state: "Foreign", taskId: "A" },
+  snapshotRevision: observation.snapshot.revision
+})
+assert(
+  saveCommands.length === 1
+    && savingHistoricalModel.branches.length === 2
+    && savingHistoricalModel.activeBranchId === 2
+    && claimCommands.length === 1
+    && claimingHistoricalModel.branches.length === 2
+    && claimingHistoricalModel.activeBranchId === 2,
+  "Task editing and claim changes after Undo must use the same immutable prefix-fork seam"
+)
+const taskA = observation.snapshot.trackerTasks.find(({ id }) => id === "A")
+if (taskA === undefined) throw new Error("Missing task A")
+const savedHistoricalExecution = await executeCommand(observation.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: taskA
+})
+const [savedHistoricalModel] = update(savingHistoricalModel, {
+  _tag: "LabExecutionFinished",
+  requestId: savingHistoricalModel.requestId,
+  result: { _tag: "Executed", execution: savedHistoricalExecution }
+})
+const claimedHistoricalExecution = await executeCommand(observation.snapshot, {
+  _tag: "SetTrackerClaim",
+  state: "Foreign",
+  taskId: "A"
+})
+const [claimedHistoricalModel] = update(claimingHistoricalModel, {
+  _tag: "LabExecutionFinished",
+  requestId: claimingHistoricalModel.requestId,
+  result: { _tag: "Executed", execution: claimedHistoricalExecution }
+})
+assert(
+  savedHistoricalModel.branches[0]?.actions[1] === preclaimRead.input
+    && savedHistoricalModel.branches[1]?.actions[1]?._tag === "ReplacedTrackerTask"
+    && claimedHistoricalModel.branches[0]?.actions[1] === preclaimRead.input
+    && claimedHistoricalModel.branches[1]?.actions[1]?._tag === "SetTrackerClaim"
+    && savedHistoricalModel.snapshot?.latestObservation.length
+      === observation.snapshot.latestObservation.length
+    && claimedHistoricalModel.snapshot?.latestObservation.length
+      === observation.snapshot.latestObservation.length,
+  "Completed task and claim commands must append only to their forks without observing again"
+)
+const [forkingModel, forkCommands] = update(historicalModel, {
+  _tag: "TriggeredLabMove",
+  moveId: rereadCMoveId,
+  snapshotRevision: observation.snapshot.revision
+})
+assert(
+  forkCommands.length === 1,
+  "Choosing a reread after Undo must execute without a separate manual Fork click"
+)
+assert(
+  forkingModel.branches.length === 2
+    && forkingModel.activeBranchId === 2
+    && forkingModel.branches[0]?.actions.length === 2
+    && forkingModel.branches[1]?.actions.length === 1,
+  "Choosing a reread after Undo must fork the immutable prefix and preserve the original future"
+)
+const rereadC = await Effect.runPromise(executeLabMove(
+  observation.snapshot,
+  rereadCMoveId,
+  observation.snapshot.revision
+))
+const [forkedResultModel] = update(forkingModel, {
+  _tag: "LabExecutionFinished",
+  requestId: forkingModel.requestId,
+  result: { _tag: "Executed", execution: rereadC }
+})
+assert(
+  forkingModel.branches[0]?.actions[1]?._tag === "RecheckedTaskBeforeClaim"
+    && forkingModel.branches[0]?.actions[1]?.taskId === "A"
+    && forkedResultModel.branches[1]?.actions[1]?._tag === "RecheckedTaskBeforeClaim"
+    && forkedResultModel.branches[1]?.actions[1]?.taskId === "C",
+  "The original branch must retain reread A while the new branch appends reread C"
+)
+const [originalBranchModel] = update(forkedResultModel, {
+  _tag: "SelectedBranch",
+  branchId: 1
+})
+const [redoingOriginalModel] = update(originalBranchModel, {
+  _tag: "MovedCursor",
+  cursor: 2
+})
+const reconstructedOriginalSnapshot = await reconstruct(
+  forkedResultModel.branches.find(({ id }) => id === 1)!.actions.slice(0, 2)
+)
+const [redoneOriginalModel] = update(redoingOriginalModel, {
+  _tag: "SnapshotReady",
+  requestId: redoingOriginalModel.requestId,
+  snapshot: reconstructedOriginalSnapshot,
+  viewModel: presentLab(reconstructedOriginalSnapshot)
+})
+assert(
+  redoneOriginalModel.snapshot?.revision === preclaimRead.snapshot.revision,
+  "Selecting the original branch and redoing must reconstruct its original reread A"
+)
 const claim = await Effect.runPromise(executeLabMove(
   preclaimRead.snapshot,
   availableMoveId(preclaimRead.snapshot, "CommitFreshTaskClaimIntent", "A"),

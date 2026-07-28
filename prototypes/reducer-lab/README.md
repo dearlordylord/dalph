@@ -53,7 +53,13 @@ browser events remain private to the adapter; the presenter still exposes only
 the stable `TaskGraphProjection`.
 
 Capacity, target settlement, claims, and coordinator lifetime are inputs in the
-branch history, so undo, redo, and forks restore them consistently.
+branch history, so undo, redo, and forks restore them consistently. Acting
+after undo automatically creates a branch from the displayed immutable input
+prefix; the original branch and its future inputs remain unchanged. The
+separate **Fork at cursor** control is only an explicit way to name that
+decision before acting. During cursor reconstruction there is no current
+snapshot, so no semantic move or explicit Lab command can run against the
+snapshot from the previous cursor.
 Primary and Secondary select two independent controlled tracker targets. Each
 retains its own task authority, while observations from both flow through the
 same production target-closure reconstruction.
@@ -156,13 +162,14 @@ also supplies the stable renderer-independent `TaskGraphProjection`; layout
 and browser events stay in the throwaway view.
 
 The opaque snapshot revision is partly redundant in this single-process
-prototype because FoldKit already ignores superseded Commands and disables
-actions away from a branch tip. It still provides a small, explicit
-revalidation boundary for a delayed click or future asynchronous activation
-adapter. Keep it as part of this experiment; do not promote it to production
-domain state. Issue #132's activation seam now owns the real process-local
-selection and execution correlations; this revision remains only a browser
-command revalidation token.
+prototype because FoldKit already ignores superseded Commands. Actions remain
+available while inspecting history: selecting one creates a new branch from
+the exact displayed input prefix before the driver executes it. The revision
+still provides a small, explicit revalidation boundary for a delayed click or
+future asynchronous activation adapter. Keep it as part of this experiment;
+do not promote it to production domain state. Issue #132's activation seam now
+owns the real process-local selection and execution correlations; this
+revision remains only a browser command revalidation token.
 
 The parity scenarios now prove that a task observed from the graph editor can
 be advanced, one real production move at a time, through the current coarse
