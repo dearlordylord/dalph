@@ -29,7 +29,8 @@
     "check:quint": "node scripts/check-quint-models.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
+    "test:coverage": "vitest run --exclude '**/*.mbt.test.ts' --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
+    "test:mbt": "vitest run packages/orchestrator/test/task-work-session-recovery/task-work-session-recovery.mbt.test.ts packages/orchestrator/test/frontier-recovery/frontier-recovery-reconstruction.mbt.test.ts",
     "test:watch": "vitest",
     "check:ci": "node scripts/run-quality-gate.mjs --without-quint",
     "check:all": "node scripts/run-quality-gate.mjs"

@@ -35,7 +35,11 @@ import {
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition, RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity } from "./selected-transition.js"
-import { makeTaskAdmissionController, type NextAdmissionDecision } from "./task-admission-controller.js"
+import {
+  makeTaskAdmissionController,
+  MultipleCurrentCapacityOperationsForTask,
+  type NextAdmissionDecision
+} from "./task-admission-controller.js"
 import { taskRevisionFor } from "./task-dag.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
@@ -598,7 +602,7 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
 
     expect(
       yield* controller.releaseTaskAdmissionPosition(originalOperationId)
-    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
     expect((yield* controller.snapshot()).occupied).toEqual([{
       observationId: "conflicting-observation",
       operationId: "conflicting-operation",
@@ -845,4 +849,38 @@ it.effect("correlates both operation-backed and pre-intent reservations exactly"
         )
       )
     ).toEqual([])
+  }))
+
+it.effect("rejects two current capacity operations for one task before admission", () =>
+  Effect.gen(function*() {
+    const taskId = TaskId.make("duplicate-current-capacity-task")
+    const result = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: [
+        {
+          operationId: OperationId.make("duplicate-current-capacity-operation-1"),
+          taskId
+        },
+        {
+          operationId: OperationId.make("duplicate-current-capacity-operation-2"),
+          taskId
+        }
+      ]
+    }).pipe(Effect.result)
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toBeInstanceOf(
+        MultipleCurrentCapacityOperationsForTask
+      )
+      expect(result.failure).toMatchObject({
+        _tag: "MultipleCurrentCapacityOperationsForTask",
+        operationIds: [
+          "duplicate-current-capacity-operation-1",
+          "duplicate-current-capacity-operation-2"
+        ],
+        taskId
+      })
+    }
   }))

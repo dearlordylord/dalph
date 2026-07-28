@@ -2,7 +2,7 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, ITFSet, ITFTuple, ITFVariant, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { TaskWorkCapacity } from "../../src/domain.js"
+import { ProviderObservationId, TaskWorkCapacity } from "../../src/domain.js"
 import { JournalStore, memoryJournalStoreLayer } from "../../src/journal-store.js"
 import {
   type FrontierRecoveryActivationAction,
@@ -14,6 +14,7 @@ import {
   FrontierRecoveryModelTaskId,
   type FrontierRecoveryReconstructionActionFields
 } from "./frontier-recovery-conformance.js"
+import { conflictingCapacityOperationId, frontierRecoveryTaskEntries } from "./frontier-recovery-fixture-identities.js"
 import type {
   FrontierRecoveryActivationProjection,
   FrontierRecoveryReconstructionProjection
@@ -21,19 +22,40 @@ import type {
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
 const actionSchema = {
+  capacityCorrelationAbsentConnectionStep: {},
+  capacityCorrelationAdmissionConnectionStep: {},
+  capacityCorrelationConflictConnectionStep: {},
+  capacityCorrelationInterruptedConnectionStep: {},
+  capacityCorrelationReconstructionConnectionStep: {},
+  capacityCorrelationTerminalConnectionStep: {},
+  capacityCorrelationUnknownConnectionStep: {},
   claimActivationOwnership: { task: ITFBigInt },
   crash: {},
   crashCoordinatorWithActivation: {},
   deriveActivationPass: {},
   excludeOwnedTransitions: {},
   init: {},
+  initAwaitingProviderEvidenceActivationProfile: {},
   initCapacityOneResponsibilityFirstProfile: {},
+  initCorrelationConflictActivationProfile: {},
+  initInvalidCurrentCapacityHistory: {},
   initStoppedCoordinator: {},
   interruptAfterIntent: { task: ITFBigInt },
   interruptAfterOwnershipBeforeIntent: { task: ITFBigInt },
   interruptBeforeOwnership: { task: ITFBigInt },
+  observeCapacityAbsent: { task: ITFBigInt },
   observeCapacityConsumed: { task: ITFBigInt },
+  observeCapacityInterrupted: { task: ITFBigInt },
   observeCapacityReleased: { task: ITFBigInt },
+  observeCapacityUnknown: { task: ITFBigInt },
+  observeConflictingCapacityCorrelation: {
+    observedOperationId: ITFBigInt,
+    task: ITFBigInt
+  },
+  observeConflictingOperationReleased: {
+    observedOperationId: ITFBigInt,
+    task: ITFBigInt
+  },
   readProviderInvocationForReconstruction: { task: ITFBigInt },
   orchestratorCommitsFirstFreshTaskClaimIntent: {},
   orchestratorCommitsFreshTaskClaimIntent: { task: ITFBigInt },
@@ -47,9 +69,20 @@ const actionSchema = {
   stopProviderWorker: { task: ITFBigInt },
   taskTrackerReturnsTargetClosureReadAtNextRevision: {},
   taskTrackerReturnsTargetClosureReadWithPredecessor: {},
-  taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {}
+  taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {},
+  validateCurrentCapacityHistoryBeforeReconstruction: {}
 } satisfies FrontierRecoveryReconstructionActionFields & {
+  readonly capacityCorrelationAbsentConnectionStep: Record<never, never>
+  readonly capacityCorrelationAdmissionConnectionStep: Record<never, never>
+  readonly capacityCorrelationConflictConnectionStep: Record<never, never>
+  readonly capacityCorrelationInterruptedConnectionStep: Record<never, never>
+  readonly capacityCorrelationReconstructionConnectionStep: Record<never, never>
+  readonly capacityCorrelationTerminalConnectionStep: Record<never, never>
+  readonly capacityCorrelationUnknownConnectionStep: Record<never, never>
   readonly initCapacityOneResponsibilityFirstProfile: Record<never, never>
+  readonly initCorrelationConflictActivationProfile: Record<never, never>
+  readonly initAwaitingProviderEvidenceActivationProfile: Record<never, never>
+  readonly initInvalidCurrentCapacityHistory: Record<never, never>
   readonly initStoppedCoordinator: Record<never, never>
   readonly orchestratorCommitsFirstFreshTaskClaimIntent: Record<never, never>
 }
@@ -401,12 +434,15 @@ const normalizedProjectionMatches = (left: unknown, right: unknown): boolean =>
 const makeReconstructionDriver = (
   configuredCapacity: 1 | 2,
   initiallyResponsibleTask?: 0 | 2,
-  startStopped = false
+  startStopped = false,
+  reconstructedReservedTasks: ReadonlyArray<0 | 2> = [],
+  initiallyConflictingTaskA = false
 ) => {
   let closePreviousControls: Effect.Effect<void> = Effect.void
   const driver = defineDriver(
     actionSchema,
     () => {
+      let capacityCorrelationReconstructionStage = 0
       const capacity = TaskWorkCapacity.make(configuredCapacity)
       const services = Effect.runSync(
         Layer.build(memoryJournalStoreLayer).pipe(Effect.scoped)
@@ -416,7 +452,19 @@ const makeReconstructionDriver = (
         makeFrontierRecoveryReconstructionControls({
           capacity,
           coordinatorRunning: true,
-          journal
+          freshOccupiedInvocations: initiallyConflictingTaskA
+            ? [{
+              observationId: ProviderObservationId.make(
+                "M2-initial-conflicting-observation"
+              ),
+              operationId: conflictingCapacityOperationId,
+              taskId: frontierRecoveryTaskEntries[0].branded
+            }]
+            : [],
+          journal,
+          reconstructedReservedModelTaskIds: reconstructedReservedTasks.map(
+            (task) => FrontierRecoveryModelTaskId.make(BigInt(task))
+          )
         }).pipe(Effect.orDie)
       )
       closePreviousControls = controls.close()
@@ -437,7 +485,19 @@ const makeReconstructionDriver = (
             const stopped = yield* makeFrontierRecoveryReconstructionControls({
               capacity,
               coordinatorRunning: false,
-              journal
+              freshOccupiedInvocations: initiallyConflictingTaskA
+                ? [{
+                  observationId: ProviderObservationId.make(
+                    "M2-initial-conflicting-observation"
+                  ),
+                  operationId: conflictingCapacityOperationId,
+                  taskId: frontierRecoveryTaskEntries[0].branded
+                }]
+                : [],
+              journal,
+              reconstructedReservedModelTaskIds: reconstructedReservedTasks.map(
+                (task) => FrontierRecoveryModelTaskId.make(BigInt(task))
+              )
             })
             yield* Ref.set(controlsRef, stopped)
             closePreviousControls = stopped.close()
@@ -458,7 +518,53 @@ const makeReconstructionDriver = (
           _tag,
           task: FrontierRecoveryModelTaskId.make(task)
         } as Extract<FrontierRecoveryActivationAction, { readonly task: unknown }>)
+      const activationWithObservedOperation = (
+        _tag:
+          | "observeConflictingCapacityCorrelation"
+          | "observeConflictingOperationReleased",
+        task: bigint,
+        observedOperationId: bigint
+      ) =>
+        activation({
+          _tag,
+          observedOperationId: FrontierRecoveryModelOperationId.make(observedOperationId),
+          task: FrontierRecoveryModelTaskId.make(task)
+        })
       return {
+        capacityCorrelationAbsentConnectionStep: () => activationForTask("observeCapacityAbsent", 0n),
+        capacityCorrelationAdmissionConnectionStep: () =>
+          activationWithObservedOperation(
+            "observeConflictingCapacityCorrelation",
+            0n,
+            101n
+          ),
+        capacityCorrelationConflictConnectionStep: () =>
+          activationWithObservedOperation(
+            "observeConflictingCapacityCorrelation",
+            0n,
+            101n
+          ),
+        capacityCorrelationInterruptedConnectionStep: () => activationForTask("observeCapacityInterrupted", 0n),
+        capacityCorrelationReconstructionConnectionStep: () => {
+          capacityCorrelationReconstructionStage += 1
+          if (capacityCorrelationReconstructionStage === 1) {
+            return activation({ _tag: "crashCoordinatorWithActivation" })
+          }
+          if (capacityCorrelationReconstructionStage === 2) {
+            return activationForTask(
+              "readProviderInvocationForReconstruction",
+              0n
+            )
+          }
+          return activation({ _tag: "reconstructActivation" })
+        },
+        capacityCorrelationTerminalConnectionStep: () =>
+          activationWithObservedOperation(
+            "observeConflictingOperationReleased",
+            0n,
+            101n
+          ),
+        capacityCorrelationUnknownConnectionStep: () => activationForTask("observeCapacityUnknown", 0n),
         claimActivationOwnership: ({ task }) => activationForTask("claimActivationOwnership", task),
         crashCoordinatorWithActivation: () => activation({ _tag: "crashCoordinatorWithActivation" }),
         deriveActivationPass: () => activation({ _tag: "deriveActivationPass" }),
@@ -492,14 +598,45 @@ const makeReconstructionDriver = (
             )
           ),
         init: initialize,
+        initAwaitingProviderEvidenceActivationProfile: initialize,
         initCapacityOneResponsibilityFirstProfile: initialize,
+        initCorrelationConflictActivationProfile: initialize,
+        initInvalidCurrentCapacityHistory: () =>
+          initialize().pipe(
+            Effect.andThen(
+              activation({
+                _tag: "validateCurrentCapacityHistoryBeforeReconstruction"
+              })
+            )
+          ),
         initStoppedCoordinator: initialize,
         interruptAfterIntent: ({ task }) => activationForTask("interruptAfterIntent", task),
         interruptAfterOwnershipBeforeIntent: ({ task }) =>
           activationForTask("interruptAfterOwnershipBeforeIntent", task),
         interruptBeforeOwnership: ({ task }) => activationForTask("interruptBeforeOwnership", task),
         observeCapacityConsumed: ({ task }) => activationForTask("observeCapacityConsumed", task),
+        observeCapacityAbsent: ({ task }) => activationForTask("observeCapacityAbsent", task),
+        observeCapacityInterrupted: ({ task }) => activationForTask("observeCapacityInterrupted", task),
         observeCapacityReleased: ({ task }) => activationForTask("observeCapacityReleased", task),
+        observeCapacityUnknown: ({ task }) => activationForTask("observeCapacityUnknown", task),
+        observeConflictingCapacityCorrelation: ({
+          observedOperationId,
+          task
+        }) =>
+          activationWithObservedOperation(
+            "observeConflictingCapacityCorrelation",
+            task,
+            observedOperationId
+          ),
+        observeConflictingOperationReleased: ({
+          observedOperationId,
+          task
+        }) =>
+          activationWithObservedOperation(
+            "observeConflictingOperationReleased",
+            task,
+            observedOperationId
+          ),
         readProviderInvocationForReconstruction: ({ task }) =>
           activationForTask(
             "readProviderInvocationForReconstruction",
@@ -533,14 +670,30 @@ const makeReconstructionDriver = (
             const freshControls = yield* makeFrontierRecoveryReconstructionControls({
               capacity,
               coordinatorRunning: false,
-              journal
+              freshOccupiedInvocations: initiallyConflictingTaskA
+                ? [{
+                  observationId: ProviderObservationId.make(
+                    "M2-initial-conflicting-observation"
+                  ),
+                  operationId: conflictingCapacityOperationId,
+                  taskId: frontierRecoveryTaskEntries[0].branded
+                }]
+                : [],
+              journal,
+              reconstructedReservedModelTaskIds: reconstructedReservedTasks.map(
+                (task) => FrontierRecoveryModelTaskId.make(BigInt(task))
+              )
             })
             yield* freshControls.restart()
             yield* Ref.set(controlsRef, freshControls)
             closePreviousControls = freshControls.close()
             return yield* freshControls.getState()
           }),
-        stopProviderWorker: ({ task }) => activationForTask("stopProviderWorker", task)
+        stopProviderWorker: ({ task }) => activationForTask("stopProviderWorker", task),
+        validateCurrentCapacityHistoryBeforeReconstruction: () =>
+          activation({
+            _tag: "validateCurrentCapacityHistoryBeforeReconstruction"
+          })
       }
     }
   )
@@ -771,6 +924,13 @@ const decodeReconstructionModelState = (
             }
             return [{
               correlation: "Operation" as const,
+              ...(position.tag === "ActivationPositionCorrelationConflict"
+                ? {
+                  conflictingModelOperationId: FrontierRecoveryModelOperationId.make(
+                    position.value.observedOperationId
+                  )
+                }
+                : {}),
               modelOperationId: FrontierRecoveryModelOperationId.make(
                 position.tag === "ActivationPositionCorrelationConflict"
                   ? position.value.expectedOperationId
@@ -1013,6 +1173,27 @@ const reconstructionStateCheck = stateCheck(
   compareReconstructionState
 )
 
+const compareCapacityCorrelationState = (
+  model: ReconstructionComparable,
+  implementation: ReconstructionComparable
+): boolean =>
+  normalizedProjectionMatches(model.activation, implementation.activation)
+  && model.admissionCapacity === implementation.admissionCapacity
+  && model.admittedModelTaskIds.join(",")
+    === implementation.admittedModelTaskIds.join(",")
+  && explanationIdentities(model.admissionExplanations)
+    === explanationIdentities(implementation.admissionExplanations)
+  && model.admissionReservedModelTaskIds.join(",")
+    === implementation.admissionReservedModelTaskIds.join(",")
+  && model.occupiedModelTaskIds.join(",")
+    === implementation.occupiedModelTaskIds.join(",")
+  && model.coordinatorRunning === implementation.coordinatorRunning
+
+const capacityCorrelationStateCheck = stateCheck(
+  decodeReconstructionModelState,
+  compareCapacityCorrelationState
+)
+
 for (const configuredCapacity of [1, 2] as const) {
   quintIt(
     it.effect,
@@ -1087,6 +1268,73 @@ for (
 }
 
 for (
+  const scenario of [
+    {
+      capacity: 2,
+      driverFactory: makeReconstructionDriver(2, 0, false, [0]),
+      init: "initAwaitingProviderEvidenceActivationProfile",
+      maxSteps: 2,
+      name: "the seeded capacity-two correlation portfolio",
+      nTraces: 32,
+      seed: "13101",
+      step: "capacityCorrelationConnectionPortfolioStep",
+      witnesses: [
+        "capacityCorrelationConflictReached",
+        "differentlyCorrelatedTerminalRetainsExpectedPositionReached",
+        "unknownCapacityEvidenceRetainsExactConflictReached",
+        "matchingCapacityAbsenceReleasesPositionReached",
+        "matchingCapacityInterruptionReleasesPositionReached",
+        "capacityTwoConflictAdmitsIndependentTaskReached",
+        "invalidCapacityHistoryRejectedBeforeFrontierReached"
+      ]
+    },
+    {
+      capacity: 1,
+      driverFactory: makeReconstructionDriver(1, 0, false, [0]),
+      init: "initAwaitingProviderEvidenceActivationProfile",
+      maxSteps: 3,
+      name: "capacity one explaining why C waits behind conflicted A",
+      nTraces: 2,
+      seed: "13107",
+      step: "capacityCorrelationAdmissionConnectionStep",
+      witnesses: ["capacityOneConflictExplainsIndependentTaskWaitReached"]
+    },
+    {
+      capacity: 2,
+      driverFactory: makeReconstructionDriver(2, 0, false, [0], true),
+      init: "initCorrelationConflictActivationProfile",
+      maxSteps: 1,
+      name: "restart reconstructing the exact provider correlation conflict",
+      nTraces: 2,
+      seed: "13108",
+      step: "capacityCorrelationReconstructionConnectionStep",
+      witnesses: ["restartReconstructsExactCapacityConflictReached"]
+    }
+  ] as const
+) {
+  quintIt(
+    it.effect,
+    `replays M2 ${scenario.name} through production capacity state`,
+    {
+      backend: "typescript",
+      driverFactory: scenario.driverFactory,
+      init: scenario.init,
+      main: scenario.capacity === 1
+        ? "frontierRecoveryCapacityOne"
+        : "frontierRecoveryCapacityTwo",
+      maxSteps: scenario.maxSteps,
+      nTraces: scenario.nTraces,
+      seed: scenario.seed,
+      spec: "specs/frontierRecovery.qnt",
+      stateCheck: capacityCorrelationStateCheck,
+      step: scenario.step,
+      witnesses: scenario.witnesses
+    },
+    60_000
+  )
+}
+
+for (
   const { action: profile, seed, witness } of [
     {
       action: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
@@ -1117,45 +1365,6 @@ for (
     stateCheck: reconstructionStateCheck,
     witnesses: [witness]
   }, 30_000)
-}
-
-for (
-  const scenario of [
-    {
-      driverFactory: makeReconstructionDriver(2),
-      name: "direct fresh-claim intent",
-      step: "orchestratorCommitsFirstFreshTaskClaimIntent"
-    },
-    {
-      driverFactory: makeReconstructionDriver(2),
-      name: "coordinator crash",
-      step: "crash"
-    },
-    {
-      driverFactory: makeReconstructionDriver(2, undefined, true),
-      init: "initStoppedCoordinator",
-      name: "coordinator restart",
-      step: "restart"
-    }
-  ] as const
-) {
-  quintIt(
-    it.effect,
-    `compares exact reconstruction projections after ${scenario.name}`,
-    {
-      backend: "typescript",
-      driverFactory: scenario.driverFactory,
-      ...(scenario.init === undefined ? {} : { init: scenario.init }),
-      main: "frontierRecoveryCapacityTwo",
-      maxSteps: 1,
-      nTraces: 2,
-      seed: "144",
-      spec: "specs/frontierRecovery.qnt",
-      stateCheck: reconstructionStateCheck,
-      step: scenario.step
-    },
-    30_000
-  )
 }
 
 quintIt(

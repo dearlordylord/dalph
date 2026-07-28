@@ -462,6 +462,64 @@ it.effect("isolates the exact duplicate result while preserving its original own
     yield* Deferred.succeed(releaseRunner, undefined)
   })))
 
+it.effect("isolates a duplicate ownership checkpoint without rolling back its position", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskId = TaskId.make("checkpoint-duplicate")
+    const transition = freshTransition(taskId)
+    const releaseRunner = yield* Deferred.make<void>()
+    const runnerStarted = yield* Deferred.make<void>()
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [],
+      reconstructedReservedPositions: []
+    })
+    const ownershipSnapshots = yield* Ref.make<
+      ReadonlyArray<{ readonly isolated: number; readonly owners: number }>
+    >([])
+    const control: ActivationCoordinatorControl = {
+      checkpoint: (checkpoint) =>
+        checkpoint._tag === "OwnershipRegistered"
+          ? Effect.fail(
+            {
+              _tag: "RejectDuplicateOwnership"
+            } satisfies ActivationCoordinatorCheckpointFailure
+          )
+          : checkpoint._tag === "FrontierDerived"
+          ? Ref.update(ownershipSnapshots, (current) => [
+            ...current,
+            {
+              isolated: checkpoint.observation.ownership.isolatedTransitionKeys.size,
+              owners: checkpoint.observation.ownership.owners.size
+            }
+          ])
+          : Effect.void
+    }
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      control,
+      readFrontier: Effect.succeed({
+        explanations: [],
+        transitions: [transition]
+      }),
+      runId: RunId.make("checkpoint-duplicate-run"),
+      runTransition: () =>
+        Deferred.succeed(runnerStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRunner))
+        )
+    })
+
+    yield* coordinator.signal(ActivationCause.Startup())
+    yield* Deferred.await(runnerStarted)
+    yield* coordinator.signal(ActivationCause.Resume())
+
+    expect((yield* Ref.get(ownershipSnapshots)).at(-1)).toEqual({
+      isolated: 1,
+      owners: 1
+    })
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
+    yield* Deferred.succeed(releaseRunner, undefined)
+  })))
+
 it.effect("atomically rejects or drains signals when the coordinator closes", () =>
   Effect.scoped(Effect.gen(function*() {
     const failFrontier = yield* Deferred.make<void>()

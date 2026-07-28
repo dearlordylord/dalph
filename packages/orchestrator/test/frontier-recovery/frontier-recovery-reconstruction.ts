@@ -106,11 +106,28 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     ],
     tasks: taskEntries
   })
+  const activationOperationFor = (
+    modelTaskId: FrontierRecoveryModelTaskId
+  ) =>
+    identityMapping.operationFromModel(
+      modelTaskId === modelTaskA
+        ? firstClaimOperationIdentity
+        : secondClaimOperationIdentity
+    )
   let coordinatorRunning = options.coordinatorRunning
+  let capacityHistoryRejected = false
+  const reconstructedReservedPositions = yield* Effect.forEach(
+    options.reconstructedReservedModelTaskIds ?? [],
+    (modelTaskId) =>
+      Effect.all({
+        operationId: activationOperationFor(modelTaskId),
+        taskId: identityMapping.taskFromModel(modelTaskId)
+      })
+  )
   let activationController = yield* makeTaskAdmissionController({
     capacity: options.capacity,
     freshOccupiedInvocations: options.freshOccupiedInvocations ?? [],
-    reconstructedReservedPositions: []
+    reconstructedReservedPositions
   })
   let derivedFrontierObservation: RunnableFrontier = {
     explanations: [],
@@ -120,7 +137,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     explanations: [],
     transitions: []
   }
-  let selectedAtOwnershipExclusion = false
   let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map(
     (options.freshOccupiedInvocations ?? []).map(
       ({ operationId, taskId }) => [taskId, operationId]
@@ -192,15 +208,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     })
   })
 
-  const activationOperationFor = (
-    modelTaskId: FrontierRecoveryModelTaskId
-  ) =>
-    identityMapping.operationFromModel(
-      modelTaskId === modelTaskA
-        ? firstClaimOperationIdentity
-        : secondClaimOperationIdentity
-    )
-
   const rememberCheckpoint = (
     checkpoint: ActivationCoordinatorCheckpoint
   ) => {
@@ -210,7 +217,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       derivedFrontierObservation = checkpoint.frontier
     } else if (checkpoint._tag === "OwnedTransitionsExcluded") {
       selectedFrontierObservation = checkpoint.frontier
-      selectedAtOwnershipExclusion = true
       activationProjectionEvents = [...activationProjectionEvents, "Derived"]
     } else if (checkpoint._tag === "AdmissionReserved") {
       selectedFrontierObservation = {
@@ -221,7 +227,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               !== runnableTransitionTaskId(checkpoint.transition)
         )
       }
-      selectedAtOwnershipExclusion = false
     } else if (
       checkpoint._tag === "AdmissionReservationCancelled"
       || checkpoint._tag === "OwnershipReleased"
@@ -792,6 +797,68 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         })
         return
       }
+      case "observeConflictingCapacityCorrelation": {
+        if (taskId === undefined) return
+        const observedOperationId = yield* identityMapping.operationFromModel(
+          action.observedOperationId
+        )
+        providerWorkers = new Map([
+          ...providerWorkers,
+          [taskId, observedOperationId]
+        ])
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = new Set([
+          ...providerObservedActiveTaskIds,
+          taskId
+        ])
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
+        yield* activationController.applyFreshInvocationObservation({
+          _tag: "FreshCapacityConsumed",
+          observationId: ProviderObservationId.make(
+            `M2-conflicting:${action.task}:${action.observedOperationId}`
+          ),
+          operationId: observedOperationId,
+          taskId
+        })
+        return
+      }
+      case "observeConflictingOperationReleased": {
+        if (taskId === undefined) return
+        const observedOperationId = yield* identityMapping.operationFromModel(
+          action.observedOperationId
+        )
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        )
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = new Set(
+          [...providerObservedActiveTaskIds].filter(
+            (candidate) => candidate !== taskId
+          )
+        )
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
+        yield* activationController.applyFreshInvocationObservation({
+          _tag: "FreshCapacityReleased",
+          observationId: ProviderObservationId.make(
+            `M2-conflicting-released:${action.task}:${action.observedOperationId}`
+          ),
+          operationId: observedOperationId,
+          taskId
+        })
+        return
+      }
       case "observeCapacityReleased": {
         if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
@@ -821,6 +888,53 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         })
         return
       }
+      case "observeCapacityAbsent":
+      case "observeCapacityInterrupted": {
+        if (taskId === undefined) return
+        const operationId = yield* activationOperationFor(action.task)
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        )
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = new Set(
+          [...providerObservedActiveTaskIds].filter(
+            (candidate) => candidate !== taskId
+          )
+        )
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
+        yield* activationController.applyFreshInvocationObservation({
+          _tag: "FreshCapacityReleased",
+          observationId: ProviderObservationId.make(
+            `M2-${action._tag}:${action.task}`
+          ),
+          operationId,
+          taskId
+        })
+        return
+      }
+      case "observeCapacityUnknown": {
+        if (taskId === undefined) return
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = new Set(
+          [...providerObservedActiveTaskIds].filter(
+            (candidate) => candidate !== taskId
+          )
+        )
+        activationProjectionEvents = [
+          ...activationProjectionEvents,
+          "ReactivationRequested"
+        ]
+        return
+      }
       case "stopProviderWorker": {
         if (taskId === undefined) return
         providerWorkers = new Map(
@@ -846,7 +960,6 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         providerObservedActiveTaskIds = new Set()
         derivedFrontierObservation = { explanations: [], transitions: [] }
         selectedFrontierObservation = { explanations: [], transitions: [] }
-        selectedAtOwnershipExclusion = false
         runnerCommands = new Map()
         return
       }
@@ -878,7 +991,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               taskId
             })
           ),
-          reconstructedReservedPositions: []
+          reconstructedReservedPositions
         })
         pendingActivationCheckpoints = []
         heldActivationCheckpoints = []
@@ -886,8 +999,36 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         activationProjectionEvents = ["ReactivationRequested"]
         derivedFrontierObservation = { explanations: [], transitions: [] }
         selectedFrontierObservation = { explanations: [], transitions: [] }
-        selectedAtOwnershipExclusion = false
         yield* makeControlledCoordinator()
+        return
+      }
+      case "validateCurrentCapacityHistoryBeforeReconstruction": {
+        const taskId = yield* identityMapping.taskFromModel(modelTaskA)
+        const validation = yield* makeTaskAdmissionController({
+          capacity: options.capacity,
+          freshOccupiedInvocations: [],
+          reconstructedReservedPositions: [
+            {
+              operationId: yield* identityMapping.operationFromModel(
+                firstClaimOperationIdentity
+              ),
+              taskId
+            },
+            {
+              operationId: yield* identityMapping.operationFromModel(
+                secondClaimOperationIdentity
+              ),
+              taskId
+            }
+          ]
+        }).pipe(Effect.result)
+        if (validation._tag === "Success") {
+          return yield* new FrontierRecoveryConformanceIssue({
+            detail: "production capacity reconstruction accepted two current operations for one task",
+            reason: "LossyProjection"
+          })
+        }
+        capacityHistoryRejected = true
         return
       }
     }
@@ -1038,9 +1179,24 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         [...new Set(responsibleTaskIds)].sort(),
         identityMapping.taskToModel
       )
-      const selection = yield* selectFrontier(
+      const selected = yield* selectFrontier(
         reduced.managedRun.responsibility
       )
+      const selection = capacityHistoryRejected
+        ? {
+          ...selected,
+          admittedModelTaskIds: [],
+          admittedTransitionOperations: [],
+          admittedTransitionTags: [],
+          admissionExplanations: [],
+          admissionReservedModelTaskIds: [],
+          admission: { explanations: [], transitions: [] },
+          frontierModelTaskIds: [],
+          frontierTransitionOperations: [],
+          frontierTransitionTags: [],
+          occupiedModelTaskIds: []
+        }
+        : selected
       const projectionMapping = {
         operationToModel: identityMapping.operationToModel,
         revisionToModel: modelRevisionFromTracker,
@@ -1266,10 +1422,24 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
                 const operationId = correlation._tag === "OperationReservation"
                   ? correlation.operationId
                   : undefined
+                const conflictingOperationId = operationId === undefined
+                  ? undefined
+                  : controllerSnapshot.occupied.find(
+                    (invocation) =>
+                      invocation.taskId === taskId
+                      && invocation.operationId !== operationId
+                  )?.operationId
                 return {
                   correlation: operationId === undefined
                     ? "SelectedTransition" as const
                     : "Operation" as const,
+                  ...(conflictingOperationId === undefined
+                    ? {}
+                    : {
+                      conflictingModelOperationId: yield* identityMapping.operationToModel(
+                        conflictingOperationId
+                      )
+                    }),
                   ...(operationId === undefined
                     ? {}
                     : {
@@ -1292,12 +1462,12 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             runnerCommands.keys()
           ),
           selectedModelTaskIds: yield* projectTaskIds(
-            selectedFrontierObservation.transitions.filter((transition) =>
-              selectedAtOwnershipExclusion
-              || !controllerSnapshot.reservedTaskIds.includes(
-                runnableTransitionTaskId(transition)
+            selectedFrontierObservation.transitions
+              .filter((transition) =>
+                !controllerSnapshot.reservedTaskIds.includes(
+                  runnableTransitionTaskId(transition)
+                )
               )
-            )
               .map(runnableTransitionTaskId)
           ),
           triggerPending: activationProjectionEvents.toReversed()[0]

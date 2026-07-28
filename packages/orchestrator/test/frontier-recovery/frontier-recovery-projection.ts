@@ -137,6 +137,7 @@ export interface FrontierRecoveryActivationProjection {
   readonly providerConsumingModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly reservedPositions: ReadonlyArray<{
     readonly correlation: "Operation" | "SelectedTransition"
+    readonly conflictingModelOperationId?: FrontierRecoveryModelOperationId
     readonly modelOperationId?: FrontierRecoveryModelOperationId
     readonly modelTaskId: FrontierRecoveryModelTaskId
   }>
@@ -183,6 +184,10 @@ export interface MakeFrontierRecoveryReconstructionControlsOptions {
     readonly operationId: OperationId
     readonly taskId: TaskId
   }>
+  /** Current task-local operations supplied by the seeded reconstruction lane. */
+  readonly reconstructedReservedModelTaskIds?: ReadonlyArray<
+    FrontierRecoveryModelTaskId
+  >
   readonly journal: JournalStoreService
 }
 

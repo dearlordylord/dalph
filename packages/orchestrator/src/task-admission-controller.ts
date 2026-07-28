@@ -2,7 +2,8 @@
 import { Data, Effect, Option, Ref, Schema } from "effect"
 import {
   OperationId as OperationIdSchema,
-  SelectedTransitionIdentity as SelectedTransitionIdentitySchema
+  SelectedTransitionIdentity as SelectedTransitionIdentitySchema,
+  TaskId as TaskIdSchema
 } from "./domain.js"
 import type {
   OperationId,
@@ -69,6 +70,17 @@ class TaskAdmissionPositionReleaseIssue extends Schema.TaggedErrorClass<TaskAdmi
   "TaskAdmissionPositionReleaseIssue",
   { operationId: OperationIdSchema }
 ) {}
+
+/** One task cannot reconstruct more than one current capacity-holding operation. */
+export class MultipleCurrentCapacityOperationsForTask
+  extends Schema.TaggedErrorClass<MultipleCurrentCapacityOperationsForTask>()(
+    "MultipleCurrentCapacityOperationsForTask",
+    {
+      operationIds: Schema.Array(OperationIdSchema),
+      taskId: TaskIdSchema
+    }
+  )
+{}
 
 export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
@@ -192,7 +204,11 @@ const sameReservation = (
           === selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
   )
 
-const usedPositions = (state: TaskAdmissionControllerState): number => state.occupied.length + state.reservations.length
+const usedPositions = (state: TaskAdmissionControllerState): number =>
+  new Set([
+    ...state.occupied.map(({ taskId }) => taskId),
+    ...state.reservations.map(({ taskId }) => taskId)
+  ]).size
 
 const changeAfterUsageDecrease = (
   before: TaskAdmissionControllerState,
@@ -262,6 +278,17 @@ const tryAdmitTransition = (
 export const makeTaskAdmissionController = Effect.fn(
   "TaskAdmissionController.make"
 )(function*(input: MakeTaskAdmissionControllerInput) {
+  for (const position of input.reconstructedReservedPositions) {
+    const operationIds = input.reconstructedReservedPositions
+      .filter(({ taskId }) => taskId === position.taskId)
+      .map(({ operationId }) => operationId)
+    if (operationIds.length > 1) {
+      return yield* new MultipleCurrentCapacityOperationsForTask({
+        operationIds,
+        taskId: position.taskId
+      })
+    }
+  }
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
     occupied: [...input.freshOccupiedInvocations].sort((left, right) => left.taskId.localeCompare(right.taskId)),
