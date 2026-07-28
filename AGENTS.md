@@ -80,8 +80,10 @@
 - One exact worktree and planned Base SHA per task attempt.
 - Bounded concurrent task execution; integration resources remain distinct and
   serialized according to the accepted target protocol.
-- Fresh independent reviewers, same-session handback, distinct technical and
-  semantic retry scopes, automatic bounded retries, and typed non-convergence.
+- The production-shaped fake-provider milestone treats executor work as one
+  coarse planned-attempt responsibility. Detailed reviewer, handback, retry,
+  restoration, and convergence policy is post-milestone design; current
+  experimental behavior is not a delivery invariant.
 - Intent before ambiguity-crossing effects, observation afterward, and
   reconcile-before-retry after ambiguous outcomes.
 - Cleanup is disposition-typed, exact, recoverable, and fail-closed.

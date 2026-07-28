@@ -1,142 +1,157 @@
-# Count one task once when provider correlation disagrees
+# Keep one position for one admitted planned task attempt
 
-Issue: [Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131)
+Issues:
+[Define planned-attempt executor work and position release](https://github.com/dearlordylord/dalph/issues/162)
+and
+[Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131)
 
-## Starting situation
+## The fake executor completes Task A's planned attempt
 
-No person directly triggers this behavior. The running Dalph coordinator has
-configured two task-work positions. Task A has an outstanding workflow
-operation, `expected-A`, so Dalph holds one position for task A while it checks
-the task-work provider. Task B is independently runnable. The journal contains
-the task-A intent and responsibility, but it does not persist the capacity
-position.
+### Starting situation
 
-Dalph asks the task-work provider for the current lifecycle of task A's exact
-outer invocation. The provider returns a fresh active report for task A, but it
-names `reported-A` instead of `expected-A`. An `OperationId` is Dalph's
-identity for one exact workflow action. It connects the recorded intent,
-provider request, fresh report, retry, and outcome. It is not the task ID or
-provider session ID. The mismatch matters because Dalph cannot safely treat the
-report as proof about `expected-A`. For example, stopping `reported-A` does not
-prove that `expected-A` never started.
+Alice is monitoring run R, but she does not directly trigger this automatic
+behavior. The running Dalph coordinator has two task-work positions. The fake
+tracker reports Tasks A and B eligible.
+Dalph has planned `(run R, attempt attempt-A-3)` for Task A and recorded that
+it is starting executor work for that exact pair. Task A therefore occupies
+one position. Task B may use the other position.
 
-No GitHub task, Git ref, worktree, or executor session is changed merely by
-applying this report.
+The fake-provider milestone does not model a coding agent, reviewer, handback,
+retry, or restoration step inside the executor.
 
-## Dalph action and visible result
+### Trigger and ordered actions
 
-The activation code passes the normalized report to the capacity controller.
-In order, the controller:
+The controlled fake executor returns a terminal successful result for
+`(run R, attempt attempt-A-3)`. Dalph records that result for the same pair and
+makes Task A's task-work position available.
 
-1. changes task A's one position to `CorrelationConflict`, recording expected
-   `expected-A` and observed `reported-A`;
-2. counts task A once, not twice;
-3. explains the conflict for task A; and
-4. admits task B into the second configured position.
+This result does not say that the fake tracker marks Task A completed. Dalph
+must perform the later integration and tracker-completion workflow, then read
+the fake tracker again and record its completed lifecycle before any task
+blocked by A becomes eligible.
 
-For example, the capacity snapshot is `{ A: CorrelationConflict, B: Reserved }`
-and its usage is two. It is never `{ expected-A: Reserved, reported-A:
-Working, B: Waiting }`, because capacity belongs to tasks rather than
-operations.
+### Visible and forbidden result
 
-If configured capacity were one, task B would receive `CapacityWait` because
-task A's unresolved position remains unavailable. The maintainer sees the two
-operation identities in task A's explanation. Dalph must not discard the
-provider report, invent a second position for task A, silently release task A,
-or stop unrelated task B when another position exists.
+Alice can see that executor work for Task A's attempt finished; independently
+eligible work may now start. Alice cannot yet see Task A presented as
+tracker-completed unless the later tracker read reports it.
 
-## Crash and repeated observations
+Dalph must not allocate a second executor identity, expose an executor-internal
+operation, keep the position merely because tracker completion is pending, or
+release A's dependants from the executor result.
 
-If Dalph crashes before or after applying the report, it loses the
-process-local position state. Startup reconstructs task A's
-`AwaitingProviderEvidence` state from the one current journal operation and
-asks the provider again. Receiving the same mismatched active report recreates
-the same one-position conflict.
+No crash or retry occurs in this scenario. If the shared Dalph/fake-executor
+process dies before the terminal result is journaled, the shared-crash scenario
+below applies; no external executor request survives to retry.
 
-A later matching active report for `expected-A` changes task A to `Working`.
-A later matching terminal or absent report for `expected-A` changes task A to
-`NotUsing`. A terminal report only for `reported-A` removes that observed
-mismatch but does not prove the expected operation absent, so task A returns
-to `AwaitingProviderEvidence` and still counts once. For example, Dalph must
-ask again about `expected-A` before making task A's position available.
+### Acceptance-test mapping
 
-An unknown report preserves an existing `CorrelationConflict`, including both
-operation identities. It cannot attach to a temporary `Reserved` position,
-because Dalph has not recorded an `OperationId` at that point. For example,
-unknown evidence after the mismatch keeps
-`CorrelationConflict(expected-A, reported-A)`, while unknown evidence before
-the task-A start intent cannot turn its temporary reservation into
-`AwaitingProviderEvidence`.
+- `frees Task A's position when its planned-attempt executor work completes`
+  proves A stops using task-work capacity.
+- The diamond cassette in #167 proves that executor completion alone does not
+  release tracker dependants.
 
-There is no state-changing external request in this scenario, so request
-acknowledgement loss and request retry do not apply. The repeated action is a
-provider read. For example, repeating the same `reported-A` observation must
-recreate one conflict rather than increasing capacity usage.
+## Alice pauses Task A and the executor safely suspends it
 
-## Invalid journal history is different
+### Starting situation
 
-Before frontier derivation, reconstruction validates that one task has at most
-one current capacity-holding operation. If the journal itself contains two
-unclosed current operations for task A, reconstruction fails with invalid
-managed history. For example, current intents `expected-A-1` and
-`expected-A-2` are not turned into two positions and are not described as an
-ordinary provider mismatch. Unrelated work is not derived from invalid
-managed-run history.
+Alice is the affected user. Task A's `(run R, attempt attempt-A-3)` is admitted
+and occupies one task-work position. The controlled fake executor reports its
+complete work for that pair as running.
 
-## Acceptance-test mapping
+### Trigger and ordered actions
 
-- `counts a mismatched provider operation once and admits another task at
-  capacity two` must prove task A uses one position and task B uses the second;
-  Quint test
-  `mismatchedProviderOperationCountsTaskOnceAndAdmitsAnotherTaskTest` proves
-  the model behavior.
-- `keeps another task waiting behind one unresolved task at capacity one` must
-  prove task A remains unavailable without being double-counted; Quint test
-  `unresolvedTaskUsesTheOnlyPositionOnceTest` proves the model behavior.
-- `requires a matching fresh report before making a conflicted task available`
-  must prove that a terminal report for only `reported-A` does not release
-  `expected-A`; Quint test
-  `differentlyCorrelatedTerminalReportKeepsExpectedOperationHeldTest` proves
-  the model behavior.
-- `repeated mismatched reports do not increase capacity usage` must prove two
-  identical task-A reads still count once; Quint test
-  `repeatedMismatchedReportsKeepOneTaskPositionTest` proves the model behavior.
-- `restart recreates the exact task-local correlation conflict` must prove
-  Dalph discards the pre-crash observation, reads the provider again, and
-  recreates the expected and observed identities; Quint test
-  `restartRecreatesExactCorrelationConflictTest` proves the model behavior.
-- `unknown provider evidence holds one position while matching absence
-  releases it` must prove that an unreadable lookup cannot free task A and an
-  exact absent report can; Quint tests
-  `unknownProviderReportKeepsExpectedTaskPositionTest` and
-  `absentProviderReportReleasesExpectedTaskPositionTest` prove the model
-  behavior.
-- `unknown evidence does not erase a correlation conflict` must prove that
-  both task-A operation identities remain visible; Quint test
-  `unknownReportDoesNotEraseDifferentlyCorrelatedActiveEvidenceTest` proves the
-  model behavior.
-- `provider evidence requires a recorded operation identity` must prove an
-  unknown report cannot attach to task A's temporary pre-intent reservation;
-  the `observeCapacityUnknown` model action enforces that boundary.
-- `a matching interrupted report releases the expected task position` must
-  prove that a provider-confirmed interruption makes task A not using
-  capacity; Quint test
-  `interruptedProviderReportReleasesExpectedTaskPositionTest` proves the model
-  behavior.
-- `rejects two current capacity operations for one task during reconstruction`
-  must prove invalid journal history fails before frontier derivation; Quint
-  test `rejectsTwoCurrentCapacityOperationsForOneTaskTest` proves the
-  pre-validation rule.
-- The focused M2 projection must exhaustively check the same capacity rules
-  without importing unrelated graph, pause, and workflow state. Quint tests
-  `mismatchCountsOnceAndLeavesTheSecondPositionAvailableTest`,
-  `mismatchUsesTheOnlyConfiguredPositionTest`,
-  `mismatchedTerminalKeepsTheExpectedPositionTest`,
-  `unknownReportDoesNotReleaseTheExpectedPositionTest`, and
-  `restartReconstructsTheExactMismatchTest` map the accepted paths to that
-  projection. Exhaustive profiles
-  `focused capacity-two provider correlation conflict and reconstruction` and
-  `focused capacity-one provider correlation conflict and reconstruction`
-  check its finite reachable states.
-- Quint tests with the same plain-language outcomes must pass before the
-  TypeScript controller is changed.
+Alice asks Dalph to pause Task A. Dalph applies and records the Pause direction.
+Dalph asks the fake executor to bring its complete work for the planned attempt
+to a safe resumable stop. Until the fake executor reports the attempt safely
+suspended, Task A keeps its position.
+
+The fake executor then reports that no executor-owned activity for
+`(run R, attempt attempt-A-3)` remains running and that the same pair can
+resume. Dalph records that suspension result and makes the position available.
+A later Unpause does not itself consume a position; Task A must be admitted
+again before Dalph asks the executor to resume the same pair.
+
+### Visible and forbidden result
+
+Alice sees Task A reach a safely suspended state. Dalph must not infer
+suspension from a stopped inner process, create a replacement attempt, or free
+the position before the complete-attempt suspension result.
+
+If the shared process dies while suspension is in progress, both Dalph and the
+fake executor stop. Restart reconstructs the applied Pause direction and the
+same planned-attempt responsibility as occupying one position. Dalph asks the
+recreated fake again to safely suspend that exact pair. Only after Dalph
+records the new suspension result does it release the position. There is no
+independent executor response to retry.
+
+### Acceptance-test mapping
+
+- `keeps Task A's position while suspension is still in progress` proves the
+  position remains occupied before the suspension result.
+- `frees Task A's position after safe suspension and resumes the same attempt`
+  proves release and later reacquisition.
+
+## Dalph and the fake executor crash together
+
+### Starting situation
+
+Alice is monitoring run R, but she does not cause the crash. Dalph has recorded
+`(run R, attempt attempt-A-3)` and the intent to start its executor work. Its
+process-local controller shows Task A using one position. The controlled fake
+executor runs in the same process.
+
+### Trigger and ordered actions
+
+The process dies. Both Dalph and the fake executor stop; no fake executor work
+survives. The process-local position disappears.
+
+After restart, Dalph validates and folds the journal. It reconstructs the same
+planned-attempt responsibility, recreates the fake executor, and derives Task
+A as needing one position before continuing the same
+`(run R, attempt attempt-A-3)`. It does not ask
+for or reconcile a separately surviving executor invocation.
+
+### Visible and forbidden result
+
+Alice sees the same attempt continue after restart. Dalph must not create a
+new attempt, a separate outer-invocation identity, or a story in which the fake
+executor survived the coordinator.
+
+Independently surviving production executor work is post-milestone design.
+
+### Acceptance-test mapping
+
+- `reconstructs the same planned attempt after Dalph and the fake executor
+  crash together` proves shared-process restart.
+- The test asserts that no separate executor lookup or outer identity exists.
+
+## Duplicate unfinished executor responsibilities are invalid
+
+### Starting situation and trigger
+
+No person or outside provider creates this case. A malformed journal contains
+two unfinished executor-work responsibilities for Task A, both claiming to be
+the work for `(run R, attempt attempt-A-3)`, or it contains unfinished executor
+work for `(run R, attempt attempt-A-3)` and
+`(run R, attempt attempt-A-4)` where only one is legal.
+
+### Result
+
+Reconstruction returns a typed invalid-managed-history result naming Task A,
+both unfinished responsibility records, and the pair or pairs they claim
+before frontier derivation.
+The executor, tracker, Git, and every other outside boundary must not be
+called. The operator sees that exact recovery error. Dalph does not merge the
+responsibilities, count them as one valid position, or present them as an
+ordinary executor mismatch.
+
+A repeated restart rereads the preserved malformed history and returns the
+same typed failure before frontier derivation or any outside call. Recovery
+does not rewrite, merge, or discard either responsibility.
+
+### Acceptance-test mapping
+
+- `rejects duplicate unfinished planned-attempt executor work before frontier
+  derivation or an executor call` proves the production recovery seam in
+  TypeScript and Quint.

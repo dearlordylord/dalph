@@ -2,8 +2,13 @@ import { Schema } from "effect"
 import { OperationId, ProviderObservationId, TaskId, TechnicalRetryNotBefore } from "./domain.js"
 
 /**
- * The exact Dalph identity used to correlate one executor-declared outer
- * invocation across intent, provider observation, interruption, and outcome.
+ * Transitional pre-#158 correlation.
+ *
+ * The accepted v1 boundary correlates the executor's complete work by the
+ * planned task attempt's RunId and AttemptId. It does not allocate a separate
+ * outer-invocation identity. This OperationId-based shape leaks review-loop
+ * internal operations into generic orchestration and must not be treated as
+ * the target contract when implementing #158.
  */
 export const ExecutorOuterInvocationCorrelation = Schema.Struct({
   invocationId: OperationId,
@@ -12,8 +17,11 @@ export const ExecutorOuterInvocationCorrelation = Schema.Struct({
 export type ExecutorOuterInvocationCorrelation = typeof ExecutorOuterInvocationCorrelation.Type
 
 /**
- * The task-work capacity used by one executor-declared outer invocation.
- * The current admission protocol allocates at most one position per task.
+ * Transitional pre-#158 resource-use declaration.
+ *
+ * The accepted milestone rule keeps one position for the complete planned
+ * attempt until terminal outcome or safe suspension. The executor does not
+ * declare capacity.
  */
 export const ExecutorOuterInvocationResourceUse = Schema.TaggedUnion({
   DoesNotUseTaskWorkCapacity: {},
@@ -21,14 +29,20 @@ export const ExecutorOuterInvocationResourceUse = Schema.TaggedUnion({
 })
 export type ExecutorOuterInvocationResourceUse = typeof ExecutorOuterInvocationResourceUse.Type
 
-/** One opaque outer invocation declared by the selected Dalph executor. */
+/**
+ * Transitional pre-#158 projection subject.
+ *
+ * The target generic subject is the selected executor's complete work for one
+ * planned task attempt, not one evidence, review, handback, or provider
+ * operation presented as an outer invocation.
+ */
 export const ExecutorOuterInvocation = Schema.Struct({
   correlation: ExecutorOuterInvocationCorrelation,
   resourceUse: ExecutorOuterInvocationResourceUse
 })
 export type ExecutorOuterInvocation = typeof ExecutorOuterInvocation.Type
 
-/** A named reason that Dalph cannot yet continue one outer invocation. */
+/** Transitional pre-#158 wait for one leaked internal operation. */
 export const ExecutorOuterInvocationWait = Schema.TaggedUnion({
   RetryScheduled: {
     correlation: ExecutorOuterInvocationCorrelation,
@@ -37,14 +51,20 @@ export const ExecutorOuterInvocationWait = Schema.TaggedUnion({
 })
 export type ExecutorOuterInvocationWait = typeof ExecutorOuterInvocationWait.Type
 
-/** A provider-confirmed interruption of one exact outer invocation. */
+/**
+ * Transitional pre-#158 interruption shape.
+ *
+ * The target generic fact is that all executor work for the planned attempt is
+ * safely suspended and resumable. One provider observation or interrupted
+ * internal operation cannot establish that fact by itself.
+ */
 export const ExecutorOuterInvocationInterruption = Schema.Struct({
   correlation: ExecutorOuterInvocationCorrelation,
   observationId: ProviderObservationId
 })
 export type ExecutorOuterInvocationInterruption = typeof ExecutorOuterInvocationInterruption.Type
 
-/** The normalized result Dalph records for one exact outer invocation. */
+/** Transitional pre-#158 outcome for one leaked internal operation. */
 export const ExecutorOuterInvocationOutcome = Schema.TaggedUnion({
   Completed: {
     correlation: ExecutorOuterInvocationCorrelation
@@ -62,8 +82,8 @@ export const ExecutorOuterInvocationOutcome = Schema.TaggedUnion({
 export type ExecutorOuterInvocationOutcome = typeof ExecutorOuterInvocationOutcome.Type
 
 /**
- * The selected executor's current outer view of one invocation. Generic
- * frontier derivation uses this declaration without inspecting inner events.
+ * Transitional pre-#158 projection. The target projects complete executor
+ * work for one planned attempt identified by RunId plus AttemptId.
  */
 export const ExecutorOuterInvocationProjection = Schema.TaggedUnion({
   Ready: {},

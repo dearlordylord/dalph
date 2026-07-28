@@ -126,20 +126,17 @@ After restart and while holding coordinator ownership, Dalph scans every
 physical journal row and discovers every recoverable run without an age cutoff.
 It validates each run's complete event history in position order before it
 rereads current task and claim state from the tracker, refs and exact worktrees
-from Git, current sessions from the task runner, worker processes from the task
-executor, and evidence, review, and handback state from their authorities. It derives new in-memory
+from Git, and other current authority facts required by the accepted boundary.
+It derives new in-memory
 coordination and presentation state from those reads. A restarted process must
 not treat a pre-crash queue buffer, capacity reservation, timer instance,
 frontier, presentation cursor, or projection as proof that work occurred.
 
-Dalph is deployed locally, but the coordinator process and provider-owned
-worker processes remain distinct failure and observation boundaries. A
-coordinator crash does not prove that a worker stopped, and a worker exit does
-not imply coordinator failure. Deterministic-test and live-fake harnesses
-control those deaths independently and cover coordinator-only failure,
-co-failure, and mixed worker survival. This local separation preserves truthful
-recovery now and a later distributed deployment path without changing
-authority ownership.
+During the production-shaped fake-provider milestone, Dalph and the controlled
+fake executor share one process lifetime. A Dalph crash therefore stops the
+fake executor too, and restart does not search for surviving fake executor
+activity. Independently surviving production executor work is post-milestone
+design and must not be inferred from the current experimental process code.
 
 Discovery accumulates independent physical-row, envelope, payload, identity,
 ownership, semantic-history, and reconciliation issues. A row that cannot be
@@ -297,28 +294,23 @@ show its prerequisites satisfied. In the edge direction, the prerequisite
 blocks the dependent; pause never reverses that edge or persists its transitive
 dependent closure.
 
-Under the review-loop executor protocol, an active reviewer or
-findings-handback agent is long-running task work for pause purposes. The
-generic Dalph orchestrator sees only an opaque executor outer invocation. It
-asks the review-loop executor to interrupt that exact outer invocation. The
-review-loop executor preserves its internal workflow operation, reviewer
-session, every already recorded immutable evidence object, and unresolved
-finding history, and later resumes that invocation. The review-loop executor
-does not invent a partial review disposition or let reviewer work continue
-merely because the invocation does not change Git or the task tracker. Review
-and handback are concrete stages of the review-loop executor protocol, not
-permanent Dalph orchestrator stages.
+The generic Dalph orchestrator sees only the executor's complete work for one
+exact planned task attempt, identified by that attempt's `RunId` and
+`AttemptId`; it does not allocate a separate outer-invocation identity. When
+pause requires admitted work to stop, Dalph asks the executor to bring that
+complete planned attempt to a safe resumable stop. The executor reports the
+attempt suspended only after no executor-owned activity for it remains running
+and it has preserved what is required to resume. Dalph may then make the
+task-work position available and later resume the same planned attempt.
 
-[Future research](https://github.com/dearlordylord/dalph/issues/127) must permit
-an executor to govern its own optional review and restoration protocol without
-making review evidence a universal completion requirement.
+How a production executor stops coding agents, reviewers, provider calls, or
+other internal work is post-milestone executor design. The fake-provider
+milestone neither exposes those stages nor preserves the current experimental
+review-loop policy as a requirement.
 
-If implementation evidence capture has already begun when pause is requested,
-the review-loop executor lets that bounded local Git-and-EvidenceStore operation
-finish and seal its immutable evidence manifest. The manifest preserves the
-exact worker output and worktree diff that later resume and review require.
-Pause does not select evidence capture if it has not begun, and it does not
-select the subsequent review after an in-flight capture finishes.
+[Future research](https://github.com/dearlordylord/dalph/issues/127) decides
+production executor stop and restoration behavior. The milestone does not
+specify how an executor handles partially completed internal work.
 
 Pause never selects a not-yet-started cleanup or disposition action. If an exact
 cleanup request already crossed its boundary, the request follows the same
@@ -339,11 +331,11 @@ shared resource, Dalph does not begin that integration attempt. A future
 cancel-integration policy is a separate command and does not change pause
 semantics.
 
-A user Unpause request moves a task into `TaskResuming`; it does not
-directly start or resume a worker. Dalph freshly rereads the exact task, claim,
-applicable dependency and grouping facts, Git resources, task-work session,
-worker or provider work unit, evidence, review, handback, and integration facts
-needed by the task's preserved responsibilities. Only compatible observations
+A user Unpause request moves a task into `TaskResuming`; it does not directly
+resume executor work. Dalph freshly rereads the exact task, claim, applicable
+dependency and grouping facts, Git resources, and other accepted
+provider-neutral facts needed by the task's preserved responsibilities. Only
+compatible observations
 allow ordinary operation selection. Edited, completed, closed, newly blocked,
 newly unblocked, foreign-claimed, unreadable, or target-closure-removed tasks
 enter their accepted reconciliation, wait, disposition, or isolation rule
@@ -352,31 +344,16 @@ without stale task work restarting. The canonical
 owns those per-observation choices.
 
 If the user requests Unpause while a task is still pausing, Dalph records the
-new requested destination but does not cancel an already-sent interruption or
-start another worker. It first observes or reconciles the original worker and
-every other already-started operation to their safe boundaries, then performs
-the ordinary resuming reads. The derived progress reason names the operation that
-still prevents resumption.
+new requested destination but does not cancel the already-requested safe
+suspension or start competing executor work. It waits for the complete-attempt
+suspension result, then performs the ordinary resuming reads.
 
-Pause handling does not select a replacement task or execute a pause-specific
-capacity-release branch. Dalph may already hold the task's one position as
-`Reserved` or `AwaitingProviderEvidence` before an active provider report. A
-matching active report changes that same position to `Working`; a matching
-terminal interruption report changes it to `NotUsing`. For example, a
-different operation identity creates one task-local `CorrelationConflict`
-instead of another permit. Frontier scheduling separately derives whether a
-position is available and may admit another task. Preserving a task-work
-session or worktree does not by itself retain task-work capacity. The current
-provider contract has no suspended outcome; a future suspension capability
-must separately define its task-position state, fresh observation, and
-resumption semantics before pause may select it.
-
-While the task is in `CorrelationConflict`, an unknown report preserves both
-operation identities. A terminal report for only the differently correlated
-operation returns the task to `AwaitingProviderEvidence`; it does not make the
-position available. For example, if Dalph expects `prepare-A` but the provider
-reported active `worker-A`, learning that `worker-A` ended still requires a
-fresh report about `prepare-A` before task A becomes `Working` or `NotUsing`.
+Pause handling does not select a replacement task. An admitted task keeps its
+one position while Dalph asks the executor to bring the complete planned
+attempt to a safe resumable stop. Only the executor's complete-attempt
+suspension result makes that position available. Preserving a worktree or
+task-work session does not itself consume capacity. After Unpause, the same
+planned attempt must be admitted again before executor work resumes.
 
 A confirmed task or run pause is passive. Pause state by itself schedules no
 polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
@@ -542,29 +519,25 @@ zero or one position; the executor does not request, declare, acquire, or
 release it. For example, continuing task A through the executor requires one
 position, while reading task A from GitHub requires none.
 
-A task position is reserved before its operation intent, retained under the
-durable `OperationId` after intent, marked working by a matching fresh active
-provider report, and made available by a matching fresh terminal, interrupted,
-or absent report. If the provider names a different operation for the same task, the
-controller stores one correlation conflict containing both identities and
-continues counting the task once. For example, with capacity two, conflicted
-task A uses one position and task B may use the other. A report that only the
-different provider operation terminated returns task A to awaiting evidence
-about its expected operation; it does not make task A available.
+A task position is reserved before Dalph starts executor work for one planned
+attempt. After start, the position is correlated by that attempt's `RunId` and
+`AttemptId` and remains occupied until the executor returns a terminal result
+for the complete attempt or proves it safely suspended. No executor-internal
+operation or provider report can change generic capacity directly.
 
-Reconstruction validates that durable history identifies at most one current
-capacity-holding operation for each task before deriving a frontier. For
-example, two current task-A operations are invalid managed history, not two
-controller positions and not an ordinary provider correlation conflict.
+Reconstruction validates that durable history identifies at most one
+unfinished planned-attempt executor responsibility for each task before
+deriving a frontier. Two are invalid managed history, not two controller
+positions and not an ordinary identity mismatch.
 
-Pure derivation, reducer execution, bounded journal appends, tracker/Git/provider
-reconciliation reads, evidence sealing, cleanup, and integration do not consume
-task-work capacity. Cleanup follows its exact disposition protocol, and
+Pure derivation, reducer execution, bounded journal appends, tracker and Git
+reads, cleanup, and integration do not consume task-work capacity. Cleanup
+follows its exact disposition protocol, and
 integration uses its separately serialized resource. A paused branch, a branch
 waiting on an external condition after its current bounded action settles, a
-disposed or isolated branch, and a branch whose task-work invocation terminated
-hold no admission position merely because their responsibility or recoverable
-resources remain.
+disposed or isolated branch, and a branch whose complete planned-attempt
+executor work terminated hold no admission position merely because their
+responsibility or recoverable resources remain.
 
 Creating one exact task claim record is the exception for its already-committed
 fresh task: retryable GitHub failures reuse the same operation identity under
@@ -622,13 +595,14 @@ only for `A`, checks GitHub for that exact owner and token, and leaves `B`
 unselected. Observing both tasks therefore neither selects both nor creates
 responsibility for both.
 
-If responsible task `A` is paused after its worker stops, it retains its claim
-and recoverable resources but holds no admission position. Fresh task `B` may
-use the sole position. A later Unpause request triggers `A`'s required fresh
-reads while `B` continues. If `A` becomes ready before `B` finishes, it derives
-capacity waiting without a journal event. When `B` releases the position, `A`
-is admitted before fresh task `C`; if `A` is paused, blocked, or isolated
-instead, `C` may proceed.
+If responsible task `A` is paused after the executor reports its complete
+planned attempt safely suspended, it retains its claim and recoverable
+resources but holds no admission position. Fresh task `B` may use the sole
+position. A later Unpause request triggers `A`'s required fresh reads while `B`
+continues. If `A` becomes ready before `B` finishes, it derives capacity
+waiting without a journal event. When `B` releases the position, `A` is
+admitted before fresh task `C`; if `A` is paused, blocked, or isolated instead,
+`C` may proceed.
 
 See [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
 
@@ -653,10 +627,17 @@ journal append alone is not a reason to return.
 | Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the unresolved-request reconciliation rules to each intent missing a recorded outcome before retrying |
 | Task identity, lifecycle, dependencies, grouping, and claims | Read through the configured task tracker | Reread every task in the task-tracker target closure and derive current eligibility instead of restoring a stored frontier |
 | Git lineage, refs, commits, worktrees, and integration state | Read from Git | Reread the exact resource locators recorded in the planned task attempt and compare them with journaled intents before continuing |
-| Task-work sessions, provider work units, and worker processes | Read through the configured task runner; its adapter queries the configured task-work provider | Ask the task runner for a fresh report, then classify the task-work session and its provider work units or worker processes before retry, cleanup, or failure |
-| In-memory queue buffers, wakeup signals, semaphore instances, permit holdings, and timer instances | Available only in the live coordinator process | Discard them on process loss and recreate them from accepted configuration, journaled scheduling records, and fresh task-tracker, Git, and task-runner reads; they never prove that work occurred |
-| Runnable frontiers and resource-readiness views | Derived in the live coordinator process | Recompute them from fresh task-tracker, Git, and task-runner reads plus Dalph-recorded journal history |
-| Workflow-comparison-trace entries, presentation cursors, and graph indexes | Derived presentation data, even when an output store retains a copy | Rebuild them from committed journal records in original `(RunId, JournalPosition)` order without reordering or renumbering history. After restart, reread the task tracker and Git, ask the task runner for a fresh task-work session report, and record new journal events for those reads and reports. Preserve returned identities or revisions and leave unreadable intervals explicit. Dry-run and deterministic-test comparison traces remain process-local and do not write the Dalph workflow journal |
+| Unfinished planned-attempt executor work | Reconstructed from durable history for its exact `(RunId, AttemptId)` | Recreate the same-process controlled fake and continue the same planned attempt when capacity permits; do not search for surviving fake activity |
+| In-memory queue buffers, wakeup signals, semaphore instances, permit holdings, fake-executor instance, and timer instances | Available only in the live Dalph process | Discard them on process loss and recreate them from accepted configuration, journaled workflow history, and fresh task-tracker and Git reads; they never prove that work occurred |
+| Runnable frontiers and resource-readiness views | Derived in the live coordinator process | Recompute them from fresh task-tracker and Git reads plus Dalph-recorded journal history |
+| Workflow-comparison-trace entries, presentation cursors, and graph indexes | Derived presentation data, even when an output store retains a copy | Rebuild them from committed journal records in original `(RunId, JournalPosition)` order without reordering or renumbering history. After restart, reread the task tracker and Git and record new journal events for those accepted reads. Preserve returned identities or revisions and leave unreadable intervals explicit. Dry-run and deterministic-test comparison traces remain process-local and do not write the Dalph workflow journal |
+
+### Post-milestone provider/session recovery provenance
+
+The following provider registry, session, work-unit, and worker-process rules
+describe current experimental code. They do not apply to the same-process fake
+executor and are not requirements for the production-shaped fake-provider
+milestone. Issues #127 and #168 own their redesign or retention.
 
 A task-work provider adapter may satisfy its correlation contract with a
 provider-owned durable registry outside the Dalph workflow journal. That
@@ -699,8 +680,10 @@ must either atomically commit each projected item with advancement of its source
 cursor or enforce idempotency by `(RunId, JournalPosition)`, so replay cannot
 persist a second projection of the same committed record. A workflow comparison
 trace item saying task-work capacity was reserved does not prove that task work
-began. After restart, Dalph requires the journaled start request and a fresh
-task-work session report from the task runner.
+began. During the fake-provider milestone, Dalph and the fake executor restart
+together. Dalph reconstructs the unfinished `(RunId, AttemptId)`, gives it one
+position when capacity permits, and continues it through a recreated fake; it
+does not look for a surviving executor report.
 
 SQLite schema migration, journal-event version conversion, and ordered journal
 history validation change independently and require separate implementations.
@@ -947,7 +930,13 @@ worktrees, and malformed Git output remain distinct typed reconciliation facts.
 Dalph preserves every observed resource; this workflow performs no repair,
 clean, move, reset, prune, or deletion.
 
-## Exact Task Execution Reconciliation
+## Current experimental task-execution reconciliation
+
+This section documents pre-#162 code. Its separate execution `OperationId`,
+provider session, worker process, interruption, and restart-observation
+protocol is not part of the fake-provider milestone and must not be treated as
+the generic executor contract. Issues #127 and #168 decide its post-milestone
+replacement or retention.
 
 After Dalph establishes the exact provider-assigned task-work session, it
 selects a distinct task-execution operation and admits that operation to bounded
@@ -984,23 +973,21 @@ allocate a replacement operation identity, or discard the worktree. Dry-run
 uses the planned session locator in the same exhaustive operation algebra but
 cannot fabricate a provider session or process identity.
 
-## Review-loop Executor Internals
+## Current experimental review-loop implementation
 
-The following evidence, review, findings-handback, retry, and convergence
-sections describe the **review-loop executor**, not the generic
-Dalph orchestrator. The executor translates each internal action into an opaque
-outer invocation, wait, correlation, resource-use declaration, or outcome
-before generic reconstruction, frontier selection, admission, or activation
-uses it.
+The following sections document code that already exists. They are not
+accepted requirements for the production-shaped fake-provider milestone and
+must not be used to infer reviewer timing, provider topology, retry policy, or
+other executor internals. The milestone uses only the planned-attempt executor
+boundary. Post-milestone executor design decides whether to retain, replace, or
+remove these implementation choices.
 
-The present source layout is transitional. The review-loop executor remains
+The current review-loop code remains
 co-located in `packages/orchestrator` and its internal operations still share
-the `WorkflowOperation` and `WorkflowInterpreter` algebras. The accepted
-[source-boundary decision](../research/review-loop-executor-source-boundary-decision.md)
-and [issue #158](https://github.com/dearlordylord/dalph/issues/158) require an
-enforced `review-loop-executor` module tree and one injected bundle without
-adding a second production executor. Issue #127 owns later
-per-attempt executor identity, configuration, and mixed-executor recovery.
+the `WorkflowOperation` and `WorkflowInterpreter` algebras. Issue #158 replaces
+their leakage into generic orchestration with the coarse planned-attempt
+boundary and a fake executor. A post-milestone ticket owns any adaptation of
+this detailed implementation.
 
 ## Immutable Implementation Evidence
 

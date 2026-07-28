@@ -1,6 +1,16 @@
-# Executor source-boundary ownership evidence
+# Superseded executor source-boundary ownership evidence
 
-Status: primary-source research input. The accepted
+Status: provenance only.
+
+This evidence supported a separate outer-invocation identity and preservation
+of the detailed review-loop implementation inside the fake-provider milestone.
+Issue #162 later rejected both premises. The accepted milestone boundary uses
+the planned attempt's `RunId` and `AttemptId`, a stage-name-free controlled fake
+executor, and shared Dalph/fake-executor process lifetime. Do not use the
+requirements below to implement #158; they remain only to explain how the
+superseded design arose.
+
+Previous status: primary-source research input. The accepted
 [review-loop executor source-boundary decision](review-loop-executor-source-boundary-decision.md)
 supersedes this note's preliminary package and terminology recommendations.
 

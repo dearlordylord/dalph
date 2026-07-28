@@ -1,166 +1,139 @@
-# Review-loop executor source-boundary scenarios
+# Planned-attempt executor boundary scenarios
 
-Status: accepted during the executor source-boundary Wayfinder reconciliation.
+Status: accepted for the production-shaped fake-provider milestone.
 
-These scenarios preserve the current single-executor workflow while making
-source ownership truthful. The implementation may replace the unreleased
-journal event shape; Dalph has no released product database whose bytes, tags,
-or schema require migration compatibility.
+These scenarios define only what generic Dalph needs in order to consume a task
+graph with a controlled fake executor. They do not specify coding-agent,
+reviewer, evidence, handback, retry, restoration, or convergence behavior
+inside a later production executor.
 
-## Dalph starts one opaque review-loop invocation
-
-### Starting situation
-
-No person directly triggers this scenario. A running Dalph coordinator has one
-planned task attempt with its exact claim, Base SHA, worktree, and task-work
-session. The review-loop executor is the only executor installed in the
-application composition. The journal contains the generic task-attempt history
-and any review-loop executor history already recorded for that attempt.
-
-The generic orchestrator knows the attempt and its outstanding executor
-invocation responsibility. It does not know whether the review-loop executor
-will next capture evidence, ask a reviewer, return findings, retry a provider
-request, or record convergence.
-
-### Trigger and ordered actions
-
-Activation asks the injected executor bundle to reconstruct and project the
-attempt's executor-owned history. The review-loop executor returns an outer
-invocation with exact correlation and a ready, waiting, interrupted, or
-completed projection. Dalph separately supplies the task-work capacity
-requirement. For example, the executor may report an invocation ready, but it
-does not request a position.
-
-If the invocation is ready and admitted, Dalph asks the review-loop executor
-bundle to continue that exact outer invocation. The review-loop executor
-records its exact internal intent before an ambiguity-crossing call, interprets
-its internal operations, and calls the same Git, evidence-store, coding-agent,
-or reviewer boundaries required by the existing protocol. Dalph receives the
-normalized outer result and activates the generic frontier again.
-
-No new person-facing command, provider request, retry bound, artifact,
-disposition, or outcome is introduced by the source-boundary change.
-
-### Crash, retry, and visible result
-
-A coordinator crash before or after an ambiguity-crossing request keeps the
-existing intent-before-effect and observe-before-retry behavior. The refactor
-must not add a new retry or infer that an unrecorded result did not occur.
-
-The operator sees the same task progress, waits, failures, and final outcome as
-before the refactor. The operator does not see internal review-loop stage names
-as generic Dalph stages.
-
-Dalph must not let generic reconstruction, frontier derivation, admission, or
-activation inspect evidence, reviewer, findings-handback, or convergence
-payloads. It must not duplicate a provider request or treat an internal event
-tag as generic scheduling authority.
-
-### Acceptance-test mapping
-
-- `generic activation continues an opaque review-loop invocation` proves the
-  injected outer projection and continuation path.
-- Existing review-loop evidence, review, handback, retry, and convergence tests
-  prove that internal behavior remains unchanged.
-- A checked import rule proves that generic reconstruction, frontier,
-  admission, and activation cannot import the review-loop implementation or
-  its internal types.
-
-## Dalph restarts while a reviewer invocation is unresolved
+## Dalph starts and completes executor work for one planned attempt
 
 ### Starting situation
 
-No person directly triggers the crash or restart. Dalph has recorded the exact
-review-loop intent for a reviewer invocation, including its attempt,
-operation, and reviewer-session identities. The reviewer provider may have
-accepted the request, but Dalph has not recorded a final review result.
-
-The coordinator process dies. The provider-owned reviewer process may stop,
-remain active, or complete while Dalph is down. The journal remains available.
+Alice is monitoring run R, but she does not directly trigger this automatic
+start. The fake tracker reports Task A eligible and claimed by Dalph. Dalph has
+planned `(run R, attempt attempt-A-3)`. Fake Git reports its exact planned
+worktree at the recorded Base SHA. No executor work has started.
 
 ### Trigger and ordered actions
 
-The Dalph process restarts and scans the complete journal in position order.
-Journal storage validates each physical row, record key, and position. The
-application composition gives review-loop payloads to the injected review-loop
-codec and validator. The review-loop executor reconstructs the unresolved
-internal invocation and returns only its outer correlation and projection to
-generic reconstruction.
+Dalph admits Task A within the configured capacity and records that it is
+starting executor work for run R, attempt `attempt-A-3`. It passes that exact
+planned attempt to the controlled fake executor.
 
-When activation continues the outer invocation, the review-loop executor asks
-the reviewer provider to create, discover, or resume the exact recorded
-reviewer session. It records the observed result through its internal protocol
-and returns a normalized outer result.
-
-### Crash, retry, and visible result
-
-Another crash at any existing intent, request, observation, or outcome cut
-repeats the same complete reconstruction and fresh provider observation. Dalph
-does not allocate another semantic review round merely because the coordinator
-restarted.
-
-The operator sees either continued progress, the existing typed wait or
-failure, or the same completed/non-convergent result. Generic Dalph must not
-read a review manifest or internal event name to decide whether the reviewer is
-running or finished.
-
-### Acceptance-test mapping
-
-- `restart delegates unresolved reviewer history to the review-loop executor`
-  proves complete in-memory reconstruction without generic stage knowledge.
-- The same scenario through a closed and reopened SQLite journal proves the
-  production decoding and reconstruction composition.
-- The stateful reviewer-provider test proves that a reviewer may complete
-  during coordinator downtime and that restart reuses the exact invocation.
-
-## A stage-name-free test executor drives generic orchestration
-
-### Starting situation
-
-This is controlled test evidence, not a second production executor. No person,
-external provider, crash, or retry applies because the test bundle performs no
-outside request and its internal state is process-local fixture data.
-
-The test composition installs a minimal executor bundle whose private internal
-name and payload do not contain review-loop vocabulary.
-
-### Trigger and ordered actions
-
-The test gives generic reconstruction an executor-owned history value. Generic
-reconstruction asks the injected bundle for an outer projection. Frontier,
-admission, and activation use only the returned correlation, provider
-lifecycle, wait, continuation, and outcome. Dalph supplies any task-work
-capacity requirement independently.
+The fake executor first reports the attempt running. Dalph records that report
+for the same pair. The fake later returns one terminal result for its complete
+work on the attempt, and Dalph records that result before selecting later
+integration work. Generic Dalph never sees an executor-internal operation or
+another executor identity.
 
 ### Visible and forbidden result
 
-The test observes the same generic transition sequence regardless of the
-bundle's private stage name. No production configuration, executor registry,
-protocol identity, or switching command is created.
+Alice sees Task A's executor work start and finish. The result may authorize
+the later integration workflow, but it does not prove tracker completion.
 
-Generic source, emitted declarations, traces, and snapshots must not contain
-the test bundle's private stage name or review-loop internal names.
+Dalph must not allocate `ExecutorOuterInvocationId`, expose a reviewer or
+coding-agent step, or treat executor success as a completed tracker task.
+
+No crash occurs on this path. If the shared process dies before the terminal
+result is journaled, the shared-restart scenario below applies; no external
+executor response survives to retry.
 
 ### Acceptance-test mapping
 
-- `generic orchestration uses a stage-name-free executor bundle` proves the
-  replaceability tracer bullet.
-- The import-boundary check rejects any generic import from the
-  `review-loop-executor` module tree.
-- A composition test proves production installs exactly one review-loop
-  executor bundle.
+- `drives one planned attempt through the generic executor boundary` proves
+  start, running, and terminal projections using `RunId` plus `AttemptId`.
+- A source and emitted-type check proves generic code contains no separate
+  outer identity or experimental review-loop stage.
 
-## Deferred multi-executor behavior
+## Dalph asks the fake executor to suspend one planned attempt
 
-V1 has only one production executor, so changing executors during a run,
-routing mixed executor histories, handling an unavailable old executor, and
-authorizing an operator to restart under another executor do not occur in
-these scenarios. Issue #127 owns that v2 design.
+### Starting situation
 
-That design must preserve the accepted direction that executor ownership is
-per planned task attempt. The first executor invocation for an attempt records
-the owning executor protocol identity; later executor history for that attempt
-uses the same identity. A clean restart may create a new attempt under another
-executor only after exact old writers and resources are safely handled.
-Existing issues #66, #69, and #83 remain the first reuse candidates for clean
-restart, disposition-authorized cleanup, and visible operator state.
+Alice has asked Dalph to pause Task A. Dalph has applied that direction. Task
+A's `(run R, attempt attempt-A-3)` is running and occupies one task-work
+position.
+
+### Trigger and ordered actions
+
+Dalph asks the controlled fake executor to stop all work for
+`(run R, attempt attempt-A-3)` while preserving the ability to resume it. The
+position remains
+occupied while the fake executor reports suspension still in progress.
+
+When the fake executor reports that exact pair safely suspended, Dalph records
+the result and makes the position available. After Alice unpauses A, Dalph
+later reacquires a position and resumes the same pair.
+
+### Visible and forbidden result
+
+Alice sees the attempt safely suspended and later resumed. Dalph must not infer
+suspension from an internal process event, create another attempt, or release
+the position before the complete-attempt result.
+
+If the shared process dies during suspension, both Dalph and the fake executor
+stop. Restart reconstructs the applied Pause and the same pair as occupying one
+position. Dalph asks the recreated fake again to safely suspend that pair. Only
+after Dalph records the new suspension result does it release the position. No
+independent executor response survives to retry.
+
+### Acceptance-test mapping
+
+- `releases capacity only after the planned attempt is safely suspended`
+  proves the stop-for-resume boundary.
+- `resumes the same planned attempt after unpause` proves identity reuse.
+
+## Dalph and the controlled fake executor restart together
+
+### Starting situation
+
+Alice is monitoring run R, but she does not cause the crash. Dalph has durable
+history for `(run R, attempt attempt-A-3)`. The fake executor and Dalph run in
+the same process. The fake tracker still reports Task A eligible and claimed by
+Dalph. Fake Git still reports the planned worktree at its recorded Base SHA.
+
+### Trigger and ordered actions
+
+The process dies, so the fake executor dies with Dalph. On restart, Dalph folds
+the journal, reconstructs the same planned-attempt responsibility, creates a
+new controlled fake-executor instance, and continues the same
+`(run R, attempt attempt-A-3)` when capacity permits.
+
+### Visible and forbidden result
+
+Alice sees the existing attempt continue. Dalph does not search for a
+surviving fake executor, invent a separate invocation identity, or pretend that
+the journal proves external executor activity remained alive.
+
+Independent coordinator and production-executor lifetimes are post-milestone
+work, so provider observation, lost executor responses, and cross-process retry
+do not apply here.
+
+### Acceptance-test mapping
+
+- `recreates the fake executor and continues the same attempt after shared
+  process death` proves the milestone restart rule.
+
+## A stage-name-free fake drives generic orchestration
+
+### Starting situation and trigger
+
+This is controlled test evidence, so no person, tracker edit, Git change,
+outside process, crash, or retry applies. The fake executor knows only the
+exact `(RunId, AttemptId)` plus running, suspended, and terminal values. It has
+no review-loop vocabulary or outside process.
+
+Dalph runs the real reconstruction, frontier, admission, and activation path
+against it.
+
+### Visible and forbidden result
+
+The same generic path drives the milestone cassettes. Source, emitted types,
+traces, and cassette entries contain no coding-agent, reviewer, handback,
+evidence, restoration, or retry stage.
+
+### Acceptance-test mapping
+
+- `generic orchestration uses a stage-name-free planned-attempt executor`
+  proves the fake boundary required by #158.

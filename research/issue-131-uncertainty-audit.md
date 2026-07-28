@@ -1,6 +1,10 @@
 # Issue 131 uncertainty audit
 
-Status: pre-follow-up-implementation research for
+Status: historical evidence. Issue #162 supersedes every outer-invocation,
+provider-correlation, and independent executor-survival conclusion in this
+ledger. Do not use those conclusions to implement #131.
+
+Previous status: pre-follow-up-implementation research for
 [Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131).
 This ledger changes no production code. It keeps every user annotation and
 every uncertainty from the previous choices audit visible until evidence
