@@ -14,6 +14,37 @@ and executor capabilities. “Interpreter” names this operation handler, not a
 environment or runtime mode; one Layer may intentionally combine real behavior
 at one boundary with simulated behavior at another.
 
+## Workflow Actions, Occurrences, and Lab Controls
+
+A workflow action is intentionally initiated by a named actor. A workflow
+occurrence is any concrete happening relevant to a run, including an action but
+also an unchosen coordinator crash, timeout, or process exit. Dalph may select
+an observation operation that later reports an occurrence; selecting the
+observation did not select the reported occurrence. A workflow-journal event is
+the durable record of Dalph's intent or observation and is not interchangeable
+with either the action or occurrence.
+
+Production and test-support values exposed to a presentation must declare two
+independent facts in their originating tagged domain type:
+
+- whether the represented happening is an actor-selected action or an
+  occurrence without a selecting production actor; and
+- whether its immediate source is a production selection, an external
+  authority, a Lab fault injection, or an explicitly synthetic unproven input.
+
+A presentation may map those generic tags to colors, borders, and explanatory
+text. It must not maintain an operation-name, transition-name, or button-label
+map that independently decides the category. Adding a new happening variant
+must make its source declaration and every exhaustive consumer fail
+typechecking until handled.
+
+A Lab crash control is therefore a Lab-selected action that injects a valid
+production occurrence. A direct assertion of an authority fact without the
+required operation identity, read result, coverage, freshness, and journal
+relationship is instead a synthetic unproven input. The Lab may expose such an
+input for component exploration only when its type and presentation make that
+status explicit; it must not present it as a production workflow action.
+
 ## Historical-Harness Boundary
 
 The Dalph orchestrator is graph-native repository tooling designed independently

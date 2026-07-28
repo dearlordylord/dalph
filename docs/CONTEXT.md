@@ -656,11 +656,32 @@ requested repository change is acceptable or whether the task tracker should
 mark the task successful. A running session has current state but no result.
 _Avoid_: Task execution outcome observation, task admission, canonical task ordering
 
+**Workflow occurrence**:
+One concrete happening relevant to a Dalph run, whether or not an actor chose
+it. A coordinator process dying, a provider request timing out, a worker
+exiting, and a person editing a tracker task are workflow occurrences. An
+occurrence is not automatically a Dalph-selected operation, and the journal
+event that later records Dalph's observation is not the occurrence itself.
+_Avoid_: Workflow action, workflow operation, workflow-journal event, Lab control
+
+**Workflow action**:
+A workflow occurrence intentionally initiated by a named actor, such as the
+Dalph user requesting Pause, Dalph asking the task tracker for a fresh read, or
+a person editing a tracker task. A coordinator crash is not a workflow action:
+it can happen in production, but no production actor selects it. A Lab control
+that deliberately injects a crash is a Lab action representing that production
+occurrence; it does not turn the represented crash into a production action.
+_Avoid_: Workflow occurrence without an initiating actor, journal event,
+unattributed external change
+
 **Workflow operation**:
-One named Dalph action or observation, such as requesting task-work start or
-recording a task-runner report. It is neither the whole task nor an individual
-SDK, CLI, or agent tool call.
-_Avoid_: Generic operation, tool call, task
+One named Dalph-selected workflow action or observation, such as requesting
+task-work start or recording a task-runner report. An observation may report a
+workflow occurrence that Dalph did not select. The operation, reported
+occurrence, and journal event recording the result remain distinct. A workflow
+operation is neither the whole task nor an individual SDK, CLI, or agent tool
+call.
+_Avoid_: Generic operation, tool call, task, external occurrence
 
 **Workflow operation intent**:
 The immutable journal event recording one selected workflow operation before
