@@ -236,10 +236,15 @@ export const LabMoveId = S.String.pipe(S.brand("LabMoveId"))
 export type LabMoveId = typeof LabMoveId.Type
 
 export const LabMoveOrigin = S.Literals([
-  "FrontierTransition",
-  "TrackerAuthority",
-  "CoordinatorProcess",
-  "LabCapability"
+  "ProductionFrontierSelection",
+  "FakeTaskTracker",
+  "LabProductionStageControl",
+  "LabResponsibilitySelectorInput",
+  "ProductionCoordinator",
+  "LabFinalityInput",
+  "LabCoordinatorSimulation",
+  "FakeBoundarySetup",
+  "OperatorControlRequest"
 ])
 export type LabMoveOrigin = typeof LabMoveOrigin.Type
 
@@ -1452,7 +1457,7 @@ const frontierMove = (
     const operationId = runnableTransitionOperationId(transition)
     return move(
       `frontier:${transition._tag}:${subjectTaskId}:${operationId ?? "fresh"}`,
-      "FrontierTransition",
+      "ProductionFrontierSelection",
       transition._tag,
       { _tag: "Task", taskId: subjectTaskId },
       {
@@ -1467,7 +1472,7 @@ const frontierMove = (
   if (!preclaimReadyTaskIds.has(subjectTaskId)) {
     return move(
       `workflow:recheck-before-claim:${subjectTaskId}`,
-      "FrontierTransition",
+      "LabProductionStageControl",
       "RecheckTaskBeforeClaim",
       { _tag: "Task", taskId: subjectTaskId },
       coordinatorRunning
@@ -1487,7 +1492,7 @@ const frontierMove = (
   )
   return move(
     `frontier:CommitFreshTaskClaimIntent:${subjectTaskId}`,
-    "FrontierTransition",
+    "ProductionFrontierSelection",
     transition._tag,
     { _tag: "Task", taskId: subjectTaskId },
     !coordinatorRunning
@@ -1513,7 +1518,7 @@ const driverMoves = (
   ...ControlledTrackerTarget.literals.map((controlledTarget) =>
     move(
       `tracker:set-target:${controlledTarget}`,
-      "TrackerAuthority",
+      "FakeTaskTracker",
       "SelectControlledTrackerTarget",
       { _tag: "TrackerTarget" },
       controlledTrackerTarget === controlledTarget
@@ -1527,7 +1532,7 @@ const driverMoves = (
   ...BoundaryBehavior.literals.map((behavior) =>
     move(
       `boundary:set-behavior:${behavior}`,
-      "LabCapability",
+      "FakeBoundarySetup",
       "SetBoundaryBehavior",
       { _tag: "Run" },
       boundaryBehavior === behavior
@@ -1540,7 +1545,7 @@ const driverMoves = (
   ),
   move(
     "tracker:observe-target",
-    "TrackerAuthority",
+    "FakeTaskTracker",
     "ObserveTrackerTarget",
     { _tag: "TrackerTarget" },
     coordinatorRunning
@@ -1549,7 +1554,7 @@ const driverMoves = (
   ),
   move(
     `tracker:set-target-settled:${!targetSettled}`,
-    "TrackerAuthority",
+    "LabFinalityInput",
     "SetTrackerTargetSettlement",
     { _tag: "TrackerTarget" },
     {
@@ -1578,7 +1583,7 @@ const driverMoves = (
       ] as const).map((fact) =>
       move(
         `tracker:supply-fact:${operationId}:${fact}`,
-        "TrackerAuthority",
+        "LabResponsibilitySelectorInput",
         `Supply${fact}Fact`,
         { _tag: "Task", taskId },
         {
@@ -1590,7 +1595,7 @@ const driverMoves = (
       ...(["Missing", "Duplicate"] as const).map((cardinality) =>
         move(
           `tracker:supply-cardinality:${operationId}:${cardinality}`,
-          "TrackerAuthority",
+          "LabResponsibilitySelectorInput",
           `Supply${cardinality}FreshFacts`,
           { _tag: "Task", taskId },
           {
@@ -1608,7 +1613,7 @@ const driverMoves = (
   ),
   move(
     "coordinator:crash",
-    "CoordinatorProcess",
+    "LabCoordinatorSimulation",
     "CrashCoordinator",
     { _tag: "Coordinator" },
     coordinatorRunning
@@ -1617,7 +1622,7 @@ const driverMoves = (
   ),
   move(
     "coordinator:restart",
-    "CoordinatorProcess",
+    "LabCoordinatorSimulation",
     "RestartCoordinator",
     { _tag: "Coordinator" },
     coordinatorRunning
@@ -1627,7 +1632,7 @@ const driverMoves = (
   ...([1, 2, 3] as const).map((nextCapacity) =>
     move(
       `coordinator:set-capacity:${nextCapacity}`,
-      "CoordinatorProcess",
+      "LabCoordinatorSimulation",
       "SetTaskWorkCapacity",
       { _tag: "Capacity", capacity: nextCapacity },
       capacity === nextCapacity
@@ -1640,7 +1645,7 @@ const driverMoves = (
   ),
   move(
     "control:pause-run",
-    "LabCapability",
+    "OperatorControlRequest",
     "RequestRunPause",
     { _tag: "Run" },
     {
@@ -1650,7 +1655,7 @@ const driverMoves = (
   ),
   move(
     "control:unpause-run",
-    "LabCapability",
+    "OperatorControlRequest",
     "RequestRunUnpause",
     { _tag: "Run" },
     {
@@ -1661,7 +1666,7 @@ const driverMoves = (
   ...trackerTasks.flatMap(({ id: taskId }) => [
     move(
       `control:pause-task:${taskId}`,
-      "LabCapability",
+      "OperatorControlRequest",
       "RequestTaskPause",
       { _tag: "Task", taskId },
       {
@@ -1671,7 +1676,7 @@ const driverMoves = (
     ),
     move(
       `control:unpause-task:${taskId}`,
-      "LabCapability",
+      "OperatorControlRequest",
       "RequestTaskUnpause",
       { _tag: "Task", taskId },
       {
@@ -2018,7 +2023,7 @@ const reconstructThroughProduction = (
             ? []
             : [move(
                 `workflow:advance:${progress.taskId}:${progress.completedOperations.length}`,
-                "FrontierTransition",
+                "LabProductionStageControl",
                 progress.nextOperation,
                 { _tag: "Task", taskId: progress.taskId },
                 built.coordinatorRunning
@@ -2033,7 +2038,7 @@ const reconstructThroughProduction = (
           progress.nextOperation === "StartExecutorInvocation"
             ? [move(
               `coordinator:run-executor:${progress.taskId}:${progress.completedExecutorInvocations}`,
-              "CoordinatorProcess",
+              "LabProductionStageControl",
               "RunExecutorInvocationsToCompletion",
               { _tag: "Task", taskId: progress.taskId },
               built.coordinatorRunning
@@ -2051,7 +2056,7 @@ const reconstructThroughProduction = (
         ...(built.hasRestartedCoordinator && firstRecoveredTransition !== undefined
           ? [move(
             "coordinator:activate-recovered",
-            "CoordinatorProcess",
+            "ProductionCoordinator",
             "RunRecoveredResponsibilitiesToQuiescence",
             {
               _tag: "Task",

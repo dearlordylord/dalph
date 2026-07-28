@@ -19,10 +19,24 @@ The semantic move inventory is returned by the exploration driver. A separate
 pure presenter turns each move into exactly one display action and owns all
 labels, explanations, grouping, ordering, and styling intent. It distinguishes:
 
-- reducer-selected moves, including runnable moves waiting for capacity;
-- external tracker edits and fresh authority facts;
-- coordinator and capacity controls; and
-- planned production behavior that the driver refuses to fake.
+- moves selected by the real production runnable frontier, including selections
+  the Lab cannot drive;
+- selection of a Lab fake task-tracker target and a request for production to
+  read it, separate from task editing and saving;
+- moves selected by the Lab's fixed prototype workflow driver to invoke
+  production stages, including fresh-read and executor-replay conveniences;
+- synthetic Lab disposition and cardinality cases supplied directly to the
+  production responsibility selector, explicitly not authoritative evidence;
+- real production recovery activation;
+- direct Lab input to the production run-finality selector;
+- in-memory Lab coordinator crash, restart, and capacity inputs;
+- fake boundary outcomes configured for later production workflow moves; and
+- operator pause/unpause requests that production can record without proving
+  reconstructed pause state changed.
+
+The palette gives those phenomena separate headings and status labels.
+“Production move executable,” “Lab input available,” and “request can be
+recorded” are deliberately different claims.
 
 The graph workbench implements the accepted task-card interaction:
 
@@ -182,4 +196,7 @@ The prototype invokes the current authenticated whole-run and task pause/unpause
 command service and shows its `ControlCommandRecorded` events. The current
 reconstructed pause reducer still returns `RunUnpaused` and `NoTaskPauses`;
 the Lab does not pretend that recording a request has already applied the
-still-unimplemented derived pause state.
+still-unimplemented derived pause state. Per-task request buttons may appear
+before graph observation because their task identities come from the Lab's fake
+tracker authority. Their group and row text state that provenance explicitly;
+their presence is not a reducer selection.

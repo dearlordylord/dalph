@@ -92,6 +92,7 @@ p { line-height: 1.5; }
 .claim-row > div:first-child { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .claim-state { font: 11px ui-monospace, monospace; }
 .action-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid #c8c1b5; }
+.action-group-description { margin: 4px 0 10px; max-width: 78ch; color: #625b51; line-height: 1.4; }
 .action-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .driver-action { border: 1px solid #c8c1b5; padding: 10px; background: #f1ede4; }
 .driver-action .button { width: 100%; }

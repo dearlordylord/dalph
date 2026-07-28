@@ -4,11 +4,13 @@ import {
   executeLabCommand,
   executeLabMove,
   type LabAction,
+  LabMoveOrigin,
   type LabMoveId,
+  type LabMoveOrigin as LabMoveOriginType,
   type LabSnapshot,
   reconstructLabSnapshot
 } from "./lab-engine.ts"
-import { presentLab } from "./lab-presenter.ts"
+import { type LabDisplayActionStatus, presentLab } from "./lab-presenter.ts"
 import { type Model, update, view } from "./main.ts"
 import {
   dispositionCoverage,
@@ -71,7 +73,12 @@ const setTrackerTarget = (
 }
 
 const assertPresenterParity = (snapshot: LabSnapshot): void => {
-  const displayed = presentLab(snapshot).actionGroups.flatMap(({ actions }) =>
+  const groups = presentLab(snapshot).actionGroups
+  assert(
+    JSON.stringify(groups.map(({ key }) => key)) === JSON.stringify(LabMoveOrigin.literals),
+    "Presenter groups must be exhaustive, unique, and ordered by the typed move-origin taxonomy"
+  )
+  const displayed = groups.flatMap(({ actions }) =>
     actions.map(({ moveId }) => moveId)
   )
   assert(displayed.length === snapshot.moves.length, "Presenter omitted or duplicated a move")
@@ -81,6 +88,40 @@ const assertPresenterParity = (snapshot: LabSnapshot): void => {
   )
   for (const move of snapshot.moves) {
     assert(displayed.includes(move.id), `Presenter omitted ${move.id}`)
+    const containingGroups = groups.filter(({ actions }) =>
+      actions.some(({ moveId }) => moveId === move.id)
+    )
+    assert(
+      containingGroups.length === 1 && containingGroups[0]?.key === move.origin,
+      `Presenter put ${move.id} outside its exact ${move.origin} group`
+    )
+  }
+}
+
+const assertPresentedMove = (
+  snapshot: LabSnapshot,
+  transition: string,
+  expectedOrigin: LabMoveOriginType,
+  expectedStatus: LabDisplayActionStatus,
+  expectedReasonParts: ReadonlyArray<string>,
+  taskId?: string
+): void => {
+  const candidates = snapshot.moves.filter((candidate) =>
+    candidate.transition === transition
+    && (taskId === undefined || (
+      candidate.subject._tag === "Task" && candidate.subject.taskId === taskId
+    ))
+  )
+  const move = candidates.find(({ availability }) => availability._tag === "Available")
+    ?? candidates[0]
+  if (move === undefined) throw new Error(`Missing ${transition} move`)
+  const group = presentLab(snapshot).actionGroups.find(({ key }) => key === expectedOrigin)
+  const action = group?.actions.find(({ moveId }) => moveId === move.id)
+  assert(move.origin === expectedOrigin, `${transition} must originate at ${expectedOrigin}`)
+  assert(action !== undefined, `${transition} must appear in the ${expectedOrigin} group`)
+  assert(action?.status === expectedStatus, `${transition} must show ${expectedStatus}`)
+  for (const part of expectedReasonParts) {
+    assert(action?.reason.includes(part) === true, `${transition} reason must name ${part}`)
   }
 }
 
@@ -89,6 +130,93 @@ assert(initial.latestObservation.length === 0, "Initial state must have no obser
 assert(initial.trackerTasks.length === 4, "Initial controlled tracker must contain A–D")
 assert(initial.authorityIssues.length === 0, "Initial tracker authority must be valid")
 assertPresenterParity(initial)
+const initialPalette = presentLab(initial)
+const initialGroupTitles = initialPalette.actionGroups.map(({ title }) => title)
+const initialGroupDescriptions = initialPalette.actionGroups.map(({ description }) => description)
+assert(
+  JSON.stringify(initialGroupTitles) === JSON.stringify([
+    "Production frontier selections",
+    "Fake task-tracker selection and read",
+    "Lab workflow-driver controls",
+    "Lab responsibility-selector inputs",
+    "Production recovery activation",
+    "Lab run-finality inputs",
+    "Lab coordinator simulation",
+    "Fake boundary outcomes",
+    "Recorded operator control requests"
+  ]),
+  "The action palette must name the selector and effect of every group before observation"
+)
+assert(
+  !initialGroupTitles.some((title) => [
+    "Production capability gaps",
+    "Reducer-selected moves",
+    "Process controls"
+  ].includes(title)),
+  "The action palette must not retain ambiguous historical group titles"
+)
+assert(
+  JSON.stringify(initialGroupDescriptions) === JSON.stringify([
+    "Moves selected by the real production runnable frontier. Disabled rows identify frontier selections the Lab cannot drive.",
+    "Select which Lab fake task-tracker target is controlled, or ask production to read it. Task editing and saving happen separately.",
+    "The Lab's fixed prototype driver selects which production stage to invoke next, including fresh-read and executor-replay conveniences. Production executes those stages but does not select these UI moves.",
+    "Synthetic Lab scenario inputs for production's responsibility selector, including disposition and fact-cardinality cases. They are not authoritative evidence.",
+    "The real production recovery activation over responsibilities reconstructed after a coordinator restart.",
+    "Direct Lab input to the run-finality selector. It does not edit the fake task tracker.",
+    "Change only the Lab's in-memory exploration scenario: coordinator process lifetime or task-work capacity.",
+    "Choose what a later fake task-runner, executor, reviewer, or handback boundary returns. These are setup inputs, not production-selected moves.",
+    "Invoke production command recording. Task IDs come from fake tracker authority, even before observation; a recorded request does not prove pause state changed."
+  ]),
+  "Every action-group description must preserve its exact ownership and effect claim"
+)
+const initialActions = initialPalette.actionGroups.flatMap(({ actions }) => actions)
+const initialAction = (label: string) => {
+  const action = initialActions.find((candidate) => candidate.label === label)
+  if (action === undefined) throw new Error(`Missing initial action ${label}`)
+  return action
+}
+assert(
+  initialAction("Ask Dalph to observe fake tracker").status === "LAB TRACKER INPUT AVAILABLE"
+    && initialAction("Record run pause request").status === "REQUEST CAN BE RECORDED"
+    && initialAction("Record task pause request · A").reason.includes("fake tracker authority")
+    && initialAction("Record task pause request · A").reason.includes("does not prove"),
+  "Availability labels must distinguish Lab inputs from recorded operator requests"
+)
+assertPresentedMove(
+  initial,
+  "ObserveTrackerTarget",
+  "FakeTaskTracker",
+  "LAB TRACKER INPUT AVAILABLE",
+  ["production to read", "Saving a task"]
+)
+assertPresentedMove(
+  initial,
+  "SetTrackerTargetSettlement",
+  "LabFinalityInput",
+  "LAB FINALITY INPUT AVAILABLE",
+  ["run-finality selector", "does not change task-tracker authority"]
+)
+assertPresentedMove(
+  initial,
+  "CrashCoordinator",
+  "LabCoordinatorSimulation",
+  "LAB SCENARIO INPUT AVAILABLE",
+  ["in-memory coordinator scenario"]
+)
+assertPresentedMove(
+  initial,
+  "SetBoundaryBehavior",
+  "FakeBoundarySetup",
+  "LAB BOUNDARY SETUP AVAILABLE",
+  ["Lab setup", "not a production move"]
+)
+assertPresentedMove(
+  initial,
+  "RequestRunPause",
+  "OperatorControlRequest",
+  "REQUEST CAN BE RECORDED",
+  ["records the operator request", "does not prove"]
+)
 
 const secondaryTarget = await setTrackerTarget(initial, "Secondary")
 assert(
@@ -160,6 +288,14 @@ const observation = await Effect.runPromise(executeLabMove(
   availableMoveId(initial, "ObserveTrackerTarget"),
   initial.revision
 ))
+assertPresentedMove(
+  observation.snapshot,
+  "RecheckTaskBeforeClaim",
+  "LabProductionStageControl",
+  "LAB WORKFLOW CONTROL AVAILABLE",
+  ["Lab offers this control", "production's fresh task-graph stage"],
+  "A"
+)
 assert(observation.snapshot.latestObservation.length === 4, "Observation must reveal A–D")
 assert(observation.snapshot.journal.length === 2, "Success must append intent and outcome")
 assert(observation.snapshot.frontier.some(({ taskId }) => taskId === "A"), "A must be runnable")
@@ -426,6 +562,30 @@ const claim = await Effect.runPromise(executeLabMove(
   preclaimRead.snapshot.revision
 ))
 assert(claim.snapshot.responsibilities.length === 1, "Claim intent must create responsibility")
+assertPresentedMove(
+  preclaimRead.snapshot,
+  "CommitFreshTaskClaimIntent",
+  "ProductionFrontierSelection",
+  "PRODUCTION FRONTIER MOVE EXECUTABLE",
+  ["production frontier", "capacity admits"],
+  "A"
+)
+assertPresentedMove(
+  claim.snapshot,
+  "ObserveClaimedTaskEligibility",
+  "LabProductionStageControl",
+  "LAB WORKFLOW CONTROL AVAILABLE",
+  ["fixed prototype driver", "Production executes the stage", "did not select"],
+  "A"
+)
+assertPresentedMove(
+  claim.snapshot,
+  "SupplyReadyFact",
+  "LabResponsibilitySelectorInput",
+  "LAB SELECTOR INPUT AVAILABLE",
+  ["synthetic Lab scenario input", "not task-tracker or executor evidence"],
+  "A"
+)
 assert(
   claim.snapshot.moves.some(({ transition, availability }) =>
     transition === "ObserveClaimedTaskEligibility" && availability._tag === "Available"
@@ -647,6 +807,22 @@ assertPresenterParity(completedWorkflow)
 if (worktreeReadySnapshot === null || executorReadySnapshot === null) {
   throw new Error("The workflow did not reach its controlled provider boundaries")
 }
+assertPresentedMove(
+  executorReadySnapshot,
+  "StartExecutorInvocation",
+  "LabProductionStageControl",
+  "LAB WORKFLOW CONTROL AVAILABLE",
+  ["fixed prototype driver", "Production executes the stage", "did not select"],
+  "A"
+)
+assertPresentedMove(
+  executorReadySnapshot,
+  "RunExecutorInvocationsToCompletion",
+  "LabProductionStageControl",
+  "LAB WORKFLOW CONTROL AVAILABLE",
+  ["Lab convenience", "not production coordinator activation"],
+  "A"
+)
 
 const behaviorSnapshots = new Array<LabSnapshot>()
 for (const [behavior, expectedEvent] of [
@@ -883,6 +1059,14 @@ const restartedDuringExecutor = await Effect.runPromise(executeLabMove(
   availableMoveId(crashedDuringExecutor.snapshot, "RestartCoordinator"),
   crashedDuringExecutor.snapshot.revision
 ))
+assertPresentedMove(
+  restartedDuringExecutor.snapshot,
+  "RunRecoveredResponsibilitiesToQuiescence",
+  "ProductionCoordinator",
+  "PRODUCTION RECOVERY CONTROL EXECUTABLE",
+  ["real production recovery activation", "reconstructed responsibilities"],
+  "A"
+)
 const recoveredToQuiescence = await Effect.runPromise(executeLabMove(
   restartedDuringExecutor.snapshot,
   availableMoveId(

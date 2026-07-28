@@ -89,6 +89,28 @@ It does not execute actions, decide whether a move is legal, mutate authority,
 or reconstruct domain state. FoldKit therefore never has to infer domain
 meaning from production unions.
 
+The presenter keeps nine visibly distinct action phenomena:
+
+- real production runnable-frontier selections;
+- Lab fake task-tracker target selection and production read requests, separate
+  from task editing and saving;
+- moves selected by the Lab's fixed prototype workflow driver to invoke a
+  production stage, including fresh-read and executor-replay conveniences;
+- synthetic Lab disposition and cardinality cases supplied directly to
+  production's responsibility selector, not authoritative evidence;
+- real production recovery activation;
+- direct Lab inputs to the run-finality selector;
+- Lab coordinator simulation inputs;
+- fake boundary-outcome setup; and
+- recorded operator control requests.
+
+Those groups are not interchangeable availability classes. A production move
+may be executable, a Lab scenario input may be available, and the production
+control service may be able to record an operator request. In particular,
+recording pause or unpause is not evidence that reconstructed pause state
+changed, and a task identity read from fake tracker authority is not durable
+graph knowledge or a reducer selection.
+
 ### FoldKit
 
 FoldKit renders the presenter output and owns view-local interaction:

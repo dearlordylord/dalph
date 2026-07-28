@@ -541,10 +541,12 @@ const actionButton = (
 const actionGroup = (
   h: HtmlFactory,
   title: string,
+  description: string,
   actions: ReadonlyArray<LabDisplayAction>,
   snapshotRevision: LabSnapshotRevision | null
 ) => h.section([h.Class("action-group")], [
   h.p([h.Class("label")], [title]),
+  h.p([h.Class("action-group-description")], [description]),
   actions.length === 0
     ? h.p([h.Class("empty")], ["No moves in this category."])
     : h.div(
@@ -878,10 +880,10 @@ export const view = (model: Model): Document => {
           ]),
 
           h.section([h.Class("card controls")], [
-            h.p([h.Class("eyebrow")], ["SEMANTIC MOVE PALETTE"]),
-            h.h2([], ["What can happen from this state?"]),
-            ...viewModel.actionGroups.map(({ actions, title }) =>
-              actionGroup(h, title, actions, snapshotRevision)
+            h.p([h.Class("eyebrow")], ["INPUTS AND SELECTED MOVES"]),
+            h.h2([], ["Who selected it, and what does it change?"]),
+            ...viewModel.actionGroups.map(({ actions, description, title }) =>
+              actionGroup(h, title, description, actions, snapshotRevision)
             ),
             model.interactionError === null
               ? null
@@ -919,14 +921,14 @@ export const view = (model: Model): Document => {
 
           stateCard(h, "Task implementation workflow", h.div([], [
             h.p([], [
-              "Operation selections drive controlled authoritative adapters through the production journaled interpreter. The journal below is the reducer input."
+              "Selected production moves call the Lab's named fake boundaries through the production journaled interpreter. The journal below is the reducer input."
             ]),
             listOrEmpty(
               h,
               viewModel.workflowRows,
               "Observe the tracker, then select a claim move to begin a production task workflow."
             )
-          ]), "REAL PRODUCTION STAGES + CONTROLLED AUTHORITIES"),
+          ]), "REAL PRODUCTION STAGES + LAB FAKE BOUNDARIES"),
 
           h.section([h.Class("card journal")], [
             h.p([h.Class("eyebrow")], ["EXACT INPUT TO THE FOLD"]),

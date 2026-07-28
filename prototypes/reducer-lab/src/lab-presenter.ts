@@ -4,9 +4,27 @@ import {
   type LabAction,
   type LabMove,
   LabMoveId,
+  LabMoveOrigin,
   type LabMoveUnavailableReason,
   type LabSnapshot
 } from "./lab-engine.ts"
+
+export const LabDisplayActionStatus = S.Literals([
+  "PRODUCTION FRONTIER MOVE EXECUTABLE",
+  "LAB TRACKER INPUT AVAILABLE",
+  "LAB WORKFLOW CONTROL AVAILABLE",
+  "LAB SELECTOR INPUT AVAILABLE",
+  "PRODUCTION RECOVERY CONTROL EXECUTABLE",
+  "LAB FINALITY INPUT AVAILABLE",
+  "LAB SCENARIO INPUT AVAILABLE",
+  "LAB BOUNDARY SETUP AVAILABLE",
+  "REQUEST CAN BE RECORDED",
+  "WAITING",
+  "CURRENT VALUE",
+  "NOT EXECUTABLE IN LAB",
+  "PLANNED, NOT EXECUTABLE"
+])
+export type LabDisplayActionStatus = typeof LabDisplayActionStatus.Type
 
 export const LabDisplayAction = S.Struct({
   buttonKind: S.String,
@@ -15,13 +33,14 @@ export const LabDisplayAction = S.Struct({
   label: S.String,
   moveId: LabMoveId,
   reason: S.String,
-  status: S.String
+  status: LabDisplayActionStatus
 })
 export interface LabDisplayAction extends S.Schema.Type<typeof LabDisplayAction> {}
 
 const LabActionGroup = S.Struct({
   actions: S.Array(LabDisplayAction),
-  key: S.String,
+  description: S.String,
+  key: LabMoveOrigin,
   title: S.String
 })
 
@@ -123,28 +142,28 @@ const inputLabel = (action: LabAction): string => {
     case "CommittedClaimIntent": return `Commit claim intent for ${action.taskId}`
     case "AdvancedTaskWorkflow": return `Advance production workflow for ${action.taskId}`
     case "AdvancedExecutorProtocol":
-      return `Let the coordinator finish executor invocations for ${action.taskId}`
+      return `Fast-forward executor replay for ${action.taskId}`
     case "ActivatedRecoveredResponsibilities":
       return `Activate recovered responsibilities for ${action.taskId}`
     case "SuppliedFreshFact":
-      return `Supply ${action.fact} fact for ${action.taskId} · ${action.operationId}`
+      return `Choose ${action.fact} selector case for ${action.taskId} · ${action.operationId}`
     case "SuppliedFreshFactCardinality":
-      return `Supply ${action.cardinality.toLowerCase()} fresh facts for ${
+      return `Choose ${action.cardinality.toLowerCase()}-input cardinality case for ${
         action.taskId
       } · ${action.operationId}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
     case "ChangedCapacity": return `Set capacity to ${action.capacity}`
     case "ChangedBoundaryBehavior":
-      return `Set controlled boundary behavior to ${action.behavior}`
+      return `Set fake boundary outcome to ${action.behavior}`
     case "ChangedTrackerTarget":
-      return `Select controlled tracker target ${action.target}`
+      return `Select fake tracker target ${action.target}`
     case "ChangedTargetSettlement":
-      return `Mark tracker target ${action.settled ? "settled" : "unsettled"}`
-    case "RequestedRunPause": return "Request run pause"
-    case "RequestedRunUnpause": return "Request run unpause"
-    case "RequestedTaskPause": return `Request ${action.taskId} pause`
-    case "RequestedTaskUnpause": return `Request ${action.taskId} unpause`
+      return `Supply finality input: target ${action.settled ? "settled" : "unsettled"}`
+    case "RequestedRunPause": return "Record run pause request"
+    case "RequestedRunUnpause": return "Record run unpause request"
+    case "RequestedTaskPause": return `Record ${action.taskId} pause request`
+    case "RequestedTaskUnpause": return `Record ${action.taskId} unpause request`
   }
 }
 
@@ -161,55 +180,66 @@ const moveLabel = (move: LabMove, snapshot: LabSnapshot): string => {
     ? ` · ${move.availability.input.operationId}`
     : ""
   switch (move.transition) {
-    case "ObserveTrackerTarget": return "Observe tracker authority"
+    case "ObserveTrackerTarget": return "Ask Dalph to observe fake tracker"
     case "SelectControlledTrackerTarget":
       return move.availability._tag === "Available"
         && move.availability.input._tag === "ChangedTrackerTarget"
-        ? `Tracker target · ${move.availability.input.target}`
-        : "Select controlled tracker target"
+        ? `Fake tracker target · ${move.availability.input.target}`
+        : "Select fake tracker target"
     case "SetTrackerTargetSettlement":
       return move.availability._tag === "Available"
         && move.availability.input._tag === "ChangedTargetSettlement"
-        ? `Mark target ${move.availability.input.settled ? "settled" : "unsettled"}`
-        : "Change target settlement"
-    case "SupplyReadyFact": return `Ready fact · ${taskId}${responsibilityOperation}`
-    case "SupplyForeignClaimFact": return `Foreign claim fact · ${taskId}${responsibilityOperation}`
-    case "SupplyMissingClaimFact": return `Missing claim fact · ${taskId}${responsibilityOperation}`
-    case "SupplyPausedFact": return `Paused fact · ${taskId}${responsibilityOperation}`
-    case "SupplyDependencyWaitFact": return `Dependency wait · ${taskId}${responsibilityOperation}`
-    case "SupplyCompletedFact": return `Tracker completed · ${taskId}${responsibilityOperation}`
-    case "SupplyFailedFact": return `Tracker failed · ${taskId}${responsibilityOperation}`
-    case "SupplyBlockedFact": return `Tracker blocked · ${taskId}${responsibilityOperation}`
-    case "SupplyCancelledFact": return `Tracker cancelled · ${taskId}${responsibilityOperation}`
-    case "SupplyRelinquishedFact": return `Relinquished · ${taskId}${responsibilityOperation}`
-    case "SupplySettledFact": return `Responsibility settled · ${taskId}${responsibilityOperation}`
-    case "SupplyUnreadableFact": return `Task-tracker unreadable · ${taskId}${responsibilityOperation}`
-    case "SupplyExecutorWaitFact": return `Executor retry wait · ${taskId}${responsibilityOperation}`
+        ? `Supply finality input · target ${
+          move.availability.input.settled ? "settled" : "unsettled"
+        }`
+        : "Supply target settlement to finality selector"
+    case "SupplyReadyFact": return `Selector case · Ready · ${taskId}${responsibilityOperation}`
+    case "SupplyForeignClaimFact":
+      return `Selector case · Foreign claim · ${taskId}${responsibilityOperation}`
+    case "SupplyMissingClaimFact":
+      return `Selector case · Missing claim · ${taskId}${responsibilityOperation}`
+    case "SupplyPausedFact": return `Selector case · Paused · ${taskId}${responsibilityOperation}`
+    case "SupplyDependencyWaitFact":
+      return `Selector case · Dependency wait · ${taskId}${responsibilityOperation}`
+    case "SupplyCompletedFact":
+      return `Selector case · Completed · ${taskId}${responsibilityOperation}`
+    case "SupplyFailedFact": return `Selector case · Failed · ${taskId}${responsibilityOperation}`
+    case "SupplyBlockedFact": return `Selector case · Blocked · ${taskId}${responsibilityOperation}`
+    case "SupplyCancelledFact":
+      return `Selector case · Cancelled · ${taskId}${responsibilityOperation}`
+    case "SupplyRelinquishedFact":
+      return `Selector case · Relinquished · ${taskId}${responsibilityOperation}`
+    case "SupplySettledFact":
+      return `Selector case · Settled · ${taskId}${responsibilityOperation}`
+    case "SupplyUnreadableFact":
+      return `Selector case · Unreadable · ${taskId}${responsibilityOperation}`
+    case "SupplyExecutorWaitFact":
+      return `Selector case · Executor wait · ${taskId}${responsibilityOperation}`
     case "SupplyExecutorSettledFact":
-      return `Executor invocation settled · ${taskId}${responsibilityOperation}`
+      return `Selector case · Executor settled · ${taskId}${responsibilityOperation}`
     case "SupplyMissingFreshFacts":
-      return `Omit fresh facts · ${taskId}${responsibilityOperation}`
+      return `Selector cardinality · Missing input · ${taskId}${responsibilityOperation}`
     case "SupplyDuplicateFreshFacts":
-      return `Duplicate fresh facts · ${taskId}${responsibilityOperation}`
-    case "CrashCoordinator": return "Crash coordinator"
-    case "RestartCoordinator": return "Restart coordinator"
+      return `Selector cardinality · Duplicate inputs · ${taskId}${responsibilityOperation}`
+    case "CrashCoordinator": return "Crash Lab coordinator process"
+    case "RestartCoordinator": return "Restart Lab coordinator process"
     case "RunExecutorInvocationsToCompletion":
-      return `Run executor invocations to completion · ${taskId}`
+      return `Fast-forward executor replay to outer outcome · ${taskId}`
     case "RunRecoveredResponsibilitiesToQuiescence":
       return "Activate recovered responsibilities to quiescence"
     case "SetTaskWorkCapacity":
       return move.subject._tag === "Capacity"
-        ? `Set capacity to ${move.subject.capacity}`
-        : "Set capacity"
+        ? `Set Lab task-work capacity to ${move.subject.capacity}`
+        : "Set Lab task-work capacity"
     case "SetBoundaryBehavior":
       return move.availability._tag === "Available"
         && move.availability.input._tag === "ChangedBoundaryBehavior"
-        ? `Boundary behavior · ${move.availability.input.behavior}`
-        : "Change controlled boundary behavior"
-    case "RequestRunPause": return "Request run pause"
-    case "RequestRunUnpause": return "Request run unpause"
-    case "RequestTaskPause": return `Request task pause · ${taskId}`
-    case "RequestTaskUnpause": return `Request task unpause · ${taskId}`
+        ? `Fake boundary outcome · ${move.availability.input.behavior}`
+        : "Change fake boundary outcome"
+    case "RequestRunPause": return "Record run pause request"
+    case "RequestRunUnpause": return "Record run unpause request"
+    case "RequestTaskPause": return `Record task pause request · ${taskId}`
+    case "RequestTaskUnpause": return `Record task unpause request · ${taskId}`
     case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${taskId}`
     case "RecheckTaskBeforeClaim":
       return `Reread current task before claim · ${taskId}`
@@ -243,7 +273,7 @@ const unavailableReason = (
     case "CoordinatorStopped":
       return "The coordinator must be running before the driver can perform this move."
     case "AlreadyCurrent":
-      return "The requested process or capacity state is already current."
+      return "This Lab input already matches the current value."
     case "ProductionTransitionNotDriven":
       return `Production selected this move, but the Lab driver cannot execute it yet (${owningIssue ?? "unowned"}).`
     case "ProductionPauseStateAbsent":
@@ -251,43 +281,133 @@ const unavailableReason = (
   }
 }
 
+const availableReason = (move: LabMove): string => {
+  switch (move.origin) {
+    case "ProductionFrontierSelection":
+      return "The production frontier selected this move and current capacity admits it."
+    case "FakeTaskTracker":
+      return move.transition === "SelectControlledTrackerTarget"
+        ? "Changes which Lab fake task-tracker target is controlled. It does not edit either target's authority."
+        : "Asks production to read the selected Lab fake task-tracker authority. Saving a task remains a separate input."
+    case "LabProductionStageControl":
+      return move.transition === "RecheckTaskBeforeClaim"
+        ? "The Lab offers this control to invoke production's fresh task-graph stage before the frontier-selected claim intent."
+        : move.transition === "RunExecutorInvocationsToCompletion"
+          ? "This Lab convenience advances the replay through the remaining executor invocations to one outer outcome; it is not production coordinator activation."
+          : `The Lab's fixed prototype driver selected ${move.transition} as the next production stage to invoke. Production executes the stage but did not select this UI move.`
+    case "LabResponsibilitySelectorInput":
+      return "Supplies a synthetic Lab scenario input directly to production's responsibility selector. It is not task-tracker or executor evidence."
+    case "ProductionCoordinator":
+      return "Runs the real production recovery activation over the currently reconstructed responsibilities."
+    case "LabFinalityInput":
+      return "Supplies a direct Lab input to the run-finality selector. It does not change task-tracker authority."
+    case "LabCoordinatorSimulation":
+      return "Changes only the Lab's in-memory coordinator scenario: process lifetime or task-work capacity."
+    case "FakeBoundarySetup":
+      return "Configures what a later fake task-runner, executor, reviewer, or handback boundary returns. This is Lab setup, not a production move."
+    case "OperatorControlRequest":
+      return move.subject._tag === "Task"
+        ? "The task identity comes from fake tracker authority. Production records the operator request; this does not prove the task pause state changed."
+        : "Production records the operator request; this does not prove the run pause state changed."
+  }
+}
+
+const groupPresentationByOrigin = {
+  ProductionFrontierSelection: {
+    availableStatus: "PRODUCTION FRONTIER MOVE EXECUTABLE",
+    buttonKind: "accent",
+    description: "Moves selected by the real production runnable frontier. Disabled rows identify frontier selections the Lab cannot drive.",
+    title: "Production frontier selections"
+  },
+  FakeTaskTracker: {
+    availableStatus: "LAB TRACKER INPUT AVAILABLE",
+    buttonKind: "outline",
+    description: "Select which Lab fake task-tracker target is controlled, or ask production to read it. Task editing and saving happen separately.",
+    title: "Fake task-tracker selection and read"
+  },
+  LabProductionStageControl: {
+    availableStatus: "LAB WORKFLOW CONTROL AVAILABLE",
+    buttonKind: "",
+    description: "The Lab's fixed prototype driver selects which production stage to invoke next, including fresh-read and executor-replay conveniences. Production executes those stages but does not select these UI moves.",
+    title: "Lab workflow-driver controls"
+  },
+  LabResponsibilitySelectorInput: {
+    availableStatus: "LAB SELECTOR INPUT AVAILABLE",
+    buttonKind: "",
+    description: "Synthetic Lab scenario inputs for production's responsibility selector, including disposition and fact-cardinality cases. They are not authoritative evidence.",
+    title: "Lab responsibility-selector inputs"
+  },
+  ProductionCoordinator: {
+    availableStatus: "PRODUCTION RECOVERY CONTROL EXECUTABLE",
+    buttonKind: "accent",
+    description: "The real production recovery activation over responsibilities reconstructed after a coordinator restart.",
+    title: "Production recovery activation"
+  },
+  LabFinalityInput: {
+    availableStatus: "LAB FINALITY INPUT AVAILABLE",
+    buttonKind: "",
+    description: "Direct Lab input to the run-finality selector. It does not edit the fake task tracker.",
+    title: "Lab run-finality inputs"
+  },
+  LabCoordinatorSimulation: {
+    availableStatus: "LAB SCENARIO INPUT AVAILABLE",
+    buttonKind: "",
+    description: "Change only the Lab's in-memory exploration scenario: coordinator process lifetime or task-work capacity.",
+    title: "Lab coordinator simulation"
+  },
+  FakeBoundarySetup: {
+    availableStatus: "LAB BOUNDARY SETUP AVAILABLE",
+    buttonKind: "",
+    description: "Choose what a later fake task-runner, executor, reviewer, or handback boundary returns. These are setup inputs, not production-selected moves.",
+    title: "Fake boundary outcomes"
+  },
+  OperatorControlRequest: {
+    availableStatus: "REQUEST CAN BE RECORDED",
+    buttonKind: "",
+    description: "Invoke production command recording. Task IDs come from fake tracker authority, even before observation; a recorded request does not prove pause state changed.",
+    title: "Recorded operator control requests"
+  }
+} as const satisfies Record<typeof LabMoveOrigin.Type, {
+  readonly availableStatus: LabDisplayActionStatus
+  readonly buttonKind: string
+  readonly description: string
+  readonly title: string
+}>
+
+const statusLabel = (move: LabMove): LabDisplayActionStatus => {
+  switch (move.availability._tag) {
+    case "Available":
+      return groupPresentationByOrigin[move.origin].availableStatus
+    case "Waiting": return "WAITING"
+    case "NotCurrent": return "CURRENT VALUE"
+    case "DriverMissing": return "NOT EXECUTABLE IN LAB"
+    case "Planned": return "PLANNED, NOT EXECUTABLE"
+  }
+}
+
 const displayAction = (move: LabMove, snapshot: LabSnapshot): LabDisplayAction => {
-  const status = move.availability._tag
-  const reason = status === "Available"
-    ? move.transition === "RunExecutorInvocationsToCompletion"
-      ? "Lets the coordinator activate each immediately legal opaque executor invocation until the selected executor returns an outer outcome."
-      : move.transition === "RecheckTaskBeforeClaim"
-        ? "Runs production's fresh task-graph stage before any state-changing claim request."
-      : move.origin === "TrackerAuthority"
-      ? "Changes or rereads the controlled tracker boundary. Save and Observe remain separate."
-      : move.origin === "FrontierTransition"
-        ? "Selected by the real frontier and admitted within current capacity."
-        : "Changes the controlled coordinator process state recorded in this branch."
+  const availabilityTag = move.availability._tag
+  const reason = move.availability._tag === "Available"
+    ? availableReason(move)
     : unavailableReason(
       move.availability.reason,
       "owningIssue" in move.availability ? move.availability.owningIssue : undefined
     )
   return {
-    buttonKind: move.origin === "FrontierTransition"
-      ? "accent"
-      : move.origin === "TrackerAuthority"
-        ? "outline"
-        : "",
-    cssClass: status.toLowerCase(),
-    enabled: status === "Available",
+    buttonKind: groupPresentationByOrigin[move.origin].buttonKind,
+    cssClass: availabilityTag.toLowerCase(),
+    enabled: availabilityTag === "Available",
     label: moveLabel(move, snapshot),
     moveId: move.id,
     reason,
-    status
+    status: statusLabel(move)
   }
 }
 
-const actionGroups = [
-  { key: "FrontierTransition", title: "Reducer-selected moves" },
-  { key: "TrackerAuthority", title: "Tracker observation + target facts" },
-  { key: "CoordinatorProcess", title: "Process controls" },
-  { key: "LabCapability", title: "Production capability gaps" }
-] as const
+const actionGroups = LabMoveOrigin.literals.map((key) => ({
+  key,
+  ...groupPresentationByOrigin[key]
+}))
 
 const edgesFor = (tasks: ReadonlyArray<ControlledTask>): ReadonlyArray<GraphEdge> =>
   tasks.flatMap((task) => [
@@ -355,10 +475,10 @@ const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProject
     ),
     projection(
       "Authority",
-      "Controlled tracker authority",
+      "Lab fake task-tracker authority",
       snapshot.authorityIssues.length === 0
-        ? "Current fake external authority"
-        : "Current fake authority is intentionally invalid",
+        ? "Current facts in the Lab's fake tracker"
+        : "The Lab's current fake tracker facts are intentionally invalid",
       authorityTasks,
       authorityEdges,
       snapshot.authorityIssues,
@@ -391,10 +511,11 @@ const workflowStatusLabel = (
 
 /** Converts one semantic snapshot into all wording, grouping, ordering, and styling intent. */
 export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
-  actionGroups: actionGroups.map(({ key, title }) => ({
+  actionGroups: actionGroups.map(({ description, key, title }) => ({
     actions: snapshot.moves
       .filter(({ origin }) => origin === key)
       .map((move) => displayAction(move, snapshot)),
+    description,
     key,
     title
   })),
@@ -438,8 +559,8 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     [...new Set(snapshot.graphKnowledge.flatMap(({ taskIds }) => taskIds))].join(", ") || "none"
   }`,
   notes: [
-    "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
-    "The journaled controlled adapter records an exact fake claim; Dalph checks it and rereads current tracker authority before planning.",
+    "Task-card Save changes only the Lab's fake tracker. Observe asks Dalph to cross the task-tracker read boundary.",
+    "The Lab's journaled fake claim adapter records an exact claim; Dalph checks it and rereads current fake tracker facts before planning.",
     "The orchestrator sees opaque executor invocations. Review strategy and review events stay inside the selected executor protocol.",
     "Opaque executor invocations cross journaled production boundaries and are shown by ordinal; the coordinator control runs the current path to completion without repeated clicks.",
     "Pause and unpause controls record production ControlCommandRecorded events. Production reconstruction still reports RunUnpaused / NoTaskPauses until the later pause-state issues land.",

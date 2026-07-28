@@ -24,59 +24,59 @@ const excluded = (reason: string) => ({ reason, status: "IntentionallyExcluded" 
 export const workflowOperationCoverage = {
   AcquireTaskClaim: interactive("Selected claim intents can be committed."),
   EstablishTaskWorkSession: interactive("The production stage runs through the dry-run interpreter."),
-  ExecuteTaskWork: interactive("The controlled executor is invoked through the selected executor's opaque outer protocol."),
-  HandBackReviewFindings: interactive("Controlled review findings cross the journaled handback boundary."),
-  ReadTrackerGraph: interactive("The controlled tracker can be observed repeatedly."),
+  ExecuteTaskWork: interactive("The Lab's fake executor boundary is invoked through the selected executor's opaque outer protocol."),
+  HandBackReviewFindings: interactive("Findings from the Lab's fake reviewer cross the journaled handback boundary."),
+  ReadTrackerGraph: interactive("The Lab's fake task tracker can be observed repeatedly."),
   ReconcileTaskWorktree: interactive("The production stage runs through the dry-run interpreter."),
   RecordImplementationDisposition: interactive("The selected executor journals its exact terminal disposition."),
   RecordTaskAttemptPlan: interactive("The production stage plans the exact attempt."),
-  ReviewImplementation: interactive("The controlled independent reviewer is invoked inside the selected executor protocol."),
-  SealImplementationEvidence: interactive("The controlled content-addressed evidence store is invoked inside the selected executor protocol.")
+  ReviewImplementation: interactive("The Lab's fake independent reviewer is invoked inside the selected executor protocol."),
+  SealImplementationEvidence: interactive("The Lab's fake content-addressed evidence store is invoked inside the selected executor protocol.")
 } satisfies Coverage<WorkflowOperation>
 
 /** Journal events are consequences of driver operations, never raw UI buttons. */
 export const workflowJournalEventCoverage = {
   ControlCommandRecorded: interactive("Produced by authenticated pause and unpause controls."),
-  ImplementationConvergenceDispositionRecorded: interactive("Produced when the controlled selected executor accepts the implementation."),
-  ImplementationEvidenceSealed: interactive("Produced through the controlled evidence store."),
-  ImplementationEvidenceSealingIntended: interactive("Produced before controlled evidence sealing."),
-  ImplementationReviewCompleted: interactive("Produced through the controlled independent reviewer."),
-  ImplementationReviewIntended: interactive("Produced before the controlled independent reviewer is invoked."),
-  ReviewFindingsHandbackCompleted: interactive("Produced when controlled findings are returned to the exact implementer session."),
-  ReviewFindingsHandbackIntended: interactive("Produced before controlled findings handback."),
+  ImplementationConvergenceDispositionRecorded: interactive("Produced when the Lab's selected fake executor accepts the implementation."),
+  ImplementationEvidenceSealed: interactive("Produced through the Lab's fake evidence store."),
+  ImplementationEvidenceSealingIntended: interactive("Produced before the Lab's fake evidence store is called."),
+  ImplementationReviewCompleted: interactive("Produced through the Lab's fake independent reviewer."),
+  ImplementationReviewIntended: interactive("Produced before the Lab's fake independent reviewer is invoked."),
+  ReviewFindingsHandbackCompleted: interactive("Produced when the Lab's fake reviewer findings return to the exact implementer session."),
+  ReviewFindingsHandbackIntended: interactive("Produced before the Lab sends fake reviewer findings back."),
   TaskAttemptPlanned: interactive("Produced by the real attempt-planning stage."),
-  TaskClaimAcquired: interactive("Produced by the controlled exact-claim adapter."),
+  TaskClaimAcquired: interactive("Produced by the Lab's fake task-tracker claim adapter."),
   TaskClaimAcquisitionIntended: interactive("Produced by an admitted claim move."),
-  TaskExecutionIntentRecorded: interactive("Produced before the controlled executor request."),
+  TaskExecutionIntentRecorded: interactive("Produced before a request to the Lab's fake executor."),
   TaskExecutionObservationFailed: interactive("Produced by the selectable executor-observation failure."),
-  TaskExecutionOutcomeObserved: interactive("Produced from a successful controlled executor observation."),
-  TaskExecutionReported: interactive("Produced from the controlled executor report."),
-  TaskExecutionRequestAttemptRecorded: interactive("Produced before the controlled executor request."),
+  TaskExecutionOutcomeObserved: interactive("Produced from a successful observation of the Lab's fake executor."),
+  TaskExecutionReported: interactive("Produced from the Lab's fake executor report."),
+  TaskExecutionRequestAttemptRecorded: interactive("Produced before a request to the Lab's fake executor."),
   TaskExecutionRequestFailed: interactive("Produced by the selectable executor-request failure."),
-  TaskExecutionRequestReturned: interactive("Produced by the controlled executor acknowledgement."),
-  TaskWorkSessionEstablished: interactive("Produced from the controlled task-work provider."),
+  TaskExecutionRequestReturned: interactive("Produced by the Lab's fake executor acknowledgement."),
+  TaskWorkSessionEstablished: interactive("Produced from the Lab's fake task-work provider."),
   TaskWorkSessionEstablishmentIntentRecorded: interactive("Produced before task-work session establishment."),
   TaskWorkSessionLookupFailed: interactive("Produced by the selectable task-work lookup failure."),
-  TaskWorkSessionLookupRequested: interactive("Produced before the controlled task-work provider lookup."),
-  TaskWorkSessionReported: interactive("Produced from the controlled task-work provider report."),
+  TaskWorkSessionLookupRequested: interactive("Produced before looking up a session through the Lab's fake task-work provider."),
+  TaskWorkSessionReported: interactive("Produced from the Lab's fake task-work provider report."),
   TaskWorkSessionResultReported: excluded("No task-work provider driver."),
-  TaskWorkStartRequestAcknowledged: interactive("Produced by the controlled task-work provider acknowledgement."),
+  TaskWorkStartRequestAcknowledged: interactive("Produced by the Lab's fake task-work provider acknowledgement."),
   TaskWorkStartRequestFailed: interactive("Produced by the selectable task-work start failure."),
-  TaskWorkStartRequested: interactive("Produced before the controlled task-work provider request."),
-  TaskWorktreeReady: interactive("Produced from the controlled authoritative Git proof."),
-  TaskWorktreeReconciliationIntended: interactive("Produced before controlled Git reconciliation."),
-  TechnicalRetryDeferralSuperseded: interactive("Produced immediately before the controlled retry invocation."),
+  TaskWorkStartRequested: interactive("Produced before a request to the Lab's fake task-work provider."),
+  TaskWorktreeReady: interactive("Produced from the authoritative proof returned by the Lab's fake Git boundary."),
+  TaskWorktreeReconciliationIntended: interactive("Produced before reconciliation through the Lab's fake Git boundary."),
+  TechnicalRetryDeferralSuperseded: interactive("Produced immediately before retrying the Lab's applicable fake boundary."),
   TechnicalRetryPolicyCaptured: interactive("Produced when the journaled review or handback boundary captures its retry policy."),
-  TechnicalRetryScheduled: interactive("Produced when a controlled technical failure schedules its bounded retry."),
-  TrackerGraphObservationIntentRecorded: interactive("Produced by observing the controlled tracker."),
-  TrackerGraphOutcomeObserved: interactive("Produced by observing the controlled tracker.")
+  TechnicalRetryScheduled: interactive("Produced when a technical failure from a Lab fake boundary schedules its bounded retry."),
+  TrackerGraphObservationIntentRecorded: interactive("Produced before reading the Lab's fake task tracker."),
+  TrackerGraphOutcomeObserved: interactive("Produced after successfully reading the Lab's fake task tracker.")
 } satisfies Coverage<WorkflowJournalEvent>
 
 export const responsibilityCoverage = {
-  ExecutorInvocationResponsibility: interactive("Created by the controlled journaled executor boundary."),
+  ExecutorInvocationResponsibility: interactive("Created by the journaled boundary around the Lab's fake executor."),
   TaskClaimResponsibility: interactive("Created by a committed claim intent."),
-  TaskWorkSessionResponsibility: interactive("Created by the controlled journaled task-work provider."),
-  TaskWorktreeResponsibility: interactive("Created by the controlled journaled Git boundary.")
+  TaskWorkSessionResponsibility: interactive("Created by the journaled boundary around the Lab's fake task-work provider."),
+  TaskWorktreeResponsibility: interactive("Created by the journaled boundary around the Lab's fake Git adapter.")
 } satisfies Coverage<WorkflowResponsibilityEntry>
 
 export const dispositionCoverage = {
@@ -120,6 +120,6 @@ export const explanationCoverage = {
 } satisfies Coverage<FrontierExplanation>
 
 export const finalityCoverage = {
-  RunMayTerminate: observable("Rendered if the controlled state reaches it."),
+  RunMayTerminate: observable("Rendered if production reconstruction over the current Lab inputs reaches it."),
   RunMustRemainActive: observable("Rendered from the current frontier and unsettled target.")
 } satisfies Coverage<RunFinalityDecision>
