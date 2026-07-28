@@ -154,28 +154,27 @@ The graph is view-only. Card editing, not direct node dragging or edge drawing,
 is the first editing surface. Direct graph manipulation may be reconsidered
 later, but it is outside the promotion scope.
 
-## Three graph projections
+## Two graph projections and durable observation coverage
 
-The Lab can display three related but non-equivalent graph projections:
+The Lab can display two related but non-equivalent graph projections:
 
 1. **Latest successful normalized observation** — the last graph snapshot
    produced by the task-tracker read boundary and therefore the graph most
    recently seen successfully by Dalph. It is not necessarily current.
 2. **Controlled tracker authority** — the Lab's current fake external task
    tracker, including unsound or invalid topology used to exercise failures.
-3. **Best available durable graph knowledge** — the graph facts reconstructed
-   from successful journal outcomes, including any conflicts and limitations
-   of the current reducer.
 
-An adaptive selector offers `Auto`, each individual projection, and `Compare`.
+An adaptive selector offers `Auto`, each individual graph projection, and `Compare`.
 `Auto` collapses projections that are equal. `Compare` keeps the selected
 `TaskId` and viewport synchronized where practical. The Lab should not consume
 screen space showing identical copies.
 
-The current reducer retains target-closure membership rather than the complete
-dependency and grouping topology. The durable-knowledge projection must show
-that limitation instead of filling the missing edges from current authority or
-the latest read.
+The current reducer retains target-closure membership rather than dependency or
+grouping topology. The Lab therefore renders **journal-reconstructed observation
+coverage** as a membership-and-diagnostics panel, not a graph. It must show
+retained task identities, observation conflicts/counts, and staleness
+limitations without filling missing edges from current authority or the latest
+read.
 
 ## Invalid graph semantics
 

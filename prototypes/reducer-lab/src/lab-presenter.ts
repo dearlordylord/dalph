@@ -30,14 +30,13 @@ const LabJournalRow = S.Struct({
   tag: S.String
 })
 
-export const GraphProjectionKey = S.Literals(["Latest", "Authority", "Durable"])
+export const GraphProjectionKey = S.Literals(["Latest", "Authority"])
 export type GraphProjectionKey = typeof GraphProjectionKey.Type
 
 export const GraphProjectionSelection = S.Literals([
   "Auto",
   "Latest",
   "Authority",
-  "Durable",
   "Compare"
 ])
 export type GraphProjectionSelection = typeof GraphProjectionSelection.Type
@@ -262,22 +261,6 @@ const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProject
   const latestEdges = edgesFor(latestTasks)
   const authorityFingerprint = fingerprint(authorityTasks, authorityEdges, snapshot.authorityIssues)
   const latestFingerprint = fingerprint(latestTasks, latestEdges, [])
-  const durableIds = [...new Set(
-    snapshot.graphKnowledge.flatMap(({ taskIds }) => taskIds)
-  )]
-  const durableTasks = durableIds.map((id) => ({
-    body: "The current reducer retains membership only.",
-    id,
-    lifecycle: "Not retained",
-    parentTaskId: null,
-    prerequisiteIds: [],
-    title: id
-  }))
-  const durableDiagnostics = snapshot.graphKnowledge.flatMap((knowledge) =>
-    knowledge.kind === "TaskTrackerTargetClosureObserved"
-      ? ["Dependency, grouping, lifecycle, title, and body are not retained in durable graph knowledge."]
-      : [`${knowledge.kind} · ${knowledge.observationCount} incomparable observations.`]
-  )
   const latestExists = snapshot.hasSuccessfulObservation
   const observationFailed = snapshot.observationAttempt._tag === "Failed"
   return [
@@ -304,19 +287,6 @@ const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProject
       authorityEdges,
       snapshot.authorityIssues,
       false
-    ),
-    projection(
-      "Durable",
-      "Best available durable graph knowledge",
-      snapshot.graphKnowledge.length === 0
-        ? "No successful graph outcome in managed history"
-        : observationFailed || authorityFingerprint !== latestFingerprint
-          ? "Prior journal knowledge; stale against current authority"
-          : "Reconstructed from successful journal outcomes",
-      durableTasks,
-      [],
-      durableDiagnostics,
-      observationFailed || authorityFingerprint !== latestFingerprint
     )
   ]
 }
@@ -352,13 +322,14 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   ),
   graphProjections: graphProjections(snapshot),
   journal: snapshot.journal,
-  knownTasksMetric:
-    `Latest successful observation: ${snapshot.latestObservation.map(({ id }) => id).join(", ") || "none"}`,
+  knownTasksMetric: `Retained membership: ${
+    [...new Set(snapshot.graphKnowledge.flatMap(({ taskIds }) => taskIds))].join(", ") || "none"
+  }`,
   notes: [
     "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
     "The orchestrator sees opaque executor invocations. Review strategy and review events stay inside the selected executor protocol.",
     "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
-    "Durable graph knowledge currently retains target-closure membership, not dependency or grouping edges.",
+    "Journal-reconstructed observation coverage is a membership set, not a graph; it retains no topology.",
     "The browser build still uses the documented temporary Node-platform shim."
   ],
   observationStatus: snapshot.observationAttempt._tag === "NeverAttempted"

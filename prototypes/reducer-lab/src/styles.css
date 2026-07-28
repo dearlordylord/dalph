@@ -48,6 +48,7 @@ p { line-height: 1.5; }
 .observation-status { max-width: 520px; margin: 0; font-family: ui-monospace, monospace; font-size: 12px; text-align: right; }
 .projection-tabs { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0; }
 .projection-grid { display: grid; gap: 14px; }
+.coverage-panel { margin: 16px 0; padding: 16px; border: 1px solid #8a8175; border-radius: 3px; background: #e5ded2; }
 .projection-count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .projection-count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .graph-projection { min-width: 0; border: 1px solid #211f1a; background: #ece5d8; padding: 14px; }

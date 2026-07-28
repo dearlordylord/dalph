@@ -49,7 +49,7 @@ export const Model = S.Struct({
   activeBranchId: S.Number,
   branches: S.Array(Branch),
   editorError: S.NullOr(S.String),
-  graphSelection: S.Literals(["Auto", "Latest", "Authority", "Durable", "Compare"]),
+  graphSelection: S.Literals(["Auto", "Latest", "Authority", "Compare"]),
   interactionError: S.NullOr(S.String),
   nextBranchId: S.Number,
   requestId: S.Number,
@@ -69,7 +69,7 @@ const SnapshotReady = m("SnapshotReady", {
 })
 const SelectedBranch = m("SelectedBranch", { branchId: S.Number })
 const SelectedGraphProjection = m("SelectedGraphProjection", {
-  selection: S.Literals(["Auto", "Latest", "Authority", "Durable", "Compare"])
+  selection: S.Literals(["Auto", "Latest", "Authority", "Compare"])
 })
 const SelectedGraphTask = m("SelectedGraphTask", { taskId: S.String })
 const StartedNewTask = m("StartedNewTask")
@@ -818,13 +818,13 @@ export const view = (model: Model): Document => {
             h.div([h.Class("section-heading")], [
               h.div([], [
                 h.p([h.Class("eyebrow")], ["GRAPH WORKBENCH"]),
-                h.h2([], ["Tracker task editor + three graph truths"])
+                h.h2([], ["Tracker task editor + two graph truths"])
               ]),
               h.p([h.Class("observation-status")], [viewModel.observationStatus])
             ]),
             h.p([h.Class("authority-state")], [viewModel.trackerAuthorityState]),
             h.div([h.Class("projection-tabs")], (
-              ["Auto", "Latest", "Authority", "Durable", "Compare"] as const
+              ["Auto", "Latest", "Authority", "Compare"] as const
             ).map((selection) =>
               button(
                 h,
@@ -839,6 +839,19 @@ export const view = (model: Model): Document => {
                 graphProjection(h, projection, model.selectedTaskId, atTip)
               )
             ),
+            h.section([h.Class("coverage-panel")], [
+              h.p([h.Class("eyebrow")], ["NO TOPOLOGY RETAINED"]),
+              h.h3([], ["Journal-reconstructed observation coverage"]),
+              h.p([h.Class("metric")], [viewModel.knownTasksMetric]),
+              listOrEmpty(
+                h,
+                viewModel.graphKnowledgeRows,
+                "No successful graph outcome in managed history."
+              ),
+              h.p([h.Class("boundary-note")], [
+                "This durable membership history supports reconstruction diagnostics. It cannot show dependencies or grouping and is not used as current tracker authority."
+              ])
+            ]),
             h.div([h.Class("editor-claims-grid")], [
               h.section([h.Class("editor-panel")], [
                 h.p([h.Class("eyebrow")], ["FOLDKIT-OWNED DRAFT"]),
@@ -868,14 +881,6 @@ export const view = (model: Model): Document => {
           ]),
 
           h.div([h.Class("state-grid")], [
-            stateCard(h, "Graph knowledge", h.div([], [
-              h.p([h.Class("metric")], [viewModel.knownTasksMetric]),
-              listOrEmpty(
-                h,
-                viewModel.graphKnowledgeRows,
-                "No successful graph outcome in managed history."
-              )
-            ]), "REAL MANAGED-HISTORY REDUCER"),
             stateCard(h, "Responsibility", h.div([], [
               listOrEmpty(
                 h,

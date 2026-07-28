@@ -83,6 +83,15 @@ assert(observation.snapshot.latestObservation.length === 4, "Observation must re
 assert(observation.snapshot.journal.length === 2, "Success must append intent and outcome")
 assert(observation.snapshot.frontier.some(({ taskId }) => taskId === "A"), "A must be runnable")
 assert(observation.snapshot.frontier.some(({ taskId }) => taskId === "C"), "C must be runnable")
+const observedView = presentLab(observation.snapshot)
+assert(
+  observedView.graphProjections.map(({ key }) => key).join(",") === "Latest,Authority",
+  "Only topology-bearing Latest and Authority projections may be rendered as graphs"
+)
+assert(
+  observedView.graphKnowledgeRows.some((row) => row.includes("[A, B, C, D]")),
+  "Journal-reconstructed observation coverage must remain visible as a membership row"
+)
 assertPresenterParity(observation.snapshot)
 
 const capacityTwo = await Effect.runPromise(executeLabMove(

@@ -39,12 +39,13 @@ an invalid observation appends intent, displays the real `TaskDag` projection
 issues, and leaves the latest successful observation and durable knowledge
 unchanged.
 
-The graph selector exposes `Auto`, `Latest`, `Authority`, `Durable`, and
-`Compare`. `Auto` collapses equal projections. The durable projection explicitly
-shows the current reducer limitation: target-closure membership is retained,
-but task content, lifecycle, dependency edges, and grouping edges are not.
+The graph selector exposes `Auto`, `Latest`, `Authority`, and `Compare`.
+`Auto` collapses equal projections. Journal-reconstructed observation coverage
+is deliberately rendered as a membership-and-diagnostics panel rather than a
+graph: the current reducer retains target-closure task IDs, but no task content,
+lifecycle, dependency edges, or grouping edges.
 
-Each projection is rendered as an actual view-only Cytoscape graph through a
+Each topology-bearing projection is rendered as an actual view-only Cytoscape graph through a
 FoldKit custom-element adapter. Dagre lays tasks out left-to-right; solid arrow
 edges mean “blocks,” dashed diamond edges mean “contains,” and invalid missing
 endpoints appear as explicit placeholder nodes. Cytoscape data, layout, and
