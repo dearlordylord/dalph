@@ -22,6 +22,13 @@ invocation responsibility. It does not know whether the review-loop executor
 will next capture evidence, ask a reviewer, return findings, retry a provider
 request, or record convergence.
 
+One `ExecutorOuterInvocationId` identifies the opaque invocation visible to
+generic Dalph. The review-loop executor's implementer, evidence, reviewer,
+findings-handback, retry, restoration, and convergence actions have private
+`OperationId` values. Generic Dalph does not receive those identities. The
+outer invocation spans the executor's complete task-implementation algorithm;
+an internal stage does not become another outer invocation.
+
 ### Trigger and ordered actions
 
 Activation asks the injected executor bundle to reconstruct and project the
@@ -54,7 +61,8 @@ as generic Dalph stages.
 Dalph must not let generic reconstruction, frontier derivation, admission, or
 activation inspect evidence, reviewer, findings-handback, or convergence
 payloads. It must not duplicate a provider request or treat an internal event
-tag as generic scheduling authority.
+tag or internal `OperationId` as generic scheduling, correlation, or capacity
+authority.
 
 ### Acceptance-test mapping
 
@@ -65,6 +73,8 @@ tag as generic scheduling authority.
 - A checked import rule proves that generic reconstruction, frontier,
   admission, and activation cannot import the review-loop implementation or
   its internal types.
+- Emitted generic declarations prove that `OperationId` cannot be supplied
+  where `ExecutorOuterInvocationId` is required.
 
 ## Dalph restarts while a reviewer invocation is unresolved
 
@@ -140,6 +150,8 @@ protocol identity, or switching command is created.
 
 Generic source, emitted declarations, traces, and snapshots must not contain
 the test bundle's private stage name or review-loop internal names.
+The test bundle uses an outer invocation identity that is not one of its
+private operation identities.
 
 ### Acceptance-test mapping
 

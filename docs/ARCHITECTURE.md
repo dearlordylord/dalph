@@ -345,23 +345,25 @@ still prevents resumption.
 
 Pause handling does not select a replacement task or execute a pause-specific
 capacity-release branch. Dalph may already hold the task's one position as
-`Reserved` or `AwaitingProviderEvidence` before an active provider report. A
+`Reserved` or `AwaitingExecutorReport` before an active executor report. A
 matching active report changes that same position to `Working`; a matching
-terminal interruption report changes it to `NotUsing`. For example, a
-different operation identity creates one task-local `CorrelationConflict`
-instead of another permit. Frontier scheduling separately derives whether a
-position is available and may admit another task. Preserving a task-work
-session or worktree does not by itself retain task-work capacity. The current
-provider contract has no suspended outcome; a future suspension capability
-must separately define its task-position state, fresh observation, and
-resumption semantics before pause may select it.
+terminal interruption report removes it from the task-position map. A
+different outer executor invocation identity creates one task-local
+`ExecutorInvocationMismatch` instead of another permit. Frontier scheduling
+separately derives whether a position is available and may admit another task.
+Preserving a task-work session or worktree does not by itself retain task-work
+capacity.
 
-While the task is in `CorrelationConflict`, an unknown report preserves both
-operation identities. A terminal report for only the differently correlated
-operation returns the task to `AwaitingProviderEvidence`; it does not make the
-position available. For example, if Dalph expects `prepare-A` but the provider
-reported active `worker-A`, learning that `worker-A` ended still requires a
-fresh report about `prepare-A` before task A becomes `Working` or `NotUsing`.
+While the task has an `ExecutorInvocationMismatch`, an unknown report preserves
+both outer invocation identities. A terminal report for only the differently
+correlated outer invocation returns the task to `AwaitingExecutorReport`; it
+does not make the position available.
+
+The executor report is already normalized at the outer boundary. Generic
+Dalph never receives the implementer, evidence, reviewer, findings-handback,
+retry, restoration, or convergence `OperationId` values that the review-loop
+executor uses internally. Those internal operations may start and finish
+without changing the identity of the one outer invocation that Dalph admits.
 
 A confirmed task or run pause is passive. Pause state by itself schedules no
 polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
@@ -521,26 +523,24 @@ responsibility for that exact operation and follows its reconcile-before-retry
 protocol before considering fresh work.
 
 One process-local controller supplies the configured task admission positions
-to ordinary and resumed work. Its key is `TaskId`, so one task can hold at most
-one position. Dalph decides whether the selected workflow transition requires
-zero or one position; the executor does not request, declare, acquire, or
-release it. For example, continuing task A through the executor requires one
-position, while reading task A from GitHub requires none.
+to ordinary and resumed work. Its sole representation is one read-only map
+keyed by `TaskId`, so one task can hold at most one position. Dalph decides
+whether an outer transition requires zero or one position; the executor does
+not request, declare, acquire, or release it.
 
-A task position is reserved before its operation intent, retained under the
-durable `OperationId` after intent, marked working by a matching fresh active
-provider report, and made available by a matching fresh terminal, interrupted,
-or absent report. If the provider names a different operation for the same task, the
-controller stores one correlation conflict containing both identities and
-continues counting the task once. For example, with capacity two, conflicted
-task A uses one position and task B may use the other. A report that only the
-different provider operation terminated returns task A to awaiting evidence
-about its expected operation; it does not make task A available.
+A task position is reserved before its outer executor intent, retained under
+the durable `ExecutorOuterInvocationId` after intent, marked working by a
+matching active executor report, and removed by a matching terminal,
+interrupted, or absent executor report. If the executor names a different
+outer invocation for the same task, the controller stores one
+`ExecutorInvocationMismatch` containing both outer identities and continues
+counting the task once.
 
-Reconstruction validates that durable history identifies at most one current
-capacity-holding operation for each task before deriving a frontier. For
-example, two current task-A operations are invalid managed history, not two
-controller positions and not an ordinary provider correlation conflict.
+Reconstruction validates that generic history identifies at most one unfinished
+outer executor invocation for each task before deriving a frontier. Multiple
+internal implementer, evidence, reviewer, findings-handback, retry,
+restoration, or convergence operations are private executor history and do not
+become generic responsibilities or task-capacity positions.
 
 Pure derivation, reducer execution, bounded journal appends, tracker/Git/provider
 reconciliation reads, evidence sealing, cleanup, and integration do not consume
@@ -973,10 +973,10 @@ cannot fabricate a provider session or process identity.
 
 The following evidence, review, findings-handback, retry, and convergence
 sections describe the **review-loop executor**, not the generic
-Dalph orchestrator. The executor translates each internal action into an opaque
-outer invocation, wait, correlation, resource-use declaration, or outcome
-before generic reconstruction, frontier selection, admission, or activation
-uses it.
+Dalph orchestrator. One opaque outer invocation spans the executor's complete
+internal algorithm. Evidence sealing, review, findings handback, retry, and
+convergence remain private executor actions: generic reconstruction, frontier
+selection, admission, and activation neither receive nor correlate them.
 
 The present source layout is transitional. The review-loop executor remains
 co-located in `packages/orchestrator` and its internal operations still share

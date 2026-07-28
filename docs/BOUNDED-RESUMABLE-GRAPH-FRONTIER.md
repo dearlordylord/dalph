@@ -111,54 +111,53 @@ responsibilities priority over fresh tasks, then uses the accepted canonical
 task order. Fresh-task selection creates responsibility only when the
 orchestrator records that task's first exact operation intent.
 
-One process-local capacity controller stores at most one task-admission
-position per task. Dalph decides whether a workflow transition needs zero or
-one position; the executor does not request, acquire, declare, or release it.
-For example, continuing task A through the executor needs one position, while a
-tracker-only observation needs none. The controller never infers capacity from
-an executor's internal stage or operation name.
+One process-local capacity controller stores one read-only map from `TaskId` to
+task-work position. The map is the sole capacity representation; absence means
+the task uses no position. Dalph decides whether an outer workflow transition
+needs zero or one position. The executor does not request, acquire, declare, or
+release capacity, and Dalph never infers capacity from an executor-internal
+stage or operation name.
 
-One task moves through `NotUsing`, `Reserved`,
-`AwaitingProviderEvidence`, `Working`, and `CorrelationConflict`. Recording
+One task moves through absence, `Reserved`, `AwaitingExecutorReport`,
+`Working`, and `ExecutorInvocationMismatch`. Recording the outer executor
 intent replaces the temporary reservation identity with the durable
-`OperationId`. A matching fresh active provider report changes
-`AwaitingProviderEvidence` to `Working`. A matching terminal or absent report
-changes either state to `NotUsing`; a matching interrupted report also makes
-the position available because the provider proved that invocation stopped. An
-unknown or unreadable report keeps one position unavailable in
-`AwaitingProviderEvidence`. For example, “lookup failed” cannot release task A,
-while “operation A is absent” can. Paused worktrees and sessions do not consume
-capacity by themselves.
+`ExecutorOuterInvocationId`. A matching active report from the executor changes
+`AwaitingExecutorReport` to `Working`. A matching terminal, interrupted, or
+absent report makes the position available. An unknown or unreadable executor
+report keeps one position unavailable in `AwaitingExecutorReport`. Paused
+worktrees and sessions do not consume capacity by themselves.
 
-A provider report for another `OperationId` on the same task creates one
-task-local `CorrelationConflict`; it never creates another position. For
-example, if task A expects `prepare-A` and the provider reports active
-`worker-A`, task A counts once. With configured capacity two, independently
-runnable task B may use the second position. With capacity one, task B waits.
-The conflict keeps both operation identities visible until a fresh provider
-report resolves it. An unknown report preserves the conflict. A terminal
-report for only the differently correlated operation removes that observed
-mismatch but returns the task to `AwaitingProviderEvidence` for the expected
-operation; it does not release the position. For example, if `worker-A` ends
-while Dalph still expects `prepare-A`, a later fresh report must say whether
-`prepare-A` is active, terminal, interrupted, or absent before Dalph can mark
-the task `Working` or `NotUsing`.
+An executor report for another `ExecutorOuterInvocationId` on the same task
+creates one task-local `ExecutorInvocationMismatch`; it never creates another
+position. With configured capacity two, mismatched task A counts once and
+independently runnable task B may use the second position. With capacity one,
+task B waits. An unknown report preserves both outer invocation identities. A
+terminal report for only the differently correlated outer invocation returns
+the task to `AwaitingExecutorReport` for the expected outer invocation; it does
+not release the position.
 
-Valid journal history contains at most one current capacity-holding operation
-for each task. If reconstruction finds two, Dalph rejects that managed history
-before deriving the frontier. For example, two unclosed intents for task A
-that both claim its current task-work position are invalid journal history;
-they are not normalized into a provider conflict.
+These identities are never review-loop operation identities. The review-loop
+executor may internally start an implementer, capture evidence, invoke a
+reviewer, return findings, and retry. All of those internal `OperationId`
+values stay inside the executor. It emits one normalized lifecycle report for
+the single outer invocation that spans that complete algorithm.
+
+Valid generic journal history contains at most one unfinished outer executor
+invocation for each task. If reconstruction finds two, Dalph rejects that
+managed history before deriving the frontier. Multiple unfinished internal
+review-loop operations are not multiple generic responsibilities and are not
+capacity holders.
 
 ### Executor outer protocol
 
-The review-loop executor translates its internal implementation,
-restoration, evidence, review, and findings algorithm into opaque outer
-invocations. Generic reconstruction and activation retain only each
-invocation's exact task-and-invocation correlation, Dalph's task-work capacity
-requirement, named wait or interruption, and normalized outcome. They do not inspect logs,
-output, evidence manifests, or executor artifacts to infer a current worker or
-reviewer.
+The review-loop executor translates its internal implementation, restoration,
+evidence, review, and findings algorithm into one opaque outer invocation per
+task attempt. That invocation spans the complete executor algorithm, rather
+than creating one outer invocation for each internal action. Generic
+reconstruction and activation retain only the exact task-and-outer-invocation
+correlation, Dalph's task-work capacity requirement, named wait or
+interruption, and normalized outcome. They do not inspect internal operation
+identities, logs, output, evidence manifests, or executor artifacts.
 
 The review-loop executor retains same-session findings return, an independent
 reviewer identity for each semantic round, separate technical and semantic
@@ -266,13 +265,13 @@ the coordinator supervisor isolates its exact subject and continues unrelated
 work without starting a runner or external effect.
 
 After an acknowledged handoff, a live-runtime runner exit before intent removes
-ownership and makes the exact reserved position available. An exit after intent
-without a recorded result removes only the dead runner's ownership, retains the
-position under `OperationId`, and signals reconciliation. Only a fresh matching
-provider report may change it to working or not using; a different correlation
-changes it to one task-local correlation conflict. Abrupt process death
-guarantees neither finalization nor signaling and relies on startup
-reconstruction.
+ownership and makes the exact reserved position available. An exit after the
+outer executor intent without a recorded result removes only the dead runner's
+ownership, retains the position under `ExecutorOuterInvocationId`, and signals
+reconciliation. Only a matching normalized executor report may change it to
+working or not using; a different outer correlation changes it to one
+task-local `ExecutorInvocationMismatch`. Abrupt process death guarantees
+neither finalization nor signaling and relies on startup reconstruction.
 
 Selection, reservation, and activation ownership are process-local. Restart
 discards every pre-intent instance and derives again. A recorded intent retains
@@ -404,8 +403,8 @@ provider correlation and three-lookup protocol would make the broad model less
 tractable and obscure the focused question.
 
 The activation extension to M2 must make a runtime-observed runner exit after
-intent retain its exact task-admission position until fresh provider evidence
-changes that position. The
+outer executor intent retain its exact task-admission position until a new
+normalized executor report changes that position. The
 `postIntentExitRetainsPositionUntilFreshEvidence` invariant owns this rule. A
 weakened action that frees the position immediately must produce a
 counterexample, and Quint-connect must execute the positive exit-then-observe

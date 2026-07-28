@@ -37,6 +37,14 @@ observation, and outcome values. Dalph orchestration separately owns the
 zero-or-one task-work capacity requirement. For example, an executor may report
 an invocation active, but it never asks the controller for a position.
 
+The boundary has an identity firewall. Generic Dalph uses the branded
+`ExecutorOuterInvocationId` for the one opaque invocation spanning a task
+attempt's executor algorithm. The review-loop executor uses `OperationId` for
+its private implementation, evidence, reviewer, findings-handback, retry,
+restoration, and convergence actions. Internal operation identities never
+become outer invocation identities merely because the implementation is
+currently colocated or the histories share physical journal storage.
+
 The review-loop executor module owns:
 
 - its internal workflow operations and interpreter members;
@@ -72,6 +80,10 @@ An enforced import rule prevents generic reconstruction, frontier, admission,
 and activation modules from importing the review-loop module or internal
 evidence/review types. Tests that deliberately know review-loop details move
 beside that module.
+
+The emitted generic API also distinguishes `ExecutorOuterInvocationId` from
+`OperationId`, preventing generic code from accepting an executor-internal
+identity as outer correlation or capacity evidence.
 
 ## Issue ownership
 

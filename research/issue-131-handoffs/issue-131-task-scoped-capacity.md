@@ -2,162 +2,139 @@
 
 Issue: [#131](https://github.com/dearlordylord/dalph/issues/131)
 
-This handoff prepares a fresh `/implement` session. It changes the accepted
-specification and model, but deliberately does not repair the production
-controller.
+## Non-negotiable executor boundary
+
+Generic Dalph sees one opaque executor outer invocation for a task. The
+review-loop executor alone interprets implementation, evidence capture,
+reviewer invocation, findings handback, retry, restoration, and convergence
+operations.
+
+The two identity domains are deliberately distinct:
+
+- `ExecutorOuterInvocationId` crosses the executor boundary and may appear in
+  generic responsibility, frontier, admission, activation, wait,
+  interruption, and outcome code.
+- `OperationId` identifies an executor-internal action or another concrete
+  Dalph workflow action. An executor-internal `OperationId` must not appear in
+  generic capacity state or masquerade as an outer invocation identity.
+
+Physical colocation in `packages/orchestrator` and shared journal storage do
+not relax this boundary. Generic code gives opaque executor-owned history to
+the injected executor bundle and consumes only its normalized outer
+projection.
 
 ## Accepted behavior
 
-1. Dalph owns capacity. The executor does not request, declare, acquire, or
-   release it. For example, Dalph says that continuing task A through the
-   executor requires one position, while a GitHub-only read requires none.
-2. Capacity is keyed by `TaskId`. One task uses zero or one position. For
-   example, task A cannot use one position for `expected-A` and another for
-   `reported-A`.
-3. A task normally moves through `NotUsing`, `Reserved`,
-   `AwaitingProviderEvidence`, `Working`, then `NotUsing`. For example,
-   recording intent changes task A's temporary reservation into a position
-   retained under its durable `OperationId`.
-4. A matching active provider report changes the task to `Working`. For
-   example, an active report for `expected-A` confirms the position already
-   held for `expected-A`; it does not add a position.
-5. A matching terminal, interrupted, or absent report changes the task to
-   `NotUsing`. For example, an absent report for `expected-A` makes task A's
-   position available.
-6. A report for a different operation creates one `CorrelationConflict`. For
-   example, expected `expected-A` plus active `reported-A` keeps one task-A
-   position unavailable and exposes both identities.
-7. A terminal report only for the differently correlated operation does not
-   release the expected operation. For example, after `reported-A` stops, task
-   A returns to `AwaitingProviderEvidence` for `expected-A`.
-8. An unknown report does not erase a correlation conflict. For example,
-   expected `expected-A`, observed active `reported-A`, then unknown still
-   keeps both identities in `CorrelationConflict`. After `reported-A` ends,
-   Dalph must get a fresh active, terminal, interrupted, or absent report for
-   `expected-A` before changing the task to `Working` or `NotUsing`.
-9. Two current capacity-holding operations for one task in the journal are
-   invalid managed history. For example, two unclosed current task-A intents
-   fail reconstruction before Dalph derives a frontier.
-10. Provider evidence cannot attach to a temporary `Reserved` position because
-    Dalph has not recorded an `OperationId` yet. For example, an unknown
-    provider result received before task A's start intent cannot change its
-    reservation to `AwaitingProviderEvidence`.
+1. Dalph owns configured task-work capacity. The executor does not request,
+   declare, acquire, or release positions.
+2. One read-only map keyed by `TaskId` is the sole process-local capacity
+   representation. Absence means the task uses no position.
+3. A map entry is `Reserved`, `AwaitingExecutorReport`, `Working`, or
+   `ExecutorInvocationMismatch`.
+4. Recording an outer invocation identity changes the temporary reservation
+   to `AwaitingExecutorReport`.
+5. A matching active outer report changes the same entry to `Working`.
+6. A matching terminal, interrupted, or absent outer report removes the entry.
+7. A report naming another outer invocation changes the same entry to
+   `ExecutorInvocationMismatch`; it never creates another task entry.
+8. Ending only the reported invocation returns the entry to
+   `AwaitingExecutorReport` for the expected invocation.
+9. An unknown report preserves an existing mismatch.
+10. Two unfinished generic outer invocation responsibilities for one task are
+    invalid history. Multiple executor-internal operations are not generic
+    capacity holders and are validated only by the executor.
+11. An executor report cannot attach before the outer invocation identity is
+    recorded.
 
-## Why `OperationId` matters
+## Production correction
 
-An `OperationId` names one exact Dalph workflow action. It links the intent,
-request, provider result, retry, and outcome. It is not the task ID, attempt ID,
-or provider session ID.
+Replace every capacity-controller `OperationId` correlation with
+`ExecutorOuterInvocationId`. Rename provider-oriented controller inputs to
+executor outer reports: the executor may query providers internally, while
+generic admission receives only the normalized outer result.
 
-For example, task A can have operation `start-A-7` and later operation
-`review-A-8`. A provider report for `review-A-8` says nothing conclusive about
-whether `start-A-7` started. Dalph therefore keeps task A unavailable and
-reports the mismatch instead of silently releasing it.
+Remove the generic activity-to-capacity mapping containing
+`TaskExecution`, `ImplementationEvidenceSealing`, `ImplementationReview`,
+`ReviewFindingsHandback`, or `ImplementationDisposition`. Those names describe
+the review-loop executor's internal algorithm. Generic Dalph decides only
+whether starting or continuing the opaque executor invocation requires one
+position.
 
-## Production gap to implement
+Remove `occupied`, `reservedPositions`, and `reservedTaskIds`. They are
+unreleased compatibility projections and are not greenfield requirements.
+Expose only:
 
-The current controller separately counts `occupied.length` and
-`reservations.length`. A provider report with another `OperationId` can
-therefore count task A twice. The implementation must replace those two
-independent collections with one task-keyed state.
+```text
+ReadonlyMap<TaskId, TaskWorkPosition>
+```
 
-The current executor boundary also exposes executor-owned resource use. The
-implementation must replace that source with Dalph's task-work capacity
-requirement. For example, the generic transition or orchestration policy says
-whether the next task-A action needs a position; the executor only reports its
-external invocation lifecycle.
+Update the executor boundary so generic modules cannot accept an internal
+`OperationId` where an outer invocation identity is required. Until issue #158
+finishes the physical module extraction, every remaining source-level
+violation must carry an explicit #158 boundary warning and must not be copied
+into new generic code.
 
-Do not edit the reducer prototype at
-`/workspace/typescript/dalph-worktrees/issue-131-reducer-lab`. It is preserved
-research, not the implementation base.
+## Required tests
 
-## Required TypeScript tests
+- `counts a mismatched executor invocation once and admits another task at
+  capacity two`
+- `keeps another task waiting behind one unresolved executor invocation at
+  capacity one`
+- `requires a matching executor report before making a mismatched task
+  available`
+- `repeated mismatched executor reports keep one task position`
+- `restart asks the executor again and recreates the outer invocation
+  mismatch`
+- `unknown executor evidence holds one position while matching absence
+  releases it`
+- `matching interrupted executor evidence releases the task position`
+- `rejects two unfinished outer executor invocations for one task before
+  frontier derivation`
+- `executor cannot declare task-work capacity`
+- `executor report requires a recorded outer invocation identity`
+- `generic capacity code contains no review-loop stage vocabulary`
+- `generic orchestration uses a stage-name-free executor bundle`
 
-- `counts a mismatched provider operation once and admits another task at
-  capacity two`: task A is conflicted and task B receives the second position.
-- `keeps another task waiting behind one unresolved task at capacity one`:
-  task A counts once and task B waits.
-- `requires a matching fresh report before making a conflicted task available`:
-  stopping only the differently correlated operation keeps task A retained.
-- `repeated mismatched reports do not increase capacity usage`: applying the
-  same task-A provider report twice still reports one used position.
-- `restart rereads the provider and recreates the exact correlation conflict`:
-  a pre-crash report is discarded, then a fresh mismatched report recreates
-  expected and observed identities.
-- `unknown evidence holds one position while absence releases it`: an
-  unreadable task-A lookup cannot make capacity available, while a fresh
-  matching absent report can.
-- `matching interrupted evidence releases the task position`: a provider
-  report that the expected task-A invocation stopped makes the position
-  available.
-- `rejects two current capacity operations for one task during reconstruction`:
-  invalid journal history fails before frontier derivation.
-- `executor cannot declare task-work capacity`: the outer executor interface
-  has no capacity acquisition, declaration, or release field.
-- `provider evidence requires a recorded operation identity`: an unknown
-  provider result cannot attach to task A's temporary pre-intent reservation.
+The test executor's private payload and stage name must not contain
+implementation, evidence, review, findings, handback, retry, or convergence
+vocabulary. Existing review-loop tests continue proving the internal algorithm
+beside, not through, generic admission tests.
 
-Write the controller tests first so the first four demonstrate the current
-bug before production code changes. Keep failing tests local until the repair
-lands in the same implementation commit; master must remain green.
+## Quint and executable projection
 
-## Quint evidence already present
+The frontier model represents task-keyed positions correlated by
+`ExecutorOuterInvocationId`. Rename correlation-conflict variants and fields to
+outer-invocation mismatch terminology. The executable projection must compare
+the exact read-only map, including expected and reported outer identities.
 
-- `mismatchedProviderOperationCountsTaskOnceAndAdmitsAnotherTaskTest`
-- `differentlyCorrelatedTerminalReportKeepsExpectedOperationHeldTest`
-- `repeatedMismatchedReportsKeepOneTaskPositionTest`
-- `restartRecreatesExactCorrelationConflictTest`
-- `unknownProviderReportKeepsExpectedTaskPositionTest`
-- `unknownReportDoesNotEraseDifferentlyCorrelatedActiveEvidenceTest`
-- `absentProviderReportReleasesExpectedTaskPositionTest`
-- `interruptedProviderReportReleasesExpectedTaskPositionTest`
-- `rejectsTwoCurrentCapacityOperationsForOneTaskTest`
-- `unresolvedTaskUsesTheOnlyPositionOnceTest`
-- `capacityUsageCountsTasksNotOperationCorrelations`
-- `correlationConflictRetainsOneTaskPosition`
-- `currentCapacityHistoryIsValid`
+No Quint state, action, test, decoder, or TypeScript projection may describe an
+implementer, evidence, reviewer, findings-handback, or convergence operation
+as a generic capacity holder.
 
-For example, the capacity-two Quint test starts with task A in one correlation
-conflict, proves usage is one, reserves task B, and proves total usage is two.
+## Tracker reconciliation
 
-## Delivery order for the fresh `/implement` session
+- #131 owns task-keyed capacity using only opaque outer invocation reports.
+- #158 owns the enforced review-loop executor module and injected bundle. #131
+  must not encode internal stages while waiting for that extraction.
+- #133 remains closed as historical boundary work; its executor-declared
+  capacity wording is superseded.
+- #127 owns future multiple/configurable executors, not the v1 identity
+  boundary.
+- #54 counts tasks and outer invocation mismatches, never internal operations.
+- #159 owns the measured timeout increase needed for `pnpm check:all`.
 
-1. Pull current `master` and read the issue, canonical specification, scenario,
-   ADR, architecture section, and this handoff. For example, confirm the issue
-   still names task-scoped capacity before editing code.
-2. Add every TypeScript test above. For example, the capacity-two test must
-   fail because the old controller counts task A's reservation and report
-   separately.
-3. Introduce branded task-keyed capacity states and typed correlation conflict.
-   For example, one `Map<TaskId, TaskCapacityState>` entry contains both
-   expected and observed operation identities.
-4. Move capacity requirement ownership out of the executor boundary. For
-   example, a transition requiring provider work carries Dalph's requirement,
-   while a tracker-only transition requires zero.
-5. Update reconstruction and activation together. For example, reconstruction
-   rejects two current task-A capacity operations before the controller sees
-   them.
-6. Update Quint-connect decoding only where production projections changed.
-   For example, decode the conflict variant without adding an
-   operation-keyed occupancy collection.
-7. Run focused tests, model gates, `pnpm check:all`, and the three required
-   review passes. For example, reject any review suggestion that restores two
-   independent capacity collections because it violates the task-keyed model.
-8. Close #131 only after the issue's scenario-to-test mapping names passing
-   TypeScript and Quint evidence. For example, a green capacity-two test must
-   be linked before closure.
+## Scenario-to-test handoff requirement
 
-## Related tickets
+The final implementation handoff must enumerate every scenario in
+`docs/scenarios/issue-131-conflicting-capacity-observation.md`, its passing
+TypeScript test, its Quint proof, and any behavior deferred to #158. Aggregate
+test totals do not replace this mapping.
 
-- #132 remains closed. Its activation identity work is reused; for example,
-  post-intent capacity stays correlated by the durable `OperationId`.
-- #133 remains closed, but its executor-declared capacity clause is superseded.
-  For example, source-boundary work remains useful while capacity ownership
-  moves back to orchestration.
-- #158 is blocked by #131 because its executor source boundary must expose
-  lifecycle reports without capacity declarations.
-- #54 depends on the task-scoped state because resizing must count tasks, not
-  operation correlations.
-- #159 separately owns hosted-CI model timing. It does not change capacity
-  semantics; for example, increasing a timeout is not a fix for double-counting
-  task A.
+## Proposed project memory
+
+Publish from the root agent in `master` after merge:
+
+> Generic Dalph admits and observes only opaque executor outer invocations;
+> implementation, evidence, review, findings-handback, retry, restoration, and
+> convergence operations and identities remain private to the executor even
+> when their history shares Dalph journal storage.

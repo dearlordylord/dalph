@@ -11,8 +11,9 @@ export const noTaskWorkCapacityRequirement = TaskWorkCapacityRequirement.cases.N
 export const oneTaskWorkCapacityRequirement = TaskWorkCapacityRequirement.cases.OneTaskWorkPosition.make({})
 
 /**
- * The Dalph-owned activity whose orchestration policy decides whether one
- * task-work position is required. Executors only report lifecycle evidence.
+ * @deprecated Transitional #158 leakage from the review-loop executor.
+ * Generic Dalph's final policy is only about starting or continuing one opaque
+ * outer invocation. Do not add another internal activity name here.
  */
 export type TaskWorkCapacityActivity =
   | "ImplementationDisposition"
@@ -31,7 +32,10 @@ const taskWorkCapacityPolicy: Readonly<
   TaskExecution: oneTaskWorkCapacityRequirement
 }
 
-/** Returns the single orchestration-owned capacity rule used live and on restart. */
+/**
+ * @deprecated #158 removes this internal-stage mapping from generic code.
+ * It must not be treated as the executor contract.
+ */
 export const taskWorkCapacityRequirementFor = (
   activity: TaskWorkCapacityActivity
 ): TaskWorkCapacityRequirement => taskWorkCapacityPolicy[activity]

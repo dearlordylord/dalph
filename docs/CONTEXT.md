@@ -38,14 +38,26 @@ The review-loop executor is transitionally co-located in
 type names do not make its review strategy part of the Dalph orchestrator.
 
 **Executor outer invocation**:
-One executor-declared unit that Dalph may start, continue, wait for, interrupt,
-or normalize into an outcome without learning the executor's internal stage.
-_Avoid_: Review stage, worker state, workflow phase
+One opaque execution of a task-implementation algorithm that Dalph may start,
+continue, wait for, interrupt, or normalize into an outcome. The current
+review-loop executor may perform many internal implementation, evidence,
+review, findings-handback, retry, restoration, and convergence operations
+inside it. Generic Dalph never treats those internal operations as outer
+invocations.
+_Avoid_: Review stage, worker state, workflow phase, executor-internal operation
 
 **Executor outer invocation correlation**:
 The exact task and invocation identities that Dalph uses across intent,
-provider observation, interruption, continuation, and outcome.
-_Avoid_: Task identity alone, log correlation, artifact identity
+executor report, interruption, continuation, and outcome.
+_Avoid_: Task identity alone, log correlation, artifact identity, internal OperationId
+
+**Executor outer invocation identity**:
+The opaque identity, represented by `ExecutorOuterInvocationId`, for the one
+executor invocation visible to generic Dalph. It is distinct from every
+`OperationId` used by the executor's private implementation-and-review
+algorithm. Sharing journal storage or source files does not allow an internal
+operation identity to cross this boundary.
+_Avoid_: Workflow operation identity, reviewer invocation identity, provider session identity
 
 **Task-work capacity requirement**:
 The zero-or-one task-work position that Dalph says one workflow transition
@@ -693,11 +705,11 @@ _Avoid_: Request acknowledgement, external fact, operation result
 The stable Dalph-assigned identity allocated when one workflow operation is
 selected. Once its intent is committed, the identity links that immutable
 intent to any state-changing request, fresh result checks, recovery, repeats of
-that same request, and its recorded outcome. For example, task A may have
-operation `start-A-7` for one exact start request; retrying that request keeps
-`start-A-7`, while a later review action receives another identity. A provider
-report for `start-A-8` cannot prove what happened to `start-A-7`.
-_Avoid_: Task identity, attempt identity, provider session identity, journal position
+that same request, and its recorded outcome. Inside the review-loop executor,
+an implementer request and a later reviewer request have different internal
+`OperationId` values. Generic Dalph neither sees nor compares those internal
+identities; it sees only their containing `ExecutorOuterInvocationId`.
+_Avoid_: Task identity, attempt identity, provider session identity, journal position, executor outer invocation identity
 
 **Causal predecessor**:
 A workflow operation whose recorded outcome or decision was necessary to select
@@ -907,49 +919,39 @@ _Avoid_: Activation in progress, duplicate-ownership conflict, retryable activat
 
 **Task admission position**:
 One process-local unit of configured task-work capacity keyed by one task.
-Dalph reserves it while preparing work and marks it working after a matching
-fresh provider report. Dalph records at most one position per task even when
-two operation identities disagree. For example, if Dalph expects operation
-`prepare-A` but the provider reports active operation `worker-A`, task A holds
-one position in a correlation conflict; it does not hold two positions. The
-position is recreated after process loss from configuration, workflow
-responsibility, and fresh observations rather than restored as authority.
-Missing, unreadable, or conflicting provider evidence cannot make an
-ambiguously used position available.
+Dalph reserves it while preparing work and marks it working after the injected
+executor reports that the expected outer invocation is active. Dalph records
+at most one position per task even when two outer invocation identities
+disagree. For example, if Dalph expects `invocation-A-1` but the executor
+reports `invocation-A-2`, Task A still holds one position. Executor-internal
+implementation, evidence, review, findings-handback, retry, restoration, and
+convergence operations never create Dalph task-admission positions.
 _Avoid_: Task claim, persisted capacity reservation, worker process
 
-**Task capacity state**:
-The process-local state of one task's single task admission position:
-`NotUsing`, `Reserved`, `AwaitingProviderEvidence`, `Working`, or
-`CorrelationConflict`. For example, recording intent changes task A from
-`Reserved` to `AwaitingProviderEvidence`; a matching active provider report
-changes it to `Working`; a matching terminal, interrupted, or absent report
-changes it to `NotUsing`; and an unknown report keeps it awaiting evidence.
-Those direct changes apply when the report matches the expected operation. In
-a `CorrelationConflict`, an unknown report keeps both operation identities and
-the conflict. A terminal report for only the differently correlated operation
-first returns the task to `AwaitingProviderEvidence`; only a later fresh report
-about the expected operation may mark it `Working` or `NotUsing`. For example,
-expected `prepare-A`, observed active `worker-A`, then unknown still means
-`CorrelationConflict(prepare-A, worker-A)`. If `worker-A` then ends, task A
-still waits for fresh evidence about `prepare-A`.
-_Avoid_: Two positions for one task, persisted worker status
+**Task-work position**:
+The value stored for one task in Dalph's process-local read-only capacity map:
+`Reserved`, `AwaitingExecutorReport`, `Working`, or
+`ExecutorInvocationMismatch`. Absence from the map means the task uses no
+position. Recording an outer invocation identity changes `Reserved` to
+`AwaitingExecutorReport`; a matching active executor report changes it to
+`Working`; and a matching terminal, interrupted, or absent report removes the
+entry. Unknown information keeps the entry unavailable.
+_Avoid_: Task state, executor stage, persisted worker status
 
-**Capacity correlation conflict**:
-The task-local condition in which Dalph's current capacity-holding
-`OperationId` and a fresh provider report name different operations for the
-same task. Dalph keeps one position unavailable, explains both identities, and
-continues unrelated work when another position exists. For example, with
-capacity two, task A may be in conflict for expected operation `prepare-A`
-versus reported operation `worker-A` while task B uses the second position.
-_Avoid_: Second occupied position, global capacity failure, silent release
+**Executor invocation mismatch**:
+The task-local condition in which Dalph expects one
+`ExecutorOuterInvocationId` but the injected executor reports another outer
+invocation identity for the same task. Dalph keeps one position, exposes both
+outer identities, and continues unrelated work when another position exists.
+The mismatch never compares or exposes executor-internal `OperationId` values.
+_Avoid_: Correlation conflict, task-work operation mismatch, second position
 
 **Capacity waiting**:
 The derived condition in which a runnable transition needing task-work capacity
 is excluded from the admission set because every task admission position is
-`Reserved`, `AwaitingProviderEvidence`, `Working`, or
-`CorrelationConflict`. For example, at capacity one, task B waits while task A
-has an unresolved provider-correlation conflict.
+`Reserved`, `AwaitingExecutorReport`, `Working`, or has an executor invocation
+mismatch. For example, at capacity one, Task B waits while Task A's expected
+and reported outer invocation identities disagree.
 _Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
 **Control command identity (provisional)**:
