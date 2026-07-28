@@ -1,68 +1,131 @@
-# Keep a freshly observed invocation occupied beside another reservation
+# Count one task once when provider correlation disagrees
 
 Issue: [Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131)
 
 ## Starting situation
 
 No person directly triggers this behavior. The running Dalph coordinator has
-configured one task-work capacity position. For task A, its process-local
-capacity controller retains a reservation correlated with workflow operation
-`reserved-A`. The task-work provider owns current invocation facts; Dalph's
-workflow journal contains the responsibility from which the reservation was
-reconstructed, but it contains no persisted capacity position.
+configured two task-work positions. Task A has an outstanding workflow
+operation, `expected-A`, so Dalph holds one position for task A while it checks
+the task-work provider. Task B is independently runnable. The journal contains
+the task-A intent and responsibility, but it does not persist the capacity
+position.
 
-The task-work provider then returns a fresh observation that a different
-workflow operation, `running-A`, currently consumes task-work capacity for the
-same task. This can occur while Dalph is reconciling exact operations after
-coordinator or runner interruption. No GitHub task, Git ref, worktree, or
-executor session is changed by applying this observation.
+Dalph asks the task-work provider for the current lifecycle of task A's exact
+outer invocation. The provider returns a fresh active report for task A, but it
+names `reported-A` instead of `expected-A`. An `OperationId` is Dalph's
+identity for one exact workflow action. It connects the recorded intent,
+provider request, fresh report, retry, and outcome. It is not the task ID or
+provider session ID. The mismatch matters because Dalph cannot safely treat the
+report as proof about `expected-A`. For example, stopping `reported-A` does not
+prove that `expected-A` never started.
+
+No GitHub task, Git ref, worktree, or executor session is changed merely by
+applying this report.
 
 ## Dalph action and visible result
 
-The activation code passes the normalized provider observation to the capacity
-controller. In order, the controller:
+The activation code passes the normalized report to the capacity controller.
+In order, the controller:
 
-1. keeps the existing reservation for `reserved-A`;
-2. records `running-A` as process-local occupied capacity;
-3. reports that admission availability did not increase; and
-4. returns `CapacityWait` when the coordinator next tries to admit task B.
+1. changes task A's one position to `CorrelationConflict`, recording expected
+   `expected-A` and observed `reported-A`;
+2. counts task A once, not twice;
+3. explains the conflict for task A; and
+4. admits task B into the second configured position.
 
-If Dalph later releases only the reservation for `reserved-A`, `running-A`
-remains occupied and task B still waits. Only a fresh task-work-provider
-observation that `running-A` stopped removes that occupied position. The next
-derivation may then reserve the position for task B.
+For example, the capacity snapshot is `{ A: CorrelationConflict, B: Reserved }`
+and its usage is two. It is never `{ expected-A: Reserved, reported-A:
+Working, B: Waiting }`, because capacity belongs to tasks rather than
+operations.
 
-The maintainer can observe that no new task work starts while the provider
-still reports `running-A` consuming the sole position. Dalph must not discard
-the provider observation because another operation has a reservation, silently
-cancel either exact operation's position, or persist the derived reservation,
-occupancy, or wait in the workflow journal.
+If configured capacity were one, task B would receive `CapacityWait` because
+task A's unresolved position remains unavailable. The maintainer sees the two
+operation identities in task A's explanation. Dalph must not discard the
+provider report, invent a second position for task A, silently release task A,
+or stop unrelated task B when another position exists.
 
 ## Crash and repeated observations
 
-If Dalph crashes before or after applying the observation, it loses both
-process-local position facts. Startup reconstructs the reservation from durable
-workflow responsibility and asks the task-work provider for fresh invocation
-facts before admitting more task work. Applying the same fresh
-capacity-consuming observation again replaces the observation for that exact
-running task rather than allocating another position. Repeating the matching
-fresh release after `running-A` is already absent does not release
-`reserved-A`.
+If Dalph crashes before or after applying the report, it loses the
+process-local position state. Startup reconstructs task A's
+`AwaitingProviderEvidence` state from the one current journal operation and
+asks the provider again. Receiving the same mismatched active report recreates
+the same one-position conflict.
+
+A later matching active report for `expected-A` changes task A to `Working`.
+A later matching terminal or absent report for `expected-A` changes task A to
+`NotUsing`. A terminal report only for `reported-A` removes that observed
+mismatch but does not prove the expected operation absent, so task A returns
+to `AwaitingProviderEvidence` and still counts once. For example, Dalph must
+ask again about `expected-A` before making task A's position available.
+
+An unknown report preserves an existing `CorrelationConflict`, including both
+operation identities. It cannot attach to a temporary `Reserved` position,
+because Dalph has not recorded an `OperationId` at that point. For example,
+unknown evidence after the mismatch keeps
+`CorrelationConflict(expected-A, reported-A)`, while unknown evidence before
+the task-A start intent cannot turn its temporary reservation into
+`AwaitingProviderEvidence`.
 
 There is no state-changing external request in this scenario, so request
-acknowledgement loss and request retry do not apply. The only repeated boundary
-action is the task-work-provider read; its normalized result remains
-process-local capacity evidence.
+acknowledgement loss and request retry do not apply. The repeated action is a
+provider read. For example, repeating the same `reported-A` observation must
+recreate one conflict rather than increasing capacity usage.
+
+## Invalid journal history is different
+
+Before frontier derivation, reconstruction validates that one task has at most
+one current capacity-holding operation. If the journal itself contains two
+unclosed current operations for task A, reconstruction fails with invalid
+managed history. For example, current intents `expected-A-1` and
+`expected-A-2` are not turned into two positions and are not described as an
+ordinary provider mismatch. Unrelated work is not derived from invalid
+managed-run history.
 
 ## Acceptance-test mapping
 
-- `fails closed for stale reservation mutations and retains conflicting provider evidence`
-  proves that the controller retains both exact facts, refuses task B after
-  only `reserved-A` is released, and admits task B only after the matching
-  fresh release for `running-A`.
-- The unchanged frontier-recovery model checks continue to prove
-  `boundedCapacity` and fresh-evidence release behavior for M2's bounded
-  one-operation-per-task abstraction. M2 does not represent two distinct
-  operation identities for one task, so the exact correlation mismatch is
-  proved at the production controller seam rather than claimed as a new model
+- `counts a mismatched provider operation once and admits another task at
+  capacity two` must prove task A uses one position and task B uses the second;
+  Quint test
+  `mismatchedProviderOperationCountsTaskOnceAndAdmitsAnotherTaskTest` proves
+  the model behavior.
+- `keeps another task waiting behind one unresolved task at capacity one` must
+  prove task A remains unavailable without being double-counted; Quint test
+  `unresolvedTaskUsesTheOnlyPositionOnceTest` proves the model behavior.
+- `requires a matching fresh report before making a conflicted task available`
+  must prove that a terminal report for only `reported-A` does not release
+  `expected-A`; Quint test
+  `differentlyCorrelatedTerminalReportKeepsExpectedOperationHeldTest` proves
+  the model behavior.
+- `repeated mismatched reports do not increase capacity usage` must prove two
+  identical task-A reads still count once; Quint test
+  `repeatedMismatchedReportsKeepOneTaskPositionTest` proves the model behavior.
+- `restart recreates the exact task-local correlation conflict` must prove
+  Dalph discards the pre-crash observation, reads the provider again, and
+  recreates the expected and observed identities; Quint test
+  `restartRecreatesExactCorrelationConflictTest` proves the model behavior.
+- `unknown provider evidence holds one position while matching absence
+  releases it` must prove that an unreadable lookup cannot free task A and an
+  exact absent report can; Quint tests
+  `unknownProviderReportKeepsExpectedTaskPositionTest` and
+  `absentProviderReportReleasesExpectedTaskPositionTest` prove the model
   behavior.
+- `unknown evidence does not erase a correlation conflict` must prove that
+  both task-A operation identities remain visible; Quint test
+  `unknownReportDoesNotEraseDifferentlyCorrelatedActiveEvidenceTest` proves the
+  model behavior.
+- `provider evidence requires a recorded operation identity` must prove an
+  unknown report cannot attach to task A's temporary pre-intent reservation;
+  the `observeCapacityUnknown` model action enforces that boundary.
+- `a matching interrupted report releases the expected task position` must
+  prove that a provider-confirmed interruption makes task A not using
+  capacity; Quint test
+  `interruptedProviderReportReleasesExpectedTaskPositionTest` proves the model
+  behavior.
+- `rejects two current capacity operations for one task during reconstruction`
+  must prove invalid journal history fails before frontier derivation; Quint
+  test `rejectsTwoCurrentCapacityOperationsForOneTaskTest` proves the
+  pre-validation rule.
+- Quint tests with the same plain-language outcomes must pass before the
+  TypeScript controller is changed.

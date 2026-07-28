@@ -1,5 +1,12 @@
 # Issue #133 executor-boundary follow-up verification
 
+> Historical note: issue #131 was reopened after owner review rejected the
+> executor-declared capacity rule recorded below. The accepted replacement is
+> Dalph-owned, task-scoped capacity in
+> `docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md`. For example, a provider
+> correlation mismatch for task A now counts task A once rather than retaining
+> one reservation plus one occupied position.
+
 This bounded audit checks the uncertainty follow-ups after commit
 `26b6ce71751668d915d844a40f8369b9d5689811`. It does not reopen issue #133 or
 replace its completed review loop. It records executable evidence that is

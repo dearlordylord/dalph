@@ -62,7 +62,10 @@ const gateStartedAt = performance.now()
 const phaseDurations = new Map()
 const invariants = [
   "boundedCapacity",
-  "declaredExecutorResourceUseIsProjected",
+  "taskWorkCapacityRequirementIsProjected",
+  "capacityUsageCountsTasksNotOperationCorrelations",
+  "correlationConflictRetainsOneTaskPosition",
+  "rejectedCapacityHistoryDerivesNoFrontier",
   "everyEffectHasIntent",
   "noDuplicateAuthorityEffect",
   "everyRequestUsesItsIntentIdentity",
@@ -472,6 +475,12 @@ const exhaustiveProfiles = [
     "frontierRecoveryCapacityTwo",
     "init",
     "activationCrashReconstructionProfileStep"
+  ],
+  [
+    "task-local provider correlation conflict and reconstruction",
+    "frontierRecoveryCapacityTwo",
+    "initCorrelationConflictActivationProfile",
+    "capacityCorrelationProfileStep"
   ]
 ]
 const invariantExpression = invariants.join(" and ")
@@ -521,7 +530,7 @@ expectInvariantFailure(
 expectInvariantFailure(
   "operation-name capacity counterexample",
   "projectCapacityFromOperationName",
-  "declaredExecutorResourceUseIsProjected"
+  "taskWorkCapacityRequirementIsProjected"
 )
 expectInvariantFailure(
   "duplicate exact activation owner counterexample",

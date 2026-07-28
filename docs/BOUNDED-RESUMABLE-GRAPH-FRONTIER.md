@@ -111,21 +111,52 @@ responsibilities priority over fresh tasks, then uses the accepted canonical
 task order. Fresh-task selection creates responsibility only when the
 orchestrator records that task's first exact operation intent.
 
-One process-local capacity controller represents reserved and occupied task
-admission positions. Each executor outer invocation declares whether it uses
-one task-work capacity position. The controller reads that declared resource
-use; it never infers capacity from an internal stage or operation name. A
-provider-observed invocation remains occupied only while a fresh provider
-observation says its exact correlation consumes capacity. Paused worktrees and
-sessions do not consume capacity by themselves.
+One process-local capacity controller stores at most one task-admission
+position per task. Dalph decides whether a workflow transition needs zero or
+one position; the executor does not request, acquire, declare, or release it.
+For example, continuing task A through the executor needs one position, while a
+tracker-only observation needs none. The controller never infers capacity from
+an executor's internal stage or operation name.
+
+One task moves through `NotUsing`, `Reserved`,
+`AwaitingProviderEvidence`, `Working`, and `CorrelationConflict`. Recording
+intent replaces the temporary reservation identity with the durable
+`OperationId`. A matching fresh active provider report changes
+`AwaitingProviderEvidence` to `Working`. A matching terminal or absent report
+changes either state to `NotUsing`; a matching interrupted report also makes
+the position available because the provider proved that invocation stopped. An
+unknown or unreadable report keeps one position unavailable in
+`AwaitingProviderEvidence`. For example, “lookup failed” cannot release task A,
+while “operation A is absent” can. Paused worktrees and sessions do not consume
+capacity by themselves.
+
+A provider report for another `OperationId` on the same task creates one
+task-local `CorrelationConflict`; it never creates another position. For
+example, if task A expects `prepare-A` and the provider reports active
+`worker-A`, task A counts once. With configured capacity two, independently
+runnable task B may use the second position. With capacity one, task B waits.
+The conflict keeps both operation identities visible until a fresh provider
+report resolves it. An unknown report preserves the conflict. A terminal
+report for only the differently correlated operation removes that observed
+mismatch but returns the task to `AwaitingProviderEvidence` for the expected
+operation; it does not release the position. For example, if `worker-A` ends
+while Dalph still expects `prepare-A`, a later fresh report must say whether
+`prepare-A` is active, terminal, interrupted, or absent before Dalph can mark
+the task `Working` or `NotUsing`.
+
+Valid journal history contains at most one current capacity-holding operation
+for each task. If reconstruction finds two, Dalph rejects that managed history
+before deriving the frontier. For example, two unclosed intents for task A
+that both claim its current task-work position are invalid journal history;
+they are not normalized into a provider conflict.
 
 ### Executor outer protocol
 
 The review-loop executor translates its internal implementation,
 restoration, evidence, review, and findings algorithm into opaque outer
 invocations. Generic reconstruction and activation retain only each
-invocation's exact task-and-invocation correlation, declared resource use,
-named wait or interruption, and normalized outcome. They do not inspect logs,
+invocation's exact task-and-invocation correlation, Dalph's task-work capacity
+requirement, named wait or interruption, and normalized outcome. They do not inspect logs,
 output, evidence manifests, or executor artifacts to infer a current worker or
 reviewer.
 
@@ -237,9 +268,11 @@ work without starting a runner or external effect.
 After an acknowledged handoff, a live-runtime runner exit before intent removes
 ownership and makes the exact reserved position available. An exit after intent
 without a recorded result removes only the dead runner's ownership, retains the
-position under `OperationId`, and signals reconciliation; only fresh provider
-evidence may change it to occupied or available. Abrupt process death guarantees
-neither finalization nor signaling and relies on startup reconstruction.
+position under `OperationId`, and signals reconciliation. Only a fresh matching
+provider report may change it to working or not using; a different correlation
+changes it to one task-local correlation conflict. Abrupt process death
+guarantees neither finalization nor signaling and relies on startup
+reconstruction.
 
 Selection, reservation, and activation ownership are process-local. Restart
 discards every pre-intent instance and derives again. A recorded intent retains

@@ -26,8 +26,10 @@ request, or record convergence.
 
 Activation asks the injected executor bundle to reconstruct and project the
 attempt's executor-owned history. The review-loop executor returns an outer
-invocation with exact correlation, declared task-work resource use, and either
-a ready, waiting, interrupted, or completed projection.
+invocation with exact correlation and a ready, waiting, interrupted, or
+completed projection. Dalph separately supplies the task-work capacity
+requirement. For example, the executor may report an invocation ready, but it
+does not request a position.
 
 If the invocation is ready and admitted, Dalph asks the review-loop executor
 bundle to continue that exact outer invocation. The review-loop executor
@@ -126,8 +128,9 @@ name and payload do not contain review-loop vocabulary.
 
 The test gives generic reconstruction an executor-owned history value. Generic
 reconstruction asks the injected bundle for an outer projection. Frontier,
-admission, and activation use only the returned correlation, resource use,
-wait, continuation, and outcome.
+admission, and activation use only the returned correlation, provider
+lifecycle, wait, continuation, and outcome. Dalph supplies any task-work
+capacity requirement independently.
 
 ### Visible and forbidden result
 

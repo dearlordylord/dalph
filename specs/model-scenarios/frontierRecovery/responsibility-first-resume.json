@@ -34,7 +34,7 @@
     "traceHash": "d900b56c19e127b409b66ffe841826ca62aeeeb71e9f275ef9743991dc9c7cce"
   },
   "initialFacts": {
-    "executorResourceUse": "UsesOneTaskWorkCapacityPosition",
+    "taskWorkCapacityRequirement": "RequiresOneTaskWorkCapacityPosition",
     "ownedTask": "A",
     "occupiedIndependentTasks": ["B", "C"],
     "freshEligibleTask": "D",
@@ -45,7 +45,7 @@
     "fresh pause and authority facts report A ready"
   ],
   "expected": {
-    "capacitySource": "executorResourceUse",
+    "capacitySource": "taskWorkCapacityRequirement",
     "firstAdmittedTask": "A",
     "restartProjectionEqual": true,
     "unrelatedTaskPreserved": "D"

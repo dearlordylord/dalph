@@ -171,7 +171,7 @@ module frontierRecoveryCounterexamples {
         ownerRegistrationCounts:
           state.activation.ownerRegistrationCounts.put(task, 0),
         positions:
-          state.activation.positions.put(task, ActivationPositionAvailable),
+          state.activation.positions.put(task, ActivationPositionNotUsing),
         runners: state.activation.runners.exclude(Set(task)),
         postIntentExited:
           state.activation.postIntentExited.union(Set(task)),
@@ -196,14 +196,23 @@ module frontierRecoveryCounterexamples {
     val operationA = state.workflow.get(A).operationId
     state' = {
       ...state,
+      providerInvocationAuthority:
+        state.providerInvocationAuthority.put(
+          A,
+          ProviderInvocationActive({ operationId: operationA })
+        ),
       activation: {
         ...state.activation,
         configuredCapacity: 1,
         positions:
           state.activation.positions
-            .put(A, ActivationPositionOccupied({ operationId: operationA }))
+            .put(A, ActivationPositionWorking({ operationId: operationA }))
             .put(C, ActivationPositionReserved({ selectedTaskId: C })),
-        providerConsuming: Set(A),
+        freshProviderInvocationObservations:
+          state.activation.freshProviderInvocationObservations.put(
+            A,
+            ProviderInvocationActive({ operationId: operationA })
+          ),
       },
     }
   }
@@ -221,8 +230,8 @@ module frontierRecoveryCounterexamples {
       },
     }
 
-  // Deliberately changes an executor declaration without re-projecting it,
-  // representing an adapter that derives capacity from an operation name.
+  // Deliberately changes Dalph's requirement without re-projecting it,
+  // representing orchestration that derives capacity from an operation name.
   action projectCapacityFromOperationName: bool = {
     val current = state.workflow.get(A)
     state' = {
@@ -230,7 +239,7 @@ module frontierRecoveryCounterexamples {
       workflow:
         state.workflow.put(A, {
           ...current,
-          executorResourceUse: DoesNotUseTaskWorkCapacity,
+          taskWorkCapacityRequirement: DoesNotRequireTaskWorkCapacity,
         }),
     }
   }

@@ -54,7 +54,7 @@ review-protocol implementations.
 | [`task-dag.ts`](../packages/orchestrator/src/task-dag.ts), tracker graph readers, and graph outcome types | Refactor and deepen | Retain provider decoding, identity normalization, closure validation, cycle detection, and deterministic task ordering. Replace `eligibleTasks()` as an orchestration interface with normalized graph facts carrying declared coverage, completeness, consistency, freshness, and proven absence. A graph-knowledge reducer, not graph membership, supplies the selector's facts. |
 | [`workflow-operation.ts`](../packages/orchestrator/src/workflow-operation.ts), [`workflow.ts`](../packages/orchestrator/src/workflow.ts), and journaled interpreters | Retain and refactor at the edges | Preserve the operation algebra, `WorkflowInterpreter` seam, Layer substitution, stable `OperationId`, and intent-before-effect ordering. Add accepted control, read, constraint, responsibility, integration, completion, and disposition operations as current consumers require them; remove mode-shaped or obsolete operations only when their callers migrate. |
 | Claim, worktree, session-establishment, and task-execution protocol modules | Retain | Their exact identity, immutable payload, causal predecessor, fresh-result-check, typed conflict, and reconcile-before-retry behavior provide leverage across ordinary and restarted execution and correspond to `AmbiguityBoundaryV1`. Adapt their results into the new reconstructed-state reducers instead of reimplementing them. |
-| Implementation evidence, review, handback, retry, and convergence modules | Retain as the review-loop executor; refactor behind the executor seam | The accepted review-loop protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports declared outer transitions, waits, correlation identities, capacity use, and outcomes; issue #127 owns whether later executors make review optional or store different internal evidence. |
+| Implementation evidence, review, handback, retry, and convergence modules | Retain as the review-loop executor; refactor behind the executor seam | The accepted review-loop protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports outer transitions, waits, correlation identities, provider lifecycle, and outcomes; Dalph owns task-work capacity. For example, an active executor report changes the state of the task's existing position rather than adding an executor-owned position. Issue #127 owns whether later executors make review optional or store different internal evidence. |
 | Existing focused protocol, Schema, property, SQLite, and interpreter-equivalence tests | Retain where their production seam survives | Keep tests that prove an exact retained boundary contract. Replace tests that assert `ManagedRunRecoveryStageEntry`, one-shot traversal, or global startup blockage. Every behavior slice also updates the owning Quint model, test-only adapter, semantic trace, and applicable in-memory and SQLite P0–P6 conformance-test cut points. These labels are test vocabulary, never production stages or states. |
 
 ## Why the current topology is replaced
@@ -151,10 +151,12 @@ are architectural blocking edges, not tickets.
    model, semantic-trace, and dual-store prefix coverage. These slices depend
    on reconstruction and the selector but may be split by authority boundary.
 5. **Executor seam.** Move the current evidence/review/handback/convergence
-   implementation behind an executor-declared outer protocol without changing
-   its accepted behavior. Do not decide configurable pipelines here; preserve
-   issue #127's ability to replace this adapter without changing the outer
-   frontier and responsibility modules.
+   implementation behind an outer protocol without changing its accepted
+   behavior. Dalph keeps the capacity requirement outside that protocol. For
+   example, the executor reports provider lifecycle while Dalph decides whether
+   the transition needs one task-work position. Do not decide configurable
+   pipelines here; preserve issue #127's ability to replace this adapter
+   without changing the outer frontier and responsibility modules.
 
 ### Executor source-boundary reconciliation
 

@@ -313,15 +313,24 @@ the ordinary resuming reads. The derived progress reason names the operation tha
 still prevents resumption.
 
 Pause handling does not select a replacement task or execute a pause-specific
-capacity-release branch. Task execution holds a scoped task-work-capacity permit
-only while the task-work provider reports that the exact worker consumes that
-capacity. A fresh terminal interruption observation closes the permit scope
-through the same resource mechanism used by ordinary execution. Frontier
-scheduling separately derives that capacity is available and may admit another
-task. Preserving a task-work session or worktree does not by itself retain
-task-work capacity. The current provider contract has no suspended outcome; a
-future suspension capability must separately define its resource occupancy,
-fresh observation, and resumption semantics before pause may select it.
+capacity-release branch. Dalph may already hold the task's one position as
+`Reserved` or `AwaitingProviderEvidence` before an active provider report. A
+matching active report changes that same position to `Working`; a matching
+terminal interruption report changes it to `NotUsing`. For example, a
+different operation identity creates one task-local `CorrelationConflict`
+instead of another permit. Frontier scheduling separately derives whether a
+position is available and may admit another task. Preserving a task-work
+session or worktree does not by itself retain task-work capacity. The current
+provider contract has no suspended outcome; a future suspension capability
+must separately define its task-position state, fresh observation, and
+resumption semantics before pause may select it.
+
+While the task is in `CorrelationConflict`, an unknown report preserves both
+operation identities. A terminal report for only the differently correlated
+operation returns the task to `AwaitingProviderEvidence`; it does not make the
+position available. For example, if Dalph expects `prepare-A` but the provider
+reported active `worker-A`, learning that `worker-A` ended still requires a
+fresh report about `prepare-A` before task A becomes `Working` or `NotUsing`.
 
 A confirmed task or run pause is passive. Pause state by itself schedules no
 polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
@@ -481,13 +490,26 @@ responsibility for that exact operation and follows its reconcile-before-retry
 protocol before considering fresh work.
 
 One process-local controller supplies the configured task admission positions
-to ordinary and resumed work. A position is reserved from a fresh task's first
-operation intent through preparation of its initial task-work invocation. It is
-occupied while the task-work provider reports that an implementation,
-technical-review, semantic-review, findings-handback, or resumed task-work
-invocation consumes capacity. An invocation's terminal observation releases
-the position; the task keeps its durable responsibility and receives
-responsibility-first priority when another invocation becomes ready.
+to ordinary and resumed work. Its key is `TaskId`, so one task can hold at most
+one position. Dalph decides whether the selected workflow transition requires
+zero or one position; the executor does not request, declare, acquire, or
+release it. For example, continuing task A through the executor requires one
+position, while reading task A from GitHub requires none.
+
+A task position is reserved before its operation intent, retained under the
+durable `OperationId` after intent, marked working by a matching fresh active
+provider report, and made available by a matching fresh terminal, interrupted,
+or absent report. If the provider names a different operation for the same task, the
+controller stores one correlation conflict containing both identities and
+continues counting the task once. For example, with capacity two, conflicted
+task A uses one position and task B may use the other. A report that only the
+different provider operation terminated returns task A to awaiting evidence
+about its expected operation; it does not make task A available.
+
+Reconstruction validates that durable history identifies at most one current
+capacity-holding operation for each task before deriving a frontier. For
+example, two current task-A operations are invalid managed history, not two
+controller positions and not an ordinary provider correlation conflict.
 
 Pure derivation, reducer execution, bounded journal appends, tracker/Git/provider
 reconciliation reads, evidence sealing, cleanup, and integration do not consume

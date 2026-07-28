@@ -18,12 +18,31 @@ tie-breaker. Fresh tasks use normalized task identity as their stable order.
 External response and completion timing may change the state seen by a later
 decision, but the admission set is deterministic for one exact derived state.
 
-One process-local capacity controller reserves positions for freshly committed
-task preparation. Each executor outer invocation declares whether it uses one
-task-work capacity position. Generic orchestration applies that resource use
-without knowing whether the selected executor is implementing, restoring,
-reviewing, or handling artifacts internally. Capacity waits, reservations, and
-frontier values are recomputed after restart and are never journal authority.
+One process-local capacity controller stores at most one position for each
+task. Dalph decides whether a workflow transition needs zero or one task-work
+position; the executor does not request, acquire, declare, or release it.
+Generic orchestration applies that requirement without knowing whether the
+selected executor is implementing, restoring, reviewing, or handling artifacts
+internally. For example, task A still counts once if Dalph expects operation
+`prepare-A` while the provider reports active operation `worker-A`.
+
+A fresh provider report changes the state of that same task position. A
+matching active report marks it working; a matching terminal, interrupted, or
+absent report makes it available. A different operation identity creates one task-local
+correlation conflict and keeps the position unavailable until another fresh
+report resolves it. An unknown report preserves both identities. A terminal
+report for only the differently correlated operation returns the task to
+awaiting evidence for the expected operation. For example, learning that
+`worker-A` ended does not release the position while Dalph still needs fresh
+evidence about expected `prepare-A`. With capacity two, task B may use the
+other position while task A is in conflict. Capacity waits, reservations,
+conflicts, and frontier values are recomputed after restart and are never
+journal authority.
+
+Journal reconstruction must reject two current capacity-holding operations for
+one task before frontier derivation. For example, two unclosed task-A intents
+cannot be converted into two controller positions or hidden as an ordinary
+provider mismatch.
 
 When the process-local controller's snapshot changes so future admission may be
 possible—including after it records fresh provider evidence of non-consumption

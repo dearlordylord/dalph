@@ -27,29 +27,29 @@ module frontierRecovery {
   type Claim = Unclaimed | ActiveClaim | CompletionClaim | ForeignClaim
   type Availability = Missing | Available
   type Invocation = NoInvocation | RunningInvocation | AcceptedInvocation | InterruptedInvocation
-  type ExecutorOuterInvocationResourceUse =
-    | DoesNotUseTaskWorkCapacity
-    | UsesOneTaskWorkCapacityPosition
+  type TaskWorkCapacityRequirement =
+    | DoesNotRequireTaskWorkCapacity
+    | RequiresOneTaskWorkCapacityPosition
   type Readability = Readable | Unreadable | Conflicting
   type Observation = NeverObserved | UsableObservation | UnreadableObservation | ConflictingObservation
   type Responsibility = Unowned | Outstanding | Settled | Relinquished
 
-  // Capacity is declared by the executor's outer invocation. Internal
-  // protocol names and artifacts cannot change this projection.
-  pure def executorOuterInvocationCapacityPositions(
-    resourceUse: ExecutorOuterInvocationResourceUse
+  // Dalph decides whether a workflow transition requires task-work capacity.
+  // The executor does not request, declare, acquire, or release this position.
+  pure def requiredTaskWorkCapacityPositions(
+    requirement: TaskWorkCapacityRequirement
   ): int =
-    match resourceUse {
-      | DoesNotUseTaskWorkCapacity => 0
-      | UsesOneTaskWorkCapacityPosition => 1
+    match requirement {
+      | DoesNotRequireTaskWorkCapacity => 0
+      | RequiresOneTaskWorkCapacityPosition => 1
     }
 
-  val executorOuterInvocationCapacityUseIsDeclared: bool = and {
-    executorOuterInvocationCapacityPositions(
-      DoesNotUseTaskWorkCapacity
+  val taskWorkCapacityRequirementIsZeroOrOne: bool = and {
+    requiredTaskWorkCapacityPositions(
+      DoesNotRequireTaskWorkCapacity
     ) == 0,
-    executorOuterInvocationCapacityPositions(
-      UsesOneTaskWorkCapacityPosition
+    requiredTaskWorkCapacityPositions(
+      RequiresOneTaskWorkCapacityPosition
     ) == 1,
   }
   type Isolation =
@@ -188,7 +188,7 @@ module frontierRecovery {
     isolation: Isolation,
     attemptOutcome: AttemptOutcome,
     settlement: TaskSettlement,
-    executorResourceUse: ExecutorOuterInvocationResourceUse,
+    taskWorkCapacityRequirement: TaskWorkCapacityRequirement,
   }
 
   // Durable user commands. Pause phases and grouping coverage are derived.
@@ -212,10 +212,29 @@ module frontierRecovery {
     | PostIntentActivationOwner({ operationId: int })
 
   type ActivationPosition =
-    | ActivationPositionAvailable
+    | ActivationPositionNotUsing
     | ActivationPositionReserved({ selectedTaskId: TaskId })
-    | ActivationPositionRetained({ operationId: int })
-    | ActivationPositionOccupied({ operationId: int })
+    | ActivationPositionAwaitingProviderEvidence({ operationId: int })
+    | ActivationPositionWorking({ operationId: int })
+    | ActivationPositionCorrelationConflict({
+        expectedOperationId: int,
+        observedOperationId: int,
+      })
+
+  // One fresh provider report about the exact external invocation lifecycle.
+  // TaskId is supplied by the map key; OperationId remains part of the report.
+  type ProviderInvocationObservation =
+    | ProviderInvocationNotObserved
+    | ProviderInvocationActive({ operationId: int })
+    | ProviderInvocationTerminal({ operationId: int })
+    | ProviderInvocationInterrupted({ operationId: int })
+    | ProviderInvocationAbsent({ operationId: int })
+    | ProviderInvocationUnknown({ operationId: int })
+
+  type CurrentCapacityHistoryValidation =
+    | CapacityHistoryNotValidated
+    | CapacityHistoryAccepted
+    | CapacityHistoryRejected
 
   type ActivationReleaseCorrelation =
     | NoActivationRelease
@@ -235,7 +254,8 @@ module frontierRecovery {
     owners: TaskId -> ActivationOwner,
     ownerRegistrationCounts: TaskId -> int,
     runners: Set[TaskId],
-    providerConsuming: Set[TaskId],
+    freshProviderInvocationObservations:
+      TaskId -> ProviderInvocationObservation,
     postIntentExited: Set[TaskId],
     freshlyObservedCapacity: Set[TaskId],
     resultsRecorded: Set[TaskId],
@@ -255,7 +275,7 @@ module frontierRecovery {
     capacity: int,
     frontierTaskIds: Set[TaskId],
     admittedTaskIds: Set[TaskId],
-    executorResourceUses: TaskId -> ExecutorOuterInvocationResourceUse,
+    taskWorkCapacityRequirements: TaskId -> TaskWorkCapacityRequirement,
     transitionTags: TaskId -> str,
     transitionOperations: TaskId -> TransitionOperation,
     explanations: Set[{
@@ -278,6 +298,13 @@ module frontierRecovery {
     control: Control,
     coordinator: Coordinator,
     activation: Activation,
+    // Provider-owned current invocation facts remain outside the process-local
+    // controller. A provider read copies one exact fact into Activation.
+    providerInvocationAuthority:
+      TaskId -> ProviderInvocationObservation,
+    // Raw history exists only at the reconstruction validation boundary.
+    unvalidatedCurrentCapacityOperationIds: TaskId -> Set[int],
+    currentCapacityHistoryValidation: CurrentCapacityHistoryValidation,
     nextKnowledgeRevision: int,
     requestFreshnessViolations: int,
     duplicateEffectViolations: int,
@@ -286,6 +313,17 @@ module frontierRecovery {
     reconstructionWorkflowHistory: List[ReconstructionWorkflowRecord],
     reconstructionResponsibility: TaskId -> ReconstructionResponsibility,
     selectorProjection: SelectorProjection,
+  }
+
+  pure def withoutDerivedSelection(
+    projection: SelectorProjection
+  ): SelectorProjection = {
+    ...projection,
+    frontierTaskIds: Set(),
+    admittedTaskIds: Set(),
+    explanations: Set(),
+    reservationTaskIds: Set(),
+    occupiedTaskIds: Set(),
   }
 
   pure val A: TaskId = 0
@@ -353,7 +391,7 @@ module frontierRecovery {
     isolation: NotIsolated,
     attemptOutcome: AttemptPending,
     settlement: TaskUnsettled,
-    executorResourceUse: UsesOneTaskWorkCapacityPosition,
+    taskWorkCapacityRequirement: RequiresOneTaskWorkCapacityPosition,
   }
 
   pure def initialControl: Control = {
@@ -368,11 +406,12 @@ module frontierRecovery {
     derivedTransitions: Set(),
     selectedTransitions: Set(),
     activationInProgress: Set(),
-    positions: TASKS.mapBy(_ => ActivationPositionAvailable),
+    positions: TASKS.mapBy(_ => ActivationPositionNotUsing),
     owners: TASKS.mapBy(_ => NoActivationOwner),
     ownerRegistrationCounts: TASKS.mapBy(_ => 0),
     runners: Set(),
-    providerConsuming: Set(),
+    freshProviderInvocationObservations:
+      TASKS.mapBy(_ => ProviderInvocationNotObserved),
     postIntentExited: Set(),
     freshlyObservedCapacity: Set(),
     resultsRecorded: Set(),
@@ -417,6 +456,11 @@ module frontierRecovery {
     control: initialControl,
     coordinator: { running: true, activation: 0, crashCount: 0 },
     activation: initialActivation,
+    providerInvocationAuthority:
+      TASKS.mapBy(_ => ProviderInvocationNotObserved),
+    unvalidatedCurrentCapacityOperationIds:
+      TASKS.mapBy(_ => Set()),
+    currentCapacityHistoryValidation: CapacityHistoryAccepted,
     nextKnowledgeRevision: 1,
     requestFreshnessViolations: 0,
     duplicateEffectViolations: 0,
@@ -517,8 +561,8 @@ module frontierRecovery {
       workflow.get(task).responsibility == Outstanding
     )
     val capacityFree = selected.filter(task =>
-      workflow.get(task).executorResourceUse
-        == DoesNotUseTaskWorkCapacity
+      workflow.get(task).taskWorkCapacityRequirement
+        == DoesNotRequireTaskWorkCapacity
     )
     val capacityUsing = selected.exclude(capacityFree)
     val admittedUsing =
@@ -538,8 +582,8 @@ module frontierRecovery {
       capacity: CAPACITY,
       frontierTaskIds: selected,
       admittedTaskIds: admitted,
-      executorResourceUses:
-        TASKS.mapBy(task => workflow.get(task).executorResourceUse),
+      taskWorkCapacityRequirements:
+        TASKS.mapBy(task => workflow.get(task).taskWorkCapacityRequirement),
       transitionTags: TASKS.mapBy(task =>
         if (workflow.get(task).responsibility == Outstanding)
           "CheckTaskClaim"
@@ -1529,12 +1573,27 @@ module frontierRecovery {
   pure def activationPositionUsesCapacity(
     position: ActivationPosition
   ): bool =
-    position != ActivationPositionAvailable
+    position != ActivationPositionNotUsing
 
   pure def activationCapacityUsage(s: State): int =
     TASKS.filter(task =>
       activationPositionUsesCapacity(s.activation.positions.get(task))
     ).size()
+
+  pure def providerInvocationIsActive(
+    observation: ProviderInvocationObservation
+  ): bool =
+    match observation {
+      | ProviderInvocationActive(_) => true
+      | _ => false
+    }
+
+  pure def providerActiveTaskIds(s: State): Set[TaskId] =
+    TASKS.filter(task =>
+      providerInvocationIsActive(
+        s.activation.freshProviderInvocationObservations.get(task)
+      )
+    )
 
   pure def activationFrontier(s: State): Set[TaskId] =
     s.selectorProjection.frontierTaskIds
@@ -1552,11 +1611,18 @@ module frontierRecovery {
     derived: Set[TaskId]
   ): Activation = {
     val owned = derived.filter(task => activationOwnerExists(s, task))
+    val alreadyUsingCapacity = derived.filter(task =>
+      activationPositionUsesCapacity(s.activation.positions.get(task))
+    )
     {
       ...s.activation,
       derivedTransitions: derived,
       selectedTransitions:
-        derived.exclude(owned.union(s.activation.isolatedSubjects)),
+        derived.exclude(
+          owned
+            .union(s.activation.isolatedSubjects)
+            .union(alreadyUsingCapacity)
+        ),
       activationInProgress: owned,
       triggerPending: false,
     }
@@ -1564,6 +1630,7 @@ module frontierRecovery {
 
   action deriveActivationPass: bool = all {
     state.coordinator.running,
+    state.currentCapacityHistoryValidation == CapacityHistoryAccepted,
     // Reservation and ownership registration are one interruption-masked
     // production handoff. A later pass can overlap a live owner, but cannot
     // enter between those two boundaries.
@@ -1588,19 +1655,26 @@ module frontierRecovery {
     },
   }
 
-  action reserveTaskAdmissionPosition(task: TaskId): bool = all {
+  pure def canReserveTaskAdmissionPosition(
+    s: State,
+    task: TaskId
+  ): bool = and {
     // Release/provider observations request a fresh ordered derivation. A
     // stale selection cannot admit another task before that pass consumes the
     // trigger.
-    not(state.activation.triggerPending),
-    state.activation.selectedTransitions.contains(task),
-    state.activation.selectedTransitions.forall(candidate => task <= candidate),
-    state.activation.positions.get(task) == ActivationPositionAvailable,
+    not(s.activation.triggerPending),
+    s.activation.selectedTransitions.contains(task),
+    s.activation.selectedTransitions.forall(candidate => task <= candidate),
+    s.activation.positions.get(task) == ActivationPositionNotUsing,
     // Reservation and ownership registration are one serialized production
     // handoff. The model exposes both checkpoints but cannot start a second
     // reservation between them.
-    noActivationReservationHandoffInProgress(state),
-    activationCapacityUsage(state) < state.activation.configuredCapacity,
+    noActivationReservationHandoffInProgress(s),
+    activationCapacityUsage(s) < s.activation.configuredCapacity,
+  }
+
+  action reserveTaskAdmissionPosition(task: TaskId): bool = all {
+    canReserveTaskAdmissionPosition(state, task),
     state' = {
       ...state,
       activation: {
@@ -1695,7 +1769,7 @@ module frontierRecovery {
           positions:
             state.activation.positions.put(
               task,
-              ActivationPositionRetained({ operationId: operationId })
+              ActivationPositionAwaitingProviderEvidence({ operationId: operationId })
             ),
         },
       },
@@ -1711,7 +1785,7 @@ module frontierRecovery {
       activation: {
         ...state.activation,
         positions:
-          state.activation.positions.put(task, ActivationPositionAvailable),
+          state.activation.positions.put(task, ActivationPositionNotUsing),
         preIntentInterrupted:
           state.activation.preIntentInterrupted.union(Set(task)),
         triggerPending: true,
@@ -1731,7 +1805,7 @@ module frontierRecovery {
         ownerRegistrationCounts:
           state.activation.ownerRegistrationCounts.put(task, 0),
         positions:
-          state.activation.positions.put(task, ActivationPositionAvailable),
+          state.activation.positions.put(task, ActivationPositionNotUsing),
         runners: state.activation.runners.exclude(Set(task)),
         preIntentInterrupted:
           state.activation.preIntentInterrupted.union(Set(task)),
@@ -1770,6 +1844,13 @@ module frontierRecovery {
     state.activation.runners.contains(task),
     state' = {
       ...state,
+      providerInvocationAuthority:
+        state.providerInvocationAuthority.put(
+          task,
+          ProviderInvocationTerminal({
+            operationId: state.workflow.get(task).operationId,
+          })
+        ),
       activation: {
         ...state.activation,
         activationInProgress:
@@ -1778,9 +1859,14 @@ module frontierRecovery {
         ownerRegistrationCounts:
           state.activation.ownerRegistrationCounts.put(task, 0),
         positions:
-          state.activation.positions.put(task, ActivationPositionAvailable),
-        providerConsuming:
-          state.activation.providerConsuming.exclude(Set(task)),
+          state.activation.positions.put(task, ActivationPositionNotUsing),
+        freshProviderInvocationObservations:
+          state.activation.freshProviderInvocationObservations.put(
+            task,
+            ProviderInvocationTerminal({
+              operationId: state.workflow.get(task).operationId,
+            })
+          ),
         runners: state.activation.runners.exclude(Set(task)),
         resultsRecorded:
           state.activation.resultsRecorded.union(Set(task)),
@@ -1792,19 +1878,141 @@ module frontierRecovery {
   action observeCapacityConsumed(task: TaskId): bool = {
     val operationId = state.workflow.get(task).operationId
     all {
-      state.activation.positions.get(task)
-        == ActivationPositionRetained({ operationId: operationId }),
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionAwaitingProviderEvidence({ operationId: operationId }),
+        match state.activation.positions.get(task) {
+          | ActivationPositionCorrelationConflict(conflict) =>
+              conflict.expectedOperationId == operationId
+          | _ => false
+        },
+      },
       state' = {
         ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationActive({ operationId: operationId })
+          ),
         activation: {
           ...state.activation,
           positions:
             state.activation.positions.put(
               task,
-              ActivationPositionOccupied({ operationId: operationId })
+              ActivationPositionWorking({ operationId: operationId })
             ),
-          providerConsuming:
-            state.activation.providerConsuming.union(Set(task)),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationActive({ operationId: operationId })
+            ),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  // A fresh active report for a different operation on the same task is a
+  // task-local correlation conflict. It keeps one task position unavailable;
+  // it never allocates a second position for the observed operation.
+  action observeConflictingCapacityCorrelation(
+    task: TaskId,
+    observedOperationId: int
+  ): bool = {
+    val expectedOperationId = state.workflow.get(task).operationId
+    all {
+      observedOperationId != expectedOperationId,
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionAwaitingProviderEvidence({
+            operationId: expectedOperationId,
+          }),
+        state.activation.positions.get(task)
+          == ActivationPositionWorking({
+            operationId: expectedOperationId,
+          }),
+        match state.activation.positions.get(task) {
+          | ActivationPositionCorrelationConflict(conflict) =>
+              conflict.expectedOperationId == expectedOperationId
+          | _ => false
+        },
+      },
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationActive({
+              operationId: observedOperationId,
+            })
+          ),
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionCorrelationConflict({
+                expectedOperationId: expectedOperationId,
+                observedOperationId: observedOperationId,
+              })
+            ),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationActive({
+                operationId: observedOperationId,
+              })
+            ),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  // A terminal report only for the differently correlated provider operation
+  // removes that mismatch, but it does not prove that Dalph's expected
+  // operation is absent. The task therefore keeps its one position.
+  action observeConflictingOperationReleased(
+    task: TaskId,
+    observedOperationId: int
+  ): bool = {
+    val expectedOperationId = state.workflow.get(task).operationId
+    all {
+      match state.activation.positions.get(task) {
+        | ActivationPositionCorrelationConflict(conflict) =>
+            conflict.expectedOperationId == expectedOperationId
+              and conflict.observedOperationId == observedOperationId
+        | _ => false
+      },
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationTerminal({
+              operationId: observedOperationId,
+            })
+          ),
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionAwaitingProviderEvidence({
+                operationId: expectedOperationId,
+              })
+            ),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationTerminal({
+                operationId: observedOperationId,
+              })
+            ),
           freshlyObservedCapacity:
             state.activation.freshlyObservedCapacity.union(Set(task)),
           triggerPending: true,
@@ -1819,18 +2027,26 @@ module frontierRecovery {
       state.activation.owners.get(task) == NoActivationOwner,
       or {
         state.activation.positions.get(task)
-          == ActivationPositionRetained({ operationId: operationId }),
+          == ActivationPositionAwaitingProviderEvidence({ operationId: operationId }),
         state.activation.positions.get(task)
-          == ActivationPositionOccupied({ operationId: operationId }),
+          == ActivationPositionWorking({ operationId: operationId }),
       },
       state' = {
         ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationTerminal({ operationId: operationId })
+          ),
         activation: {
           ...state.activation,
           positions:
-            state.activation.positions.put(task, ActivationPositionAvailable),
-          providerConsuming:
-            state.activation.providerConsuming.exclude(Set(task)),
+            state.activation.positions.put(task, ActivationPositionNotUsing),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationTerminal({ operationId: operationId })
+            ),
           freshlyObservedCapacity:
             state.activation.freshlyObservedCapacity.union(Set(task)),
           lastReleaseCorrelation:
@@ -1838,6 +2054,141 @@ module frontierRecovery {
               requestedOperationId: operationId,
               affectedOperationId: operationId,
             }),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action observeCapacityAbsent(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      state.activation.owners.get(task) == NoActivationOwner,
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionAwaitingProviderEvidence({
+            operationId: operationId,
+          }),
+        state.activation.positions.get(task)
+          == ActivationPositionWorking({ operationId: operationId }),
+      },
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationAbsent({ operationId: operationId })
+          ),
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionNotUsing
+            ),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationAbsent({ operationId: operationId })
+            ),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action observeCapacityInterrupted(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      state.activation.owners.get(task) == NoActivationOwner,
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionAwaitingProviderEvidence({
+            operationId: operationId,
+          }),
+        state.activation.positions.get(task)
+          == ActivationPositionWorking({ operationId: operationId }),
+      },
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationInterrupted({
+              operationId: operationId,
+            })
+          ),
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              ActivationPositionNotUsing
+            ),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationInterrupted({
+                operationId: operationId,
+              })
+            ),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
+          triggerPending: true,
+        },
+      },
+    }
+  }
+
+  action observeCapacityUnknown(task: TaskId): bool = {
+    val operationId = state.workflow.get(task).operationId
+    all {
+      // A provider report can only correlate after Dalph has recorded the
+      // durable operation intent. A temporary pre-intent reservation has no
+      // OperationId for the provider to report about.
+      or {
+        state.activation.positions.get(task)
+          == ActivationPositionAwaitingProviderEvidence({
+            operationId: operationId,
+          }),
+        state.activation.positions.get(task)
+          == ActivationPositionWorking({ operationId: operationId }),
+        match state.activation.positions.get(task) {
+          | ActivationPositionCorrelationConflict(conflict) =>
+              conflict.expectedOperationId == operationId
+          | _ => false
+        },
+      },
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            ProviderInvocationUnknown({ operationId: operationId })
+          ),
+        activation: {
+          ...state.activation,
+          positions:
+            state.activation.positions.put(
+              task,
+              match state.activation.positions.get(task) {
+                | ActivationPositionCorrelationConflict(conflict) =>
+                    ActivationPositionCorrelationConflict(conflict)
+                | _ =>
+                    ActivationPositionAwaitingProviderEvidence({
+                      operationId: operationId,
+                    })
+              }
+            ),
+          freshProviderInvocationObservations:
+            state.activation.freshProviderInvocationObservations.put(
+              task,
+              ProviderInvocationUnknown({ operationId: operationId })
+            ),
+          freshlyObservedCapacity:
+            state.activation.freshlyObservedCapacity.union(Set(task)),
           triggerPending: true,
         },
       },
@@ -1859,7 +2210,10 @@ module frontierRecovery {
         derivedTransitions: Set(),
         selectedTransitions: Set(),
         activationInProgress: Set(),
-        positions: TASKS.mapBy(_ => ActivationPositionAvailable),
+        positions: TASKS.mapBy(_ => ActivationPositionNotUsing),
+        freshProviderInvocationObservations:
+          TASKS.mapBy(_ => ProviderInvocationNotObserved),
+        freshlyObservedCapacity: Set(),
         owners: TASKS.mapBy(_ => NoActivationOwner),
         ownerRegistrationCounts: TASKS.mapBy(_ => 0),
         runners: Set(),
@@ -1867,23 +2221,57 @@ module frontierRecovery {
     },
   }
 
-  action stopProviderWorker(task: TaskId): bool = all {
-    state.activation.providerConsuming.contains(task),
+  action stopProviderWorker(task: TaskId): bool = {
+    val observation =
+      state.providerInvocationAuthority.get(task)
+    all {
+      providerInvocationIsActive(observation),
+      state' = {
+        ...state,
+        providerInvocationAuthority:
+          state.providerInvocationAuthority.put(
+            task,
+            match observation {
+              | ProviderInvocationActive(active) =>
+                  ProviderInvocationTerminal({
+                    operationId: active.operationId,
+                  })
+              | _ => observation
+            }
+          ),
+      },
+    }
+  }
+
+  action readProviderInvocationForReconstruction(
+    task: TaskId
+  ): bool = all {
+    not(state.coordinator.running),
+    state.activation.freshProviderInvocationObservations.get(task)
+      == ProviderInvocationNotObserved,
     state' = {
       ...state,
       activation: {
         ...state.activation,
-        providerConsuming:
-          state.activation.providerConsuming.exclude(Set(task)),
+        freshProviderInvocationObservations:
+          state.activation.freshProviderInvocationObservations.put(
+            task,
+            state.providerInvocationAuthority.get(task)
+          ),
         freshlyObservedCapacity:
           state.activation.freshlyObservedCapacity.union(Set(task)),
-        triggerPending: true,
       },
     },
   }
 
   action reconstructActivation: bool = all {
     not(state.coordinator.running),
+    state.currentCapacityHistoryValidation == CapacityHistoryAccepted,
+    TASKS.forall(task =>
+      state.workflow.get(task).responsibility != Outstanding
+        or state.activation.freshProviderInvocationObservations.get(task)
+          != ProviderInvocationNotObserved
+    ),
     state' = {
       ...state,
       coordinator: {
@@ -1894,19 +2282,70 @@ module frontierRecovery {
       activation: {
         ...initialActivation,
         configuredCapacity: state.activation.configuredCapacity,
-        positions: TASKS.mapBy(task =>
-          if (state.activation.providerConsuming.contains(task))
-            ActivationPositionOccupied({
-              operationId: state.workflow.get(task).operationId,
-            })
-          else if (state.workflow.get(task).responsibility == Outstanding)
-            ActivationPositionRetained({
-              operationId: state.workflow.get(task).operationId,
-            })
-          else
-            ActivationPositionAvailable
-        ),
-        providerConsuming: state.activation.providerConsuming,
+        positions: TASKS.mapBy(task => {
+          val expectedOperationId = state.workflow.get(task).operationId
+          match state.activation.freshProviderInvocationObservations.get(task) {
+            | ProviderInvocationActive(active) =>
+                if (active.operationId == expectedOperationId)
+                  ActivationPositionWorking({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionCorrelationConflict({
+                    expectedOperationId: expectedOperationId,
+                    observedOperationId: active.operationId,
+                  })
+            | ProviderInvocationTerminal(terminal) =>
+                if (terminal.operationId == expectedOperationId)
+                  ActivationPositionNotUsing
+                else if (
+                  state.workflow.get(task).responsibility == Outstanding
+                )
+                  ActivationPositionAwaitingProviderEvidence({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionNotUsing
+            | ProviderInvocationInterrupted(interrupted) =>
+                if (interrupted.operationId == expectedOperationId)
+                  ActivationPositionNotUsing
+                else if (
+                  state.workflow.get(task).responsibility == Outstanding
+                )
+                  ActivationPositionAwaitingProviderEvidence({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionNotUsing
+            | ProviderInvocationAbsent(absent) =>
+                if (absent.operationId == expectedOperationId)
+                  ActivationPositionNotUsing
+                else if (
+                  state.workflow.get(task).responsibility == Outstanding
+                )
+                  ActivationPositionAwaitingProviderEvidence({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionNotUsing
+            | ProviderInvocationUnknown(_) =>
+                if (state.workflow.get(task).responsibility == Outstanding)
+                  ActivationPositionAwaitingProviderEvidence({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionNotUsing
+            | ProviderInvocationNotObserved =>
+                if (state.workflow.get(task).responsibility == Outstanding)
+                  ActivationPositionAwaitingProviderEvidence({
+                    operationId: expectedOperationId,
+                  })
+                else
+                  ActivationPositionNotUsing
+          }
+        }),
+        freshProviderInvocationObservations:
+          state.activation.freshProviderInvocationObservations,
         freshlyObservedCapacity: state.activation.freshlyObservedCapacity,
       },
     },
@@ -1917,15 +2356,52 @@ module frontierRecovery {
   val boundedCapacity: bool = and {
     initialReservedCount(state) <= CAPACITY,
     state.selectorProjection.admittedTaskIds.filter(task =>
-      state.selectorProjection.executorResourceUses.get(task)
-        == UsesOneTaskWorkCapacityPosition
+      state.selectorProjection.taskWorkCapacityRequirements.get(task)
+        == RequiresOneTaskWorkCapacityPosition
     ).size() <= CAPACITY,
     state.selectorProjection.reservationTaskIds.size() <= CAPACITY,
   }
-  val declaredExecutorResourceUseIsProjected: bool =
+  val taskWorkCapacityRequirementIsProjected: bool =
     TASKS.forall(task =>
-      state.selectorProjection.executorResourceUses.get(task)
-        == state.workflow.get(task).executorResourceUse)
+      state.selectorProjection.taskWorkCapacityRequirements.get(task)
+        == state.workflow.get(task).taskWorkCapacityRequirement)
+  // Activation positions are keyed by TaskId. A conflict records two
+  // correlations inside one task position instead of counting two operations.
+  val capacityUsageCountsTasksNotOperationCorrelations: bool =
+    activationCapacityUsage(state)
+      == TASKS.filter(task =>
+        state.activation.positions.get(task)
+          != ActivationPositionNotUsing
+      ).size()
+  val correlationConflictRetainsOneTaskPosition: bool =
+    TASKS.forall(task =>
+      match state.activation.positions.get(task) {
+        | ActivationPositionCorrelationConflict(conflict) => and {
+            conflict.expectedOperationId != conflict.observedOperationId,
+            activationPositionUsesCapacity(
+              state.activation.positions.get(task)
+            ),
+          }
+        | _ => true
+      })
+  // Workflow is a TaskId-keyed map with one current OperationId. A provider's
+  // differently correlated observation is stored only in the process-local
+  // conflict variant and cannot become a second journal operation.
+  // Invalid journal inputs remain outside validated State. Reconstruction must
+  // call this check before it selects one current operation per task.
+  pure def currentCapacityHistoryIsValid(
+    currentOperationIds: TaskId -> Set[int]
+  ): bool =
+    TASKS.forall(task => currentOperationIds.get(task).size() <= 1)
+  val rejectedCapacityHistoryDerivesNoFrontier: bool =
+    state.currentCapacityHistoryValidation != CapacityHistoryRejected
+      or and {
+        not(state.coordinator.running),
+        state.activation.derivedTransitions.size() == 0,
+        state.activation.selectedTransitions.size() == 0,
+        state.selectorProjection.frontierTaskIds.size() == 0,
+        state.selectorProjection.admittedTaskIds.size() == 0,
+      }
   val oneOwnerPerExactTransition: bool =
     TASKS.forall(task => and {
       state.activation.ownerRegistrationCounts.get(task) <= 1,
@@ -1953,7 +2429,7 @@ module frontierRecovery {
   val preIntentInterruptionLeaksNoReservedPosition: bool =
     state.activation.preIntentInterrupted.forall(task =>
       and {
-        state.activation.positions.get(task) == ActivationPositionAvailable,
+        state.activation.positions.get(task) == ActivationPositionNotUsing,
         state.activation.owners.get(task) == NoActivationOwner,
       })
   val duplicateOwnershipDoesNotStopIndependentResponsibility: bool =
@@ -1966,9 +2442,10 @@ module frontierRecovery {
       or state.activation.resultsRecorded.contains(C)
       or match state.activation.positions.get(C) {
         | ActivationPositionReserved(_) => true
-        | ActivationPositionRetained(_) => true
-        | ActivationPositionOccupied(_) => true
-        | ActivationPositionAvailable =>
+        | ActivationPositionAwaitingProviderEvidence(_) => true
+        | ActivationPositionWorking(_) => true
+        | ActivationPositionCorrelationConflict(_) => true
+        | ActivationPositionNotUsing =>
             state.activation.triggerPending
         | _ => false
       }
@@ -1991,16 +2468,18 @@ module frontierRecovery {
       not(state.coordinator.running)
         or state.activation.freshlyObservedCapacity.contains(task)
         or match state.activation.positions.get(task) {
-          | ActivationPositionRetained(_) => true
-          | ActivationPositionOccupied(_) => true
+          | ActivationPositionAwaitingProviderEvidence(_) => true
+          | ActivationPositionWorking(_) => true
+          | ActivationPositionCorrelationConflict(_) => true
           | _ => false
         })
   val everyAmbiguityCrossingEffectHasIntent: bool = everyEffectHasIntent
   val newReservedPositionsRespectConfiguredCapacity: bool = {
     val retainedOrOccupied = TASKS.filter(task =>
       match state.activation.positions.get(task) {
-        | ActivationPositionRetained(_) => true
-        | ActivationPositionOccupied(_) => true
+        | ActivationPositionAwaitingProviderEvidence(_) => true
+        | ActivationPositionWorking(_) => true
+        | ActivationPositionCorrelationConflict(_) => true
         | _ => false
       }).size()
     val newlyReserved = TASKS.filter(task =>
@@ -2014,9 +2493,10 @@ module frontierRecovery {
       retainedOrOccupied + newlyReserved <= state.activation.configuredCapacity
   }
   val lowerRestartCapacityDoesNotPreemptObservedUsage: bool =
-    state.activation.providerConsuming.forall(task =>
+    providerActiveTaskIds(state).forall(task =>
       match state.activation.positions.get(task) {
-        | ActivationPositionOccupied(_) => true
+        | ActivationPositionWorking(_) => true
+        | ActivationPositionCorrelationConflict(_) => true
         | _ => not(state.coordinator.running)
       })
   val releaseAffectsOnlyItsExactOperation: bool =
@@ -2121,7 +2601,7 @@ module frontierRecovery {
       })
   val activationPreIntentInterruptionReached: bool =
     state.activation.triggerPending
-      and state.activation.positions.get(A) == ActivationPositionAvailable
+      and state.activation.positions.get(A) == ActivationPositionNotUsing
   val activationPostIntentInterruptionReached: bool =
     state.activation.postIntentExited.size() > 0
   val activationResultReleaseReached: bool =
@@ -2132,7 +2612,7 @@ module frontierRecovery {
       and state.activation.triggerPending
   val activationChangedCapacityReconstructionReached: bool =
     state.coordinator.running
-      and state.activation.providerConsuming.size()
+      and providerActiveTaskIds(state).size()
         > state.activation.configuredCapacity
 
   action init: bool = state' = initialState
@@ -2142,6 +2622,49 @@ module frontierRecovery {
       ...initialState,
       coordinator: {...initialState.coordinator, running: false},
     }
+
+  action initInvalidCurrentCapacityHistory: bool =
+    state' = {
+      ...initialState,
+      coordinator: {
+        ...initialState.coordinator,
+        running: false,
+      },
+      unvalidatedCurrentCapacityOperationIds:
+        initialState.unvalidatedCurrentCapacityOperationIds.put(
+          A,
+          Set(7, 8)
+        ),
+      currentCapacityHistoryValidation: CapacityHistoryNotValidated,
+      selectorProjection:
+        withoutDerivedSelection(initialState.selectorProjection),
+    }
+
+  action validateCurrentCapacityHistoryBeforeReconstruction: bool = all {
+    state.currentCapacityHistoryValidation == CapacityHistoryNotValidated,
+    not(state.coordinator.running),
+    state' = {
+      ...state,
+      currentCapacityHistoryValidation:
+        if (
+          currentCapacityHistoryIsValid(
+            state.unvalidatedCurrentCapacityOperationIds
+          )
+        )
+          CapacityHistoryAccepted
+        else
+          CapacityHistoryRejected,
+      selectorProjection:
+        if (
+          currentCapacityHistoryIsValid(
+            state.unvalidatedCurrentCapacityOperationIds
+          )
+        )
+          state.selectorProjection
+        else
+          withoutDerivedSelection(state.selectorProjection),
+    },
+  }
 
   action initAnyBoundaryProfile: bool = {
     nondet boundary = BOUNDARIES.oneOf()
@@ -2163,14 +2686,76 @@ module frontierRecovery {
     state' = {
       ...initialState,
       coordinator: {...initialState.coordinator, running: false},
+      providerInvocationAuthority:
+        initialState.providerInvocationAuthority
+          .put(A, ProviderInvocationActive({ operationId: operationA }))
+          .put(C, ProviderInvocationActive({ operationId: operationC })),
       activation: {
         ...initialActivation,
         configuredCapacity: 1,
-        providerConsuming: Set(A, C),
+        freshProviderInvocationObservations:
+          initialActivation.freshProviderInvocationObservations
+            .put(A, ProviderInvocationActive({ operationId: operationA }))
+            .put(C, ProviderInvocationActive({ operationId: operationC })),
         positions:
           initialActivation.positions
-            .put(A, ActivationPositionOccupied({ operationId: operationA }))
-            .put(C, ActivationPositionOccupied({ operationId: operationC })),
+            .put(A, ActivationPositionWorking({ operationId: operationA }))
+            .put(C, ActivationPositionWorking({ operationId: operationC })),
+      },
+    }
+  }
+
+  action initCorrelationConflictActivationProfile: bool = {
+    val expectedOperationId = initialState.workflow.get(A).operationId
+    val responsible =
+      applyCommitFirstIntent(initialState, A)
+    state' = {
+      ...responsible,
+      providerInvocationAuthority:
+        responsible.providerInvocationAuthority.put(
+          A,
+          ProviderInvocationActive({
+            operationId: expectedOperationId + 100,
+          })
+        ),
+      activation: {
+        ...initialActivation,
+        configuredCapacity: CAPACITY,
+        positions:
+          initialActivation.positions.put(
+            A,
+            ActivationPositionCorrelationConflict({
+              expectedOperationId: expectedOperationId,
+              observedOperationId: expectedOperationId + 100,
+            })
+          ),
+        freshProviderInvocationObservations:
+          initialActivation.freshProviderInvocationObservations.put(
+            A,
+            ProviderInvocationActive({
+              operationId: expectedOperationId + 100,
+            })
+          ),
+        freshlyObservedCapacity: Set(A),
+      },
+    }
+  }
+
+  action initAwaitingProviderEvidenceActivationProfile: bool = {
+    val expectedOperationId = initialState.workflow.get(A).operationId
+    val responsible = applyCommitFirstIntent(initialState, A)
+    state' = {
+      ...responsible,
+      activation: {
+        ...initialActivation,
+        configuredCapacity: CAPACITY,
+        positions:
+          initialActivation.positions.put(
+            A,
+            ActivationPositionAwaitingProviderEvidence({
+              operationId: expectedOperationId,
+            })
+          ),
       },
     }
   }
@@ -2410,6 +2995,8 @@ module frontierRecovery {
 
   action activationProfileStep: bool = {
     nondet task = Set(A, C).oneOf()
+    val conflictingOperationId =
+      state.workflow.get(task).operationId + 100
     any {
       deriveActivationPass,
       excludeOwnedTransitions,
@@ -2422,10 +3009,50 @@ module frontierRecovery {
       interruptAfterIntent(task),
       recordOwnedResultAndRelease(task),
       observeCapacityConsumed(task),
+      observeConflictingCapacityCorrelation(
+        task,
+        conflictingOperationId
+      ),
+      observeConflictingOperationReleased(
+        task,
+        conflictingOperationId
+      ),
       observeCapacityReleased(task),
+      observeCapacityAbsent(task),
+      observeCapacityInterrupted(task),
+      observeCapacityUnknown(task),
       crashCoordinatorWithActivation,
       stopProviderWorker(task),
+      readProviderInvocationForReconstruction(task),
       reconstructActivation,
+    }
+  }
+
+  // Focused provider-correlation profile. It begins with one valid current
+  // journal operation for A and explores active/terminal mismatches plus crash
+  // reconstruction without requiring the production Quint-connect adapter.
+  action capacityCorrelationProfileStep: bool = {
+    val conflictingOperationId =
+      state.workflow.get(A).operationId + 100
+    any {
+      observeConflictingCapacityCorrelation(
+        A,
+        conflictingOperationId
+      ),
+      observeConflictingOperationReleased(
+        A,
+        conflictingOperationId
+      ),
+      observeCapacityConsumed(A),
+      observeCapacityReleased(A),
+      observeCapacityAbsent(A),
+      observeCapacityInterrupted(A),
+      observeCapacityUnknown(A),
+      crashCoordinatorWithActivation,
+      readProviderInvocationForReconstruction(A),
+      reconstructActivation,
+      deriveActivationPass,
+      reserveTaskAdmissionPosition(C),
     }
   }
 
@@ -2483,6 +3110,7 @@ module frontierRecovery {
         crashCoordinatorWithActivation,
       },
       stopProviderWorker(task),
+      readProviderInvocationForReconstruction(task),
       reconstructActivation,
     }
   }

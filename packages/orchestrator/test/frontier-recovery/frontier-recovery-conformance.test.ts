@@ -33,6 +33,7 @@ it("defines the versioned closed M2 reconstruction action map", () => {
     "recordOwnedResultAndRelease",
     "observeCapacityConsumed",
     "observeCapacityReleased",
+    "readProviderInvocationForReconstruction",
     "crashCoordinatorWithActivation",
     "stopProviderWorker",
     "reconstructActivation",

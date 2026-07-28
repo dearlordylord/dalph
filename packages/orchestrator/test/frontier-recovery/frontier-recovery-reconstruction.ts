@@ -126,7 +126,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       ({ operationId, taskId }) => [taskId, operationId]
     )
   )
-  let providerObservationTaskIds: ReadonlySet<TaskId> = new Set()
+  let providerObservationTaskIds: ReadonlySet<TaskId> = new Set(providerWorkers.keys())
+  let providerObservedActiveTaskIds: ReadonlySet<TaskId> = new Set(providerWorkers.keys())
   let activationCheckpointHistory: ReadonlyArray<ActivationCoordinatorCheckpoint> = []
   let activationProjectionEvents: ReadonlyArray<
     "Derived" | "ReactivationRequested"
@@ -755,6 +756,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         providerWorkers = new Map(
           [...providerWorkers].filter(([candidate]) => candidate !== taskId)
         )
+        providerObservedActiveTaskIds = new Set(
+          [...providerObservedActiveTaskIds].filter(
+            (candidate) => candidate !== taskId
+          )
+        )
         return
       }
       case "observeCapacityConsumed": {
@@ -766,6 +772,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         ])
         providerObservationTaskIds = new Set([
           ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = new Set([
+          ...providerObservedActiveTaskIds,
           taskId
         ])
         activationProjectionEvents = [
@@ -782,8 +792,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         })
         return
       }
-      case "observeCapacityReleased":
-      case "stopProviderWorker": {
+      case "observeCapacityReleased": {
         if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
         providerWorkers = new Map(
@@ -793,6 +802,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           ...providerObservationTaskIds,
           taskId
         ])
+        providerObservedActiveTaskIds = new Set(
+          [...providerObservedActiveTaskIds].filter(
+            (candidate) => candidate !== taskId
+          )
+        )
         activationProjectionEvents = [
           ...activationProjectionEvents,
           "ReactivationRequested"
@@ -805,6 +819,13 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           operationId,
           taskId
         })
+        return
+      }
+      case "stopProviderWorker": {
+        if (taskId === undefined) return
+        providerWorkers = new Map(
+          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        )
         return
       }
       case "crashCoordinatorWithActivation": {
@@ -821,10 +842,27 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         heldActivationCheckpoints = []
         latestActivationCheckpoint = undefined
         activationProjectionEvents = []
+        providerObservationTaskIds = new Set()
+        providerObservedActiveTaskIds = new Set()
         derivedFrontierObservation = { explanations: [], transitions: [] }
         selectedFrontierObservation = { explanations: [], transitions: [] }
         selectedAtOwnershipExclusion = false
         runnerCommands = new Map()
+        return
+      }
+      case "readProviderInvocationForReconstruction": {
+        if (taskId === undefined) return
+        providerObservationTaskIds = new Set([
+          ...providerObservationTaskIds,
+          taskId
+        ])
+        providerObservedActiveTaskIds = providerWorkers.has(taskId)
+          ? new Set([...providerObservedActiveTaskIds, taskId])
+          : new Set(
+            [...providerObservedActiveTaskIds].filter(
+              (candidate) => candidate !== taskId
+            )
+          )
         return
       }
       case "reconstructActivation": {
@@ -1219,7 +1257,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             )
           ),
           providerConsumingModelTaskIds: yield* projectTaskIds(
-            providerWorkers.keys()
+            providerObservedActiveTaskIds
           ),
           reservedPositions: yield* Effect.forEach(
             controllerSnapshot.reservedPositions,

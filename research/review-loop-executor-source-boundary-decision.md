@@ -32,8 +32,10 @@ or runtime mechanism currently selects among executors.
 The application composition root installs one review-loop executor bundle.
 Generic reconstruction, frontier derivation, admission, and activation depend
 only on an injected executor-facing interface containing the already accepted
-outer correlation, resource use, wait, interruption, continuation, observation,
-and outcome values.
+outer correlation, provider lifecycle, wait, interruption, continuation,
+observation, and outcome values. Dalph orchestration separately owns the
+zero-or-one task-work capacity requirement. For example, an executor may report
+an invocation active, but it never asks the controller for a position.
 
 The review-loop executor module owns:
 

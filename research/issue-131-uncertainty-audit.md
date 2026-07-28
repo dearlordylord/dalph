@@ -6,6 +6,11 @@ This ledger changes no production code. It keeps every user annotation and
 every uncertainty from the previous choices audit visible until evidence
 resolves it.
 
+Owner review later superseded this ledger's executor-declared capacity
+conclusions. The accepted task-scoped rule is in
+`docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md`. For example, a differently
+correlated provider report for task A counts task A once.
+
 Audited source: `master` at `84b2c9768`, including the five issue
 131 commits. GitHub still reports issue 131 as open, `ready-for-agent`, with
 every acceptance and review checkbox unchecked. A green local gate therefore

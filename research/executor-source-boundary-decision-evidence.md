@@ -4,6 +4,11 @@ Status: primary-source research input. The accepted
 [review-loop executor source-boundary decision](review-loop-executor-source-boundary-decision.md)
 supersedes this note's preliminary package and terminology recommendations.
 
+Reopened issue #131 also supersedes this note's executor-declared
+resource-use wording. Dalph owns the task-work capacity requirement. For
+example, the executor reports an invocation active while Dalph updates the
+state of that task's one position.
+
 After owner grilling, v1 uses the canonical name **review-loop executor** and
 an enforced module tree inside `@dalph/orchestrator`, not a new executor
 package. It installs one executor bundle and may redesign unreleased journal

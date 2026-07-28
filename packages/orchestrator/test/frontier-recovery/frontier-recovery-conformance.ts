@@ -53,6 +53,9 @@ const frontierRecoveryReconstructionActionFields = {
   recordOwnedResultAndRelease: { task: FrontierRecoveryModelTaskId },
   observeCapacityConsumed: { task: FrontierRecoveryModelTaskId },
   observeCapacityReleased: { task: FrontierRecoveryModelTaskId },
+  readProviderInvocationForReconstruction: {
+    task: FrontierRecoveryModelTaskId
+  },
   crashCoordinatorWithActivation: {},
   stopProviderWorker: { task: FrontierRecoveryModelTaskId },
   reconstructActivation: {},
@@ -91,6 +94,7 @@ export type FrontierRecoveryActivationAction = Extract<
       | "recordOwnedResultAndRelease"
       | "observeCapacityConsumed"
       | "observeCapacityReleased"
+      | "readProviderInvocationForReconstruction"
       | "crashCoordinatorWithActivation"
       | "stopProviderWorker"
       | "reconstructActivation"
@@ -168,6 +172,7 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       interruptBeforeOwnership: controls.activation,
       observeCapacityConsumed: controls.activation,
       observeCapacityReleased: controls.activation,
+      readProviderInvocationForReconstruction: controls.activation,
       orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
       orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
       claimActivationOwnership: controls.activation,
