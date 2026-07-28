@@ -4,21 +4,28 @@
 
 - Codex's built-in Memories are disabled for this project. The checked-in
   OptMem store is advisory project memory.
+- After a fresh clone, run `git submodule update --init tools/optmem` before
+  using project memory or starting Codex.
 - The `SessionStart` hook performs the same read as `pnpm memory:wake`. If the
   hook was not trusted or did not run, execute that command before relying on
   prior project context.
-- Only the root agent in `master`'s primary worktree may publish memory. The
-  wrapper enforces the Git location; the root-agent restriction is an
-  instruction because a process cannot reliably identify its caller.
-  Subagents and task worktrees must put proposed memories in their handoff.
+- Multiple independent root Codex sessions may publish concurrently when they
+  share `master`'s primary worktree; OptMem's local file lock serializes their
+  record positions. Before adding a note, reread or recall related memory to
+  avoid semantic duplicates. Treat memory changes from other sessions as
+  shared worktree changes: never discard them, and review them before commit.
+- Subagents and agents in separate task worktrees must put proposed memories in
+  their handoff. The wrapper enforces the Git location; the root-agent
+  restriction is an instruction because a process cannot identify its caller.
 - Record only durable project decisions, verified repository facts, and
   reusable lessons with `pnpm memory -- note "<one line>"`. Never record
   credentials, secrets, personal facts, private incident details, speculative
   conclusions, or facts owned by GitHub, Git, an executor, or Dalph's journal.
 - If OptMem requests a compression after `note` or `wake`, complete the shown
-  `nap` command before continuing. Treat checked-in documentation, accepted
-  scenarios, and tracker records as authoritative when they disagree with
-  memory.
+  `nap` command before continuing. If another session settled it first, reread
+  memory and continue with the next pending compression. Treat checked-in
+  documentation, accepted scenarios, and tracker records as authoritative
+  when they disagree with memory.
 - Read `.codex/PROJECT-MEMORY.md` before changing the memory tooling or update
   protocol.
 

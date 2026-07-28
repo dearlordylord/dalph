@@ -1,0 +1,1 @@
+Codex built-in Memories are disabled; checked-in OptMem is advisory. Parallel root sessions may write only in master's shared primary worktree, where OptMem locks appends; other worktrees propose entries.                                                                                   

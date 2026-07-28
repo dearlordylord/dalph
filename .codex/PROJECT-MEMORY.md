@@ -47,6 +47,30 @@ Acceptance tests: `master appends one note to the project store`, `repairs a
 partial record before appending a retried note`, and `refuses authored memory
 text that resembles a credential`.
 
+### Several root sessions record lessons at the same time
+
+Several independent root Codex sessions share `master`'s primary worktree and
+the same `.codex/memory` directory. Each session may run `note` or answer a
+pending `nap`. OptMem's advisory file lock assigns append positions while
+holding the lock, so two local processes do not receive the same record
+identity. If another session settles the same compression first, the later
+session rereads memory and continues instead of replacing that summary.
+
+The lock coordinates processes sharing this physical directory only. It does
+not coordinate separate clones or Git worktrees; those agents remain
+read-only and propose memories in their handoff. Before writing, each root
+session uses `wake` or `recall` to avoid recording the same lesson twice.
+Before committing, it reviews all memory changes because another session may
+have appended them.
+
+Acceptance evidence:
+
+- `parallel sessions sharing master's primary worktree append distinct
+  positional records`; and
+- OptMem's upstream `test.py` check that “two sessions paid the same nap”
+  preserves the first settled summary and reports the later submission as
+  already settled. `pnpm memory:update` runs that upstream suite.
+
 ### A task worktree proposes a memory
 
 An agent works on a non-`master` branch whose checked-in memory starts at the
@@ -56,8 +80,8 @@ refuses before invoking OptMem and tells the agent to put the proposal in its
 handoff. Bulk `import` is disabled everywhere because its unreviewed text
 cannot satisfy the checked-in-memory policy.
 
-The serialized root agent later decides whether to append the proposal from
-`master`. Separate worktrees must not allocate competing positional IDs.
+A root session in `master`'s primary worktree later decides whether to append
+the proposal. Separate worktrees must not allocate competing positional IDs.
 
 Acceptance tests: `non-master worktrees can read but cannot mutate project
 memory`, `a second physical master worktree cannot mutate project memory`, and

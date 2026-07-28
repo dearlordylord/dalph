@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { execFileSync, spawnSync } from "node:child_process"
+import { execFile, execFileSync, spawnSync } from "node:child_process"
 import {
   appendFileSync,
   existsSync,
@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 import { afterEach, test } from "node:test"
 
 import {
@@ -25,6 +26,7 @@ import {
 } from "./update-project-memory-toolkit.mjs"
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const execFileAsync = promisify(execFile)
 let activeFixtureRoots = []
 
 afterEach(() => {
@@ -114,6 +116,41 @@ test("master appends one note to the project store", () => {
     readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8"),
     /Only master publishes project memory\./u,
   )
+})
+
+test("parallel sessions sharing master's primary worktree append distinct positional records", async () => {
+  const root = fixture()
+  assert.equal(invoke(root, ["init"]).status, 0)
+  const notes = Array.from({ length: 8 }, (_, index) => `Concurrent durable lesson ${index}.`)
+
+  await Promise.all(
+    notes.map((note) =>
+      execFileAsync(
+        process.execPath,
+        [join(repositoryRoot, "scripts", "project-memory.mjs"), "note", note],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            DALPH_PROJECT_MEMORY_TEST_ROOT: root,
+            NODE_ENV: "test",
+          },
+        },
+      ),
+    ),
+  )
+
+  const log = readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8")
+  const records = log.trimEnd().split("\n")
+
+  assert.equal(records.length, notes.length)
+  assert.deepEqual(
+    records.map((record) => Number(/^#(\d+)/u.exec(record)?.[1])).sort((left, right) => left - right),
+    notes.map((_, index) => index),
+  )
+  for (const note of notes) {
+    assert.match(log, new RegExp(note.replace(".", "\\."), "u"))
+  }
 })
 
 test("repairs a partial record before appending a retried note", () => {
