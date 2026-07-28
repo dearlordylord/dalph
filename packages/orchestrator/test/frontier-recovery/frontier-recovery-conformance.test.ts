@@ -18,7 +18,7 @@ const taskB = TaskId.make("frontier-recovery-task-B")
 const operationOne = OperationId.make("frontier-recovery-operation-1")
 
 it("defines the versioned closed M2 reconstruction action map", () => {
-  expect(frontierRecoveryReconstructionConformanceVersion).toBe(6)
+  expect(frontierRecoveryReconstructionConformanceVersion).toBe(5)
   expect(frontierRecoveryReconstructionActions).toEqual([
     "init",
     "deriveActivationPass",
@@ -32,14 +32,8 @@ it("defines the versioned closed M2 reconstruction action map", () => {
     "interruptAfterIntent",
     "recordOwnedResultAndRelease",
     "observeCapacityConsumed",
-    "observeConflictingCapacityCorrelation",
-    "observeConflictingOperationReleased",
     "observeCapacityReleased",
-    "observeCapacityAbsent",
-    "observeCapacityInterrupted",
-    "observeCapacityUnknown",
     "readProviderInvocationForReconstruction",
-    "validateCurrentCapacityHistoryBeforeReconstruction",
     "crashCoordinatorWithActivation",
     "stopProviderWorker",
     "reconstructActivation",

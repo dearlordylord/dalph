@@ -2,8 +2,8 @@ import { Effect, Match, Schema } from "effect"
 import type { OperationId, TaskId } from "../../src/domain.js"
 
 // A manifest change is an explicit compatibility-boundary revision.
-// eslint-disable-next-line no-magic-numbers -- Version six connects task-local provider-correlation recovery.
-export const frontierRecoveryReconstructionConformanceVersion = 6 as const
+// eslint-disable-next-line no-magic-numbers -- Version five adds exact activation ownership actions.
+export const frontierRecoveryReconstructionConformanceVersion = 5 as const
 const minimumModelIdentity = 0n
 
 /** Identifies one bounded M2 task, not a production task or model operation. */
@@ -52,22 +52,10 @@ const frontierRecoveryReconstructionActionFields = {
   interruptAfterIntent: { task: FrontierRecoveryModelTaskId },
   recordOwnedResultAndRelease: { task: FrontierRecoveryModelTaskId },
   observeCapacityConsumed: { task: FrontierRecoveryModelTaskId },
-  observeConflictingCapacityCorrelation: {
-    observedOperationId: FrontierRecoveryModelOperationId,
-    task: FrontierRecoveryModelTaskId
-  },
-  observeConflictingOperationReleased: {
-    observedOperationId: FrontierRecoveryModelOperationId,
-    task: FrontierRecoveryModelTaskId
-  },
   observeCapacityReleased: { task: FrontierRecoveryModelTaskId },
-  observeCapacityAbsent: { task: FrontierRecoveryModelTaskId },
-  observeCapacityInterrupted: { task: FrontierRecoveryModelTaskId },
-  observeCapacityUnknown: { task: FrontierRecoveryModelTaskId },
   readProviderInvocationForReconstruction: {
     task: FrontierRecoveryModelTaskId
   },
-  validateCurrentCapacityHistoryBeforeReconstruction: {},
   crashCoordinatorWithActivation: {},
   stopProviderWorker: { task: FrontierRecoveryModelTaskId },
   reconstructActivation: {},
@@ -105,14 +93,8 @@ export type FrontierRecoveryActivationAction = Extract<
       | "interruptAfterIntent"
       | "recordOwnedResultAndRelease"
       | "observeCapacityConsumed"
-      | "observeConflictingCapacityCorrelation"
-      | "observeConflictingOperationReleased"
       | "observeCapacityReleased"
-      | "observeCapacityAbsent"
-      | "observeCapacityInterrupted"
-      | "observeCapacityUnknown"
       | "readProviderInvocationForReconstruction"
-      | "validateCurrentCapacityHistoryBeforeReconstruction"
       | "crashCoordinatorWithActivation"
       | "stopProviderWorker"
       | "reconstructActivation"
@@ -188,13 +170,8 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       interruptAfterIntent: controls.activation,
       interruptAfterOwnershipBeforeIntent: controls.activation,
       interruptBeforeOwnership: controls.activation,
-      observeCapacityAbsent: controls.activation,
       observeCapacityConsumed: controls.activation,
-      observeCapacityInterrupted: controls.activation,
       observeCapacityReleased: controls.activation,
-      observeCapacityUnknown: controls.activation,
-      observeConflictingCapacityCorrelation: controls.activation,
-      observeConflictingOperationReleased: controls.activation,
       readProviderInvocationForReconstruction: controls.activation,
       orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
       orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
@@ -206,7 +183,6 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       reserveTaskAdmissionPosition: controls.activation,
       restart: controls.restart,
       stopProviderWorker: controls.activation,
-      validateCurrentCapacityHistoryBeforeReconstruction: controls.activation,
       taskTrackerReturnsTargetClosureReadAtNextRevision: controls.taskTrackerReturnsTargetClosureReadAtNextRevision,
       taskTrackerReturnsTargetClosureReadWithPredecessor: controls.taskTrackerReturnsTargetClosureReadWithPredecessor,
       taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage:

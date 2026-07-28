@@ -2614,59 +2614,6 @@ module frontierRecovery {
     state.coordinator.running
       and providerActiveTaskIds(state).size()
         > state.activation.configuredCapacity
-  val capacityCorrelationConflictReached: bool =
-    match state.activation.positions.get(A) {
-      | ActivationPositionCorrelationConflict(conflict) =>
-          conflict.expectedOperationId
-            == state.workflow.get(A).operationId
-            and conflict.observedOperationId
-              == state.workflow.get(A).operationId + 100
-      | _ => false
-    }
-  val differentlyCorrelatedTerminalRetainsExpectedPositionReached: bool =
-    state.activation.positions.get(A)
-      == ActivationPositionAwaitingProviderEvidence({
-        operationId: state.workflow.get(A).operationId,
-      })
-      and state.providerInvocationAuthority.get(A)
-        == ProviderInvocationTerminal({
-          operationId: state.workflow.get(A).operationId + 100,
-        })
-  val unknownCapacityEvidenceRetainsExactConflictReached: bool =
-    capacityCorrelationConflictReached
-      and state.providerInvocationAuthority.get(A)
-        == ProviderInvocationUnknown({
-          operationId: state.workflow.get(A).operationId,
-        })
-  val matchingCapacityAbsenceReleasesPositionReached: bool =
-    state.activation.positions.get(A) == ActivationPositionNotUsing
-      and state.providerInvocationAuthority.get(A)
-        == ProviderInvocationAbsent({
-          operationId: state.workflow.get(A).operationId,
-        })
-  val matchingCapacityInterruptionReleasesPositionReached: bool =
-    state.activation.positions.get(A) == ActivationPositionNotUsing
-      and state.providerInvocationAuthority.get(A)
-        == ProviderInvocationInterrupted({
-          operationId: state.workflow.get(A).operationId,
-        })
-  val capacityTwoConflictAdmitsIndependentTaskReached: bool =
-    CAPACITY == 2
-      and capacityCorrelationConflictReached
-      and state.selectorProjection.admittedTaskIds.contains(C)
-  val capacityOneConflictExplainsIndependentTaskWaitReached: bool =
-    CAPACITY == 1
-      and capacityCorrelationConflictReached
-      and state.selectorProjection.explanations.exists(explanation =>
-        explanation.taskId == C
-          and explanation.tag == "CapacityWait")
-  val restartReconstructsExactCapacityConflictReached: bool =
-    state.coordinator.crashCount > 0
-      and state.coordinator.running
-      and capacityCorrelationConflictReached
-  val invalidCapacityHistoryRejectedBeforeFrontierReached: bool =
-    state.currentCapacityHistoryValidation == CapacityHistoryRejected
-      and rejectedCapacityHistoryDerivesNoFrontier
 
   action init: bool = state' = initialState
 
@@ -2761,7 +2708,7 @@ module frontierRecovery {
   action initCorrelationConflictActivationProfile: bool = {
     val expectedOperationId = initialState.workflow.get(A).operationId
     val responsible =
-      refreshSelectorProjection(applyCommitFirstIntent(initialState, A))
+      applyCommitFirstIntent(initialState, A)
     state' = {
       ...responsible,
       providerInvocationAuthority:
@@ -2796,8 +2743,7 @@ module frontierRecovery {
 
   action initAwaitingProviderEvidenceActivationProfile: bool = {
     val expectedOperationId = initialState.workflow.get(A).operationId
-    val responsible =
-      refreshSelectorProjection(applyCommitFirstIntent(initialState, A))
+    val responsible = applyCommitFirstIntent(initialState, A)
     state' = {
       ...responsible,
       activation: {
@@ -3111,63 +3057,6 @@ module frontierRecovery {
       deriveActivationPass,
       reserveTaskAdmissionPosition(C),
     }
-  }
-
-  // Seeded Quint-connect lane: once the conflict exists, crash, reread the
-  // provider, and reconstruct it without importing unrelated model actions.
-  action capacityCorrelationReconstructionConnectionStep: bool = {
-    nondet task = Set(A).oneOf()
-    any {
-      crashCoordinatorWithActivation,
-      readProviderInvocationForReconstruction(task),
-      reconstructActivation,
-    }
-  }
-
-  action capacityCorrelationConflictConnectionStep: bool =
-    observeConflictingCapacityCorrelation(
-      A,
-      state.workflow.get(A).operationId + 100
-    )
-
-  action capacityCorrelationTerminalConnectionStep: bool =
-    observeConflictingOperationReleased(
-      A,
-      state.workflow.get(A).operationId + 100
-    )
-
-  action capacityCorrelationUnknownConnectionStep: bool =
-    observeCapacityUnknown(A)
-
-  action capacityCorrelationAbsentConnectionStep: bool =
-    observeCapacityAbsent(A)
-
-  action capacityCorrelationInterruptedConnectionStep: bool =
-    observeCapacityInterrupted(A)
-
-  action capacityCorrelationAdmissionConnectionStep: bool =
-    observeConflictingCapacityCorrelation(
-      A,
-      state.workflow.get(A).operationId + 100
-    )
-
-  // One generated Quint-connect portfolio amortizes process startup while the
-  // individual wrapper labels keep every production command and witness exact.
-  action capacityCorrelationConnectionPortfolioStep: bool = any {
-    capacityCorrelationConflictConnectionStep,
-    capacityCorrelationTerminalConnectionStep,
-    capacityCorrelationUnknownConnectionStep,
-    capacityCorrelationAbsentConnectionStep,
-    capacityCorrelationInterruptedConnectionStep,
-    capacityCorrelationAdmissionConnectionStep,
-  }
-
-  // The three tracker-read shapes share one initializer and adapter, so one
-  // witnessed portfolio avoids paying three identical Quint startup costs.
-  action taskTrackerReadConnectionPortfolioStep: bool = any {
-    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage,
-    taskTrackerReturnsTargetClosureReadWithPredecessor,
-    taskTrackerReturnsTargetClosureReadAtNextRevision,
   }
 
   // Focused executable prefix: derive current work, reserve the canonical

@@ -29,10 +29,6 @@ export const initialGraphOperationIdentity = FrontierRecoveryModelOperationId.ma
 export const firstClaimOperationIdentity = FrontierRecoveryModelOperationId.make(1n)
 export const targetClosureReplacementOperationIdentity = FrontierRecoveryModelOperationId.make(2n)
 export const secondClaimOperationIdentity = FrontierRecoveryModelOperationId.make(3n)
-export const conflictingCapacityOperationIdentity = FrontierRecoveryModelOperationId.make(101n)
-export const conflictingCapacityOperationId = OperationId.make(
-  "frontier-recovery-conflicting-operation-101"
-)
 export const initialModelRevision = FrontierRecoveryModelRevision.make(0n)
 export const minimumModelRevision = initialModelRevision
 export const replacementModelRevision = FrontierRecoveryModelRevision.make(1n)
@@ -69,10 +65,6 @@ export const frontierRecoveryClaimOperationEntries = [
   {
     branded: OperationId.make("frontier-recovery-claim-operation-3"),
     model: secondClaimOperationIdentity
-  },
-  {
-    branded: conflictingCapacityOperationId,
-    model: conflictingCapacityOperationIdentity
   }
 ] as const
 

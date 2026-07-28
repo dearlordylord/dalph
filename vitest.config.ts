@@ -5,15 +5,7 @@ const coverageThresholds = Object.fromEntries(
   coveragePolicy.metrics.map((metric) => [metric, coveragePolicy.threshold])
 )
 
-const mbtTestPattern = "**/*.mbt.test.ts"
-const ordinaryTestIncludes = [
-  "src/**/*.test.ts",
-  "packages/**/*.test.ts",
-  "scripts/**/*.test.ts",
-  "test/**/*.test.ts"
-]
-
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
   test: {
     coverage: {
       exclude: [
@@ -28,9 +20,13 @@ export default defineConfig(({ mode }) => ({
       thresholds: coverageThresholds
     },
     environment: "node",
-    exclude: mode === "coverage" ? [mbtTestPattern] : [],
-    include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
+    include: [
+      "src/**/*.test.ts",
+      "packages/**/*.test.ts",
+      "scripts/**/*.test.ts",
+      "test/**/*.test.ts"
+    ],
     maxWorkers: 4,
     testTimeout: 10_000
   }
-}))
+})
