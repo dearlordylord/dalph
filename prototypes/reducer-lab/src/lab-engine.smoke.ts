@@ -27,6 +27,12 @@ const assert = (condition: boolean, message: string): void => {
 const reconstruct = (actions: LabSnapshot["input"]["actions"]) =>
   Effect.runPromise(reconstructLabSnapshot({ actions }))
 
+const latestObservationTasks = (
+  snapshot: LabSnapshot
+) => snapshot.latestObservation._tag === "Available"
+  ? snapshot.latestObservation.tasks
+  : []
+
 const availableMoveId = (
   snapshot: LabSnapshot,
   transition: string,
@@ -126,10 +132,21 @@ const assertPresentedMove = (
 }
 
 const initial = await reconstruct([])
-assert(initial.latestObservation.length === 0, "Initial state must have no observed tasks")
+assert(latestObservationTasks(initial).length === 0, "Initial state must have no observed tasks")
 assert(initial.trackerTasks.length === 4, "Initial controlled tracker must contain A–D")
 assert(initial.authorityIssues.length === 0, "Initial tracker authority must be valid")
 assertPresenterParity(initial)
+const crashedBeforeAnyObservation = await Effect.runPromise(executeLabMove(
+  initial,
+  availableMoveId(initial, "CrashCoordinator"),
+  initial.revision
+))
+assert(
+  crashedBeforeAnyObservation.snapshot.latestObservation._tag === "NeverObserved"
+    && crashedBeforeAnyObservation.snapshot.observationAttempt._tag
+      === "NeverAttempted",
+  "A coordinator crash must not claim that a never-observed target lost an observation"
+)
 const initialPalette = presentLab(initial)
 const initialGroupTitles = initialPalette.actionGroups.map(({ title }) => title)
 const initialGroupDescriptions = initialPalette.actionGroups.map(({ description }) => description)
@@ -245,7 +262,7 @@ assert(
   "Switching targets must restore that target's independent controlled authority"
 )
 assert(
-  primaryAgain.snapshot.latestObservation.length === 0,
+  latestObservationTasks(primaryAgain.snapshot).length === 0,
   "Switching targets must not present another target's latest observation"
 )
 assert(
@@ -260,6 +277,31 @@ const bothTargetsObserved = await Effect.runPromise(executeLabMove(
 assert(
   bothTargetsObserved.snapshot.graphKnowledge.length === 2,
   "Production reconstruction must retain both independently observed target closures"
+)
+const bothTargetsCrashed = await Effect.runPromise(executeLabMove(
+  bothTargetsObserved.snapshot,
+  availableMoveId(bothTargetsObserved.snapshot, "CrashCoordinator"),
+  bothTargetsObserved.snapshot.revision
+))
+const bothTargetsRestarted = await Effect.runPromise(executeLabMove(
+  bothTargetsCrashed.snapshot,
+  availableMoveId(bothTargetsCrashed.snapshot, "RestartCoordinator"),
+  bothTargetsCrashed.snapshot.revision
+))
+const secondaryAfterRestart = await setTrackerTarget(
+  bothTargetsRestarted.snapshot,
+  "Secondary"
+)
+assert(
+  latestObservationTasks(bothTargetsRestarted.snapshot).length === 0
+    && latestObservationTasks(secondaryAfterRestart.snapshot).length === 0
+    && secondaryAfterRestart.snapshot.latestObservation._tag
+      === "DiscardedOnCoordinatorCrash",
+  "Coordinator crash must discard volatile observations for every controlled target"
+)
+assert(
+  secondaryAfterRestart.snapshot.graphKnowledge.length === 2,
+  "Discarding volatile observations must preserve every durable target closure"
 )
 
 const initialModel: Model = {
@@ -296,11 +338,51 @@ assertPresentedMove(
   ["Lab offers this control", "production's fresh task-graph stage"],
   "A"
 )
-assert(observation.snapshot.latestObservation.length === 4, "Observation must reveal A–D")
+assert(latestObservationTasks(observation.snapshot).length === 4, "Observation must reveal A–D")
 assert(observation.snapshot.journal.length === 2, "Success must append intent and outcome")
 assert(observation.snapshot.frontier.some(({ taskId }) => taskId === "A"), "A must be runnable")
 assert(observation.snapshot.frontier.some(({ taskId }) => taskId === "C"), "C must be runnable")
 const observedView = presentLab(observation.snapshot)
+const observedModel: Model = {
+  ...initialModel,
+  branches: [{
+    actions: [observation.input],
+    cursor: 1,
+    id: 1,
+    name: "main"
+  }],
+  graphSelection: "Compare",
+  snapshot: observation.snapshot,
+  viewModel: observedView
+}
+const observedBody = view(observedModel).body
+assert(observedBody !== null, "The observed graph workbench must render")
+if (observedBody === null) throw new Error("The observed graph workbench did not render")
+assert(
+  Option.isSome(Scene.getByRole("heading", {
+    name: "Latest successful normalized observation"
+  })(observedBody))
+    && Option.isSome(Scene.getByRole("heading", {
+      name: "Lab fake task-tracker authority"
+    })(observedBody)),
+  "The graph workbench must keep both topology-bearing projections primary"
+)
+const recoveryDisclosure = Scene.find(observedBody, "details.recovery-diagnostics")
+assert(
+  Option.isSome(recoveryDisclosure)
+    && Option.isSome(Scene.getByRole("button", {
+      name: "Recovery diagnostics · 1 retained target closure"
+    })(observedBody))
+    && Option.isNone(Scene.attr(recoveryDisclosure.value, "open")),
+  "Recovery membership must render as a collapsed compact disclosure"
+)
+assert(
+  Option.isNone(Scene.getByRole("heading", {
+    name: "Journal-reconstructed observation coverage"
+  })(observedBody))
+    && Option.isNone(Scene.getByText("Retained membership: A, B, C, D")(observedBody)),
+  "The graph workbench must not spotlight durable membership as a graph truth"
+)
 assert(
   observedView.graphProjections.map(({ key }) => key).join(",") === "Latest,Authority",
   "Only topology-bearing Latest and Authority projections may be rendered as graphs"
@@ -318,6 +400,59 @@ assert(
   "The Lab must expose the exact journal position applied by production reconstruction"
 )
 assertPresenterParity(observation.snapshot)
+
+const crashedAfterObservation = await Effect.runPromise(executeLabMove(
+  observation.snapshot,
+  availableMoveId(observation.snapshot, "CrashCoordinator"),
+  observation.snapshot.revision
+))
+assert(
+  latestObservationTasks(crashedAfterObservation.snapshot).length === 0
+    && crashedAfterObservation.snapshot.latestObservation._tag
+      === "DiscardedOnCoordinatorCrash",
+  "Coordinator crash must discard the volatile latest normalized observation"
+)
+assert(
+  crashedAfterObservation.snapshot.graphKnowledge.some(({ taskIds }) =>
+    taskIds.join(",") === "A,B,C,D"
+  ),
+  "Coordinator crash must retain journal-reconstructed target-closure membership"
+)
+assert(
+  crashedAfterObservation.snapshot.journal.length === observation.snapshot.journal.length,
+  "Coordinator crash must not fabricate another tracker observation"
+)
+const restartedAfterObservation = await Effect.runPromise(executeLabMove(
+  crashedAfterObservation.snapshot,
+  availableMoveId(crashedAfterObservation.snapshot, "RestartCoordinator"),
+  crashedAfterObservation.snapshot.revision
+))
+const restartedObservationView = presentLab(restartedAfterObservation.snapshot)
+assert(
+  latestObservationTasks(restartedAfterObservation.snapshot).length === 0
+    && restartedObservationView.observationStatus.includes("observe again")
+    && restartedObservationView.graphProjections
+      .find(({ key }) => key === "Latest")?.tasks.length === 0,
+  "Restart must not reconstruct volatile topology from durable membership or fake authority"
+)
+const preCrashReplay = await reconstruct(observation.snapshot.input.actions)
+const postCrashReplay = await reconstruct(crashedAfterObservation.snapshot.input.actions)
+assert(
+  latestObservationTasks(preCrashReplay).length === 4
+    && latestObservationTasks(postCrashReplay).length === 0,
+  "Immutable replay must restore topology only for the history prefix before the crash"
+)
+const observedAgainAfterRestart = await Effect.runPromise(executeLabMove(
+  restartedAfterObservation.snapshot,
+  availableMoveId(restartedAfterObservation.snapshot, "ObserveTrackerTarget"),
+  restartedAfterObservation.snapshot.revision
+))
+assert(
+  latestObservationTasks(observedAgainAfterRestart.snapshot).length === 4
+    && observedAgainAfterRestart.snapshot.journal.length
+      === observation.snapshot.journal.length + 2,
+  "An explicit post-restart read must restore topology with one new intent/outcome pair"
+)
 
 const completedBeforeClaimAuthority = await executeCommand(observation.snapshot, {
   _tag: "ReplacedTrackerTask",
@@ -340,7 +475,7 @@ const completedBeforeClaimRead = await Effect.runPromise(executeLabMove(
   completedBeforeClaimAuthority.snapshot.revision
 ))
 assert(
-  completedBeforeClaimRead.snapshot.latestObservation
+  latestObservationTasks(completedBeforeClaimRead.snapshot)
     .find(({ id }) => id === "A")?.lifecycle === "CompletedSuccessfully",
   "The coordinator must reread a fresh task before committing its claim intent"
 )
@@ -367,6 +502,40 @@ const preclaimRead = await Effect.runPromise(executeLabMove(
   availableMoveId(observation.snapshot, "RecheckTaskBeforeClaim", "A"),
   observation.snapshot.revision
 ))
+const crashedAfterPreclaimRead = await Effect.runPromise(executeLabMove(
+  preclaimRead.snapshot,
+  availableMoveId(preclaimRead.snapshot, "CrashCoordinator"),
+  preclaimRead.snapshot.revision
+))
+const restartedAfterPreclaimRead = await Effect.runPromise(executeLabMove(
+  crashedAfterPreclaimRead.snapshot,
+  availableMoveId(crashedAfterPreclaimRead.snapshot, "RestartCoordinator"),
+  crashedAfterPreclaimRead.snapshot.revision
+))
+const observedAfterPreclaimRestart = await Effect.runPromise(executeLabMove(
+  restartedAfterPreclaimRead.snapshot,
+  availableMoveId(restartedAfterPreclaimRead.snapshot, "ObserveTrackerTarget"),
+  restartedAfterPreclaimRead.snapshot.revision
+))
+assert(
+  !restartedAfterPreclaimRead.snapshot.moves.some(({ availability, subject, transition }) =>
+    transition === "CommitFreshTaskClaimIntent"
+    && availability._tag === "Available"
+    && subject._tag === "Task"
+    && subject.taskId === "A"
+  )
+    && observedAfterPreclaimRestart.snapshot.moves.some(({
+      availability,
+      subject,
+      transition
+    }) =>
+      transition === "RecheckTaskBeforeClaim"
+      && availability._tag === "Available"
+      && subject._tag === "Task"
+      && subject.taskId === "A"
+    ),
+  "Restart must require a new observation and preclaim reread before committing the claim"
+)
 const tipModel: Model = {
   ...initialModel,
   branches: [{
@@ -496,10 +665,12 @@ assert(
     && savedHistoricalModel.branches[1]?.actions[1]?._tag === "ReplacedTrackerTask"
     && claimedHistoricalModel.branches[0]?.actions[1] === preclaimRead.input
     && claimedHistoricalModel.branches[1]?.actions[1]?._tag === "SetTrackerClaim"
-    && savedHistoricalModel.snapshot?.latestObservation.length
-      === observation.snapshot.latestObservation.length
-    && claimedHistoricalModel.snapshot?.latestObservation.length
-      === observation.snapshot.latestObservation.length,
+    && savedHistoricalModel.snapshot !== null
+    && latestObservationTasks(savedHistoricalModel.snapshot).length
+      === latestObservationTasks(observation.snapshot).length
+    && claimedHistoricalModel.snapshot !== null
+    && latestObservationTasks(claimedHistoricalModel.snapshot).length
+      === latestObservationTasks(observation.snapshot).length,
   "Completed task and claim commands must append only to their forks without observing again"
 )
 const [forkingModel, forkCommands] = update(historicalModel, {
@@ -701,7 +872,7 @@ const completedEligibility = await Effect.runPromise(executeLabMove(
   completedAuthority.snapshot.revision
 ))
 assert(
-  completedEligibility.snapshot.latestObservation
+  latestObservationTasks(completedEligibility.snapshot)
     .find(({ id }) => id === "A")?.lifecycle === "CompletedSuccessfully",
   "Claimed-task eligibility must reread current tracker authority"
 )
@@ -902,7 +1073,7 @@ const observedCompletedA = await Effect.runPromise(executeLabMove(
   trackerCompletedA.snapshot.revision
 ))
 assert(
-  observedCompletedA.snapshot.latestObservation.find(({ id }) => id === "A")
+  latestObservationTasks(observedCompletedA.snapshot).find(({ id }) => id === "A")
     ?.lifecycle === "CompletedSuccessfully",
   "Tracker completion must become the latest successful observation"
 )
@@ -1125,7 +1296,7 @@ assert(
   "Missing endpoints must remain visible in controlled authority"
 )
 assert(
-  editedB.snapshot.latestObservation.length === 0,
+  latestObservationTasks(editedB.snapshot).length === 0,
   "Saving a task must not silently observe authority"
 )
 
@@ -1143,7 +1314,7 @@ assert(
   "A failed observation must record intent but no successful outcome"
 )
 assert(
-  failedObservation.snapshot.latestObservation.length === 0,
+  latestObservationTasks(failedObservation.snapshot).length === 0,
   "A failed first read must not manufacture a successful observation"
 )
 assert(failedObservation.snapshot.graphKnowledge.length === 0, "Failed read must add no durable facts")

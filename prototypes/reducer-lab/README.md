@@ -54,10 +54,11 @@ issues, and leaves the latest successful observation and durable knowledge
 unchanged.
 
 The graph selector exposes `Auto`, `Latest`, `Authority`, and `Compare`.
-`Auto` collapses equal projections. Journal-reconstructed observation coverage
-is deliberately rendered as a membership-and-diagnostics panel rather than a
-graph: the current reducer retains target-closure task IDs, but no task content,
-lifecycle, dependency edges, or grouping edges.
+`Auto` collapses equal projections. The latest successful normalized
+observation and current fake tracker authority are the primary graph surfaces.
+Journal-reconstructed membership is a collapsed **Recovery diagnostics**
+disclosure: the current reducer retains target-closure task IDs, but no task
+content, lifecycle, dependency edges, or grouping edges.
 
 Each topology-bearing projection is rendered as an actual view-only Cytoscape graph through a
 FoldKit custom-element adapter. Dagre lays tasks out left-to-right; solid arrow
@@ -143,6 +144,11 @@ frontier. **Activate recovered responsibilities to quiescence** calls
 directly or manufacture the private activation-ownership capability. The smoke
 scenario interrupts after the first selected-executor outcome and proves that
 production recovery reaches the same convergence disposition.
+
+A simulated coordinator crash also discards every volatile latest normalized
+observation. Durable target-closure membership remains reconstructible from the
+managed journal, but the Latest graph stays unavailable after restart until the
+developer explicitly asks Dalph to read the selected fake tracker again.
 
 The architecture additionally requires an active-continuation tracker reread
 before later long-running executor invocations. Current production code does

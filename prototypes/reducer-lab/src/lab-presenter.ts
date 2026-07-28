@@ -115,7 +115,7 @@ export const LabViewModel = S.Struct({
   graphKnowledgeRows: S.Array(S.String),
   graphProjections: S.Array(TaskGraphProjection),
   journal: S.Array(LabJournalRow),
-  knownTasksMetric: S.String,
+  recoveryDiagnosticsSummary: S.String,
   notes: S.Array(S.String),
   observationStatus: S.String,
   reservedTasksMetric: S.String,
@@ -453,12 +453,16 @@ const projection = (
 const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProjection> => {
   const authorityTasks = snapshot.trackerTasks
   const authorityEdges = edgesFor(authorityTasks)
-  const latestTasks = snapshot.latestObservation
+  const latestTasks = snapshot.latestObservation._tag === "Available"
+    ? snapshot.latestObservation.tasks
+    : []
   const latestEdges = edgesFor(latestTasks)
   const authorityFingerprint = fingerprint(authorityTasks, authorityEdges, snapshot.authorityIssues)
   const latestFingerprint = fingerprint(latestTasks, latestEdges, [])
-  const latestExists = snapshot.hasSuccessfulObservation
+  const latestExists = snapshot.latestObservation._tag === "Available"
   const observationFailed = snapshot.observationAttempt._tag === "Failed"
+  const observationDiscarded =
+    snapshot.latestObservation._tag === "DiscardedOnCoordinatorCrash"
   return [
     projection(
       "Latest",
@@ -467,7 +471,9 @@ const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProject
         ? observationFailed
           ? "Prior successful read; latest attempt failed"
           : "Most recently seen successfully by Dalph"
-        : "No successful observation",
+        : observationDiscarded
+          ? "Unavailable after coordinator crash; observe again"
+          : "No successful observation",
       latestTasks,
       latestEdges,
       [],
@@ -555,9 +561,9 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   ),
   graphProjections: graphProjections(snapshot),
   journal: snapshot.journal,
-  knownTasksMetric: `Retained membership: ${
-    [...new Set(snapshot.graphKnowledge.flatMap(({ taskIds }) => taskIds))].join(", ") || "none"
-  }`,
+  recoveryDiagnosticsSummary: `${
+    snapshot.graphKnowledge.length
+  } retained target closure${snapshot.graphKnowledge.length === 1 ? "" : "s"}`,
   notes: [
     "Task-card Save changes only the Lab's fake tracker. Observe asks Dalph to cross the task-tracker read boundary.",
     "The Lab's journaled fake claim adapter records an exact claim; Dalph checks it and rereads current fake tracker facts before planning.",
@@ -566,14 +572,17 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     "Pause and unpause controls record production ControlCommandRecorded events. Production reconstruction still reports RunUnpaused / NoTaskPauses until the later pause-state issues land.",
     "Production has not implemented the specified active-continuation reread before every later executor invocation; the Lab does not fabricate it.",
     "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
-    "Journal-reconstructed observation coverage is a membership set, not a graph; it retains no topology.",
+    "Durable recovery diagnostics retain membership only, never task topology or current authority.",
     "The browser build still uses the documented temporary Node-platform shim."
   ],
-  observationStatus: snapshot.observationAttempt._tag === "NeverAttempted"
-    ? "No observation attempted"
-    : snapshot.observationAttempt._tag === "Succeeded"
-      ? `Successful observation · ${snapshot.observationAttempt.revision}`
-      : `Observation failed · ${snapshot.observationAttempt.issues.join("; ")}`,
+  observationStatus:
+    snapshot.latestObservation._tag === "DiscardedOnCoordinatorCrash"
+      ? "Volatile observation discarded by coordinator crash · observe again"
+      : snapshot.observationAttempt._tag === "NeverAttempted"
+        ? "No observation attempted"
+        : snapshot.observationAttempt._tag === "Succeeded"
+          ? `Successful observation · ${snapshot.observationAttempt.revision}`
+          : `Observation failed · ${snapshot.observationAttempt.issues.join("; ")}`,
   reservedTasksMetric: `Reserved: ${snapshot.reservedTaskIds.join(", ") || "none"}`,
   responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, operationId, taskId }) =>
     `${taskId} · ${kind} · ${operationId} · began at journal #${beganAt}`
@@ -601,5 +610,9 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     `${snapshot.controlledTrackerTarget} authority: [${
       snapshot.trackerTasks.map(({ id }) => id).join(", ") || "empty"
     }]. ` +
-    `Observed: [${snapshot.latestObservation.map(({ id }) => id).join(", ") || "nothing"}].`
+    `Observed: [${
+      snapshot.latestObservation._tag === "Available"
+        ? snapshot.latestObservation.tasks.map(({ id }) => id).join(", ")
+        : "nothing"
+    }].`
 })

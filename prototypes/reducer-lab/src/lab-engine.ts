@@ -323,6 +323,12 @@ const ObservationAttempt = S.Union([
   S.TaggedStruct("Succeeded", { revision: S.String }),
   S.TaggedStruct("Failed", { issues: S.Array(S.String) })
 ])
+/** The selected target's process-local normalized graph, or why none exists. */
+const LatestObservation = S.Union([
+  S.TaggedStruct("NeverObserved", {}),
+  S.TaggedStruct("Available", { tasks: S.Array(ControlledTask) }),
+  S.TaggedStruct("DiscardedOnCoordinatorCrash", {})
+])
 const WorkflowProgress = S.Struct({
   completedOperations: S.Array(S.String),
   completedExecutorInvocations: S.Number,
@@ -359,10 +365,9 @@ export const LabSnapshot = S.Struct({
   finalityTag: S.String,
   frontier: S.Array(Decision),
   graphKnowledge: S.Array(GraphKnowledge),
-  hasSuccessfulObservation: S.Boolean,
   input: LabInput,
   journal: S.Array(JournalRow),
-  latestObservation: S.Array(ControlledTask),
+  latestObservation: LatestObservation,
   moves: S.Array(LabMove),
   observationAttempt: ObservationAttempt,
   reservedTaskIds: S.Array(S.String),
@@ -521,6 +526,34 @@ const issueText = (issue: ProjectionIssue): string => {
   }
 }
 
+type VolatileObservation =
+  | { readonly _tag: "NeverObserved" }
+  | {
+    readonly _tag: "Available"
+    readonly projected: TaskDagSnapshot
+    readonly tasks: ReadonlyArray<ControlledTask>
+  }
+  | { readonly _tag: "DiscardedOnCoordinatorCrash" }
+
+const snapshotLatestObservation = (
+  observation: VolatileObservation
+): LabSnapshot["latestObservation"] =>
+  observation._tag === "Available"
+    ? { _tag: "Available", tasks: observation.tasks }
+    : observation
+
+const volatileObservationTasks = (
+  observation: VolatileObservation
+): ReadonlyArray<ControlledTask> =>
+  observation._tag === "Available" ? observation.tasks : []
+
+const discardVolatileObservation = (
+  observation: VolatileObservation
+): VolatileObservation =>
+  observation._tag === "Available"
+    ? { _tag: "DiscardedOnCoordinatorCrash" }
+    : observation
+
 interface ProductionInput {
   readonly activateRecovery: (capacity: number) => Promise<void>
   readonly authorityIssues: ReadonlyArray<string>
@@ -530,11 +563,9 @@ interface ProductionInput {
   readonly capacity: number
   readonly coordinatorRunning: boolean
   readonly freshFacts: ReadonlyMap<string, ReadonlyArray<FreshFact>>
-  readonly hasSuccessfulObservation: boolean
   readonly hasRestartedCoordinator: boolean
   readonly latestGraphOperationId: OperationId
-  readonly latestObservation: ReadonlyArray<ControlledTask>
-  readonly latestProjected: TaskDagSnapshot | null
+  readonly volatileObservation: VolatileObservation
   readonly observationAttempt: LabSnapshot["observationAttempt"]
   readonly preclaimReadyTaskIds: ReadonlySet<string>
   readonly recoveryRequests: ReadonlyArray<number>
@@ -572,13 +603,9 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
     ["Primary", new Set(initialTrackerTasks.map(({ id }) => id))],
     ["Secondary", new Set()]
   ])
-  const latestObservationByTarget = new Map<
+  const volatileObservationByTarget = new Map<
     ControlledTrackerTarget,
-    ReadonlyArray<ControlledTask>
-  >()
-  const latestProjectionByTarget = new Map<
-    ControlledTrackerTarget,
-    TaskDagSnapshot
+    VolatileObservation
   >()
   const observationAttemptByTarget = new Map<
     ControlledTrackerTarget,
@@ -597,9 +624,7 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
   let claimOrdinal = 0
   let controlOrdinal = 0
   let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
-  let latestObservation: ReadonlyArray<ControlledTask> = []
-  let latestProjected: TaskDagSnapshot | null = null
-  let hasSuccessfulObservation = false
+  let volatileObservation: VolatileObservation = { _tag: "NeverObserved" }
   let observationAttempt: LabSnapshot["observationAttempt"] = { _tag: "NeverAttempted" }
   const preclaimReadyTaskIds = new Set<string>()
   const workflowAcquiredClaims = new Map<string, ActiveTaskClaim>()
@@ -615,12 +640,7 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
     trackerTasksByTarget.set(controlledTrackerTarget, trackerTasks)
     trackerClaimsByTarget.set(controlledTrackerTarget, trackerClaims)
     authorityTaskIdsByTarget.set(controlledTrackerTarget, allAuthorityTaskIds)
-    if (hasSuccessfulObservation) {
-      latestObservationByTarget.set(controlledTrackerTarget, latestObservation)
-    }
-    if (latestProjected !== null) {
-      latestProjectionByTarget.set(controlledTrackerTarget, latestProjected)
-    }
+    volatileObservationByTarget.set(controlledTrackerTarget, volatileObservation)
     observationAttemptByTarget.set(controlledTrackerTarget, observationAttempt)
   }
   const selectControlledTarget = (next: ControlledTrackerTarget): void => {
@@ -629,9 +649,8 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
     trackerTasks = trackerTasksByTarget.get(next) ?? []
     trackerClaims = trackerClaimsByTarget.get(next) ?? new Map()
     allAuthorityTaskIds = authorityTaskIdsByTarget.get(next) ?? new Set()
-    latestObservation = latestObservationByTarget.get(next) ?? []
-    latestProjected = latestProjectionByTarget.get(next) ?? null
-    hasSuccessfulObservation = latestObservationByTarget.has(next)
+    volatileObservation =
+      volatileObservationByTarget.get(next) ?? { _tag: "NeverObserved" }
     observationAttempt = observationAttemptByTarget.get(next) ?? { _tag: "NeverAttempted" }
     preclaimReadyTaskIds.clear()
   }
@@ -1032,9 +1051,11 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
       }
       return null
     }
-    latestObservation = cloneTasks(trackerTasks)
-    latestProjected = result.success
-    hasSuccessfulObservation = true
+    volatileObservation = {
+      _tag: "Available",
+      projected: result.success,
+      tasks: cloneTasks(trackerTasks)
+    }
     observationAttempt = { _tag: "Succeeded", revision }
     return result.success
   }
@@ -1090,7 +1111,10 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
       }
       case "CommittedClaimIntent": {
         const capturedObservation = projectTrackerSnapshot(
-          projectionInput(latestObservation, "claim-captured-observation")
+          projectionInput(
+            volatileObservationTasks(volatileObservation),
+            "claim-captured-observation"
+          )
         )
         const selectedTask = capturedObservation._tag === "Valid"
           ? capturedObservation.snapshot.eligibleTasks().find(
@@ -1191,6 +1215,11 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
         break
       case "CrashedCoordinator":
         coordinatorRunning = false
+        for (const [target, observation] of volatileObservationByTarget) {
+          volatileObservationByTarget.set(target, discardVolatileObservation(observation))
+        }
+        volatileObservation = discardVolatileObservation(volatileObservation)
+        preclaimReadyTaskIds.clear()
         break
       case "RestartedCoordinator":
         coordinatorRunning = true
@@ -1242,11 +1271,9 @@ const buildProductionInput = async (input: LabInput): Promise<ProductionInput> =
     capacity,
     coordinatorRunning,
     freshFacts,
-    hasSuccessfulObservation,
     hasRestartedCoordinator,
     latestGraphOperationId,
-    latestObservation,
-    latestProjected,
+    volatileObservation,
     observationAttempt,
     preclaimReadyTaskIds,
     readRecoveredFrontier: () =>
@@ -1705,14 +1732,13 @@ const emptyProductionSnapshot = (
   finalityTag: "UnsafeToDecide",
   frontier: [],
   graphKnowledge: [],
-  hasSuccessfulObservation: built.hasSuccessfulObservation,
   input,
   journal: built.records.map(({ event, position }) => ({
     operationTag: journalOperationTag(event),
     position,
     tag: event._tag
   })),
-  latestObservation: built.latestObservation,
+  latestObservation: snapshotLatestObservation(built.volatileObservation),
   moves: driverMoves(
     built.coordinatorRunning,
     built.capacity,
@@ -1864,7 +1890,7 @@ const reconstructThroughProduction = (
       const responsibilityTaskId = responsibility._tag === "ExecutorInvocationResponsibility"
         ? responsibility.invocation.correlation.taskId
         : responsibility.taskId
-      const observedLifecycle = built.latestObservation.find(
+      const observedLifecycle = volatileObservationTasks(built.volatileObservation).find(
         ({ id }) => id === responsibilityTaskId
       )?.lifecycle
       const operationId = workflowResponsibilityOperationId(responsibility)
@@ -1879,10 +1905,12 @@ const reconstructThroughProduction = (
       }))
     })
     const controlledFrontier = deriveRunnableFrontier({
-      freshEligibleTasks: built.latestProjected?.eligibleTasks().map((task) => ({
-        taskId: task.id,
-        taskRevision: taskRevisionFor(task)
-      })) ?? [],
+      freshEligibleTasks: built.volatileObservation._tag === "Available"
+        ? built.volatileObservation.projected.eligibleTasks().map((task) => ({
+          taskId: task.id,
+          taskRevision: taskRevisionFor(task)
+        }))
+        : [],
       responsibility: run.responsibility,
       responsibilityFacts
     })
@@ -2000,14 +2028,13 @@ const reconstructThroughProduction = (
             taskIds: []
           }
       ),
-      hasSuccessfulObservation: built.hasSuccessfulObservation,
       input,
       journal: built.records.map(({ event, position }) => ({
         operationTag: journalOperationTag(event),
         position,
         tag: event._tag
       })),
-      latestObservation: built.latestObservation,
+      latestObservation: snapshotLatestObservation(built.volatileObservation),
       moves: [
         ...frontier.transitions.map((transition) =>
           frontierMove(

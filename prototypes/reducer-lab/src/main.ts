@@ -132,7 +132,7 @@ const emptyViewModel: LabViewModel = {
   graphKnowledgeRows: [],
   graphProjections: [],
   journal: [],
-  knownTasksMetric: "Known tasks: computing",
+  recoveryDiagnosticsSummary: "computing",
   notes: [],
   observationStatus: "computing",
   reservedTasksMetric: "Reserved: computing",
@@ -828,7 +828,7 @@ export const view = (model: Model): Document => {
             h.div([h.Class("section-heading")], [
               h.div([], [
                 h.p([h.Class("eyebrow")], ["GRAPH WORKBENCH"]),
-                h.h2([], ["Tracker task editor + two graph truths"])
+                h.h2([], ["Latest observation + fake tracker authority"])
               ]),
               h.p([h.Class("observation-status")], [viewModel.observationStatus])
             ]),
@@ -849,17 +849,19 @@ export const view = (model: Model): Document => {
                 graphProjection(h, projection, model.selectedTaskId)
               )
             ),
-            h.section([h.Class("coverage-panel")], [
-              h.p([h.Class("eyebrow")], ["NO TOPOLOGY RETAINED"]),
-              h.h3([], ["Journal-reconstructed observation coverage"]),
-              h.p([h.Class("metric")], [viewModel.knownTasksMetric]),
-              listOrEmpty(
-                h,
-                viewModel.graphKnowledgeRows,
-                "No successful graph outcome in managed history."
-              ),
-              h.p([h.Class("boundary-note")], [
-                "This durable membership history supports reconstruction diagnostics. It cannot show dependencies or grouping and is not used as current tracker authority."
+            h.details([h.Class("recovery-diagnostics")], [
+              h.summary([], [
+                `Recovery diagnostics · ${viewModel.recoveryDiagnosticsSummary}`
+              ]),
+              h.div([h.Class("recovery-diagnostics-body")], [
+                listOrEmpty(
+                  h,
+                  viewModel.graphKnowledgeRows,
+                  "No successful graph outcome in managed history."
+                ),
+                h.p([h.Class("boundary-note")], [
+                  "Journal-derived membership only. It contains no task topology, is not current tracker authority, and cannot resume work without a fresh read."
+                ])
               ])
             ]),
             h.div([h.Class("editor-claims-grid")], [

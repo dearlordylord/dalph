@@ -202,11 +202,18 @@ An adaptive selector offers `Auto`, each individual graph projection, and `Compa
 screen space showing identical copies.
 
 The current reducer retains target-closure membership rather than dependency or
-grouping topology. The Lab therefore renders **journal-reconstructed observation
-coverage** as a membership-and-diagnostics panel, not a graph. It must show
-retained task identities, observation conflicts/counts, and staleness
-limitations without filling missing edges from current authority or the latest
-read.
+grouping topology. The latest successful normalized observation and controlled
+tracker authority therefore remain the primary graph surfaces.
+Journal-reconstructed membership appears only in a collapsed **Recovery
+diagnostics** disclosure. Its expanded content shows retained task identities,
+observation conflicts/counts, and staleness limitations without filling missing
+edges from current authority or the latest read.
+
+The latest successful normalized observation is process-local. A simulated
+coordinator crash discards that topology for every controlled target while
+leaving journal-reconstructed membership intact. Restart alone must not rebuild
+the Latest graph from either durable membership or current fake authority; only
+an explicit fresh tracker read restores it.
 
 ## Invalid graph semantics
 
@@ -332,6 +339,8 @@ reconstruction from already-recorded journal facts.
 | A completes the selected executor protocol, then controlled tracker authority changes A to completed successfully and the developer observes the target. | The complete journal contains plan, worktree, session, execution, evidence, review, and convergence outcomes. The fresh tracker lifecycle projects `FinalOutcome` for every outstanding A responsibility and no further A transition. | “The complete production path must journal …”, “Tracker completion must become the latest successful observation”, and “A completed task must have no remaining runnable workflow transition.” |
 | The developer requests run or task pause/unpause. | The Lab invokes the authenticated production control service and displays `ControlCommandRecorded`. It continues to display `RunUnpaused` / `NoTaskPauses` until production implements derived pause state. | “The Lab must invoke production's authenticated pause-command journal boundary” and “Recording a pause request must not fabricate the still-unimplemented derived pause state.” |
 | Any exact reconstructed responsibility is selected and the developer supplies one of production's responsibility dispositions. | The real frontier emits the corresponding transition or explanation. Executor wait and settlement are offered only for exact executor-invocation responsibilities. | The table-driven disposition reachability scenario and the exhaustive `dispositionCoverage` assertion. |
+| The developer views a successful tracker observation during an ordinary run. | Latest observation and fake authority remain the primary graph projections. Durable membership is available only through a collapsed Recovery diagnostics disclosure. | “The graph workbench must keep both topology-bearing projections primary”, “Recovery membership must render as a collapsed compact disclosure”, and “The graph workbench must not spotlight durable membership as a graph truth.” |
+| The coordinator crashes after observing Primary and Secondary, then restarts. | Both volatile normalized observations remain unavailable; both durable target-closure memberships survive. A fresh explicit tracker read restores only the selected target's Latest graph. | “Coordinator crash must discard volatile observations for every controlled target”, “Discarding volatile observations must preserve every durable target closure”, and the chronological crash/restart/reread assertions. |
 | The coordinator crashes after the first controlled executor outcome, restarts, and the developer activates recovered responsibilities. | The Lab invokes production `activateRecoveredResponsibilities`; admission and the private activation-ownership handoff remain production-owned. Recovery reaches the durable convergence disposition and synchronizes visible workflow progress. | “Restart must route recovered executor work through production activation to quiescence” and “Recovered production activation must synchronize visible workflow progress.” |
 
 ## Browser boundary
