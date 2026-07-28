@@ -3048,7 +3048,10 @@ module frontierRecovery {
       observeCapacityAbsent(A),
       observeCapacityInterrupted(A),
       observeCapacityUnknown(A),
-      crashCoordinatorWithActivation,
+      all {
+        state.coordinator.crashCount < 2,
+        crashCoordinatorWithActivation,
+      },
       readProviderInvocationForReconstruction(A),
       reconstructActivation,
       deriveActivationPass,

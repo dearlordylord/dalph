@@ -467,3 +467,77 @@ module frontierRecoveryCapacityOneTest {
         state.activation.positions.get(C) == ActivationPositionNotUsing,
       })
 }
+
+module frontierRecoveryCapacityCorrelationTest {
+  import frontierRecoveryCapacityCorrelation(CAPACITY = 2).* from "./frontierRecovery_capacity_correlation"
+
+  run mismatchCountsOnceAndLeavesTheSecondPositionAvailableTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .expect(and {
+        mismatchUsesOneTaskPosition,
+        capacityUsage(state) == 1,
+      })
+      .then(reserveIndependentTask)
+      .expect(and {
+        boundedCapacity,
+        capacityUsage(state) == 2,
+        independentTaskAdmitted,
+      })
+
+  run mismatchedTerminalKeepsTheExpectedPositionTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .then(observeMismatchedInvocationTerminal)
+      .expect(and {
+        mismatchedTerminalReached,
+        mismatchedTerminalKeepsExpectedTaskPosition,
+        capacityUsage(state) == 1,
+      })
+
+  run unknownReportDoesNotReleaseTheExpectedPositionTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .then(observeUnknownProviderReport)
+      .expect(and {
+        mismatchReached,
+        unknownReportNeverReleasesOutstandingTask,
+        capacityUsage(state) == 1,
+      })
+
+  run restartReconstructsTheExactMismatchTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .then(crashCoordinator)
+      .then(readProviderForReconstruction)
+      .then(reconstructCapacity)
+      .expect(and {
+        mismatchReconstructedAfterCrash,
+        mismatchUsesOneTaskPosition,
+        capacityUsage(state) == 1,
+      })
+
+  run matchingAbsenceReleasesTheExpectedPositionTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .then(observeExpectedInvocationAbsent)
+      .expect(and {
+        state.expectedTaskPosition == NotUsing,
+        capacityUsage(state) == 0,
+      })
+}
+
+module frontierRecoveryCapacityCorrelationOneTest {
+  import frontierRecoveryCapacityCorrelation(CAPACITY = 1).* from "./frontierRecovery_capacity_correlation"
+
+  run mismatchUsesTheOnlyConfiguredPositionTest =
+    init
+      .then(observeCapacityCorrelationConflict)
+      .expect(and {
+        boundedCapacity,
+        mismatchUsesOneTaskPosition,
+        capacityUsage(state) == 1,
+        not(capacityUsage(state) < CAPACITY),
+        state.independentTaskPosition == NotUsing,
+      })
+}

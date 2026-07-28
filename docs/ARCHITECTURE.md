@@ -1235,6 +1235,10 @@ correlation, authoritative absence, unreadability, conflict, and the bounded
 lookup protocol. The `frontierRecovery` model owns composition across graph
 knowledge, responsibility, pause, capacity, crash recovery, reconciliation,
 and the eight claim-through-completion ambiguity-crossing boundaries.
+Its `frontierRecovery_capacity_correlation` proof projection removes unrelated
+M2 state for finite exhaustive capacity-correlation checks; it has the same
+accepted scenarios, maintainer, lifecycle, and broad-model conformance seam and
+is not a third canonical model.
 
 The models overlap only through the versioned `AmbiguityBoundaryV1` projection.
 For one exact subject it carries operation identity, immutable request

@@ -127,5 +127,16 @@ managed-run history.
   must prove invalid journal history fails before frontier derivation; Quint
   test `rejectsTwoCurrentCapacityOperationsForOneTaskTest` proves the
   pre-validation rule.
+- The focused M2 projection must exhaustively check the same capacity rules
+  without importing unrelated graph, pause, and workflow state. Quint tests
+  `mismatchCountsOnceAndLeavesTheSecondPositionAvailableTest`,
+  `mismatchUsesTheOnlyConfiguredPositionTest`,
+  `mismatchedTerminalKeepsTheExpectedPositionTest`,
+  `unknownReportDoesNotReleaseTheExpectedPositionTest`, and
+  `restartReconstructsTheExactMismatchTest` map the accepted paths to that
+  projection. Exhaustive profiles
+  `focused capacity-two provider correlation conflict and reconstruction` and
+  `focused capacity-one provider correlation conflict and reconstruction`
+  check its finite reachable states.
 - Quint tests with the same plain-language outcomes must pass before the
   TypeScript controller is changed.

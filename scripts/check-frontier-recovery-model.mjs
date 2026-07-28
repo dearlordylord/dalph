@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer"
-import { spawn, spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { createServer } from "node:net"
 import { availableParallelism, totalmem } from "node:os"
 import { performance } from "node:perf_hooks"
@@ -18,12 +18,15 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const model = "specs/frontierRecovery.qnt"
+const focusedCapacityModel =
+  "specs/frontierRecovery_capacity_correlation.qnt"
 const tests = "specs/frontierRecovery_test.qnt"
 const counterexamples =
   "specs/frontierRecovery_counterexamples.qnt"
 const gibibyte = 1024 ** 3
 const maxConcurrentOutputBytes = 16 * 1024 * 1024
 const maxExhaustiveCheckConcurrency = 3
+const maxFastCheckConcurrency = 6
 const outerQuintSafetyTimeoutSeconds =
   quintGateSafetyTimeoutMilliseconds / 1000
 const taskSessionPrefixBudgetSeconds =
@@ -38,34 +41,38 @@ const detectedExhaustiveCheckConcurrency =
     : availableParallelism() >= 4 && totalmem() >= 16 * gibibyte
       ? 2
       : 1
-const requestedConcurrencyInput =
-  process.env.DALPH_QUINT_VERIFY_CONCURRENCY ??
-  String(detectedExhaustiveCheckConcurrency)
-
-if (!/^[1-9]\d*$/u.test(requestedConcurrencyInput)) {
-  throw new Error(
-    `DALPH_QUINT_VERIFY_CONCURRENCY must be an integer from 1 to ${maxExhaustiveCheckConcurrency}`
-  )
+const detectedFastCheckConcurrency =
+  availableParallelism() >= 6 && totalmem() >= 16 * gibibyte
+    ? 6
+    : availableParallelism() >= 4 && totalmem() >= 8 * gibibyte
+      ? 4
+      : availableParallelism() >= 2
+        ? 2
+        : 1
+const resolveConcurrency = (environmentName, detected, maximum) => {
+  const input = process.env[environmentName] ?? String(detected)
+  if (!/^[1-9]\d*$/u.test(input) || Number(input) > maximum) {
+    throw new Error(
+      `${environmentName} must be an integer from 1 to ${maximum}`
+    )
+  }
+  return Math.min(Number(input), detected)
 }
-
-const requestedExhaustiveCheckConcurrency = Number(requestedConcurrencyInput)
-if (requestedExhaustiveCheckConcurrency > maxExhaustiveCheckConcurrency) {
-  throw new Error(
-    `DALPH_QUINT_VERIFY_CONCURRENCY must be an integer from 1 to ${maxExhaustiveCheckConcurrency}`
-  )
-}
-const exhaustiveCheckConcurrency = Math.min(
-  requestedExhaustiveCheckConcurrency,
-  detectedExhaustiveCheckConcurrency
+const exhaustiveCheckConcurrency = resolveConcurrency(
+  "DALPH_QUINT_VERIFY_CONCURRENCY",
+  detectedExhaustiveCheckConcurrency,
+  maxExhaustiveCheckConcurrency
+)
+const fastCheckConcurrency = resolveConcurrency(
+  "DALPH_QUINT_FAST_CONCURRENCY",
+  detectedFastCheckConcurrency,
+  maxFastCheckConcurrency
 )
 const gateStartedAt = performance.now()
 const phaseDurations = new Map()
 const invariants = [
   "boundedCapacity",
   "taskWorkCapacityRequirementIsProjected",
-  "capacityUsageCountsTasksNotOperationCorrelations",
-  "correlationConflictRetainsOneTaskPosition",
-  "rejectedCapacityHistoryDerivesNoFrontier",
   "everyEffectHasIntent",
   "noDuplicateAuthorityEffect",
   "everyRequestUsesItsIntentIdentity",
@@ -90,21 +97,12 @@ const invariants = [
   "everyResponsibilityIsActionableOrExactlyExplained",
   "preIntentInterruptionLeaksNoReservedPosition"
 ]
-
-const run = (name, args) => {
-  process.stdout.write(`\n== ${name} ==\n`)
-  const startedAt = performance.now()
-  const result = spawnSync(process.execPath, [pnpmEntryPoint, ...args], {
-    stdio: "inherit"
-  })
-  const elapsedSeconds = (performance.now() - startedAt) / 1000
-  process.stdout.write(`completed in ${elapsedSeconds.toFixed(2)}s\n`)
-  if (result.error !== undefined) throw result.error
-  if (result.status !== 0) {
-    throw new Error(`${name} failed with exit ${result.status}`)
-  }
-  return elapsedSeconds
-}
+const focusedCapacityInvariantExpression = [
+  "boundedCapacity",
+  "mismatchUsesOneTaskPosition",
+  "mismatchedTerminalKeepsExpectedTaskPosition",
+  "unknownReportNeverReleasesOutstandingTask"
+].join(" and ")
 
 const findAvailablePort = () =>
   new Promise((resolve, reject) => {
@@ -198,14 +196,21 @@ const runConcurrent = (name, args) =>
     })
   })
 
-const runExhaustiveProfile = async ([name, main, init, step]) => {
+const runExhaustiveProfile = async ([
+  name,
+  main,
+  init,
+  step,
+  input = model,
+  invariant = invariantExpression
+]) => {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const port = await findAvailablePort()
     try {
       await runConcurrent(`exhaustive ${name}`, [
         "quint",
         "verify",
-        model,
+        input,
         "--main",
         main,
         "--backend",
@@ -217,7 +222,7 @@ const runExhaustiveProfile = async ([name, main, init, step]) => {
         "--step",
         step,
         "--invariant",
-        invariantExpression,
+        invariant,
         "--verbosity",
         "3"
       ])
@@ -237,11 +242,22 @@ const runExhaustiveProfile = async ([name, main, init, step]) => {
   }
 }
 
-const runConcurrentBatch = async (profiles) => {
-  const results = await Promise.allSettled(profiles.map(runExhaustiveProfile))
+const runConcurrentBatch = async (profiles, runProfile) => {
+  const results = await Promise.allSettled(profiles.map(runProfile))
   const failure = results.find((result) => result.status === "rejected")
   if (failure?.status === "rejected") throw failure.reason
 }
+
+const runInBatches = async (profiles, concurrency, runProfile) => {
+  for (let offset = 0; offset < profiles.length; offset += concurrency) {
+    await runConcurrentBatch(
+      profiles.slice(offset, offset + concurrency),
+      runProfile
+    )
+  }
+}
+
+const runPassingProfile = ([name, args]) => runConcurrent(name, args)
 
 const recordPhase = (name, startedAt) => {
   const elapsedSeconds = (performance.now() - startedAt) / 1000
@@ -249,18 +265,16 @@ const recordPhase = (name, startedAt) => {
   return elapsedSeconds
 }
 
-const expectInvariantFailure = (
-  name,
-  step,
+const runExpectedInvariantFailure = ({
+  init,
   invariant,
   main = "frontierRecoveryCounterexamples",
-  init
-) => {
-  process.stdout.write(`\n== ${name} (expected invariant failure) ==\n`)
-  const startedAt = performance.now()
-  const result = spawnSync(
-    process.execPath,
-    [
+  name,
+  step
+}) =>
+  new Promise((resolve, reject) => {
+    const startedAt = performance.now()
+    const child = spawn(process.execPath, [
       pnpmEntryPoint,
       "quint",
       "run",
@@ -278,40 +292,95 @@ const expectInvariantFailure = (
       "1000",
       "--verbosity",
       "1"
-    ],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }
-  )
-  const elapsedSeconds = (performance.now() - startedAt) / 1000
-  if (result.error !== undefined) throw result.error
-  const output = `${result.stdout}${result.stderr}`
-  if (result.status === 0 || !output.includes("[violation] Found an issue")) {
-    process.stdout.write(output)
-    throw new Error(`${name} did not produce the expected counterexample`)
-  }
-  process.stdout.write(
-    `confirmed in ${elapsedSeconds.toFixed(2)}s: ${invariant} rejects ${step}\n`
-  )
-}
+    ], {
+      stdio: ["ignore", "pipe", "pipe"]
+    })
+    const output = makeBoundedOutput()
+    child.stdout.on("data", output.append)
+    child.stderr.on("data", output.append)
+    child.once("error", reject)
+    child.once("close", (status, signal) => {
+      const elapsedSeconds = (performance.now() - startedAt) / 1000
+      const outputText = output.text()
+      process.stdout.write(
+        `\n== ${name} (expected invariant failure) ==\n`
+      )
+      if (
+        signal === null &&
+        status !== 0 &&
+        outputText.includes("[violation] Found an issue")
+      ) {
+        process.stdout.write(
+          `confirmed in ${elapsedSeconds.toFixed(2)}s: ${invariant} rejects ${step}\n`
+        )
+        resolve()
+        return
+      }
+      output.write()
+      reject(
+        new Error(
+          `${name} did not produce the expected counterexample` +
+            (signal === null ? ` (exit ${status})` : ` (signal ${signal})`)
+        )
+      )
+    })
+  })
 
 let phaseStartedAt = performance.now()
-for (const input of [model, tests, counterexamples]) {
-  run(`typecheck ${input}`, ["quint", "typecheck", input])
-}
+process.stdout.write(
+  `\nRunning non-exhaustive profiles with concurrency ${fastCheckConcurrency} ` +
+    `(detected cap ${detectedFastCheckConcurrency}).\n`
+)
+const typecheckProfiles = [
+  model,
+  focusedCapacityModel,
+  tests,
+  counterexamples
+].map((input) => [
+  `typecheck ${input}`,
+  ["quint", "typecheck", input]
+])
+await runInBatches(
+  typecheckProfiles,
+  fastCheckConcurrency,
+  runPassingProfile
+)
 
-run("deterministic acceptance scenarios", [
-  "quint",
-  "test",
-  tests,
-  "--main",
-  "frontierRecoveryTest"
-])
-run("deterministic capacity-one acceptance scenario", [
-  "quint",
-  "test",
-  tests,
-  "--main",
-  "frontierRecoveryCapacityOneTest"
-])
+const deterministicTestProfiles = [
+  [
+    "deterministic acceptance scenarios",
+    ["quint", "test", tests, "--main", "frontierRecoveryTest"]
+  ],
+  [
+    "deterministic capacity-one acceptance scenario",
+    ["quint", "test", tests, "--main", "frontierRecoveryCapacityOneTest"]
+  ],
+  [
+    "deterministic focused capacity-correlation scenarios",
+    [
+      "quint",
+      "test",
+      tests,
+      "--main",
+      "frontierRecoveryCapacityCorrelationTest"
+    ]
+  ],
+  [
+    "deterministic focused capacity-one correlation scenario",
+    [
+      "quint",
+      "test",
+      tests,
+      "--main",
+      "frontierRecoveryCapacityCorrelationOneTest"
+    ]
+  ]
+]
+await runInBatches(
+  deterministicTestProfiles,
+  fastCheckConcurrency,
+  runPassingProfile
+)
 recordPhase("typechecks and deterministic tests", phaseStartedAt)
 
 const sampledProfiles = [
@@ -396,8 +465,9 @@ const sampledProfiles = [
 ]
 
 phaseStartedAt = performance.now()
-for (const profile of sampledProfiles) {
-  run(profile.name, [
+const sampledRunProfiles = sampledProfiles.map((profile) => [
+  profile.name,
+  [
     "quint",
     "run",
     model,
@@ -417,10 +487,22 @@ for (const profile of sampledProfiles) {
     "10000",
     "--verbosity",
     "1"
-  ])
-}
+  ]
+])
+await runInBatches(
+  sampledRunProfiles,
+  fastCheckConcurrency,
+  runPassingProfile
+)
 recordPhase("sampled profiles", phaseStartedAt)
 
+const invariantExpression = invariants.join(" and ")
+const broadCapacityCorrelationInvariantExpression = [
+  ...invariants,
+  "capacityUsageCountsTasksNotOperationCorrelations",
+  "correlationConflictRetainsOneTaskPosition",
+  "rejectedCapacityHistoryDerivesNoFrontier"
+].join(" and ")
 const exhaustiveProfiles = [
   [
     "capacity one with two independently eligible tasks",
@@ -480,11 +562,29 @@ const exhaustiveProfiles = [
     "task-local provider correlation conflict and reconstruction",
     "frontierRecoveryCapacityTwo",
     "initCorrelationConflictActivationProfile",
-    "capacityCorrelationProfileStep"
+    "capacityCorrelationProfileStep",
+    model,
+    broadCapacityCorrelationInvariantExpression
   ]
 ]
-const invariantExpression = invariants.join(" and ")
-
+const focusedExhaustiveProfiles = [
+  [
+    "focused capacity-two provider correlation conflict and reconstruction",
+    "frontierRecoveryCapacityCorrelationTwo",
+    "init",
+    "step",
+    focusedCapacityModel,
+    focusedCapacityInvariantExpression
+  ],
+  [
+    "focused capacity-one provider correlation conflict and reconstruction",
+    "frontierRecoveryCapacityCorrelationOne",
+    "init",
+    "step",
+    focusedCapacityModel,
+    focusedCapacityInvariantExpression
+  ]
+]
 // These sliced proofs are independent, so bounded concurrency reduces their
 // aggregate wall time while retaining each profile's separate diagnostics.
 process.stdout.write(
@@ -492,92 +592,110 @@ process.stdout.write(
     `(detected cap ${detectedExhaustiveCheckConcurrency}).\n`
 )
 phaseStartedAt = performance.now()
-for (
-  let offset = 0;
-  offset < exhaustiveProfiles.length;
-  offset += exhaustiveCheckConcurrency
-) {
-  await runConcurrentBatch(
-    exhaustiveProfiles.slice(offset, offset + exhaustiveCheckConcurrency)
-  )
-}
-recordPhase("exhaustive profiles", phaseStartedAt)
+await runInBatches(
+  exhaustiveProfiles,
+  exhaustiveCheckConcurrency,
+  runExhaustiveProfile
+)
+recordPhase("broad exhaustive profiles", phaseStartedAt)
 
-phaseStartedAt = performance.now()
-expectInvariantFailure(
-  "missing intent counterexample",
-  "missingIntentStep",
-  "everyEffectHasIntent"
-)
-expectInvariantFailure(
-  "duplicate effect counterexample",
-  "duplicateEffectStep",
-  "noDuplicateAuthorityEffect"
-)
-expectInvariantFailure(
-  "stale knowledge counterexample",
-  "staleKnowledgeStep",
-  "noStaleAuthorityUse",
-  "frontierRecoveryCounterexamples",
-  "initStaleKnowledgeCounterexample"
-)
-expectInvariantFailure(
-  "configured capacity counterexample",
-  "weakenedCapacityStep",
-  "boundedCapacity",
-  "frontierRecoveryCapacityCounterexample"
-)
-expectInvariantFailure(
-  "operation-name capacity counterexample",
-  "projectCapacityFromOperationName",
-  "taskWorkCapacityRequirementIsProjected"
-)
-expectInvariantFailure(
-  "duplicate exact activation owner counterexample",
-  "duplicateOwnershipStep",
-  "oneOwnerPerExactTransition"
-)
-expectInvariantFailure(
-  "owned-transition readmission counterexample",
-  "ownedReadmissionStep",
-  "ownedTransitionIsNotReadmitted"
-)
-expectInvariantFailure(
-  "duplicate registration reservation leak counterexample",
-  "duplicateReservationLeakStep",
-  "duplicateOwnershipLeaksNoReservedPosition"
-)
-expectInvariantFailure(
-  "duplicate registration stops independent C counterexample",
-  "duplicateStopsIndependentCStep",
-  "duplicateOwnershipDoesNotStopIndependentResponsibility"
-)
-expectInvariantFailure(
-  "pre-intent interruption reservation leak counterexample",
-  "preIntentInterruptionLeakStep",
-  "preIntentInterruptionLeaksNoReservedPosition"
-)
-expectInvariantFailure(
-  "post-intent exit early release counterexample",
-  "earlyPostIntentReleaseStep",
-  "postIntentExitRetainsPositionUntilFreshEvidence"
-)
-expectInvariantFailure(
-  "delayed A-17 release removes A-18 counterexample",
-  "delayedReleaseA17RemovesA18",
-  "releaseAffectsOnlyItsExactOperation"
-)
-expectInvariantFailure(
-  "lowered-capacity new reservation counterexample",
-  "reserveWhileObservedUsageIsAtLowerLimit",
-  "newReservedPositionsRespectConfiguredCapacity"
-)
-expectInvariantFailure(
-  "controller-carried stale ordering counterexample",
-  "admitPausedTransitionFromStaleOrder",
-  "currentFactsExcludePausedTransitions"
-)
-recordPhase("expected counterexamples", phaseStartedAt)
+const expectedInvariantFailures = [
+  {
+    invariant: "everyEffectHasIntent",
+    name: "missing intent counterexample",
+    step: "missingIntentStep"
+  },
+  {
+    invariant: "noDuplicateAuthorityEffect",
+    name: "duplicate effect counterexample",
+    step: "duplicateEffectStep"
+  },
+  {
+    init: "initStaleKnowledgeCounterexample",
+    invariant: "noStaleAuthorityUse",
+    name: "stale knowledge counterexample",
+    step: "staleKnowledgeStep"
+  },
+  {
+    invariant: "boundedCapacity",
+    main: "frontierRecoveryCapacityCounterexample",
+    name: "configured capacity counterexample",
+    step: "weakenedCapacityStep"
+  },
+  {
+    invariant: "taskWorkCapacityRequirementIsProjected",
+    name: "operation-name capacity counterexample",
+    step: "projectCapacityFromOperationName"
+  },
+  {
+    invariant: "oneOwnerPerExactTransition",
+    name: "duplicate exact activation owner counterexample",
+    step: "duplicateOwnershipStep"
+  },
+  {
+    invariant: "ownedTransitionIsNotReadmitted",
+    name: "owned-transition readmission counterexample",
+    step: "ownedReadmissionStep"
+  },
+  {
+    invariant: "duplicateOwnershipLeaksNoReservedPosition",
+    name: "duplicate registration reservation leak counterexample",
+    step: "duplicateReservationLeakStep"
+  },
+  {
+    invariant: "duplicateOwnershipDoesNotStopIndependentResponsibility",
+    name: "duplicate registration stops independent C counterexample",
+    step: "duplicateStopsIndependentCStep"
+  },
+  {
+    invariant: "preIntentInterruptionLeaksNoReservedPosition",
+    name: "pre-intent interruption reservation leak counterexample",
+    step: "preIntentInterruptionLeakStep"
+  },
+  {
+    invariant: "postIntentExitRetainsPositionUntilFreshEvidence",
+    name: "post-intent exit early release counterexample",
+    step: "earlyPostIntentReleaseStep"
+  },
+  {
+    invariant: "releaseAffectsOnlyItsExactOperation",
+    name: "delayed A-17 release removes A-18 counterexample",
+    step: "delayedReleaseA17RemovesA18"
+  },
+  {
+    invariant: "newReservedPositionsRespectConfiguredCapacity",
+    name: "lowered-capacity new reservation counterexample",
+    step: "reserveWhileObservedUsageIsAtLowerLimit"
+  },
+  {
+    invariant: "currentFactsExcludePausedTransitions",
+    name: "controller-carried stale ordering counterexample",
+    step: "admitPausedTransitionFromStaleOrder"
+  }
+]
+await Promise.all([
+  (async () => {
+    const focusedStartedAt = performance.now()
+    // Keep these two compilers serial: concurrent compilation of the same
+    // projection has intermittently failed inside the parser lifecycle.
+    for (const profile of focusedExhaustiveProfiles) {
+      await runExhaustiveProfile(profile)
+    }
+    recordPhase("focused exhaustive profiles (overlapped)", focusedStartedAt)
+  })(),
+  (async () => {
+    const counterexamplesStartedAt = performance.now()
+    await runInBatches(
+      expectedInvariantFailures,
+      fastCheckConcurrency,
+      runExpectedInvariantFailure
+    )
+    recordPhase(
+      "expected counterexamples (overlapped)",
+      counterexamplesStartedAt
+    )
+  })()
+])
 
 const gateElapsedSeconds = (performance.now() - gateStartedAt) / 1000
 process.stdout.write("\n== Frontier recovery phase summary ==\n")

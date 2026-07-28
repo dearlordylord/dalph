@@ -14,6 +14,14 @@ correlation rules; keeping frontier, pause, and reconciliation together
 prevents their shared authority and scheduling rules from drifting across
 several models.
 
+M2 may use a smaller proof-projection artifact, such as
+[`frontierRecovery_capacity_correlation.qnt`](../../specs/frontierRecovery_capacity_correlation.qnt),
+when it retains the same accepted scenario, maintainer, checking lifecycle, and
+broad-model executable conformance seam. Such a projection is not a third
+canonical model or another source of runtime behavior. It exists to remove
+state irrelevant to one exhaustive property while the broad M2 model remains
+authoritative for composition.
+
 ## Consequences
 
 Every model exports a closed action and state projection. A test-only executable
