@@ -2236,7 +2236,7 @@ module frontierRecovery {
     state' = applyRunPause(state, true),
   }
 
-  action requestRunResume: bool = all {
+  action requestRunUnpause: bool = all {
     state.coordinator.running,
     state.control.runPaused,
     state.control.runControlEpoch < MAX_CONTROL_EPOCH,
@@ -2250,7 +2250,7 @@ module frontierRecovery {
     state' = applyTaskPause(state, task, true),
   }
 
-  action requestTaskResume(task: TaskId): bool = all {
+  action requestTaskUnpause(task: TaskId): bool = all {
     state.coordinator.running,
     state.control.taskPaused.get(task),
     state.control.taskControlEpoch.get(task) < MAX_CONTROL_EPOCH,
@@ -2384,7 +2384,7 @@ module frontierRecovery {
   // invocation. Task C remains the independent branch.
   action pauseProfileStep: bool = any {
     requestTaskPause(A),
-    requestTaskResume(A),
+    requestTaskUnpause(A),
     providerInterruptsInvocation(A),
     observeTask(A),
     recordInterruptedInvocation(A),
@@ -2684,9 +2684,9 @@ module frontierRecovery {
       crash,
       restart,
       requestRunPause,
-      requestRunResume,
+      requestRunUnpause,
       requestTaskPause(task),
-      requestTaskResume(task),
+      requestTaskUnpause(task),
       providerAcceptsInvocation(task),
       providerInterruptsInvocation(task),
       authorityBecomesUnreadable(task),

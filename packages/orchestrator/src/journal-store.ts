@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { ControlCommandRecordedEvent } from "./control-command.js"
 import {
   JournalPosition,
   JournalRecordKey,
@@ -253,6 +254,7 @@ export const TaskExecutionOutcomeObservedEvent = Schema.TaggedStruct(
 )
 
 export const WorkflowJournalEvent = Schema.Union([
+  ControlCommandRecordedEvent,
   TrackerGraphObservationIntentRecorded,
   TrackerGraphOutcomeObservedEvent,
   TaskClaimAcquisitionIntendedEvent,

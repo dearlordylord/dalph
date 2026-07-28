@@ -12,7 +12,7 @@
       "providerInterruptsInvocation(A)",
       "observeTask(A)",
       "recordInterruptedInvocation(A)",
-      "requestTaskResume(A)",
+      "requestTaskUnpause(A)",
       "observeTask(A)",
       "commitResponsibleIntent(A)"
     ],
@@ -25,7 +25,7 @@
     "coverage": ["scenario-2", "scenario-16"],
     "modelBlobSha": "bb2583c8e740c0b34862a247fb20f7a8759bbf04",
     "modelCommit": "214a8fbab",
-    "profile": "pauseInterruptResumeRereadsBeforeReinvocationTest",
+    "profile": "pauseInterruptUnpauseRereadsBeforeReinvocationTest",
     "seed": null,
     "toolVersions": {
       "quint": "0.32.0",

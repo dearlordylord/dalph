@@ -10,6 +10,13 @@ const event = (input: unknown): WorkflowJournalEvent => input as WorkflowJournal
 it("defines canonical keys and predecessors for every journal event variant", () => {
   const cases: ReadonlyArray<readonly [WorkflowJournalEvent, string, string?]> = [
     [
+      event({
+        _tag: "ControlCommandRecorded",
+        command: { commandId: "descriptor-command", runId }
+      }),
+      "control-command:descriptor-command"
+    ],
+    [
       event({ _tag: "TrackerGraphObservationIntentRecorded", operation: { operationId } }),
       `operation:${operationId}:intent`
     ],

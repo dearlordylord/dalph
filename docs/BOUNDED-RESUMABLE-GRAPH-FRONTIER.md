@@ -47,7 +47,7 @@ and recoverable resources, and lets unrelated graph branches continue.
 
 | Actor or application | Facts it owns |
 | --- | --- |
-| Dalph user | Authenticated pause, resume, stop, restart, override, and repair commands. |
+| Dalph user | Authenticated Pause, Unpause, stop, restart, override, and repair commands. |
 | Dalph orchestrator | Run and operation identities, planned attempts, outer workflow selection, durable intents, normalized observations and outcomes, responsibility and disposition history. |
 | Dalph executor | Its implementation algorithm, coding-agent sessions and invocations, review/restoration strategy, and internal implementation or review artifacts. |
 | Task tracker | Task identity and authored work specification, lifecycle, prerequisites, grouping, target membership, and claims. |
@@ -67,7 +67,7 @@ constraint on the exact subject and does not by itself invalidate the journal.
    operation from durable history and fresh external facts, so that process
    loss does not lose or duplicate work.
 2. As a Dalph user, I want to pause a whole run without turning the request
-   into many task pauses, so that later run resume preserves independently
+   into many task pauses, so that later run unpause preserves independently
    paused tasks.
 3. As a Dalph user, I want to pause one task and its grouping descendants while
    its prerequisites and independent branches continue, so that pause does not
@@ -75,8 +75,9 @@ constraint on the exact subject and does not by itself invalidate the journal.
 4. As a Dalph user, I want pause to preserve claims, worktrees, sessions, and
    unfinished work after in-flight actions reach safe boundaries, so that an
    ordinary pause is not abandonment.
-5. As a Dalph user, I want resume to reread every authority needed by preserved
-   work, so that stale work does not restart after the world changed.
+5. As a Dalph user, I want Unpause to reread the task tracker, Git, and task
+   runner facts needed by preserved work, so that stale work does not restart
+   after the world changed.
 6. As a Dalph user, I want an edited task to stop at a safe boundary and offer
    explicit continue, restart, or stop choices, so that Dalph never pretends an
    executor incorporated new instructions.
@@ -235,11 +236,15 @@ scheduled wait. Dalph owns outer operation identity, timing, correlation, and
 the obligation to obtain an outer outcome; the executor owns restoration of its
 internal algorithm.
 
-### Pause and resume
+### Pause, unpause, and resumption
 
-The journal records distinct run-pause, run-resume, task-pause, and task-resume
-commands under branded control-command identities. Reducers derive pause
-phases; they do not persist `Pausing` or `Paused` status records.
+The control boundary accepts four explicit directions: Pause or Unpause one run,
+and Pause or Unpause one task in one run. The current issue #62 implementation
+records each received command under a branded control-command identity. Issue
+#155 reconsiders that provisional receipt protocol: a request lost before Dalph
+applies its direction may be lost, and #155 decides what later applied-direction
+fact must survive a crash and whether it needs an identity. Reducers derive
+pause phases; they do not persist `Pausing` or `Paused` status records.
 
 A task pause covers only the selected `(RunId, TaskId)` and its current
 transitive grouping descendants. It follows grouping parent-to-child edges and
@@ -255,11 +260,11 @@ Integration already holding its serialized Git resource reaches a known Git
 result and releases that resource, but does not begin the separate tracker
 completion request. Already-requested tracker completion is reconciled.
 
-Confirmed pause is passive. It schedules no polling. Resume changes the desired
-pause direction but does not start a worker. It triggers the fresh tracker, Git,
-executor, provider, evidence, review, and integration reads required by the
-preserved responsibilities. Resume requested while pausing cannot cancel an
-already-sent interruption or other safe-boundary action.
+Confirmed pause is passive. It schedules no polling. Unpause changes the
+requested pause direction but does not start a worker. It triggers the fresh
+tracker, Git, executor, provider, evidence, review, and integration reads
+required by the preserved responsibilities. Unpause requested while pausing
+cannot cancel an already-sent interruption or other safe-boundary action.
 
 ### Active-task continuation and external changes
 
@@ -413,7 +418,7 @@ The M2 action families map to these callable production seams:
 | Observe authority | Normalized boundary result with declared coverage and freshness, followed by its accepted journal event. |
 | Authorize retry or record outcome | Boundary-specific recovery decision plus the shared journaled interpreter. |
 | Crash and restart | Close process-local scopes, reconstruct through production startup recovery, then run the ordinary selector. |
-| Pause and resume | Public control-command boundary; derived phases and safe-boundary actions are observed, never assigned by the driver. |
+| Pause, Unpause, and resumption | Public control-command boundary; derived phases and safe-boundary actions are observed, never assigned by the driver. |
 | Invocation completion or interruption | Controlled provider advancement followed by a fresh execution observation. |
 | External change | Change only the owning controlled authority, run the named continuation read, and compare the resulting constraint or disposition. |
 | Repair or clear isolation | Change the owning authority, perform a fresh accepted read, and let the ordinary selector decide. |
@@ -491,7 +496,7 @@ evaluation.
 | Whole-run pause, passive restart, and fresh-read resume | M2 | E, S, P, R |
 | Task/grouping pause, interruption, capacity release, and same-session resume | M2 | E, S, P, R |
 | Pause during bounded requests and all accepted safe boundaries | M2 | E, S, P, R |
-| Resume while a pause action remains in flight | M2 | E, S, P, R |
+| Unpause while a pause action remains in flight | M2 | E, S, P, R |
 | Task edit with pause or successor-session choice | M2 | E, S, P, R |
 | Lifecycle close/reopen with preserved WIP | M2 | E, S, P, R |
 | External tracker success without duplicate effects | M2 | E, S, P, R |

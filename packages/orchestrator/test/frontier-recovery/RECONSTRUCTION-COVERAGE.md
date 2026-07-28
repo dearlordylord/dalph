@@ -36,9 +36,12 @@ evaluations under `specs/model-scenarios`.
   add its production `TaskGraphFactsUpdated` event, reducer case, closed action
   mapping, negative conflict profile, and applicable `P0`–`P6` lanes in the
   same change.
-- The reconstructed pause reducer currently exposes only `RunUnpaused` and
-  `NoTaskPauses`. The first production pause command/event must extend M2, the
-  adapter state comparison, and both reopening lanes together.
+- Issue #62 currently records authenticated run/task Pause and Unpause commands without
+  assigning a pause phase or selecting a workflow action. The reconstructed
+  pause reducer therefore still exposes only `RunUnpaused` and `NoTaskPauses`.
+  Issue #155 reconsiders receipt durability before issues #134 and #135 extend
+  M2, the adapter state comparison, and every applicable reopening lane with
+  applied run/task pause workflow semantics.
 - P2–P6 do not apply to this issue's crash-before-claim-intent and
   crash-after-claim-intent acceptance slice. Later ambiguity-crossing boundary
   tickets extend the same manifest rather than redefining P0/P1.

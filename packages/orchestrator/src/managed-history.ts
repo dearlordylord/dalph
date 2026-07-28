@@ -146,6 +146,19 @@ export const reduceManagedHistory = (
         })
       )
     }
+    if (descriptor._tag === "ControlCommandEventDescriptor") {
+      if (descriptor.runId !== runId) {
+        issues.push(
+          new ManagedHistoryIdentityIssue({
+            detail: `control command ${descriptor.commandId} binds run ${descriptor.runId}`,
+            position: record.position,
+            runId
+          })
+        )
+      }
+      seenKeys.add(record.key)
+      return
+    }
     if (descriptor._tag === "SessionResultEventDescriptor") {
       if (!establishedSessionIds.has(descriptor.requiredSessionId)) {
         issues.push(

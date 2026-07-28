@@ -26,6 +26,11 @@ including its coding-agent invocations, review strategy, internal restoration,
 and internal implementation or review artifacts.
 _Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
 
+The current review-capable executor is transitionally co-located in
+`packages/orchestrator` and shares internal `WorkflowOperation` and
+`WorkflowInterpreter` types with orchestration code. File placement and shared
+type names do not make its review strategy part of the Dalph orchestrator.
+
 **Executor outer invocation**:
 One executor-declared unit that Dalph may start, continue, wait for, interrupt,
 or normalize into an outcome without learning the executor's internal stage.
@@ -478,8 +483,9 @@ _Avoid_: Workflow journal event, cached output, review result
 **Implementation evidence manifest**:
 The immutable implementation-stage record that names the exact successful task
 execution operation as its causal predecessor and references the complete
-content-addressed executor-output and Git-diff objects. Dalph seals the manifest
-only after both referenced objects are readable from the EvidenceStore.
+content-addressed executor-output and Git-diff objects. The current selected
+executor seals the manifest only after both referenced objects are readable
+from the EvidenceStore.
 _Avoid_: Partial evidence, mutable report, task completion
 
 **Implementation review authorization**:
@@ -535,29 +541,33 @@ review round, but its technical retry ordinal is a separate branded fact.
 _Avoid_: Semantic review round, task attempt, coordinator recovery budget
 
 **Technical retry scheduled**:
-The Dalph workflow-journal fact recorded after one typed technical invocation
-failure and before waiting. It binds the active technical retry scope, next
-technical retry ordinal, capped delay, and absolute `notBefore` read from the
-Effect clock. It does not prove that the retry began and does not make a
-coordinator interruption by itself consume or preserve budget; later recovery
-compares it with an exact deferral-supersession intent.
+The Dalph workflow-journal fact that the current selected executor records
+after one typed technical invocation failure and before waiting. It binds the
+active technical retry scope, next technical retry ordinal, capped delay, and
+absolute `notBefore` read from the Effect clock. It does not prove that the
+retry began and does not make a coordinator interruption by itself consume or
+preserve budget; later recovery compares it with an exact
+deferral-supersession intent.
 _Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
 
 **Technical retry deferral superseded**:
-The Dalph workflow-journal intent recorded after one scheduled retry becomes
-eligible and immediately before Dalph asks the same provider invocation to
-create or rediscover its exact result. It retires exactly that scope and retry
-ordinal's deferral. It does not prove that the request crossed the provider
-boundary or consume another technical retry or semantic review round.
+The Dalph workflow-journal intent that the current selected executor records
+after one scheduled retry becomes eligible and immediately before that
+executor asks the same provider invocation to create or rediscover its exact
+result. It retires exactly that scope and retry ordinal's deferral. It does not
+prove that the request crossed the provider boundary or consume another
+technical retry or semantic review round.
 Like its matching schedule, it is valid only after the exact invocation intent
 and before that invocation's durable outcome.
 _Avoid_: Retry completed, timer fired, semantic review advanced
 
 **Reviewer invocation**:
-One request to a fresh independent reviewer, identified by its workflow
-operation and durable reviewer-session identity before it crosses the reviewer
-boundary. Restart resumes that exact invocation rather than creating another
-semantic round.
+One request made by the current selected executor to a fresh independent
+reviewer, identified by an executor-internal workflow operation and durable
+reviewer-session identity before it crosses the reviewer boundary. Executor
+recovery resumes that exact invocation rather than creating another semantic
+round. The generic Dalph orchestrator sees only its outer invocation
+projection.
 _Avoid_: Review result, implementer invocation, retry attempt
 
 **Reviewer session**:
@@ -878,31 +888,45 @@ is excluded from the admission set because every task admission position is
 reserved or occupied.
 _Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
-**Control command identity**:
-The branded `ControlCommandId` assigned to one exact user control command before
-Dalph appends that command to a run's workflow journal. Redelivery of the same
-identity and payload is idempotent; reusing the identity with a different
-command or subject is a typed contradiction. It is distinct from the
-`OperationId` of any workflow action later selected to carry out the command.
-_Avoid_: Operation identity, run identity, provider request identity
+**Control command identity (provisional)**:
+The branded `ControlCommandId` carried by one exact user control request in the
+current issue #62 implementation. That implementation stores the received
+request in the run's workflow journal and uses the identity to distinguish an
+exact redelivery from contradictory reuse. This is not an accepted requirement
+to persist receipt or allocate an identity before append. Issue #155 decides
+what durable fact proves Dalph applied a Pause or Unpause direction, whether
+that fact needs an identity, and which boundary would create one. It remains
+distinct from the `OperationId` of any later workflow action.
+_Avoid_: Accepted command-ID protocol, applied Pause or Unpause evidence,
+operation identity, run identity, provider request identity
+
+**Authenticated operator identity**:
+The branded local-transport identity of the Dalph user who issued one exact
+control command. The authenticating transport supplies it to the
+transport-independent control service; decoding a client payload does not
+authenticate the user. Recording the identity provides command attribution and
+does not grant task-claim, Git, executor, or provider authority.
+_Avoid_: Claim owner identity, provider-user identity, client-supplied username
 
 **Dalph user**:
-The single human actor who issues pause, resume, interruption, cancellation, and
-other control commands to Dalph. The current domain model does not distinguish
-multiple user identities or transfer command authority between users.
-_Avoid_: Claim owner identity, provider-user identity, multi-user authorization
+The single human actor who issues pause, unpause, interruption, cancellation,
+and other control commands to Dalph. V1 records the authenticated operator
+identity on each command but does not define roles, multi-user authorization
+policy, or transfer command authority between users.
+_Avoid_: Claim owner identity, provider-user identity, authorization role
 
 **User-requested run pause**:
 The durable pause of one exact `RunId` requested by the Dalph user. Dalph
 selects no new forward-progress action for any task in that run after each
 already-started action reaches its specified safe boundary. A run pause does
-not create a user-requested task pause for each task. Resuming the run removes
-only the run pause; independently paused tasks remain paused.
+not create a user-requested task pause for each task. Unpausing the run removes
+only the run pause; independently paused tasks remain paused. Resuming describes
+later workflow progress after the Unpause direction.
 _Avoid_: Collection of task pauses, run termination, run blocked
 
 **Run pause phase**:
 The reconstructed pause dimension for one run: unpaused, pausing, paused, or
-resuming. Dalph derives it from the run's durable user pause and resume commands
+resuming. Dalph derives it from the run's accepted Pause or Unpause direction
 and the safe-boundary progress of every affected task; it does not write a
 separate phase record. One task or grouping-covered descendant still reaching a
 safe boundary keeps the run pausing and supplies its tagged progress reason.
@@ -910,8 +934,8 @@ _Avoid_: Run termination, collection of task pause phases, persisted run status
 
 **Task pause phase**:
 The reconstructed pause dimension for one task in one run: unpaused, pausing,
-paused, or resuming. Dalph derives it from durable user pause and resume
-commands, ordinary workflow outcomes, current grouping-pause coverage, and
+paused, or resuming. Dalph derives it from the accepted user Pause or Unpause
+direction, ordinary workflow outcomes, current grouping-pause coverage, and
 outstanding responsibilities; it does not write a separate phase record. The
 phase composes with rather than replaces the task tracker's lifecycle and claim
 facts, the task's workflow stage, and its resource responsibilities. For
@@ -923,7 +947,7 @@ _Avoid_: Task lifecycle, task claim state, combined task status
 The durable pause of one exact `(RunId, TaskId)` pair requested by the Dalph
 user. After the request reaches its specified safe boundary, Dalph does not
 select new forward-progress actions for that task in that run. A task-graph
-change does not remove the pause; the Dalph user must request its resume. A
+change does not remove the pause; the Dalph user must request Unpause. A
 later run containing the same tracker task does not inherit the pause. The
 task's prerequisites and dependents do not become paused merely because this
 task is paused. Its transitive grouping descendants receive grouping-pause
@@ -945,7 +969,7 @@ ancestor or sibling, or require the parent task to complete.
 _Avoid_: User-requested task pause, dependency-blocked task, persisted pause closure
 
 **Task pausing**:
-The nonterminal state after Dalph records a user-requested task pause and before
+The nonterminal state after Dalph accepts a user-requested task pause and before
 it confirms the task's safe pause boundary. Dalph selects no new
 forward-progress action for the task, but it continues the exact bounded wait,
 fresh result check, worker interruption, or provider observation needed to
@@ -965,21 +989,21 @@ task or a grouping-covered descendant, and their preserved responsibilities are
 explicit. An unresolved request, unreadable authority, or covered descendant
 still reaching its boundary keeps the selected parent task pausing with a
 concrete progress reason. The paused phase creates no polling loop or periodic
-authority read. Only a user resume request or a separately configured
+authority read. Only a user Unpause request or a separately configured
 observation policy causes new reads for the task.
 _Avoid_: Task pausing, dependency-blocked task, run blocked
 
 **Task resuming**:
-The nonterminal state after the Dalph user requests resume and before Dalph
+The nonterminal state after the Dalph user requests Unpause and before Dalph
 allows another forward-progress action for the task. Dalph freshly reads the
 task, claim, applicable task-graph facts, Git resources, and task-work-provider
 state required by the task's preserved responsibilities. Compatible facts
 permit ordinary operation selection; changed or unreadable facts select the
 applicable reconciliation, wait, or isolation rule instead of restarting stale
-work. If resume is requested while pause actions remain in flight, Dalph first
+work. If Unpause is requested while pause actions remain in flight, Dalph first
 settles those exact actions and derives a progress reason rather than cancelling
 them or starting a competing worker.
-_Avoid_: Task execution resumed, user-requested task pause removed, crash recovery
+_Avoid_: Unpause command, task execution resumed, crash recovery
 
 **Dependency-blocked task**:
 A task that a fresh task-tracker read reports has at least one unsatisfied
@@ -1047,8 +1071,9 @@ _Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired h
 **Startup run recovery**:
 The fail-closed process performed under coordinator ownership that discovers
 every journaled run without an age cutoff, validates each complete managed
-history, and freshly rereads the tracker, Git, executor, evidence, and reviewer
-authorities for the exact recorded attempts before live coordination begins.
+history, freshly rereads tracker and Git authority, and asks the selected
+executor to reconcile its internal provider, evidence, and reviewer authorities
+for the exact recorded attempts before live coordination begins.
 _Avoid_: Process rehydration, recent-run scan, journal replay alone
 
 **Run termination**:

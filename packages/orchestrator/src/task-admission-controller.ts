@@ -320,18 +320,6 @@ export const makeTaskAdmissionController = Effect.fn(
     admit,
     applyFreshInvocationObservation: (observation) =>
       Ref.modify(state, (current) => {
-        const conflictingReservation = current.reservations.some(
-          ({ correlation, taskId }) =>
-            taskId === observation.taskId
-            && correlation._tag === "OperationReservation"
-            && correlation.operationId !== observation.operationId
-        )
-        if (conflictingReservation) {
-          return [
-            AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged(),
-            current
-          ] as const
-        }
         const next = {
           ...current,
           occupied: observation._tag === "FreshCapacityConsumed"

@@ -167,7 +167,7 @@ module frontierRecoveryTest {
         isGroupingPaused(state, D),
       })
       .then(orchestratorCommitsFreshTaskClaimIntent(C))
-      .then(requestTaskResume(A))
+      .then(requestTaskUnpause(A))
       .expect(not(canCommitFirstIntent(state, D)))
       .then(observeTask(D))
       .then(orchestratorCommitsFreshTaskClaimIntent(D))
@@ -177,14 +177,14 @@ module frontierRecoveryTest {
         state.workflow.get(D).responsibility == Outstanding,
       })
 
-  run runPauseResumeRereadsBeforeAdmissionTest =
+  run runPauseUnpauseRereadsBeforeAdmissionTest =
     init
       .then(requestRunPause)
       .expect(and {
         not(canCommitFirstIntent(state, A)),
         not(canCommitFirstIntent(state, C)),
       })
-      .then(requestRunResume)
+      .then(requestRunUnpause)
       .expect(and {
         not(canCommitFirstIntent(state, A)),
         not(canCommitFirstIntent(state, C)),
@@ -193,7 +193,7 @@ module frontierRecoveryTest {
       .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .expect(state.workflow.get(A).responsibility == Outstanding)
 
-  run pauseInterruptResumeRereadsBeforeReinvocationTest =
+  run pauseInterruptUnpauseRereadsBeforeReinvocationTest =
     init
       .then(reachInvocation(A))
       .then(commitResponsibleIntent(A))
@@ -202,7 +202,7 @@ module frontierRecoveryTest {
       .then(providerInterruptsInvocation(A))
       .then(observeTask(A))
       .then(recordInterruptedInvocation(A))
-      .then(requestTaskResume(A))
+      .then(requestTaskUnpause(A))
       .expect(not(canCommitResponsibleIntent(state, A)))
       .then(observeTask(A))
       .then(commitResponsibleIntent(A))

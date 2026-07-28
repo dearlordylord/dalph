@@ -130,6 +130,7 @@ export const taskWorkSessionRecoveryConformanceCutPointFor = (
 ): TaskWorkSessionRecoveryConformanceCutPoint | undefined => {
   const noConformanceCutPoint = (): undefined => undefined
   return Match.valueTags(event, {
+    ControlCommandRecorded: noConformanceCutPoint,
     ImplementationConvergenceDispositionRecorded: noConformanceCutPoint,
     ImplementationEvidenceSealed: noConformanceCutPoint,
     ImplementationEvidenceSealingIntended: noConformanceCutPoint,

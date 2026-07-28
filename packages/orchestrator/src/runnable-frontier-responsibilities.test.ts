@@ -534,10 +534,11 @@ it.effect("returns capacity waiting and signals when exact release may permit ad
     })
   }))
 
-it.effect("fails closed for stale reservation mutations and conflicting provider evidence", () =>
+it.effect("fails closed for stale reservation mutations and retains conflicting provider evidence", () =>
   Effect.gen(function*() {
     const runId = RunId.make("stale-reservation-run")
     const taskId = TaskId.make("stale-reservation-task")
+    const waitingTaskId = TaskId.make("stale-reservation-waiting-task")
     const originalOperationId = OperationId.make("stale-reservation-original")
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
@@ -556,7 +557,22 @@ it.effect("fails closed for stale reservation mutations and conflicting provider
         taskId
       })
     ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
-    expect((yield* controller.snapshot()).occupied).toEqual([])
+    expect(yield* controller.snapshot()).toEqual({
+      capacity: 1,
+      occupied: [{
+        observationId: "conflicting-observation",
+        operationId: "conflicting-operation",
+        taskId
+      }],
+      reservedPositions: [{
+        correlation: {
+          _tag: "OperationReservation",
+          operationId: originalOperationId
+        },
+        taskId
+      }],
+      reservedTaskIds: [taskId]
+    })
 
     const selected = makeSelectedTransitionIdentity(
       runId,
@@ -583,9 +599,112 @@ it.effect("fails closed for stale reservation mutations and conflicting provider
     expect(
       yield* controller.releaseTaskAdmissionPosition(originalOperationId)
     ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    expect((yield* controller.snapshot()).occupied).toEqual([{
+      observationId: "conflicting-observation",
+      operationId: "conflicting-operation",
+      taskId
+    }])
+    expect(
+      yield* controller.admit({
+        explanations: [],
+        transitions: [freshTransition(waitingTaskId)]
+      }, runId)
+    ).toEqual({
+      explanations: [{
+        _tag: "CapacityWait",
+        taskId: waitingTaskId,
+        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
+      }],
+      transition: Option.none()
+    })
     expect(
       yield* controller.releaseTaskAdmissionPosition(originalOperationId)
     ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
+    expect(
+      yield* controller.applyFreshInvocationObservation({
+        _tag: "FreshCapacityReleased",
+        observationId: ProviderObservationId.make("conflicting-release"),
+        operationId: OperationId.make("conflicting-operation"),
+        taskId
+      })
+    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    expect(
+      admittedTransitions(
+        yield* controller.admit({
+          explanations: [],
+          transitions: [freshTransition(waitingTaskId)]
+        }, runId)
+      )
+    ).toEqual([freshTransition(waitingTaskId)])
+
+    const reconstructed = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [{
+        observationId: ProviderObservationId.make(
+          "reconstructed-conflicting-observation"
+        ),
+        operationId: OperationId.make("conflicting-operation"),
+        taskId
+      }],
+      reconstructedReservedPositions: [{
+        operationId: originalOperationId,
+        taskId
+      }]
+    })
+    yield* reconstructed.applyFreshInvocationObservation({
+      _tag: "FreshCapacityConsumed",
+      observationId: ProviderObservationId.make(
+        "repeated-conflicting-observation"
+      ),
+      operationId: OperationId.make("conflicting-operation"),
+      taskId
+    })
+    expect(yield* reconstructed.snapshot()).toEqual({
+      capacity: 1,
+      occupied: [{
+        observationId: "repeated-conflicting-observation",
+        operationId: "conflicting-operation",
+        taskId
+      }],
+      reservedPositions: [{
+        correlation: {
+          _tag: "OperationReservation",
+          operationId: originalOperationId
+        },
+        taskId
+      }],
+      reservedTaskIds: [taskId]
+    })
+    yield* reconstructed.applyFreshInvocationObservation({
+      _tag: "FreshCapacityReleased",
+      observationId: ProviderObservationId.make(
+        "reconstructed-conflicting-release"
+      ),
+      operationId: OperationId.make("conflicting-operation"),
+      taskId
+    })
+    expect(
+      yield* reconstructed.applyFreshInvocationObservation({
+        _tag: "FreshCapacityReleased",
+        observationId: ProviderObservationId.make(
+          "repeated-conflicting-release"
+        ),
+        operationId: OperationId.make("conflicting-operation"),
+        taskId
+      })
+    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
+    expect(yield* reconstructed.snapshot()).toEqual({
+      capacity: 1,
+      occupied: [],
+      reservedPositions: [{
+        correlation: {
+          _tag: "OperationReservation",
+          operationId: originalOperationId
+        },
+        taskId
+      }],
+      reservedTaskIds: [taskId]
+    })
   }))
 
 it.effect("cancels one exact fresh reservation and rejects stale repeats", () =>

@@ -14,6 +14,28 @@ described in `ARCHITECTURE.md`. The native lock dependency must either ship a ma
 or the repository must explicitly accept and provide its source-build toolchain;
 an accidental local compilation is not upgrade evidence.
 
+## Operational scenario gate
+
+Before planning or implementing a behavior change, read
+[OPERATIONAL-SCENARIOS.md](OPERATIONAL-SCENARIOS.md) and write the required
+chronological scenarios in the accepted issue, specification, or
+`docs/scenarios/`. Start with the affected person when one exists, relevant
+GitHub/Git/executor state, concrete trigger, external result, applicable crash
+point and retry, and visible outcome. State why a person, boundary, or failure
+does not apply rather than filling every field with an invented event. Only
+then introduce the domain model and implementation mechanisms.
+
+The implementation plan maps every scenario to a test seam. The handoff maps
+every scenario to a passing acceptance test or model check and names anything
+deferred. Aggregate test counts, typechecking, and coverage are additional
+evidence; they do not prove that the user's story was implemented.
+
+A tooling-only or documentation-only change may omit runtime scenarios only
+when its plan and handoff state the concrete reason it cannot change Dalph
+runtime behavior. Reviewers reject an exemption that hides a changed command,
+workflow decision, external request, durable fact, retry, recovery rule,
+concurrency rule, cleanup action, or visible result.
+
 ## Domain language
 
 Canonical Dalph terms live in [CONTEXT.md](CONTEXT.md). Before adding or changing
