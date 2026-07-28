@@ -149,7 +149,7 @@ it.effect("drives intent and result release through the production coordinator",
 
     expect((yield* controls.getState()).activation).toMatchObject({
       owners: [],
-      reservedPositions: [],
+      taskWorkPositions: new Map(),
       resultsRecordedModelTaskIds: [task],
       runnerModelTaskIds: [],
       triggerPending: true
@@ -178,7 +178,7 @@ it.effect("selects the same bounded first intents before and after restart", () 
         }
         const uninterrupted = yield* beforeCrash.getState()
         expect(uninterrupted).toMatchObject({
-          admittedModelTaskIds: capacity === 1 ? [0n] : [0n, 2n],
+          admittedModelTaskIds: [0n, 2n],
           frontierModelTaskIds: [0n, 2n],
           responsibleModelTaskIds: capacity === 1 ? [0n] : [0n, 2n]
         })
@@ -439,7 +439,7 @@ it.effect("reopens bounded first-intent selection from SQLite at capacities one 
         return yield* controls.getState()
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       expect(restarted).toMatchObject({
-        admittedModelTaskIds: capacity === 1 ? [0n] : [0n, 2n],
+        admittedModelTaskIds: [0n, 2n],
         frontierModelTaskIds: [0n, 2n],
         responsibleModelTaskIds: capacity === 1 ? [0n] : [0n, 2n]
       })
@@ -490,7 +490,7 @@ it.effect("uses current capacity and fresh provider evidence after reopening SQL
         )
         const controls = yield* makeScopedFrontierRecoveryReconstructionControls({
           capacity: TaskWorkCapacity.make(scenario.capacity),
-          freshOccupiedInvocations: occupied,
+          latestExecutorActiveReports: occupied,
           coordinatorRunning: false,
           journal
         })

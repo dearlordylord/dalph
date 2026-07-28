@@ -1,12 +1,27 @@
 import { Schema } from "effect"
-import { OperationId, ProviderObservationId, TaskId, TechnicalRetryNotBefore } from "./domain.js"
+import {
+  ExecutorOuterInvocationId,
+  type OperationId,
+  ProviderObservationId,
+  TaskId,
+  TechnicalRetryNotBefore
+} from "./domain.js"
+
+/**
+ * Transitional #158 adapter for the current colocated review-loop executor.
+ * New generic code must receive an independently allocated outer identity.
+ */
+export const executorOuterInvocationIdForOperation = (
+  operationId: OperationId
+): typeof ExecutorOuterInvocationId.Type => ExecutorOuterInvocationId.make(operationId)
 
 /**
  * The exact Dalph identity used to correlate one executor-declared outer
- * invocation across intent, provider observation, interruption, and outcome.
+ * invocation across intent, normalized executor reports, interruption, and
+ * outcome.
  */
 export const ExecutorOuterInvocationCorrelation = Schema.Struct({
-  invocationId: OperationId,
+  invocationId: ExecutorOuterInvocationId,
   taskId: TaskId
 })
 export type ExecutorOuterInvocationCorrelation = typeof ExecutorOuterInvocationCorrelation.Type
@@ -66,7 +81,7 @@ export const ExecutorOuterInvocationProjection = Schema.TaggedUnion({
 export type ExecutorOuterInvocationProjection = typeof ExecutorOuterInvocationProjection.Type
 
 export const makeExecutorOuterInvocation = (
-  invocationId: typeof OperationId.Type,
+  invocationId: typeof ExecutorOuterInvocationId.Type,
   taskId: typeof TaskId.Type
 ): ExecutorOuterInvocation =>
   ExecutorOuterInvocation.make({

@@ -120,6 +120,25 @@ export type FrontierRecoveryTransitionOperation =
     readonly modelOperationId: FrontierRecoveryModelOperationId
   }
 
+export type FrontierRecoveryTaskWorkPositionProjection =
+  | {
+    readonly _tag: "AwaitingExecutorReport"
+    readonly modelInvocationId: FrontierRecoveryModelOperationId
+  }
+  | {
+    readonly _tag: "Reserved"
+    readonly selectedModelTaskId: FrontierRecoveryModelTaskId
+  }
+  | {
+    readonly _tag: "ExecutorInvocationMismatch"
+    readonly expectedModelInvocationId: FrontierRecoveryModelOperationId
+    readonly reportedModelInvocationId: FrontierRecoveryModelOperationId
+  }
+  | {
+    readonly _tag: "Working"
+    readonly modelInvocationId: FrontierRecoveryModelOperationId
+  }
+
 export interface FrontierRecoveryActivationProjection {
   readonly activationInProgressModelTaskIds: ReadonlyArray<
     FrontierRecoveryModelTaskId
@@ -134,12 +153,11 @@ export interface FrontierRecoveryActivationProjection {
   }>
   readonly postIntentExitedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly preIntentInterruptedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
-  readonly providerConsumingModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
-  readonly reservedPositions: ReadonlyArray<{
-    readonly correlation: "Operation" | "SelectedTransition"
-    readonly modelOperationId?: FrontierRecoveryModelOperationId
-    readonly modelTaskId: FrontierRecoveryModelTaskId
-  }>
+  readonly executorConsumingModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
+  readonly taskWorkPositions: ReadonlyMap<
+    FrontierRecoveryModelTaskId,
+    FrontierRecoveryTaskWorkPositionProjection
+  >
   readonly resultsRecordedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly runnerModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
   readonly selectedModelTaskIds: ReadonlyArray<FrontierRecoveryModelTaskId>
@@ -177,8 +195,11 @@ export interface MakeFrontierRecoveryReconstructionControlsOptions {
   readonly coordinatorRunning: boolean
   /** Fresh tracker eligibility supplied to this adapter invocation. */
   readonly freshEligibleModelTaskIds?: ReadonlyArray<FrontierRecoveryModelTaskId>
-  /** Fresh provider evidence supplied at this reconstruction boundary. */
-  readonly freshOccupiedInvocations?: ReadonlyArray<{
+  /**
+   * Transitional #158 adapter input normalized into executor reports at this
+   * reconstruction boundary.
+   */
+  readonly latestExecutorActiveReports?: ReadonlyArray<{
     readonly observationId: ProviderObservationId
     readonly operationId: OperationId
     readonly taskId: TaskId

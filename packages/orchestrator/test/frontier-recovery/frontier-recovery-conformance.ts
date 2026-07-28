@@ -53,11 +53,11 @@ const frontierRecoveryReconstructionActionFields = {
   recordOwnedResultAndRelease: { task: FrontierRecoveryModelTaskId },
   observeCapacityConsumed: { task: FrontierRecoveryModelTaskId },
   observeCapacityReleased: { task: FrontierRecoveryModelTaskId },
-  readProviderInvocationForReconstruction: {
+  readExecutorInvocationForReconstruction: {
     task: FrontierRecoveryModelTaskId
   },
   crashCoordinatorWithActivation: {},
-  stopProviderWorker: { task: FrontierRecoveryModelTaskId },
+  stopExecutorInvocation: { task: FrontierRecoveryModelTaskId },
   reconstructActivation: {},
   orchestratorCommitsNextFreshTaskClaimIntent: {},
   orchestratorCommitsFreshTaskClaimIntent: {
@@ -94,9 +94,9 @@ export type FrontierRecoveryActivationAction = Extract<
       | "recordOwnedResultAndRelease"
       | "observeCapacityConsumed"
       | "observeCapacityReleased"
-      | "readProviderInvocationForReconstruction"
+      | "readExecutorInvocationForReconstruction"
       | "crashCoordinatorWithActivation"
-      | "stopProviderWorker"
+      | "stopExecutorInvocation"
       | "reconstructActivation"
   }
 >
@@ -172,7 +172,7 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       interruptBeforeOwnership: controls.activation,
       observeCapacityConsumed: controls.activation,
       observeCapacityReleased: controls.activation,
-      readProviderInvocationForReconstruction: controls.activation,
+      readExecutorInvocationForReconstruction: controls.activation,
       orchestratorCommitsFreshTaskClaimIntent: ({ task }) => controls.orchestratorCommitsFreshTaskClaimIntent(task),
       orchestratorCommitsNextFreshTaskClaimIntent: controls.orchestratorCommitsNextFreshTaskClaimIntent,
       claimActivationOwnership: controls.activation,
@@ -182,7 +182,7 @@ export const runFrontierRecoveryReconstructionAction = Effect.fn(
       rejectDuplicateOwnership: controls.activation,
       reserveTaskAdmissionPosition: controls.activation,
       restart: controls.restart,
-      stopProviderWorker: controls.activation,
+      stopExecutorInvocation: controls.activation,
       taskTrackerReturnsTargetClosureReadAtNextRevision: controls.taskTrackerReturnsTargetClosureReadAtNextRevision,
       taskTrackerReturnsTargetClosureReadWithPredecessor: controls.taskTrackerReturnsTargetClosureReadWithPredecessor,
       taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage:

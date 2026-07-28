@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
+  ExecutorOuterInvocationId,
   GitCommitSha,
   JournalPosition,
   OperationId,
@@ -169,17 +170,19 @@ it.effect("reconstructs hundreds of completed outer invocations idempotently wit
 
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: first.transitions.flatMap(
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: first.transitions.flatMap(
         (transition) =>
           transition._tag === "ContinueExecutorInvocation"
             && transition.capacityRequirement._tag === "OneTaskWorkPosition"
             ? [{
-              operationId: transition.invocation.correlation.invocationId,
+              invocationId: ExecutorOuterInvocationId.make(
+                transition.invocation.correlation.invocationId
+              ),
               taskId: transition.invocation.correlation.taskId
             }]
             : []
       )
     })
-    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+    expect((yield* controller.snapshot()).taskWorkPositions).toEqual(new Map())
   }))

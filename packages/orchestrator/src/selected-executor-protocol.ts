@@ -1,6 +1,8 @@
 import { Effect, Option } from "effect"
-import type { OperationId, RunId, TechnicalRetryNotBefore } from "./domain.js"
+import { OperationId } from "./domain.js"
+import type { RunId, TechnicalRetryNotBefore } from "./domain.js"
 import {
+  executorOuterInvocationIdForOperation,
   ExecutorOuterInvocationOutcome,
   ExecutorOuterInvocationProjection,
   ExecutorOuterInvocationWait,
@@ -13,7 +15,7 @@ import { implementationConvergencePredecessorOperationId } from "./implementatio
 import type { JournalRecord } from "./journal-store.js"
 import { WorkflowResponsibilityEntry, type WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
 import type { ExecutorReconstructionProtocol } from "./reconstructed-managed-run.js"
-import { taskWorkCapacityRequirementFor } from "./task-work-capacity.js"
+import { selectedExecutorCapacityRequirementFor } from "./selected-executor-capacity.js"
 import {
   recoverImplementationEvidenceSealings,
   recoverImplementationReviews,
@@ -61,9 +63,9 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
-        capacityRequirement: taskWorkCapacityRequirementFor("TaskExecution"),
+        capacityRequirement: selectedExecutorCapacityRequirementFor("TaskExecution"),
         invocation: makeExecutorOuterInvocation(
-          event.operation.request.operationId,
+          executorOuterInvocationIdForOperation(event.operation.request.operationId),
           event.operation.request.plannedAttempt.taskId
         )
       })
@@ -74,11 +76,11 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
-        capacityRequirement: taskWorkCapacityRequirementFor(
+        capacityRequirement: selectedExecutorCapacityRequirementFor(
           "ImplementationEvidenceSealing"
         ),
         invocation: makeExecutorOuterInvocation(
-          event.operation.operationId,
+          executorOuterInvocationIdForOperation(event.operation.operationId),
           event.operation.plannedAttempt.taskId
         )
       })
@@ -94,11 +96,11 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
-        capacityRequirement: taskWorkCapacityRequirementFor(
+        capacityRequirement: selectedExecutorCapacityRequirementFor(
           "ImplementationReview"
         ),
         invocation: makeExecutorOuterInvocation(
-          event.operation.request.operationId,
+          executorOuterInvocationIdForOperation(event.operation.request.operationId),
           plannedAttempt.taskId
         )
       })
@@ -109,11 +111,11 @@ const selectedExecutorResponsibilityFor = (
     return WorkflowResponsibilityEntry.cases.ExecutorInvocationResponsibility
       .make({
         beganAt: record.position,
-        capacityRequirement: taskWorkCapacityRequirementFor(
+        capacityRequirement: selectedExecutorCapacityRequirementFor(
           "ReviewFindingsHandback"
         ),
         invocation: makeExecutorOuterInvocation(
-          event.operation.request.operationId,
+          executorOuterInvocationIdForOperation(event.operation.request.operationId),
           event.operation.request.plannedAttempt.taskId
         )
       })
@@ -141,7 +143,7 @@ const unresolvedSelectedExecutorSubjects = (
       || hasOutcome(records, event.operation.request.operationId)
       || responsibility.entries.some((entry) =>
         entry._tag === "ExecutorInvocationResponsibility"
-        && entry.invocation.correlation.invocationId
+        && OperationId.make(entry.invocation.correlation.invocationId)
           === event.operation.request.operationId
       )
     ) return []
@@ -263,7 +265,7 @@ const selectedExecutorOutcomeFor = (
   const correlation = invocation.correlation
   const terminalFailure = terminalFailureFor(
     records,
-    correlation.invocationId
+    OperationId.make(correlation.invocationId)
   )
   if (terminalFailure !== undefined) {
     return Option.some(
@@ -272,7 +274,7 @@ const selectedExecutorOutcomeFor = (
   }
   const event = outerOutcomeEventFor(
     records,
-    correlation.invocationId
+    OperationId.make(correlation.invocationId)
   )
   if (event === undefined) return Option.none()
   if (event._tag === "TaskExecutionOutcomeObserved") {
@@ -313,7 +315,7 @@ export const selectedExecutorProjectionFor = (
   const retry = records.findLast(({ event }) =>
     event._tag === "TechnicalRetryScheduled"
     && event.scope.operationId
-      === invocation.correlation.invocationId
+      === OperationId.make(invocation.correlation.invocationId)
     && !records.some(({ event: candidate }) =>
       candidate._tag === "TechnicalRetryDeferralSuperseded"
       && candidate.scope.operationId === event.scope.operationId

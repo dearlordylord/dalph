@@ -2,9 +2,11 @@ import { it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Queue, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
+import { ExecutorOuterInvocationId, OperationId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
+import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { RunnableFrontierTransition, runnableTransitionTaskId } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
+import { noTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 
 const freshTransition = (taskId: TaskId) =>
   RunnableFrontierTransition.CommitFreshTaskClaimIntent({
@@ -27,8 +29,8 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
     const runnerCount = yield* Ref.make(0)
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -51,9 +53,48 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
     yield* Deferred.await(runnerStarted)
 
     expect(yield* Ref.get(runnerCount)).toBe(1)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
+    expect([...(yield* controller.snapshot()).taskWorkPositions.keys()]).toEqual([taskId])
 
     yield* Deferred.succeed(releaseRunner, undefined)
+  })))
+
+it.effect("records a capacity-free executor intent without binding an admission position", () =>
+  Effect.scoped(Effect.gen(function*() {
+    const taskId = TaskId.make("capacity-free-activation")
+    const transition = RunnableFrontierTransition.StartExecutorInvocation({
+      capacityRequirement: noTaskWorkCapacityRequirement,
+      invocation: makeExecutorOuterInvocation(
+        ExecutorOuterInvocationId.make("capacity-free-outer-invocation"),
+        taskId
+      )
+    })
+    const frontier = yield* Ref.make([transition])
+    const intentRecorded = yield* Deferred.make<void>()
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
+    })
+    const coordinator = yield* makeActivationCoordinator({
+      admissionController: controller,
+      readFrontier: Ref.get(frontier).pipe(
+        Effect.map((transitions) => ({ explanations: [], transitions }))
+      ),
+      runId: RunId.make("capacity-free-activation-run"),
+      runTransition: (_, execution) =>
+        Ref.set(frontier, []).pipe(
+          Effect.andThen(
+            execution.recordIntent(OperationId.make("capacity-free-internal-operation"))
+          ),
+          Effect.andThen(Deferred.succeed(intentRecorded, undefined))
+        )
+    })
+
+    yield* coordinator.signal(ActivationCause.Startup())
+    yield* Deferred.await(intentRecorded)
+    yield* Effect.yieldNow
+
+    expect((yield* controller.snapshot()).taskWorkPositions.size).toBe(0)
   })))
 
 it.effect("serializes selection while capacity-N runners overlap", () =>
@@ -68,8 +109,8 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
     const releaseRunners = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -85,7 +126,7 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
     expect(new Set([yield* Queue.take(started), yield* Queue.take(started)])).toEqual(
       new Set([taskA, taskC])
     )
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA, taskC])
+    expect([...(yield* controller.snapshot()).taskWorkPositions.keys()]).toEqual([taskA, taskC])
 
     yield* Deferred.succeed(releaseRunners, undefined)
   })))
@@ -99,8 +140,8 @@ it.effect("keeps the immutable selection correlation after intent", () =>
     const runnerCount = yield* Ref.make(0)
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -123,7 +164,7 @@ it.effect("keeps the immutable selection correlation after intent", () =>
     yield* Effect.yieldNow
 
     expect(yield* Ref.get(runnerCount)).toBe(1)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
+    expect([...(yield* controller.snapshot()).taskWorkPositions.keys()]).toEqual([taskId])
 
     yield* Deferred.succeed(releaseRunner, undefined)
   })))
@@ -139,8 +180,8 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
     const exits = yield* Queue.unbounded<TaskId>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -175,7 +216,7 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
     )
     yield* Effect.yieldNow
 
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([
+    expect([...(yield* controller.snapshot()).taskWorkPositions.keys()]).toEqual([
       postIntentTask
     ])
   })))
@@ -189,8 +230,8 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
     const runnerCounts = yield* Ref.make(new Map<TaskId, number>())
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -230,10 +271,10 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
     expect(yield* Ref.get(runnerCounts)).toEqual(
       new Map([[preIntentTask, 1], [postIntentTask, 1]])
     )
-    const positions = (yield* controller.snapshot()).reservedPositions
-    expect(positions.map(({ correlation }) => correlation._tag).sort()).toEqual([
-      "OperationReservation",
-      "SelectedTransitionReservation"
+    const positions = (yield* controller.snapshot()).taskWorkPositions
+    expect([...positions.values()].map(({ _tag }) => _tag).sort()).toEqual([
+      "Reserved",
+      "Reserved"
     ])
 
     yield* Deferred.succeed(releaseRunners, undefined)
@@ -248,8 +289,8 @@ it.effect("records a result, releases its exact position, and rederives the next
     const releaseC = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -280,7 +321,7 @@ it.effect("records a result, releases its exact position, and rederives the next
     yield* coordinator.signal(ActivationCause.Startup())
     expect(yield* Queue.take(started)).toBe(taskA)
     expect(yield* Queue.take(started)).toBe(taskC)
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
+    expect([...(yield* controller.snapshot()).taskWorkPositions.keys()]).toEqual([taskC])
 
     yield* Deferred.succeed(releaseC, undefined)
   })))
@@ -295,8 +336,8 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
     const remaining = yield* Ref.make([transition])
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -314,7 +355,7 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
     yield* Effect.yieldNow
 
     expect(yield* Ref.get(remaining)).toEqual([])
-    expect((yield* controller.snapshot()).reservedPositions).toEqual([])
+    expect((yield* controller.snapshot()).taskWorkPositions).toEqual(new Map())
   })))
 
 it.effect("rolls back the exact partial handoff when a controlled boundary interrupts", () =>
@@ -360,8 +401,8 @@ it.effect("rolls back the exact partial handoff when a controlled boundary inter
         const runnerCount = yield* Ref.make(0)
         const controller = yield* makeTaskAdmissionController({
           capacity: TaskWorkCapacity.make(1),
-          freshOccupiedInvocations: [],
-          reconstructedReservedPositions: []
+          latestExecutorActiveReports: [],
+          unfinishedRecordedExecutorInvocations: []
         })
         const control: ActivationCoordinatorControl = {
           checkpoint: (checkpoint) =>
@@ -394,8 +435,8 @@ it.effect("rolls back the exact partial handoff when a controlled boundary inter
         yield* coordinator.signal(ActivationCause.Startup())
 
         expect(yield* Ref.get(runnerCount), interruptedTag).toBe(0)
-        expect((yield* controller.snapshot()).reservedPositions, interruptedTag)
-          .toEqual([])
+        expect((yield* controller.snapshot()).taskWorkPositions, interruptedTag)
+          .toEqual(new Map())
         expect(yield* Ref.get(checkpoints), interruptedTag).toContain(
           interruptedTag
         )
@@ -412,8 +453,8 @@ it.effect("isolates the exact duplicate result while preserving its original own
     const runnerStarted = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const competingAttempts = yield* Ref.make(0)
     const ownershipSnapshots = yield* Ref.make<
@@ -458,7 +499,7 @@ it.effect("isolates the exact duplicate result while preserving its original own
       isolated: 1,
       owners: 1
     })
-    expect((yield* controller.snapshot()).reservedPositions).toHaveLength(1)
+    expect((yield* controller.snapshot()).taskWorkPositions.size).toBe(1)
     yield* Deferred.succeed(releaseRunner, undefined)
   })))
 
@@ -467,8 +508,8 @@ it.effect("atomically rejects or drains signals when the coordinator closes", ()
     const failFrontier = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -501,8 +542,8 @@ it.effect("rejects a signal submitted after its exact coordinator scope closes",
   Effect.gen(function*() {
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
     const coordinatorScope = yield* Scope.make()
     const coordinator = yield* makeActivationCoordinator({

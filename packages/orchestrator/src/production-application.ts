@@ -216,8 +216,8 @@ export const productionWorkflowInterpreterLayer = <
       const currentCapacityEvidence = yield* Ref.make<
         RecoveredAdmissionCapacityEvidence
       >({
-        freshOccupiedInvocations: [],
-        freshlyReleasedOperationIds: new Set()
+        latestExecutorActiveReports: [],
+        freshlyReleasedInvocationIds: new Set()
       })
       const currentExecutionReports = yield* Ref.make<
         ReadonlyArray<{

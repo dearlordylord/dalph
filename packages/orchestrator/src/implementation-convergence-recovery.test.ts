@@ -4,6 +4,7 @@ import { Context, Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { validSnapshot } from "../test/task-dag.js"
+import { executorOuterInvocationIdForOperation } from "./executor-boundary.js"
 import { claimForPlannedAttempt } from "./implementation-convergence-history.js"
 import { ImplementationConvergenceDispositionRecordedEvent } from "./implementation-convergence-journal.js"
 import { makeRecoveredImplementationConvergenceStages } from "./implementation-convergence-recovery.js"
@@ -517,8 +518,10 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     )
     yield* executor.setObservations([successfulExecution])
     expect(yield* observeUnresolvedExecution).toEqual({
-      freshOccupiedInvocations: [],
-      freshlyReleasedOperationIds: new Set([successfulExecution.operationId])
+      latestExecutorActiveReports: [],
+      freshlyReleasedInvocationIds: new Set([
+        executorOuterInvocationIdForOperation(successfulExecution.operationId)
+      ])
     })
     yield* executor.setObservations([
       RunningTaskExecutionReported.make({
@@ -530,7 +533,7 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
         sessionId
       })
     ])
-    expect((yield* observeUnresolvedExecution).freshOccupiedInvocations)
+    expect((yield* observeUnresolvedExecution).latestExecutorActiveReports)
       .toHaveLength(1)
     const differentlyCorrelatedOperationId = OperationId.make(
       "fresh-differently-correlated-operation"
@@ -545,10 +548,12 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
         sessionId
       })
     ])
-    expect((yield* observeUnresolvedExecution).freshOccupiedInvocations)
+    expect((yield* observeUnresolvedExecution).latestExecutorActiveReports)
       .toEqual([{
+        invocationId: executorOuterInvocationIdForOperation(
+          differentlyCorrelatedOperationId
+        ),
         observationId: "fresh-differently-correlated-observation",
-        operationId: differentlyCorrelatedOperationId,
         taskId: TaskId.make("implementation-convergence-recovery-task")
       }])
     yield* executor.setObservations([
@@ -576,19 +581,26 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
     )
     const restartedController = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: restartedActivation.capacityEvidence.freshOccupiedInvocations,
-      freshlyReleasedOperationIds: restartedActivation.capacityEvidence.freshlyReleasedOperationIds,
-      reconstructedReservedPositions: restartedActivation.reconstructedReservedPositions
+      latestExecutorActiveReports: restartedActivation.capacityEvidence.latestExecutorActiveReports,
+      freshlyReleasedInvocationIds: restartedActivation.capacityEvidence.freshlyReleasedInvocationIds,
+      unfinishedRecordedExecutorInvocations: restartedActivation.unfinishedRecordedExecutorInvocations
     })
-    expect(yield* restartedController.taskStates()).toEqual([{
-      state: {
-        _tag: "CorrelationConflict",
-        expectedOperationId: successfulExecution.operationId,
-        observationId: "fresh-differently-correlated-observation",
-        observedOperationId: differentlyCorrelatedOperationId
-      },
-      taskId: TaskId.make("implementation-convergence-recovery-task")
-    }])
+    const recoveredTaskId = TaskId.make("implementation-convergence-recovery-task")
+    expect(yield* restartedController.taskWorkPositions()).toEqual(
+      new Map([[
+        recoveredTaskId,
+        {
+          _tag: "ExecutorInvocationMismatch",
+          expectedInvocationId: executorOuterInvocationIdForOperation(
+            successfulExecution.operationId
+          ),
+          observationId: "fresh-differently-correlated-observation",
+          reportedInvocationId: executorOuterInvocationIdForOperation(
+            differentlyCorrelatedOperationId
+          )
+        }
+      ]])
+    )
     yield* executor.setObservations([
       AmbiguousTaskExecutionReported.make({
         detail: "provider lookup cannot determine the current outcome",
@@ -603,8 +615,8 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
       })
     ])
     expect(yield* observeUnresolvedExecution).toEqual({
-      freshOccupiedInvocations: [],
-      freshlyReleasedOperationIds: new Set()
+      latestExecutorActiveReports: [],
+      freshlyReleasedInvocationIds: new Set()
     })
     yield* executor.setObservations([
       NoTaskExecutionReported.make({
@@ -616,8 +628,10 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
       })
     ])
     expect([
-      ...(yield* observeUnresolvedExecution).freshlyReleasedOperationIds
-    ]).toEqual([successfulExecution.operationId])
+      ...(yield* observeUnresolvedExecution).freshlyReleasedInvocationIds
+    ]).toEqual([
+      executorOuterInvocationIdForOperation(successfulExecution.operationId)
+    ])
     yield* executor.setObservations([successfulExecution])
     expect(before.filter(({ event }) => event._tag === "ImplementationEvidenceSealed")).toHaveLength(1)
     const sealedActivation = yield* makeManagedRecoveryActivation(runId)

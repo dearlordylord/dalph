@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import fc from "fast-check"
 import { expect, it } from "vitest"
-import { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
+import { ExecutorOuterInvocationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
 import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
@@ -31,13 +31,13 @@ it("generated controller commands never create more new positions than configure
         await Effect.runPromise(Effect.gen(function*() {
           const controller = yield* makeTaskAdmissionController({
             capacity,
-            freshOccupiedInvocations: [],
-            reconstructedReservedPositions: []
+            latestExecutorActiveReports: [],
+            unfinishedRecordedExecutorInvocations: []
           })
 
           for (const [ordinal, command] of commands.entries()) {
             const taskId = TaskId.make(`generated-task-${"task" in command ? command.task : 0}`)
-            const operationId = OperationId.make(
+            const invocationId = ExecutorOuterInvocationId.make(
               `generated-operation-${"operation" in command ? command.operation : ordinal}`
             )
             if (command._tag === "Admit") {
@@ -47,14 +47,14 @@ it("generated controller commands never create more new positions than configure
                   RunnableFrontierTransition.ContinueExecutorInvocation({
                     capacityRequirement: oneTaskWorkCapacityRequirement,
                     invocation: makeExecutorOuterInvocation(
-                      operationId,
+                      invocationId,
                       taskId
                     )
                   })
                 ]
               }, RunId.make("generated-run"))
             } else {
-              yield* controller.releaseTaskAdmissionPosition(operationId).pipe(
+              yield* controller.releaseTaskAdmissionPosition(invocationId).pipe(
                 Effect.catchTag(
                   "TaskAdmissionPositionReleaseIssue",
                   () => Effect.void
@@ -63,9 +63,7 @@ it("generated controller commands never create more new positions than configure
             }
 
             const snapshot = yield* controller.snapshot()
-            expect(
-              snapshot.occupied.length + snapshot.reservedTaskIds.length
-            ).toBeLessThanOrEqual(capacityValue)
+            expect(snapshot.taskWorkPositions.size).toBeLessThanOrEqual(capacityValue)
           }
         }))
       }
@@ -81,17 +79,20 @@ it("a delayed release changes only its exact operation", async () => {
       operationArbitrary.filter((later) => later !== 0),
       async (earlier, laterOffset) => {
         const taskId = TaskId.make("delayed-release-task")
-        const earlierOperation = OperationId.make(`attempt-${earlier}`)
-        const laterOperation = OperationId.make(`attempt-${earlier + laterOffset + 1}`)
+        const earlierOperation = ExecutorOuterInvocationId.make(`attempt-${earlier}`)
+        const laterOperation = ExecutorOuterInvocationId.make(`attempt-${earlier + laterOffset + 1}`)
         await Effect.runPromise(Effect.gen(function*() {
           const controller = yield* makeTaskAdmissionController({
             capacity: TaskWorkCapacity.make(1),
-            freshOccupiedInvocations: [{
+            latestExecutorActiveReports: [{
               observationId: ProviderObservationId.make("later-observation"),
-              operationId: laterOperation,
+              invocationId: laterOperation,
               taskId
             }],
-            reconstructedReservedPositions: []
+            unfinishedRecordedExecutorInvocations: [{
+              invocationId: laterOperation,
+              taskId
+            }]
           })
 
           const delayed = yield* controller.releaseTaskAdmissionPosition(
@@ -99,11 +100,16 @@ it("a delayed release changes only its exact operation", async () => {
           ).pipe(Effect.flip)
           expect(delayed._tag).toBe("TaskAdmissionPositionReleaseIssue")
 
-          expect((yield* controller.snapshot()).occupied).toEqual([{
-            observationId: "later-observation",
-            operationId: laterOperation,
-            taskId
-          }])
+          expect((yield* controller.snapshot()).taskWorkPositions).toEqual(
+            new Map([[
+              taskId,
+              {
+                _tag: "Working",
+                observationId: "later-observation",
+                invocationId: laterOperation
+              }
+            ]])
+          )
         }))
       }
     ),

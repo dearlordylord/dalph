@@ -134,7 +134,9 @@ export const workflowResponsibilityOperationId = (
   entry: WorkflowResponsibilityEntry
 ): OperationId =>
   WorkflowResponsibilityEntryShape.match(entry, {
-    ExecutorInvocationResponsibility: ({ invocation }) => invocation.correlation.invocationId,
+    // Transitional #158 bridge for the shared responsibility index. Task
+    // admission reads the branded outer identity directly.
+    ExecutorInvocationResponsibility: ({ invocation }) => OperationId.make(invocation.correlation.invocationId),
     TaskClaimResponsibility: ({ acquisition }) => acquisition.operationId,
     TaskWorkSessionResponsibility: ({ operation }) => operation.request.operationId,
     TaskWorktreeResponsibility: ({ operation }) => operation.operationId

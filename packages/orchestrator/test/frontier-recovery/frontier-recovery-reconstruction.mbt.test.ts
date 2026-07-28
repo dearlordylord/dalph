@@ -16,7 +16,8 @@ import {
 } from "./frontier-recovery-conformance.js"
 import type {
   FrontierRecoveryActivationProjection,
-  FrontierRecoveryReconstructionProjection
+  FrontierRecoveryReconstructionProjection,
+  FrontierRecoveryTaskWorkPositionProjection
 } from "./frontier-recovery-projection.js"
 import { makeFrontierRecoveryReconstructionControls } from "./frontier-recovery-reconstruction.js"
 
@@ -34,7 +35,7 @@ const actionSchema = {
   interruptBeforeOwnership: { task: ITFBigInt },
   observeCapacityConsumed: { task: ITFBigInt },
   observeCapacityReleased: { task: ITFBigInt },
-  readProviderInvocationForReconstruction: { task: ITFBigInt },
+  readExecutorInvocationForReconstruction: { task: ITFBigInt },
   orchestratorCommitsFirstFreshTaskClaimIntent: {},
   orchestratorCommitsFreshTaskClaimIntent: { task: ITFBigInt },
   orchestratorCommitsNextFreshTaskClaimIntent: {},
@@ -44,7 +45,7 @@ const actionSchema = {
   rejectDuplicateOwnership: { task: ITFBigInt },
   reserveTaskAdmissionPosition: { task: ITFBigInt },
   restart: {},
-  stopProviderWorker: { task: ITFBigInt },
+  stopExecutorInvocation: { task: ITFBigInt },
   taskTrackerReturnsTargetClosureReadAtNextRevision: {},
   taskTrackerReturnsTargetClosureReadWithPredecessor: {},
   taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage: {}
@@ -142,24 +143,42 @@ const ModelActivationOwner = ITFVariant({
   PreIntentActivationOwner: ITFTuple()
 })
 
+const ModelExecutorOuterInvocationId = Schema.Struct({
+  outerInvocationValue: ITFBigInt
+})
+
 const ModelActivationPosition = ITFVariant({
-  ActivationPositionAwaitingProviderEvidence: Schema.Struct({ operationId: ITFBigInt }),
-  ActivationPositionCorrelationConflict: Schema.Struct({
-    expectedOperationId: ITFBigInt,
-    observedOperationId: ITFBigInt
+  ActivationPositionAwaitingExecutorReport: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  }),
+  ActivationPositionExecutorInvocationMismatch: Schema.Struct({
+    expectedInvocationId: ModelExecutorOuterInvocationId,
+    reportedInvocationId: ModelExecutorOuterInvocationId
   }),
   ActivationPositionNotUsing: ITFTuple(),
   ActivationPositionReserved: Schema.Struct({ selectedTaskId: ITFBigInt }),
-  ActivationPositionWorking: Schema.Struct({ operationId: ITFBigInt })
+  ActivationPositionWorking: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  })
 })
 
-const ModelProviderInvocationObservation = ITFVariant({
-  ProviderInvocationAbsent: Schema.Struct({ operationId: ITFBigInt }),
-  ProviderInvocationActive: Schema.Struct({ operationId: ITFBigInt }),
-  ProviderInvocationInterrupted: Schema.Struct({ operationId: ITFBigInt }),
-  ProviderInvocationNotObserved: ITFTuple(),
-  ProviderInvocationTerminal: Schema.Struct({ operationId: ITFBigInt }),
-  ProviderInvocationUnknown: Schema.Struct({ operationId: ITFBigInt })
+const ModelExecutorOuterInvocationReport = ITFVariant({
+  ExecutorOuterInvocationAbsent: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  }),
+  ExecutorOuterInvocationActive: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  }),
+  ExecutorOuterInvocationInterrupted: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  }),
+  ExecutorOuterInvocationNotReported: ITFTuple(),
+  ExecutorOuterInvocationTerminal: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  }),
+  ExecutorOuterInvocationUnknown: Schema.Struct({
+    invocationId: ModelExecutorOuterInvocationId
+  })
 })
 
 const ModelActivation = Schema.Struct({
@@ -175,7 +194,7 @@ const ModelActivation = Schema.Struct({
   positions: ITFMap(ITFBigInt, Schema.Unknown),
   postIntentExited: ITFSet(ITFBigInt),
   preIntentInterrupted: ITFSet(ITFBigInt),
-  freshProviderInvocationObservations: ITFMap(
+  freshExecutorOuterInvocationReports: ITFMap(
     ITFBigInt,
     Schema.Unknown
   ),
@@ -500,9 +519,9 @@ const makeReconstructionDriver = (
         interruptBeforeOwnership: ({ task }) => activationForTask("interruptBeforeOwnership", task),
         observeCapacityConsumed: ({ task }) => activationForTask("observeCapacityConsumed", task),
         observeCapacityReleased: ({ task }) => activationForTask("observeCapacityReleased", task),
-        readProviderInvocationForReconstruction: ({ task }) =>
+        readExecutorInvocationForReconstruction: ({ task }) =>
           activationForTask(
-            "readProviderInvocationForReconstruction",
+            "readExecutorInvocationForReconstruction",
             task
           ),
         taskTrackerReturnsTargetClosureReadAtNextRevision: () =>
@@ -540,7 +559,7 @@ const makeReconstructionDriver = (
             closePreviousControls = freshControls.close()
             return yield* freshControls.getState()
           }),
-        stopProviderWorker: ({ task }) => activationForTask("stopProviderWorker", task)
+        stopExecutorInvocation: ({ task }) => activationForTask("stopExecutorInvocation", task)
       }
     }
   )
@@ -671,7 +690,11 @@ const modelResponsibilityProjection = (
       }]
     })
     .sort((left, right) =>
-      left.modelTaskId < right.modelTaskId
+      left.beganAt < right.beganAt
+        ? -1
+        : left.beganAt > right.beganAt
+        ? 1
+        : left.modelTaskId < right.modelTaskId
         ? -1
         : left.modelTaskId > right.modelTaskId
         ? 1
@@ -748,43 +771,64 @@ const decodeReconstructionModelState = (
               Effect.map((decoded) => [task, decoded] as const)
             )
         )
-        const decodedProviderInvocationObservations = yield* Effect.forEach(
-          [...state.activation.freshProviderInvocationObservations],
-          ([task, observation]) =>
-            Schema.decodeUnknownEffect(ModelProviderInvocationObservation)(
-              observation
+        const decodedExecutorInvocationReports = yield* Effect.forEach(
+          [...state.activation.freshExecutorOuterInvocationReports],
+          ([task, report]) =>
+            Schema.decodeUnknownEffect(ModelExecutorOuterInvocationReport)(
+              report
             ).pipe(Effect.map((decoded) => [task, decoded] as const))
         )
-        const activationReservedPositions: FrontierRecoveryActivationProjection["reservedPositions"] =
-          decodedActivationPositions.flatMap<
-            FrontierRecoveryActivationProjection["reservedPositions"][number]
-          >(([task, position]) => {
-            if (
-              position.tag === "ActivationPositionNotUsing"
-              || position.tag === "ActivationPositionWorking"
-            ) return []
-            if (position.tag === "ActivationPositionReserved") {
-              return [{
-                correlation: "SelectedTransition" as const,
-                modelTaskId: FrontierRecoveryModelTaskId.make(task)
-              }]
-            }
-            return [{
-              correlation: "Operation" as const,
-              modelOperationId: FrontierRecoveryModelOperationId.make(
-                position.tag === "ActivationPositionCorrelationConflict"
-                  ? position.value.expectedOperationId
-                  : position.value.operationId
-              ),
-              modelTaskId: FrontierRecoveryModelTaskId.make(task)
-            }]
-          }).sort((left, right) =>
-            left.modelTaskId < right.modelTaskId
-              ? -1
-              : left.modelTaskId > right.modelTaskId
-              ? 1
-              : 0
-          )
+        const taskWorkPositions: FrontierRecoveryActivationProjection["taskWorkPositions"] = new Map<
+          FrontierRecoveryModelTaskId,
+          FrontierRecoveryTaskWorkPositionProjection
+        >(decodedActivationPositions.flatMap<
+          readonly [FrontierRecoveryModelTaskId, FrontierRecoveryTaskWorkPositionProjection]
+        >(([task, position]) => {
+          const modelTaskId = FrontierRecoveryModelTaskId.make(task)
+          switch (position.tag) {
+            case "ActivationPositionNotUsing":
+              return []
+            case "ActivationPositionAwaitingExecutorReport":
+              return [
+                [modelTaskId, {
+                  _tag: "AwaitingExecutorReport" as const,
+                  modelInvocationId: FrontierRecoveryModelOperationId.make(
+                    position.value.invocationId.outerInvocationValue
+                  )
+                }] as const
+              ]
+            case "ActivationPositionExecutorInvocationMismatch":
+              return [
+                [modelTaskId, {
+                  _tag: "ExecutorInvocationMismatch" as const,
+                  expectedModelInvocationId: FrontierRecoveryModelOperationId.make(
+                    position.value.expectedInvocationId.outerInvocationValue
+                  ),
+                  reportedModelInvocationId: FrontierRecoveryModelOperationId.make(
+                    position.value.reportedInvocationId.outerInvocationValue
+                  )
+                }] as const
+              ]
+            case "ActivationPositionReserved":
+              return [
+                [modelTaskId, {
+                  _tag: "Reserved" as const,
+                  selectedModelTaskId: FrontierRecoveryModelTaskId.make(
+                    position.value.selectedTaskId
+                  )
+                }] as const
+              ]
+            case "ActivationPositionWorking":
+              return [
+                [modelTaskId, {
+                  _tag: "Working" as const,
+                  modelInvocationId: FrontierRecoveryModelOperationId.make(
+                    position.value.invocationId.outerInvocationValue
+                  )
+                }] as const
+              ]
+          }
+        }))
         const transitionOperationFor = (
           taskId: FrontierRecoveryModelTaskId
         ) =>
@@ -856,17 +900,17 @@ const decodeReconstructionModelState = (
             preIntentInterruptedModelTaskIds: modelTaskIds(
               state.activation.preIntentInterrupted
             ),
-            providerConsumingModelTaskIds: modelTaskIds(
+            executorConsumingModelTaskIds: modelTaskIds(
               new Set(
-                decodedProviderInvocationObservations.flatMap(
-                  ([task, observation]) =>
-                    observation.tag === "ProviderInvocationActive"
+                decodedExecutorInvocationReports.flatMap(
+                  ([task, report]) =>
+                    report.tag === "ExecutorOuterInvocationActive"
                       ? [task]
                       : []
                 )
               )
             ),
-            reservedPositions: activationReservedPositions,
+            taskWorkPositions,
             resultsRecordedModelTaskIds: modelTaskIds(
               state.activation.resultsRecorded
             ),

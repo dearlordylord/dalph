@@ -258,8 +258,8 @@ const makeHarness = Effect.fn("ConvergenceTest.makeHarness")(function*(
   }
   const admissionController = yield* makeTaskAdmissionController({
     capacity: TaskWorkCapacity.make(1),
-    freshOccupiedInvocations: [],
-    reconstructedReservedPositions: []
+    latestExecutorActiveReports: [],
+    unfinishedRecordedExecutorInvocations: []
   })
   const start = options.initialReview !== undefined
     ? {

@@ -194,24 +194,25 @@ module frontierRecoveryCounterexamples {
 
   action reserveWhileObservedUsageIsAtLowerLimit: bool = {
     val operationA = state.workflow.get(A).operationId
+    val invocationA = executorOuterInvocationIdForOperation(operationA)
     state' = {
       ...state,
-      providerInvocationAuthority:
-        state.providerInvocationAuthority.put(
+      executorInvocationAuthority:
+        state.executorInvocationAuthority.put(
           A,
-          ProviderInvocationActive({ operationId: operationA })
+          ExecutorOuterInvocationActive({ invocationId: invocationA })
         ),
       activation: {
         ...state.activation,
         configuredCapacity: 1,
         positions:
           state.activation.positions
-            .put(A, ActivationPositionWorking({ operationId: operationA }))
+            .put(A, ActivationPositionWorking({ invocationId: invocationA }))
             .put(C, ActivationPositionReserved({ selectedTaskId: C })),
-        freshProviderInvocationObservations:
-          state.activation.freshProviderInvocationObservations.put(
+        freshExecutorOuterInvocationReports:
+          state.activation.freshExecutorOuterInvocationReports.put(
             A,
-            ProviderInvocationActive({ operationId: operationA })
+            ExecutorOuterInvocationActive({ invocationId: invocationA })
           ),
       },
     }

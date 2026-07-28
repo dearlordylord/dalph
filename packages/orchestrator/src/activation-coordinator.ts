@@ -358,9 +358,20 @@ export const makeActivationCoordinator = Effect.fn(
           Effect.asVoid
         )
       }
+      if (
+        owned.transition._tag !== "StartExecutorInvocation"
+        && owned.transition._tag !== "ContinueExecutorInvocation"
+      ) {
+        return Exit.isSuccess(exit)
+          ? input.admissionController.cancelReservedPosition(entry.selected).pipe(
+            Effect.orDie,
+            Effect.asVoid
+          )
+          : Effect.void
+      }
       return Exit.isSuccess(exit)
         ? input.admissionController.releaseTaskAdmissionPosition(
-          owned.operationId.value
+          owned.transition.invocation.correlation.invocationId
         ).pipe(Effect.orDie)
         : Effect.void
     }
@@ -371,10 +382,16 @@ export const makeActivationCoordinator = Effect.fn(
           // Bind the controller first. If that exact reservation is absent,
           // ownership remains pre-intent and finalization can still cancel it
           // by the immutable selection identity.
-          if (transitionRequiresTaskAdmissionPosition(entry.transition)) {
+          if (
+            transitionRequiresTaskAdmissionPosition(entry.transition)
+            && (
+              entry.transition._tag === "StartExecutorInvocation"
+              || entry.transition._tag === "ContinueExecutorInvocation"
+            )
+          ) {
             yield* input.admissionController.bindReservedPosition(
               entry.selected,
-              operationId
+              entry.transition.invocation.correlation.invocationId
             ).pipe(Effect.orDie)
           }
           yield* ownership.bindOperation(key, operationId)

@@ -1,12 +1,13 @@
 import { Effect } from "effect"
 import { type OperationId, SemanticReviewRound, type Task } from "./domain.js"
-import { makeExecutorOuterInvocation } from "./executor-boundary.js"
+import { executorOuterInvocationIdForOperation, makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
 import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
 import type { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { RunnableFrontierTransition as FrontierTransition } from "./runnable-frontier.js"
+import { selectedExecutorCapacityRequirementFor } from "./selected-executor-capacity.js"
 import {
   makeSimulatedImplementationConvergenceStage,
   type SimulatedImplementationConvergenceStage
@@ -19,7 +20,6 @@ import {
   TaskWorkSessionEstablishmentSimulatedTrace
 } from "./task-execution-trace.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import { taskWorkCapacityRequirementFor } from "./task-work-capacity.js"
 import type { OperationIdAllocatorService, PlannedTaskAttemptPlannerService } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -46,14 +46,18 @@ interface FreshTaskAttemptStageOptions {
   readonly planner: PlannedTaskAttemptPlannerService
 }
 
+/**
+ * Transitional #158 adapter: the colocated review-loop still allocates its
+ * first internal operation before the independent outer identity exists.
+ */
 const freshExecutorTransition = (
   operationId: OperationId,
   task: Task
 ) =>
   FrontierTransition.StartExecutorInvocation({
-    capacityRequirement: taskWorkCapacityRequirementFor("TaskExecution"),
+    capacityRequirement: selectedExecutorCapacityRequirementFor("TaskExecution"),
     invocation: makeExecutorOuterInvocation(
-      operationId,
+      executorOuterInvocationIdForOperation(operationId),
       task.id
     )
   })

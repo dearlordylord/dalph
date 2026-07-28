@@ -1,5 +1,6 @@
 import { Data, Match, Option } from "effect"
-import type { OperationId, TaskId, TaskRevision } from "./domain.js"
+import { OperationId } from "./domain.js"
+import type { TaskId, TaskRevision } from "./domain.js"
 import type {
   ExecutorOuterInvocation,
   ExecutorOuterInvocationOutcome,
@@ -62,7 +63,10 @@ export const runnableTransitionOperationId = (
 ): OperationId | undefined =>
   transition._tag === "ContinueExecutorInvocation"
     || transition._tag === "StartExecutorInvocation"
-    ? transition.invocation.correlation.invocationId
+    // Transitional #158 bridge: process-local activation ownership still uses
+    // the shared workflow-operation registry. Capacity code reads the outer
+    // invocation identity directly and must not copy this conversion.
+    ? OperationId.make(transition.invocation.correlation.invocationId)
     : "operationId" in transition
     ? transition.operationId
     : undefined

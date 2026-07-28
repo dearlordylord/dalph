@@ -431,8 +431,8 @@ it.effect("collects completed stale, foreign, and unreadable authority facts wit
         "Reviewer"
       ]
     )
-    expect([...observation.capacityEvidence.freshlyReleasedOperationIds]).toEqual([
+    expect([...observation.capacityEvidence.freshlyReleasedInvocationIds]).toEqual([
       OperationId.make("observer-unresolved-execution")
     ])
-    expect(observation.capacityEvidence.freshOccupiedInvocations).toEqual([])
+    expect(observation.capacityEvidence.latestExecutorActiveReports).toEqual([])
   }))

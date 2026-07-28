@@ -1,13 +1,14 @@
 import { Clock, Context, Duration, Effect, Exit, Layer, Match, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "./activation-coordinator.js"
-import {
-  type OperationId,
-  type ProviderObservationId,
-  type RunId,
-  type TaskId,
-  type TaskWorkCapacity,
-  TechnicalRetryNotBefore
+import { OperationId, TechnicalRetryNotBefore } from "./domain.js"
+import type {
+  ExecutorOuterInvocationId as ExecutorOuterInvocationIdType,
+  ProviderObservationId,
+  RunId,
+  TaskId,
+  TaskWorkCapacity
 } from "./domain.js"
+import { executorOuterInvocationIdForOperation } from "./executor-boundary.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore, type JournalStoreError } from "./journal-store.js"
 import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
@@ -29,9 +30,10 @@ import {
 } from "./selected-executor-protocol.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import {
-  currentTaskCapacityPositions,
   makeTaskAdmissionController,
-  type MultipleCurrentTaskCapacityOperations,
+  type MultipleLatestExecutorReportsForTask,
+  type MultipleUnfinishedExecutorInvocationsForTask,
+  unfinishedRecordedExecutorInvocationsFor,
   validateCurrentTaskCapacityFacts
 } from "./task-admission-controller.js"
 import { type TaskExecutionReport, TaskExecutor } from "./task-execution.js"
@@ -60,32 +62,32 @@ export type ManagedRecoveryActivationError =
   | InvalidManagedHistory
   | InterpreterError
   | JournalStoreError
-  | MultipleCurrentTaskCapacityOperations
+  | MultipleUnfinishedExecutorInvocationsForTask
+  | MultipleLatestExecutorReportsForTask
 
 export interface RecoveredAdmissionCapacityEvidence {
-  readonly freshOccupiedInvocations: ReadonlyArray<{
+  readonly latestExecutorActiveReports: ReadonlyArray<{
     readonly observationId: ProviderObservationId
-    readonly operationId: OperationId
+    readonly invocationId: ExecutorOuterInvocationIdType
     readonly taskId: TaskId
   }>
-  readonly freshlyReleasedOperationIds: ReadonlySet<OperationId>
+  readonly freshlyReleasedInvocationIds: ReadonlySet<ExecutorOuterInvocationIdType>
 }
 
 const noRecoveredAdmissionCapacityEvidence = {
-  freshOccupiedInvocations: [],
-  freshlyReleasedOperationIds: new Set()
+  latestExecutorActiveReports: [],
+  freshlyReleasedInvocationIds: new Set()
 } satisfies RecoveredAdmissionCapacityEvidence
 
-const noOccupiedInvocations = (): RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"] => []
+const noOccupiedInvocations = (): RecoveredAdmissionCapacityEvidence["latestExecutorActiveReports"] => []
 const noOperationIds = (): ReadonlyArray<OperationId> => []
-const releasedOperationId = (
-  report: TaskExecutionReport
-): ReadonlyArray<OperationId> =>
+const noOuterInvocationIds = (): ReadonlyArray<ExecutorOuterInvocationIdType> => []
+const releasedInvocationId = (report: TaskExecutionReport): ReadonlyArray<ExecutorOuterInvocationIdType> =>
   report._tag === "RunningTaskExecutionReported"
     || report._tag === "AmbiguousTaskExecutionReported"
     || report._tag === "TaskExecutionSessionConflictReported"
     ? []
-    : [report.operationId]
+    : [executorOuterInvocationIdForOperation(report.operationId)]
 
 /**
  * Reads current execution-provider evidence for each unresolved execution.
@@ -121,11 +123,11 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
       const invocationId = responsibility.invocation.correlation.invocationId
       const lookup = selectedExecutorTaskExecutionLookup(
         records,
-        invocationId
+        OperationId.make(invocationId)
       )
       if (
         lookup === undefined
-        || settledExecutionOperationIds.has(invocationId)
+        || settledExecutionOperationIds.has(OperationId.make(invocationId))
       ) return Effect.succeed(undefined)
       return executor.observeTaskExecution(lookup).pipe(
         Effect.map((report) => ({ report, responsibility }))
@@ -134,25 +136,25 @@ export const observeRecoveredAdmissionCapacity = Effect.fn(
     { concurrency: "unbounded" }
   )
   return {
-    freshOccupiedInvocations: observations.flatMap((observation) =>
+    latestExecutorActiveReports: observations.flatMap((observation) =>
       Option.match(Option.fromUndefinedOr(observation), {
         onNone: noOccupiedInvocations,
         onSome: (candidate) =>
           Match.value(candidate.report).pipe(
             Match.tag("RunningTaskExecutionReported", (report) => [{
+              invocationId: executorOuterInvocationIdForOperation(report.operationId),
               observationId: report.observationId,
-              operationId: report.operationId,
               taskId: candidate.responsibility.invocation.correlation.taskId
             }]),
             Match.orElse(noOccupiedInvocations)
           )
       })
     ),
-    freshlyReleasedOperationIds: new Set(
+    freshlyReleasedInvocationIds: new Set(
       observations.flatMap((observation) =>
         Option.match(Option.fromUndefinedOr(observation), {
-          onNone: noOperationIds,
-          onSome: ({ report }) => releasedOperationId(report)
+          onNone: noOuterInvocationIds,
+          onSome: ({ report }) => releasedInvocationId(report)
         })
       )
     )
@@ -220,7 +222,7 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
     })
     return {
       ...frontier,
-      currentTaskCapacityPositions: currentTaskCapacityPositions(responsibilityFacts)
+      unfinishedRecordedExecutorInvocationsFor: unfinishedRecordedExecutorInvocationsFor(responsibilityFacts)
     }
   }
 )
@@ -232,8 +234,8 @@ interface ManagedActivationSource {
     ManagedRecoveryActivationError,
     never
   >
-  readonly reconstructedReservedPositions: ReadonlyArray<{
-    readonly operationId: OperationId
+  readonly unfinishedRecordedExecutorInvocations: ReadonlyArray<{
+    readonly invocationId: ExecutorOuterInvocationIdType
     readonly taskId: TaskId
   }>
   readonly waitForNextExecutorWake: Effect.Effect<
@@ -279,7 +281,7 @@ export const emptyManagedRecoveryActivationLayer = Layer.succeed(
     _tag: "SyntheticFreshOnlyActivation",
     capacityEvidence: noRecoveredAdmissionCapacityEvidence,
     readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-    reconstructedReservedPositions: [],
+    unfinishedRecordedExecutorInvocations: [],
     waitForNextExecutorWake: Effect.succeed(false)
   })
 )
@@ -301,8 +303,8 @@ export const makeManagedRecoveryActivation = Effect.fn(
     >
   ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
   const initial = yield* readRecoveredFrontier(runId)
-  const reconstructedReservedPositions = initial.currentTaskCapacityPositions.filter(
-    ({ operationId }) => !capacityEvidence.freshlyReleasedOperationIds.has(operationId)
+  const unfinishedRecordedExecutorInvocations = initial.unfinishedRecordedExecutorInvocationsFor.filter(
+    ({ invocationId }) => !capacityEvidence.freshlyReleasedInvocationIds.has(invocationId)
   )
   const readFrontier = Effect.fn(
     "ManagedActivation.readActivationFrontier"
@@ -355,7 +357,11 @@ export const makeManagedRecoveryActivation = Effect.fn(
         yield* recoverRunnableTransition(
           runId,
           transition,
-          recoverSelectedExecutorInvocation
+          (recoveredRunId, invocationId) =>
+            recoverSelectedExecutorInvocation(
+              recoveredRunId,
+              OperationId.make(invocationId)
+            )
         )
         return
       }
@@ -366,7 +372,7 @@ export const makeManagedRecoveryActivation = Effect.fn(
     _tag: "AuthoritativeManagedRunActivation",
     capacityEvidence,
     readFrontier: provideDependencies(readFrontier()),
-    reconstructedReservedPositions,
+    unfinishedRecordedExecutorInvocations,
     runId,
     runTransition: (transition, execution) =>
       provideDependencies(
@@ -393,9 +399,9 @@ export const activateRecoveredResponsibilities = Effect.fn(
   )
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: capacityEvidence.freshOccupiedInvocations,
-    freshlyReleasedOperationIds: capacityEvidence.freshlyReleasedOperationIds,
-    reconstructedReservedPositions: recovery.reconstructedReservedPositions
+    latestExecutorActiveReports: capacityEvidence.latestExecutorActiveReports,
+    freshlyReleasedInvocationIds: capacityEvidence.freshlyReleasedInvocationIds,
+    unfinishedRecordedExecutorInvocations: recovery.unfinishedRecordedExecutorInvocations
   })
   const completed = yield* Queue.unbounded<
     Exit.Exit<void, ManagedRecoveryActivationError>

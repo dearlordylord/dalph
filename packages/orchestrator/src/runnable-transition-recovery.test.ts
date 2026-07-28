@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { OperationId, RunId, TaskId, TaskRevision } from "./domain.js"
+import { ExecutorOuterInvocationId, OperationId, RunId, TaskId, TaskRevision } from "./domain.js"
 import { makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { memoryJournalStoreLayer } from "./journal-store.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
@@ -30,14 +30,14 @@ it.effect("routes every recovered transition variant through its exact empty-his
     RunnableFrontierTransition.StartExecutorInvocation({
       capacityRequirement: oneTaskWorkCapacityRequirement,
       invocation: makeExecutorOuterInvocation(
-        operationId,
+        ExecutorOuterInvocationId.make(operationId),
         taskId
       )
     }),
     RunnableFrontierTransition.ContinueExecutorInvocation({
       capacityRequirement: oneTaskWorkCapacityRequirement,
       invocation: makeExecutorOuterInvocation(
-        operationId,
+        ExecutorOuterInvocationId.make(operationId),
         taskId
       )
     }),
@@ -52,7 +52,11 @@ it.effect("routes every recovered transition variant through its exact empty-his
         recoverRunnableTransition(
           runId,
           transition,
-          recoverSelectedExecutorInvocation
+          (recoveredRunId, invocationId) =>
+            recoverSelectedExecutorInvocation(
+              recoveredRunId,
+              OperationId.make(invocationId)
+            )
         )
     )
     expect(results).toEqual(Array.from({ length: transitions.length }))

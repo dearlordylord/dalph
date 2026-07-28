@@ -13,6 +13,15 @@ const forbiddenPathFragments = [
 ]
 const forbiddenProductionVocabulary =
   /(?:\bP[0-6]\b|AmbiguityBoundaryV1|RecoveryActivationOrdinal|TaskWorkSessionRecoveryConformance)/
+const genericCapacityModules = new Set([
+  "activation-coordinator",
+  "reconstructed-managed-run-state",
+  "runnable-frontier",
+  "task-admission-controller",
+  "task-work-capacity"
+])
+const reviewLoopStageVocabulary =
+  /(?:ImplementationDisposition|ImplementationEvidenceSealing|ImplementationReview|ReviewFindingsHandback|TaskExecution)/
 
 const filesBelow = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true })
@@ -29,6 +38,7 @@ if (JSON.stringify(manifest.files) !== JSON.stringify(["dist"])) {
 }
 
 const emittedFiles = await filesBelow(buildOutput)
+const checkedGenericCapacityModules = new Set()
 for (const file of emittedFiles) {
   const relativePath = decodeURIComponent(file.href.slice(buildOutput.href.length))
   if (forbiddenPathFragments.some((fragment) => relativePath.includes(fragment))) {
@@ -39,5 +49,25 @@ for (const file of emittedFiles) {
     && forbiddenProductionVocabulary.test(await readFile(file, "utf8"))
   ) {
     throw new Error(`test-only recovery vocabulary was emitted in @dalph/orchestrator: ${relativePath}`)
+  }
+  const moduleName = relativePath
+    .replace(/^src\//u, "")
+    .replace(/\.(?:d\.ts|js)$/u, "")
+  if (
+    genericCapacityModules.has(moduleName)
+    && reviewLoopStageVocabulary.test(await readFile(file, "utf8"))
+  ) {
+    throw new Error(
+      `review-loop stage vocabulary leaked into generic capacity module: ${relativePath}`
+    )
+  }
+  if (genericCapacityModules.has(moduleName)) {
+    checkedGenericCapacityModules.add(moduleName)
+  }
+}
+
+for (const moduleName of genericCapacityModules) {
+  if (!checkedGenericCapacityModules.has(moduleName)) {
+    throw new Error(`generic capacity source-firewall target was not emitted: ${moduleName}`)
   }
 }

@@ -2,6 +2,7 @@
 import { Effect, Match, Result, Schema } from "effect"
 import { CoordinatorLockObservationContradiction, CoordinatorOwnershipLost } from "./coordinator-lock.js"
 import { defaultTaskWorkCapacity, type OperationId, RunId, type TaskWorkCapacity } from "./domain.js"
+import { executorOuterInvocationIdForOperation } from "./executor-boundary.js"
 import { GitWorktree } from "./git-worktree.js"
 import { authorizeImplementationReview, EvidenceStore } from "./implementation-evidence.js"
 import { authorizeImplementationReviewEvidence } from "./implementation-review.js"
@@ -185,13 +186,15 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
         ReadonlyArray<RecoveryAuthorityContradictionIssue | RecoveryOwnershipIssue | RecoveryReconciliationIssue>
       >
     >()
-    const freshOccupiedInvocations = new Array<RecoveredAdmissionCapacityEvidence["freshOccupiedInvocations"][number]>()
+    const latestExecutorActiveReports = new Array<
+      RecoveredAdmissionCapacityEvidence["latestExecutorActiveReports"][number]
+    >()
     const unresolvedExecutionReports = new Array<{
       readonly operationId: OperationId
       readonly report: TaskExecutionReport
     }>()
-    const freshlyReleasedOperationIds = new Set<
-      RecoveredAdmissionCapacityEvidence["freshlyReleasedOperationIds"] extends ReadonlySet<infer Item> ? Item : never
+    const freshlyReleasedInvocationIds = new Set<
+      RecoveredAdmissionCapacityEvidence["freshlyReleasedInvocationIds"] extends ReadonlySet<infer Item> ? Item : never
     >()
     for (const { event } of records) {
       Match.valueTags(event, {
@@ -283,16 +286,20 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
                     report: observed
                   })
                   if (observed._tag === "RunningTaskExecutionReported") {
-                    freshOccupiedInvocations.push({
+                    latestExecutorActiveReports.push({
+                      invocationId: executorOuterInvocationIdForOperation(
+                        observed.operationId
+                      ),
                       observationId: observed.observationId,
-                      operationId: observed.operationId,
+                      // Transitional #158 adapter for the colocated review-loop
+                      // executor's normalized outer report.
                       taskId: event.operation.request.plannedAttempt.taskId
                     })
                   } else if (
                     capacityReleasingExecutionReportTags.has(observed._tag)
                   ) {
-                    freshlyReleasedOperationIds.add(
-                      observed.operationId
+                    freshlyReleasedInvocationIds.add(
+                      executorOuterInvocationIdForOperation(observed.operationId)
                     )
                   }
                   return Effect.void
@@ -395,8 +402,8 @@ export const observeManagedRunAuthoritiesWithCapacityEvidence = Effect.fn(
     const issues = (yield* Effect.all(checks, { concurrency: 1 })).flat()
     return {
       capacityEvidence: {
-        freshOccupiedInvocations,
-        freshlyReleasedOperationIds
+        latestExecutorActiveReports,
+        freshlyReleasedInvocationIds
       },
       issues,
       unresolvedExecutionReports

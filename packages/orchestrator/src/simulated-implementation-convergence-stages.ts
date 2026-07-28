@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { type OperationId, type PlannedTaskAttempt, SemanticReviewRound, type Task } from "./domain.js"
-import { makeExecutorOuterInvocation } from "./executor-boundary.js"
+import { executorOuterInvocationIdForOperation, makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { ImplementationConvergenceSimulatedTrace } from "./implementation-convergence-trace.js"
 import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
 import { ImplementationReviewRequest } from "./implementation-review.js"
@@ -8,7 +8,10 @@ import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
 } from "./runnable-frontier.js"
-import { type TaskWorkCapacityActivity, taskWorkCapacityRequirementFor } from "./task-work-capacity.js"
+import {
+  type SelectedExecutorCapacityActivity,
+  selectedExecutorCapacityRequirementFor
+} from "./selected-executor-capacity.js"
 import type { OperationIdAllocatorService } from "./task-work-planning.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -50,15 +53,19 @@ interface SimulatedImplementationConvergenceOptions {
   readonly task: Task
 }
 
+/**
+ * Transitional #158 simulation adapter. Production generic code must receive
+ * an independently allocated outer invocation identity.
+ */
 const freshTransition = (
   operationId: OperationId,
   task: Task,
-  activity: TaskWorkCapacityActivity
+  activity: SelectedExecutorCapacityActivity
 ) =>
   FrontierTransition.StartExecutorInvocation({
-    capacityRequirement: taskWorkCapacityRequirementFor(activity),
+    capacityRequirement: selectedExecutorCapacityRequirementFor(activity),
     invocation: makeExecutorOuterInvocation(
-      operationId,
+      executorOuterInvocationIdForOperation(operationId),
       task.id
     )
   })

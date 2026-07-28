@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
+  ExecutorOuterInvocationId,
   JournalPosition,
   OperationId,
   ProviderObservationId,
@@ -45,7 +46,7 @@ const executionResponsibilityFor = (
     beganAt: JournalPosition.make(1),
     capacityRequirement: oneTaskWorkCapacityRequirement,
     invocation: makeExecutorOuterInvocation(
-      operationId,
+      ExecutorOuterInvocationId.make(operationId),
       taskId
     )
   })
@@ -60,8 +61,8 @@ it.effect("admits only the canonical first fresh task when one position is avail
     })
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      latestExecutorActiveReports: [],
+      unfinishedRecordedExecutorInvocations: []
     })
 
     const admission = yield* controller.admit(frontier, frontierRunId)
@@ -78,16 +79,13 @@ it.effect("admits only the canonical first fresh task when one position is avail
     ])
     expect(yield* controller.snapshot()).toEqual({
       capacity: 1,
-      occupied: [],
-      reservedPositions: [{
-        correlation: {
-          _tag: "SelectedTransitionReservation",
+      taskWorkPositions: new Map([[
+        taskA,
+        {
+          _tag: "Reserved",
           selected: expect.any(Object)
-        },
-        taskId: taskA
-      }],
-      reservedTaskIds: [taskA],
-      taskStates: expect.any(Array)
+        }
+      ]])
     })
   }))
 
@@ -174,23 +172,23 @@ it.effect("gives a resumed responsibility the next released position before fres
       }]
     })
     for (const occupiedTaskIds of [[taskB], [taskB, taskC]]) {
+      const reports = occupiedTaskIds.map((occupiedTaskId) => ({
+        invocationId: ExecutorOuterInvocationId.make(`execute-${occupiedTaskId}`),
+        observationId: ProviderObservationId.make(`${occupiedTaskId}-running`),
+        taskId: occupiedTaskId
+      }))
+      const recordedInvocations = reports.map(
+        ({ invocationId, taskId }) => ({ invocationId, taskId })
+      )
       const controller = yield* makeTaskAdmissionController({
         capacity: TaskWorkCapacity.make(occupiedTaskIds.length),
-        freshOccupiedInvocations: occupiedTaskIds.map((occupiedTaskId) => ({
-          observationId: ProviderObservationId.make(`${occupiedTaskId}-running`),
-          operationId: OperationId.make(`execute-${occupiedTaskId}`),
-          taskId: occupiedTaskId
-        })),
-        reconstructedReservedPositions: []
+        latestExecutorActiveReports: reports,
+        unfinishedRecordedExecutorInvocations: recordedInvocations
       })
       const restartedController = yield* makeTaskAdmissionController({
         capacity: TaskWorkCapacity.make(occupiedTaskIds.length),
-        freshOccupiedInvocations: occupiedTaskIds.map((occupiedTaskId) => ({
-          observationId: ProviderObservationId.make(`${occupiedTaskId}-running`),
-          operationId: OperationId.make(`execute-${occupiedTaskId}`),
-          taskId: occupiedTaskId
-        })),
-        reconstructedReservedPositions: []
+        latestExecutorActiveReports: reports,
+        unfinishedRecordedExecutorInvocations: recordedInvocations
       })
       expect(
         admittedTransitions(yield* controller.admit(pausedFrontier, frontierRunId))
@@ -207,14 +205,14 @@ it.effect("gives a resumed responsibility the next released position before fres
 
       yield* controller.applyFreshInvocationObservation({
         _tag: "FreshCapacityReleased",
+        invocationId: ExecutorOuterInvocationId.make("execute-task-B"),
         observationId: ProviderObservationId.make("task-B-stopped"),
-        operationId: OperationId.make("execute-task-B"),
         taskId: taskB
       })
       yield* restartedController.applyFreshInvocationObservation({
         _tag: "FreshCapacityReleased",
+        invocationId: ExecutorOuterInvocationId.make("execute-task-B"),
         observationId: ProviderObservationId.make("task-B-stopped"),
-        operationId: OperationId.make("execute-task-B"),
         taskId: taskB
       })
       const afterInterruption = yield* controller.admit(resumedFrontier, frontierRunId)
@@ -263,8 +261,8 @@ it.effect("continues independent work for each local constraint at capacities on
         })
         const controller = yield* makeTaskAdmissionController({
           capacity: TaskWorkCapacity.make(capacity),
-          freshOccupiedInvocations: [],
-          reconstructedReservedPositions: []
+          latestExecutorActiveReports: [],
+          unfinishedRecordedExecutorInvocations: []
         })
         expect(
           admittedTransitions(yield* controller.admit(frontier, frontierRunId))

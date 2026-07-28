@@ -1,6 +1,6 @@
 import type { Effect } from "effect"
 import { type ImplementationReviewRoundLimit, type OperationId, type SemanticReviewRound, type Task } from "./domain.js"
-import { makeExecutorOuterInvocation } from "./executor-boundary.js"
+import { executorOuterInvocationIdForOperation, makeExecutorOuterInvocation } from "./executor-boundary.js"
 import {
   type ImplementationConvergenceSubject,
   PriorImplementationReviewEvidence
@@ -11,7 +11,10 @@ import {
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition
 } from "./runnable-frontier.js"
-import { type TaskWorkCapacityActivity, taskWorkCapacityRequirementFor } from "./task-work-capacity.js"
+import {
+  type SelectedExecutorCapacityActivity,
+  selectedExecutorCapacityRequirementFor
+} from "./selected-executor-capacity.js"
 import type { OperationIdAllocatorService } from "./task-work-planning.js"
 import type { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -101,14 +104,14 @@ export interface FreshImplementationConvergenceOptions {
 export const freshImplementationTransition = (
   operationId: OperationId,
   task: Task,
-  activity: TaskWorkCapacityActivity
+  activity: SelectedExecutorCapacityActivity
 ): RunnableFrontierTransition =>
   // Transitional #158 adapter: this executor-private operation is still
   // surfaced as a generic transition. It is not a distinct outer invocation.
   FrontierTransition.StartExecutorInvocation({
-    capacityRequirement: taskWorkCapacityRequirementFor(activity),
+    capacityRequirement: selectedExecutorCapacityRequirementFor(activity),
     invocation: makeExecutorOuterInvocation(
-      operationId,
+      executorOuterInvocationIdForOperation(operationId),
       task.id
     )
   })
@@ -116,13 +119,13 @@ export const freshImplementationTransition = (
 export const continuedImplementationTransition = (
   operationId: OperationId,
   task: Task,
-  activity: TaskWorkCapacityActivity
+  activity: SelectedExecutorCapacityActivity
 ): RunnableFrontierTransition =>
   // Transitional #158 adapter; see `freshImplementationTransition`.
   FrontierTransition.ContinueExecutorInvocation({
-    capacityRequirement: taskWorkCapacityRequirementFor(activity),
+    capacityRequirement: selectedExecutorCapacityRequirementFor(activity),
     invocation: makeExecutorOuterInvocation(
-      operationId,
+      executorOuterInvocationIdForOperation(operationId),
       task.id
     )
   })

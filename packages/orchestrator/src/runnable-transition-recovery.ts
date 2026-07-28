@@ -1,5 +1,5 @@
 import { Effect, Match } from "effect"
-import type { OperationId, RunId } from "./domain.js"
+import type { ExecutorOuterInvocationId, RunId } from "./domain.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
 import {
   recoverTaskClaimAcquisitions,
@@ -19,7 +19,7 @@ export const recoverRunnableTransition = Effect.fn(
   transition: RunnableFrontierTransition,
   recoverExecutorInvocation: (
     runId: RunId,
-    invocationId: OperationId
+    invocationId: ExecutorOuterInvocationId
   ) => Effect.Effect<void, E, R>
 ) {
   yield* Match.value(transition).pipe(

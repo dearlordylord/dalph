@@ -81,9 +81,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: recovery.capacityEvidence.freshOccupiedInvocations,
-    freshlyReleasedOperationIds: recovery.capacityEvidence.freshlyReleasedOperationIds,
-    reconstructedReservedPositions: recovery.reconstructedReservedPositions
+    latestExecutorActiveReports: recovery.capacityEvidence.latestExecutorActiveReports,
+    freshlyReleasedInvocationIds: recovery.capacityEvidence.freshlyReleasedInvocationIds,
+    unfinishedRecordedExecutorInvocations: recovery.unfinishedRecordedExecutorInvocations
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
   type WorkflowStage = FreshWorkflowStage

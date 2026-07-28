@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
+import { executorOuterInvocationIdForOperation } from "./executor-boundary.js"
 import {
   AttemptId,
   deterministicTestWorkflowInterpreterLayer,
@@ -403,9 +404,11 @@ it.effect("reconciles a surviving provider invocation through managed activation
     )
     const program = Effect.gen(function*() {
       const evidence = yield* observeRecoveredAdmissionCapacity(runId)
-      expect(evidence.freshOccupiedInvocations).toEqual([{
+      expect(evidence.latestExecutorActiveReports).toEqual([{
+        invocationId: executorOuterInvocationIdForOperation(
+          operation.request.operationId
+        ),
         observationId: running.observationId,
-        operationId: operation.request.operationId,
         taskId: task.id
       }])
       yield* activateRecoveredResponsibilities(
@@ -433,8 +436,8 @@ it.effect("reconciles a surviving provider invocation through managed activation
         Effect.provideService(TaskExecutor, executor)
       )
     ).toEqual({
-      freshOccupiedInvocations: [],
-      freshlyReleasedOperationIds: new Set()
+      latestExecutorActiveReports: [],
+      freshlyReleasedInvocationIds: new Set()
     })
     expect(yield* Ref.get(observations)).toBe(2)
     const recovered = yield* makeManagedRecoveryActivation(runId).pipe(
@@ -450,12 +453,77 @@ it.effect("reconciles a surviving provider invocation through managed activation
       outcome: {
         _tag: "Failed",
         correlation: {
-          invocationId: operation.request.operationId,
+          invocationId: executorOuterInvocationIdForOperation(
+            operation.request.operationId
+          ),
           taskId: task.id
         }
       },
       taskId: task.id
     })
+  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+
+it.effect("rejects two unfinished outer executor invocations for one task before calling the executor", () =>
+  Effect.gen(function*() {
+    const journal = yield* JournalStore
+    yield* seedEstablishedSession()
+    const secondOperation = makeTaskExecutionOperation({
+      predecessorOperationIds: operation.predecessorOperationIds,
+      request: TaskExecutionRequest.make({
+        ...operation.request,
+        operationId: OperationId.make("second-unfinished-task-operation")
+      })
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(operation.request.operationId),
+      TaskExecutionIntentRecorded.make({ operation, version: 4 })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(secondOperation.request.operationId),
+      TaskExecutionIntentRecorded.make({ operation: secondOperation, version: 4 })
+    )
+    const executorCalls = yield* Ref.make(0)
+    const executor = TaskExecutor.of({
+      observeTaskExecution: () =>
+        Ref.update(executorCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("invalid task capacity history must stop before provider observation"))
+        ),
+      requestTaskExecution: () =>
+        Ref.update(executorCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("invalid task capacity history must stop before provider execution"))
+        )
+    })
+    const interpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledLayerFor(executor))
+    )
+
+    const result = yield* activateRecoveredResponsibilities(
+      runId,
+      TaskWorkCapacity.make(2)
+    ).pipe(
+      Effect.provideService(TaskExecutor, executor),
+      Effect.provideService(WorkflowInterpreter, interpreter),
+      Effect.provideService(
+        WorkflowTrace,
+        WorkflowTrace.of({ emit: () => Effect.void })
+      ),
+      Effect.result
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "MultipleUnfinishedExecutorInvocationsForTask",
+        invocationIds: [
+          executorOuterInvocationIdForOperation(operation.request.operationId),
+          executorOuterInvocationIdForOperation(secondOperation.request.operationId)
+        ],
+        taskId: task.id
+      }
+    })
+    expect(yield* Ref.get(executorCalls)).toBe(0)
   }).pipe(Effect.provide(memoryJournalStoreLayer)))
 
 it.effect("rejects execution before any adapter effect when durable session evidence is missing", () =>

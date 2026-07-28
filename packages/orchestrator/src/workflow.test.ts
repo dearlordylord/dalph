@@ -12,6 +12,7 @@ import {
   deterministicTestWorkflowInterpreterLayer,
   EvidenceDigest,
   EvidenceReference,
+  ExecutorOuterInvocationId,
   FixtureTarget,
   GitCommitSha,
   ImplementationReviewDisposition,
@@ -182,8 +183,8 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
     const recovery = ManagedRecoveryActivation.of({
       _tag: "AuthoritativeManagedRunActivation",
       capacityEvidence: {
-        freshOccupiedInvocations: [],
-        freshlyReleasedOperationIds: new Set()
+        latestExecutorActiveReports: [],
+        freshlyReleasedInvocationIds: new Set()
       },
       readFrontier: Effect.gen(function*() {
         const isPending = yield* Ref.get(pending)
@@ -195,7 +196,10 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
               taskId,
               wait: {
                 _tag: "RetryScheduled" as const,
-                correlation: { invocationId: operationId, taskId },
+                correlation: {
+                  invocationId: ExecutorOuterInvocationId.make(operationId),
+                  taskId
+                },
                 notBefore: deadline
               },
               wakeCondition: "ExecutorRetryDeadlineReached" as const
@@ -204,7 +208,7 @@ it.effect("adds a recovered task to fresh eligibility after its responsibility s
           transitions: isPending && now >= deadline ? [transition] : []
         }
       }),
-      reconstructedReservedPositions: [],
+      unfinishedRecordedExecutorInvocations: [],
       runId: RunId.make("recovered-then-fresh"),
       runTransition: () => Ref.set(pending, false),
       waitForNextExecutorWake: Clock.currentTimeMillis.pipe(
@@ -244,8 +248,8 @@ it.effect("rejects a recovered transition from the fresh-only composition", () =
     const recovery = ManagedRecoveryActivation.of({
       _tag: "SyntheticFreshOnlyActivation",
       capacityEvidence: {
-        freshOccupiedInvocations: [],
-        freshlyReleasedOperationIds: new Set()
+        latestExecutorActiveReports: [],
+        freshlyReleasedInvocationIds: new Set()
       },
       readFrontier: Effect.succeed({
         explanations: [],
@@ -254,7 +258,7 @@ it.effect("rejects a recovered transition from the fresh-only composition", () =
           taskId
         })]
       }),
-      reconstructedReservedPositions: [],
+      unfinishedRecordedExecutorInvocations: [],
       waitForNextExecutorWake: Effect.succeed(false)
     })
     const exit = yield* runLayered(

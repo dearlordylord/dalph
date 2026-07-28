@@ -19,6 +19,7 @@ export {
   ClaimToken,
   ControlCommandId,
   EvidenceStoreLocator,
+  ExecutorOuterInvocationId,
   FailedProcessExitCode,
   FixtureTarget,
   GitCommitSha,
@@ -158,7 +159,7 @@ export {
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./sqlite-journal-store.js"
-export { MultipleFreshTaskCapacityObservations, type TaskCapacityEntry } from "./task-admission-controller.js"
+export type { TaskWorkPosition } from "./task-admission-controller.js"
 export {
   TaskAttemptPlanAcknowledged,
   TaskAttemptPlanHistoryContradiction,
@@ -193,9 +194,7 @@ export * from "./task-execution.js"
 export {
   noTaskWorkCapacityRequirement,
   oneTaskWorkCapacityRequirement,
-  type TaskWorkCapacityActivity,
-  TaskWorkCapacityRequirement,
-  taskWorkCapacityRequirementFor
+  TaskWorkCapacityRequirement
 } from "./task-work-capacity.js"
 export {
   deterministicOperationIdAllocatorLayer,

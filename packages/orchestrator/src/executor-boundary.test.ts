@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
+  ExecutorOuterInvocationId,
   FailedProcessExitCode,
   JournalPosition,
   JournalRecordKey,
@@ -45,18 +46,21 @@ it.effect("uses each Dalph transition's task-work capacity requirement", () =>
     const freeTaskId = TaskId.make("free-task")
     const controller = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [{
+      latestExecutorActiveReports: [{
+        invocationId: ExecutorOuterInvocationId.make("occupied-invocation"),
         observationId: ProviderObservationId.make("occupied-observation"),
-        operationId: OperationId.make("occupied-invocation"),
         taskId: occupiedTaskId
       }],
-      reconstructedReservedPositions: []
+      unfinishedRecordedExecutorInvocations: [{
+        invocationId: ExecutorOuterInvocationId.make("occupied-invocation"),
+        taskId: occupiedTaskId
+      }]
     })
     const consumesCapacity = RunnableFrontierTransition
       .ContinueExecutorInvocation({
         capacityRequirement: oneTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
-          OperationId.make("opaque-capacity-user"),
+          ExecutorOuterInvocationId.make("opaque-capacity-user"),
           waitingTaskId
         )
       })
@@ -64,7 +68,7 @@ it.effect("uses each Dalph transition's task-work capacity requirement", () =>
       .ContinueExecutorInvocation({
         capacityRequirement: noTaskWorkCapacityRequirement,
         invocation: makeExecutorOuterInvocation(
-          OperationId.make("opaque-capacity-free"),
+          ExecutorOuterInvocationId.make("opaque-capacity-free"),
           freeTaskId
         )
       })
@@ -88,7 +92,7 @@ it.effect("uses each Dalph transition's task-work capacity requirement", () =>
 it("executor cannot declare task-work capacity", () => {
   expect(
     makeExecutorOuterInvocation(
-      OperationId.make("capacity-free-executor-boundary"),
+      ExecutorOuterInvocationId.make("capacity-free-executor-boundary"),
       TaskId.make("capacity-free-executor-task")
     )
   ).toEqual({
@@ -99,10 +103,27 @@ it("executor cannot declare task-work capacity", () => {
   })
 })
 
+it("rejects an internal operation identity at the emitted executor boundary", () => {
+  const internalOperationId = OperationId.make("executor-internal-operation")
+  const taskId = TaskId.make("identity-firewall-task")
+  expect(
+    makeExecutorOuterInvocation(
+      // @ts-expect-error OperationId must not cross the outer invocation boundary.
+      internalOperationId,
+      taskId
+    )
+  ).toEqual({
+    correlation: {
+      invocationId: internalOperationId,
+      taskId
+    }
+  })
+})
+
 it("projects a pending selected-executor retry as an exact outer wait", () => {
   const operationId = OperationId.make("retrying-outer-invocation")
   const invocation = makeExecutorOuterInvocation(
-    operationId,
+    ExecutorOuterInvocationId.make(operationId),
     TaskId.make("retrying-task")
   )
   const scope = TechnicalRetryScope.cases.ImplementationReviewInvocation.make({
@@ -170,7 +191,7 @@ it("normalizes terminal worker outcomes without inspecting output", () => {
   const operationId = OperationId.make("terminal-outer-invocation")
   const taskId = TaskId.make("terminal-task")
   const invocation = makeExecutorOuterInvocation(
-    operationId,
+    ExecutorOuterInvocationId.make(operationId),
     taskId
   )
   const sessionId = TaskWorkSessionId.make("terminal-session")

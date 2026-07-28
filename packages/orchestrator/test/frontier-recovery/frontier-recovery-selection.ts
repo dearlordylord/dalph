@@ -68,13 +68,8 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
   })
   const controller = yield* makeTaskAdmissionController({
     capacity: input.capacity,
-    freshOccupiedInvocations: [],
-    reconstructedReservedPositions: responsibilityFacts.map(
-      ({ responsibility }) => ({
-        operationId: responsibility.acquisition.operationId,
-        taskId: responsibility.taskId
-      })
-    )
+    latestExecutorActiveReports: [],
+    unfinishedRecordedExecutorInvocations: []
   })
   let admittedProductionTransitions: ReadonlyArray<RunnableFrontierTransition> = []
   let remainingTransitions = [...frontier.transitions]
@@ -171,7 +166,9 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     ),
     admissionExplanations,
     admissionReservedModelTaskIds: yield* Effect.forEach(
-      controllerSnapshot.reservedTaskIds,
+      [...controllerSnapshot.taskWorkPositions]
+        .filter(([, position]) => position._tag !== "Working")
+        .map(([taskId]) => taskId),
       input.identityMapping.taskToModel
     ),
     admission,
@@ -181,7 +178,9 @@ export const selectFrontierRecoveryAdmission = Effect.fn(
     ),
     frontierTransitionTags: frontierTransitions.map(({ tag }) => tag),
     occupiedModelTaskIds: yield* Effect.forEach(
-      controllerSnapshot.occupied.map(({ taskId }) => taskId),
+      [...controllerSnapshot.taskWorkPositions]
+        .filter(([, position]) => position._tag === "Working")
+        .map(([taskId]) => taskId),
       input.identityMapping.taskToModel
     )
   }

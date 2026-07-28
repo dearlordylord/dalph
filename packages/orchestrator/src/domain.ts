@@ -48,6 +48,15 @@ export const OperationId = Schema.NonEmptyString.pipe(Schema.brand("OperationId"
 export type OperationId = typeof OperationId.Type
 
 /**
+ * Identifies one opaque executor invocation visible to generic Dalph. It is
+ * not an executor-internal workflow operation identity.
+ */
+export const ExecutorOuterInvocationId = Schema.NonEmptyString.pipe(
+  Schema.brand("ExecutorOuterInvocationId")
+)
+export type ExecutorOuterInvocationId = typeof ExecutorOuterInvocationId.Type
+
+/**
  * Identifies one exact user control command within a run's workflow journal.
  * It is not a workflow operation, run, task, or provider request identity.
  */

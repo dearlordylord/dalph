@@ -8,6 +8,7 @@ import {
 } from "../../src/activation-coordinator.js"
 import { OperationId, ProviderObservationId, TaskRevision } from "../../src/domain.js"
 import type { TaskId } from "../../src/domain.js"
+import { executorOuterInvocationIdForOperation } from "../../src/executor-boundary.js"
 import { workflowJournalEventVersion } from "../../src/journal-event-version.js"
 import {
   intentRecordKey,
@@ -68,6 +69,7 @@ import {
 import { projectFrontierRecoveryExactManagedState } from "./frontier-recovery-normalized-projections.js"
 import type {
   FrontierRecoveryReconstructionProjection,
+  FrontierRecoveryTaskWorkPositionProjection,
   MakeFrontierRecoveryReconstructionControlsOptions
 } from "./frontier-recovery-projection.js"
 import { frontierRecoveryReconstructionIssue } from "./frontier-recovery-projection.js"
@@ -109,8 +111,16 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
   let coordinatorRunning = options.coordinatorRunning
   let activationController = yield* makeTaskAdmissionController({
     capacity: options.capacity,
-    freshOccupiedInvocations: options.freshOccupiedInvocations ?? [],
-    reconstructedReservedPositions: []
+    latestExecutorActiveReports: (options.latestExecutorActiveReports ?? []).map(
+      (report) => ({
+        ...report,
+        invocationId: executorOuterInvocationIdForOperation(report.operationId)
+      })
+    ),
+    unfinishedRecordedExecutorInvocations: (options.latestExecutorActiveReports ?? []).map((report) => ({
+      invocationId: executorOuterInvocationIdForOperation(report.operationId),
+      taskId: report.taskId
+    }))
   })
   let derivedFrontierObservation: RunnableFrontier = {
     explanations: [],
@@ -121,13 +131,13 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
     transitions: []
   }
   let selectedAtOwnershipExclusion = false
-  let providerWorkers: ReadonlyMap<TaskId, OperationId> = new Map(
-    (options.freshOccupiedInvocations ?? []).map(
+  let executorInvocations: ReadonlyMap<TaskId, OperationId> = new Map(
+    (options.latestExecutorActiveReports ?? []).map(
       ({ operationId, taskId }) => [taskId, operationId]
     )
   )
-  let providerObservationTaskIds: ReadonlySet<TaskId> = new Set(providerWorkers.keys())
-  let providerObservedActiveTaskIds: ReadonlySet<TaskId> = new Set(providerWorkers.keys())
+  let executorReportTaskIds: ReadonlySet<TaskId> = new Set(executorInvocations.keys())
+  let executorReportedActiveTaskIds: ReadonlySet<TaskId> = new Set(executorInvocations.keys())
   let activationCheckpointHistory: ReadonlyArray<ActivationCoordinatorCheckpoint> = []
   let activationProjectionEvents: ReadonlyArray<
     "Derived" | "ReactivationRequested"
@@ -753,11 +763,11 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         )
         yield* settleCheckpoint(returned)
         yield* observeOwnershipRelease(taskId)
-        providerWorkers = new Map(
-          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        executorInvocations = new Map(
+          [...executorInvocations].filter(([candidate]) => candidate !== taskId)
         )
-        providerObservedActiveTaskIds = new Set(
-          [...providerObservedActiveTaskIds].filter(
+        executorReportedActiveTaskIds = new Set(
+          [...executorReportedActiveTaskIds].filter(
             (candidate) => candidate !== taskId
           )
         )
@@ -766,16 +776,16 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       case "observeCapacityConsumed": {
         if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
-        providerWorkers = new Map([
-          ...providerWorkers,
+        executorInvocations = new Map([
+          ...executorInvocations,
           [taskId, operationId]
         ])
-        providerObservationTaskIds = new Set([
-          ...providerObservationTaskIds,
+        executorReportTaskIds = new Set([
+          ...executorReportTaskIds,
           taskId
         ])
-        providerObservedActiveTaskIds = new Set([
-          ...providerObservedActiveTaskIds,
+        executorReportedActiveTaskIds = new Set([
+          ...executorReportedActiveTaskIds,
           taskId
         ])
         activationProjectionEvents = [
@@ -784,10 +794,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         ]
         yield* activationController.applyFreshInvocationObservation({
           _tag: "FreshCapacityConsumed",
+          invocationId: executorOuterInvocationIdForOperation(operationId),
           observationId: ProviderObservationId.make(
             `M2-consumed:${action.task}`
           ),
-          operationId,
           taskId
         })
         return
@@ -795,15 +805,15 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
       case "observeCapacityReleased": {
         if (taskId === undefined) return
         const operationId = yield* activationOperationFor(action.task)
-        providerWorkers = new Map(
-          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        executorInvocations = new Map(
+          [...executorInvocations].filter(([candidate]) => candidate !== taskId)
         )
-        providerObservationTaskIds = new Set([
-          ...providerObservationTaskIds,
+        executorReportTaskIds = new Set([
+          ...executorReportTaskIds,
           taskId
         ])
-        providerObservedActiveTaskIds = new Set(
-          [...providerObservedActiveTaskIds].filter(
+        executorReportedActiveTaskIds = new Set(
+          [...executorReportedActiveTaskIds].filter(
             (candidate) => candidate !== taskId
           )
         )
@@ -813,18 +823,18 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         ]
         yield* activationController.applyFreshInvocationObservation({
           _tag: "FreshCapacityReleased",
+          invocationId: executorOuterInvocationIdForOperation(operationId),
           observationId: ProviderObservationId.make(
             `M2-released:${action.task}`
           ),
-          operationId,
           taskId
         })
         return
       }
-      case "stopProviderWorker": {
+      case "stopExecutorInvocation": {
         if (taskId === undefined) return
-        providerWorkers = new Map(
-          [...providerWorkers].filter(([candidate]) => candidate !== taskId)
+        executorInvocations = new Map(
+          [...executorInvocations].filter(([candidate]) => candidate !== taskId)
         )
         return
       }
@@ -833,8 +843,8 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         coordinatorRunning = false
         activationController = yield* makeTaskAdmissionController({
           capacity: options.capacity,
-          freshOccupiedInvocations: [],
-          reconstructedReservedPositions: []
+          latestExecutorActiveReports: [],
+          unfinishedRecordedExecutorInvocations: []
         })
         activationCoordinator = undefined
         activationScope = undefined
@@ -842,24 +852,24 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         heldActivationCheckpoints = []
         latestActivationCheckpoint = undefined
         activationProjectionEvents = []
-        providerObservationTaskIds = new Set()
-        providerObservedActiveTaskIds = new Set()
+        executorReportTaskIds = new Set()
+        executorReportedActiveTaskIds = new Set()
         derivedFrontierObservation = { explanations: [], transitions: [] }
         selectedFrontierObservation = { explanations: [], transitions: [] }
         selectedAtOwnershipExclusion = false
         runnerCommands = new Map()
         return
       }
-      case "readProviderInvocationForReconstruction": {
+      case "readExecutorInvocationForReconstruction": {
         if (taskId === undefined) return
-        providerObservationTaskIds = new Set([
-          ...providerObservationTaskIds,
+        executorReportTaskIds = new Set([
+          ...executorReportTaskIds,
           taskId
         ])
-        providerObservedActiveTaskIds = providerWorkers.has(taskId)
-          ? new Set([...providerObservedActiveTaskIds, taskId])
+        executorReportedActiveTaskIds = executorInvocations.has(taskId)
+          ? new Set([...executorReportedActiveTaskIds, taskId])
           : new Set(
-            [...providerObservedActiveTaskIds].filter(
+            [...executorReportedActiveTaskIds].filter(
               (candidate) => candidate !== taskId
             )
           )
@@ -869,16 +879,21 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         coordinatorRunning = true
         activationController = yield* makeTaskAdmissionController({
           capacity: options.capacity,
-          freshOccupiedInvocations: [...providerWorkers].map(
+          latestExecutorActiveReports: [...executorInvocations].map(
             ([taskId, operationId], index) => ({
+              invocationId: executorOuterInvocationIdForOperation(operationId),
               observationId: ProviderObservationId.make(
                 `M2-reconstructed:${index}`
               ),
-              operationId,
               taskId
             })
           ),
-          reconstructedReservedPositions: []
+          unfinishedRecordedExecutorInvocations: [...executorInvocations].map(
+            ([taskId, operationId]) => ({
+              invocationId: executorOuterInvocationIdForOperation(operationId),
+              taskId
+            })
+          )
         })
         pendingActivationCheckpoints = []
         heldActivationCheckpoints = []
@@ -1213,7 +1228,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
             )
           ),
           freshlyObservedModelTaskIds: yield* projectTaskIds(
-            providerObservationTaskIds
+            executorReportTaskIds
           ),
           isolatedModelTaskIds: yield* projectTaskIds(
             [...ownershipSnapshot.isolatedTransitionKeys].flatMap((key) => {
@@ -1256,28 +1271,51 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
               ]
             )
           ),
-          providerConsumingModelTaskIds: yield* projectTaskIds(
-            providerObservedActiveTaskIds
+          executorConsumingModelTaskIds: yield* projectTaskIds(
+            executorReportedActiveTaskIds
           ),
-          reservedPositions: yield* Effect.forEach(
-            controllerSnapshot.reservedPositions,
-            ({ correlation, taskId }) =>
-              Effect.gen(function*() {
-                const operationId = correlation._tag === "OperationReservation"
-                  ? correlation.operationId
-                  : undefined
-                return {
-                  correlation: operationId === undefined
-                    ? "SelectedTransition" as const
-                    : "Operation" as const,
-                  ...(operationId === undefined
-                    ? {}
-                    : {
-                      modelOperationId: yield* identityMapping.operationToModel(operationId)
-                    }),
-                  modelTaskId: yield* identityMapping.taskToModel(taskId)
-                }
-              })
+          taskWorkPositions: new Map<
+            FrontierRecoveryModelTaskId,
+            FrontierRecoveryTaskWorkPositionProjection
+          >(
+            yield* Effect.forEach(
+              [...controllerSnapshot.taskWorkPositions],
+              ([taskId, position]) =>
+                Effect.gen(function*() {
+                  const modelTaskId = yield* identityMapping.taskToModel(taskId)
+                  switch (position._tag) {
+                    case "AwaitingExecutorReport":
+                      return [modelTaskId, {
+                        _tag: position._tag,
+                        modelInvocationId: yield* identityMapping.operationToModel(
+                          OperationId.make(position.invocationId)
+                        )
+                      }] as const
+                    case "Reserved":
+                      return [modelTaskId, {
+                        _tag: position._tag,
+                        selectedModelTaskId: modelTaskId
+                      }] as const
+                    case "ExecutorInvocationMismatch":
+                      return [modelTaskId, {
+                        _tag: position._tag,
+                        expectedModelInvocationId: yield* identityMapping.operationToModel(
+                          OperationId.make(position.expectedInvocationId)
+                        ),
+                        reportedModelInvocationId: yield* identityMapping.operationToModel(
+                          OperationId.make(position.reportedInvocationId)
+                        )
+                      }] as const
+                    case "Working":
+                      return [modelTaskId, {
+                        _tag: position._tag,
+                        modelInvocationId: yield* identityMapping.operationToModel(
+                          OperationId.make(position.invocationId)
+                        )
+                      }] as const
+                  }
+                })
+            )
           ),
           resultsRecordedModelTaskIds: yield* projectTaskIds(
             new Set(
@@ -1294,7 +1332,7 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
           selectedModelTaskIds: yield* projectTaskIds(
             selectedFrontierObservation.transitions.filter((transition) =>
               selectedAtOwnershipExclusion
-              || !controllerSnapshot.reservedTaskIds.includes(
+              || !controllerSnapshot.taskWorkPositions.has(
                 runnableTransitionTaskId(transition)
               )
             )
@@ -1338,9 +1376,10 @@ export const makeFrontierRecoveryReconstructionControls = Effect.fn(
         yield* settleCheckpoint(excluded)
         yield* Effect.yieldNow
         const snapshot = yield* activationController.snapshot()
+        const positions = [...snapshot.taskWorkPositions.values()]
         return {
-          occupiedCount: snapshot.occupied.length,
-          reservedPositionCount: snapshot.reservedPositions.length
+          occupiedCount: positions.filter(({ _tag }) => _tag === "Working").length,
+          reservedPositionCount: positions.filter(({ _tag }) => _tag !== "Working").length
         }
       }),
     activation: runAction,

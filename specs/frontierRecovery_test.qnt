@@ -44,11 +44,15 @@ module frontierRecoveryTest {
         state.workflow.get(C).responsibility == Unowned,
       })
 
-  run secondIndependentAdmissionTest =
+  run independentClaimIntentsDoNotUseExecutorPositionsTest =
     init
       .then(orchestratorCommitsFreshTaskClaimIntent(A))
       .then(orchestratorCommitsFreshTaskClaimIntent(C))
-      .expect(initialReservedCount(state) == CAPACITY)
+      .expect(and {
+        state.workflow.get(A).responsibility == Outstanding,
+        state.workflow.get(C).responsibility == Outstanding,
+        initialReservedCount(state) == 0,
+      })
 
   run activationOwnershipBeforeAndAfterIntentTest =
     init
@@ -119,12 +123,12 @@ module frontierRecoveryTest {
         newReservedPositionsRespectConfiguredCapacity,
       })
 
-  run mismatchedProviderOperationCountsTaskOnceAndAdmitsAnotherTaskTest =
-    initCorrelationConflictActivationProfile
+  run mismatchedExecutorInvocationCountsTaskOnceAndAdmitsAnotherTaskTest =
+    initExecutorInvocationMismatchActivationProfile
       .then(deriveActivationPass)
       .expect(and {
-        capacityUsageCountsTasksNotOperationCorrelations,
-        correlationConflictRetainsOneTaskPosition,
+        capacityUsageCountsTasksNotInvocationMismatches,
+        executorInvocationMismatchRetainsOneTaskPosition,
         activationCapacityUsage(state) == 1,
         canReserveTaskAdmissionPosition(state, C),
       })
@@ -132,103 +136,120 @@ module frontierRecoveryTest {
       .expect(and {
         activationCapacityUsage(state) == 2,
         match state.activation.positions.get(A) {
-          | ActivationPositionCorrelationConflict(conflict) =>
-              conflict.expectedOperationId
-                != conflict.observedOperationId
+          | ActivationPositionExecutorInvocationMismatch(conflict) =>
+              conflict.expectedInvocationId
+                != conflict.reportedInvocationId
           | _ => false
         },
         state.activation.positions.get(C)
           == ActivationPositionReserved({ selectedTaskId: C }),
       })
 
-  run differentlyCorrelatedTerminalReportKeepsExpectedOperationHeldTest =
-    initCorrelationConflictActivationProfile
-      .then(observeConflictingOperationReleased(A, 101))
+  run differentlyCorrelatedTerminalReportKeepsExpectedInvocationHeldTest =
+    initExecutorInvocationMismatchActivationProfile
+      .then(observeReportedInvocationReleased(
+        A,
+        executorOuterInvocationIdForOperation(101)
+      ))
       .expect(and {
         activationCapacityUsage(state) == 1,
         state.activation.positions.get(A)
-          == ActivationPositionAwaitingProviderEvidence({
-            operationId: 1,
+          == ActivationPositionAwaitingExecutorReport({
+            invocationId: executorOuterInvocationIdForOperation(1),
           }),
       })
 
   run repeatedMismatchedReportsKeepOneTaskPositionTest =
-    initCorrelationConflictActivationProfile
-      .then(observeConflictingCapacityCorrelation(A, 101))
-      .then(observeConflictingCapacityCorrelation(A, 101))
+    initExecutorInvocationMismatchActivationProfile
+      .then(observeConflictingCapacityCorrelation(
+        A,
+        executorOuterInvocationIdForOperation(101)
+      ))
+      .then(observeConflictingCapacityCorrelation(
+        A,
+        executorOuterInvocationIdForOperation(101)
+      ))
       .expect(and {
-        capacityUsageCountsTasksNotOperationCorrelations,
+        capacityUsageCountsTasksNotInvocationMismatches,
         activationCapacityUsage(state) == 1,
         state.activation.positions.get(A)
-          == ActivationPositionCorrelationConflict({
-            expectedOperationId: 1,
-            observedOperationId: 101,
+          == ActivationPositionExecutorInvocationMismatch({
+            expectedInvocationId: executorOuterInvocationIdForOperation(1),
+            reportedInvocationId: executorOuterInvocationIdForOperation(101),
           }),
       })
 
-  run restartRecreatesExactCorrelationConflictTest =
-    initCorrelationConflictActivationProfile
+  run restartRecreatesExactExecutorInvocationMismatchTest =
+    initExecutorInvocationMismatchActivationProfile
       .then(crashCoordinatorWithActivation)
-      .then(readProviderInvocationForReconstruction(A))
+      .then(readExecutorInvocationForReconstruction(A))
       .then(reconstructActivation)
       .expect(
         state.activation.positions.get(A)
-          == ActivationPositionCorrelationConflict({
-            expectedOperationId: 1,
-            observedOperationId: 101,
+          == ActivationPositionExecutorInvocationMismatch({
+            expectedInvocationId: executorOuterInvocationIdForOperation(1),
+            reportedInvocationId: executorOuterInvocationIdForOperation(101),
           })
       )
 
-  run unknownProviderReportKeepsExpectedTaskPositionTest =
-    initAwaitingProviderEvidenceActivationProfile
+  run unrecordedExecutorReportCreatesNoTaskPositionTest =
+    initUnrecordedExecutorReportProfile
+      .then(reconstructActivation)
+      .expect(and {
+        state.activation.positions.get(A) == ActivationPositionNotUsing,
+        activationCapacityUsage(state) == 0,
+      })
+
+  run unknownExecutorReportKeepsExpectedTaskPositionTest =
+    initAwaitingExecutorReportActivationProfile
       .then(observeCapacityUnknown(A))
       .expect(and {
         activationCapacityUsage(state) == 1,
         state.activation.positions.get(A)
-          == ActivationPositionAwaitingProviderEvidence({
-            operationId: 1,
+          == ActivationPositionAwaitingExecutorReport({
+            invocationId: executorOuterInvocationIdForOperation(1),
           }),
-        state.activation.freshProviderInvocationObservations.get(A)
-          == ProviderInvocationUnknown({ operationId: 1 }),
+        state.activation.freshExecutorOuterInvocationReports.get(A)
+          == ExecutorOuterInvocationUnknown({ invocationId: executorOuterInvocationIdForOperation(1) }),
       })
 
   run unknownReportDoesNotEraseDifferentlyCorrelatedActiveEvidenceTest =
-    initCorrelationConflictActivationProfile
+    initExecutorInvocationMismatchActivationProfile
       .then(observeCapacityUnknown(A))
       .expect(and {
         activationCapacityUsage(state) == 1,
         state.activation.positions.get(A)
-          == ActivationPositionCorrelationConflict({
-            expectedOperationId: 1,
-            observedOperationId: 101,
+          == ActivationPositionExecutorInvocationMismatch({
+            expectedInvocationId: executorOuterInvocationIdForOperation(1),
+            reportedInvocationId: executorOuterInvocationIdForOperation(101),
           }),
       })
 
-  run absentProviderReportReleasesExpectedTaskPositionTest =
-    initAwaitingProviderEvidenceActivationProfile
+  run absentExecutorReportReleasesExpectedTaskPositionTest =
+    initAwaitingExecutorReportActivationProfile
       .then(observeCapacityUnknown(A))
       .then(observeCapacityAbsent(A))
       .expect(and {
         activationCapacityUsage(state) == 0,
         state.activation.positions.get(A)
           == ActivationPositionNotUsing,
-        state.activation.freshProviderInvocationObservations.get(A)
-          == ProviderInvocationAbsent({ operationId: 1 }),
+        state.activation.freshExecutorOuterInvocationReports.get(A)
+          == ExecutorOuterInvocationAbsent({ invocationId: executorOuterInvocationIdForOperation(1) }),
       })
 
-  run interruptedProviderReportReleasesExpectedTaskPositionTest =
-    initAwaitingProviderEvidenceActivationProfile
+  run interruptedExecutorReportReleasesExpectedTaskPositionTest =
+    initAwaitingExecutorReportActivationProfile
       .then(observeCapacityUnknown(A))
       .then(observeCapacityInterrupted(A))
       .expect(and {
         activationCapacityUsage(state) == 0,
         state.activation.positions.get(A)
           == ActivationPositionNotUsing,
-        state.activation.freshProviderInvocationObservations.get(A)
-          == ProviderInvocationInterrupted({ operationId: 1 }),
+        state.activation.freshExecutorOuterInvocationReports.get(A)
+          == ExecutorOuterInvocationInterrupted({ invocationId: executorOuterInvocationIdForOperation(1) }),
       })
 
-  run rejectsTwoCurrentCapacityOperationsForOneTaskTest =
+  run rejectsTwoUnfinishedOuterInvocationsForOneTaskTest =
     initInvalidCurrentCapacityHistory
       .then(validateCurrentCapacityHistoryBeforeReconstruction)
       .expect(and {
@@ -427,41 +448,33 @@ module frontierRecoveryCapacityOneTest {
       .then(orchestratorCommitsNextFreshTaskClaimIntent)
       .expect(and {
         state.workflow.get(A).responsibility == Outstanding,
-        state.workflow.get(C).responsibility == Unowned,
+        state.workflow.get(C).responsibility == Outstanding,
         state.selectorProjection.frontierTaskIds == Set(A, C),
-        state.selectorProjection.admittedTaskIds == Set(A),
+        state.selectorProjection.admittedTaskIds == Set(A, C),
         state.selectorProjection.transitionOperations.get(A)
           == DurableTransitionOperation({ operationId: 1 }),
         state.selectorProjection.transitionOperations.get(C)
-          == FreshTransitionWithoutOperation(()),
-        state.selectorProjection.reservationTaskIds == Set(A),
-        state.selectorProjection.explanations == Set({
-          taskId: C,
-          tag: "CapacityWait",
-          wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
-        }),
-        initialReservedCount(state) == 1,
+          == DurableTransitionOperation({ operationId: 3 }),
+        state.selectorProjection.reservationTaskIds == Set(),
+        state.selectorProjection.explanations == Set(),
+        initialReservedCount(state) == 0,
       })
 
   run existingResponsibilityPrecedesSmallerFreshTaskTest =
     initCapacityOneResponsibilityFirstProfile
       .expect(and {
         state.selectorProjection.frontierTaskIds == Set(A, C),
-        state.selectorProjection.admittedTaskIds == Set(C),
-        state.selectorProjection.reservationTaskIds == Set(C),
-        state.selectorProjection.explanations == Set({
-          taskId: A,
-          tag: "CapacityWait",
-          wakeCondition: "CapacityReleasedOrReconstructedStateChanged",
-        }),
+        state.selectorProjection.admittedTaskIds == Set(A, C),
+        state.selectorProjection.reservationTaskIds == Set(A),
+        state.selectorProjection.explanations == Set(),
       })
 
   run unresolvedTaskUsesTheOnlyPositionOnceTest =
-    initCorrelationConflictActivationProfile
+    initExecutorInvocationMismatchActivationProfile
       .then(deriveActivationPass)
       .expect(and {
-        capacityUsageCountsTasksNotOperationCorrelations,
-        correlationConflictRetainsOneTaskPosition,
+        capacityUsageCountsTasksNotInvocationMismatches,
+        executorInvocationMismatchRetainsOneTaskPosition,
         activationCapacityUsage(state) == 1,
         not(canReserveTaskAdmissionPosition(state, C)),
         state.activation.positions.get(C) == ActivationPositionNotUsing,

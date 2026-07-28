@@ -63,8 +63,8 @@ const phaseDurations = new Map()
 const invariants = [
   "boundedCapacity",
   "taskWorkCapacityRequirementIsProjected",
-  "capacityUsageCountsTasksNotOperationCorrelations",
-  "correlationConflictRetainsOneTaskPosition",
+  "capacityUsageCountsTasksNotInvocationMismatches",
+  "executorInvocationMismatchRetainsOneTaskPosition",
   "rejectedCapacityHistoryDerivesNoFrontier",
   "everyEffectHasIntent",
   "noDuplicateAuthorityEffect",
@@ -477,10 +477,16 @@ const exhaustiveProfiles = [
     "activationCrashReconstructionProfileStep"
   ],
   [
-    "task-local provider correlation conflict and reconstruction",
+    "task-local executor invocation mismatch reports",
     "frontierRecoveryCapacityTwo",
-    "initCorrelationConflictActivationProfile",
-    "capacityCorrelationProfileStep"
+    "initExecutorInvocationMismatchActivationProfile",
+    "executorInvocationMismatchReportProfileStep"
+  ],
+  [
+    "task-local executor invocation mismatch reconstruction",
+    "frontierRecoveryCapacityTwo",
+    "initExecutorInvocationMismatchActivationProfile",
+    "executorInvocationMismatchReconstructionProfileStep"
   ]
 ]
 const invariantExpression = invariants.join(" and ")
