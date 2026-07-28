@@ -41,9 +41,13 @@ const plannedAttemptFor = (
 }
 
 /**
- * The selected executor owns this fixed evidence and semantic-review
- * algorithm. Generic reconstruction receives only its declared outer
- * invocation identity and resource use.
+ * Transitional pre-#158 reconstruction.
+ *
+ * This currently presents separate internal task-execution, evidence, review,
+ * and handback OperationIds as generic outer invocations. The accepted v1
+ * boundary instead exposes one course of executor work identified by its
+ * planned task attempt. #158 must replace this leakage rather than preserve it
+ * behind a renamed interface.
  */
 const selectedExecutorResponsibilityFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -142,7 +146,7 @@ export const selectedExecutorReconstructionProtocol = {
   unresolvedSubjects: unresolvedSelectedExecutorSubjects
 } satisfies ExecutorReconstructionProtocol
 
-/** Continues one exact opaque outer invocation through the selected adapter. */
+/** Transitional pre-#158 continuation of one leaked internal operation. */
 export const recoverSelectedExecutorInvocation = Effect.fn(
   "SelectedExecutorProtocol.recoverInvocation"
 )(function*(runId: RunId, invocationId: OperationId) {

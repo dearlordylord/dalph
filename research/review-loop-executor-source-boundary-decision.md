@@ -1,6 +1,30 @@
-# Review-loop executor source-boundary decision
+# Superseded review-loop executor source-boundary decision
 
-Status: accepted Wayfinder reconciliation of issue #133 under issue #126,
+Status: superseded by issue #162's planned-attempt executor decision.
+
+This record previously treated a separately identified outer invocation and
+the current detailed review-loop implementation as v1 milestone requirements.
+That was premature: the executor's inner workings had not been accepted as
+milestone design.
+
+The accepted milestone boundary is now:
+
+- generic Dalph identifies executor work by the planned attempt's `RunId` and
+  `AttemptId`, with no `ExecutorOuterInvocationId`;
+- one admitted planned attempt keeps one task-work position until its complete
+  executor work is terminal or safely suspended;
+- a controlled fake executor drives the production coordination loop without
+  review, evidence, handback, retry, or restoration vocabulary;
+- Dalph and the fake executor share one process lifetime during the milestone;
+  and
+- adapting or redesigning the current review-loop implementation happens after
+  the fake-provider milestone.
+
+The accepted chronological scenarios are in
+`docs/scenarios/review-loop-executor-source-boundary.md`. The remainder of this
+file is retained only as provenance for the superseded decision.
+
+Previous status: accepted Wayfinder reconciliation of issue #133 under issue #126,
 published as [implementation issue #158](https://github.com/dearlordylord/dalph/issues/158).
 
 ## Concrete problem

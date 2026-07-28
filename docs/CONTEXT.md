@@ -21,31 +21,44 @@ not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
 **Dalph executor**:
-The Dalph component that owns one task-implementation algorithm, including its
-coding-agent invocations, internal restoration, and algorithm-specific
-artifacts.
+The Dalph component that performs the complete work for one planned task
+attempt and reports only the attempt-level running, safely suspended, or
+terminal result required by generic orchestration. The production executor's
+inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
 
 **Review-loop executor**:
-The current Dalph executor whose task-implementation algorithm repeatedly
-captures evidence, invokes a fresh reviewer, returns findings to the
-implementer, and stops with acceptance or bounded non-convergence.
+The repository's current experimental executor implementation, whose
+task-implementation algorithm captures evidence, invokes reviewers, and
+returns findings to an implementer. Its internal policy predates the
+production-shaped fake-provider milestone and is not the milestone's accepted
+executor contract. Post-milestone design decides which parts remain.
 _Avoid_: Selected executor, universal review pipeline, Dalph orchestrator
 
-The review-loop executor is transitionally co-located in
+The experimental review-loop executor is co-located in
 `packages/orchestrator` and shares internal `WorkflowOperation` and
 `WorkflowInterpreter` types with orchestration code. File placement and shared
-type names do not make its review strategy part of the Dalph orchestrator.
+type names do not make its review strategy an accepted Dalph-orchestrator or
+fake-provider-milestone requirement.
 
-**Executor outer invocation**:
-One executor-declared unit that Dalph may start, continue, wait for, interrupt,
-or normalize into an outcome without learning the executor's internal stage.
-_Avoid_: Review stage, worker state, workflow phase
+**Planned-attempt executor work**:
+The selected executor's complete course of work for one planned task attempt.
+Dalph may start, continue, ask to suspend, or receive the outcome of that work
+without learning an internal stage. In v1, the planned task attempt identifies
+this work at the generic executor boundary; Dalph does not allocate a second
+outer-invocation identity. The controlled fake has no coding-agent, reviewer,
+evidence, handback, retry, or restoration stages.
+_Avoid_: Executor outer invocation, review stage, worker process, workflow
+operation
 
-**Executor outer invocation correlation**:
-The exact task and invocation identities that Dalph uses across intent,
-provider observation, interruption, continuation, and outcome.
-_Avoid_: Task identity alone, log correlation, artifact identity
+**Planned-attempt executor-work correlation**:
+The exact `RunId` and `AttemptId` of the planned task attempt that Dalph uses
+across executor start, continuation, safe suspension, and terminal outcome. An
+internal `OperationId`, coding-agent invocation, reviewer invocation, provider
+request, session, or worker process cannot replace or supplement this generic
+correlation.
+_Avoid_: Executor outer invocation identity, task identity alone, operation
+identity, log correlation
 
 **Task-work capacity requirement**:
 The zero-or-one task-work position that Dalph says one workflow transition
@@ -54,26 +67,30 @@ position. For example, Dalph may require one position before it asks the
 executor to continue task A, while a tracker-only read requires none.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
-**Executor outer invocation wait**:
-An executor's named reason and exact correlation for why Dalph cannot yet
-continue one outer invocation. A scheduled wait carries the branded
-absolute retry deadline.
-_Avoid_: Internal executor stage, inferred log state
+**Planned-attempt executor-work suspension**:
+The executor's proof that its complete work for one exact planned task attempt
+is safely stopped, has preserved what it needs to resume the same attempt, and
+has no executor-owned activity for that attempt still running. Dalph may
+therefore make the task-work position available. The controlled fake executor
+produces this proof after Dalph asks it to stop for resume, such as during a
+task pause, run pause, or safety stop. A coding-agent, reviewer, session, or
+worker-process interruption alone is an executor-internal fact and does not
+prove suspension.
+_Avoid_: Executor interruption, process exit alone, coordinator cancellation,
+attempt abandonment
 
-**Executor outer invocation interruption**:
-The exact correlated invocation and provider observation proving that its
-outer execution was interrupted.
-_Avoid_: Process exit alone, coordinator cancellation
-
-**Executor outer invocation outcome**:
-An executor's normalized completed, failed, interrupted, or
-non-convergent result for one exact outer invocation.
+**Planned-attempt executor-work outcome**:
+An executor's normalized completed, failed, or non-convergent result for one
+exact planned task attempt. Suspension is separately resumable and therefore
+is not a terminal outcome.
 _Avoid_: Internal review result, raw provider response
 
-**Executor outer invocation projection**:
-An executor's current declaration that one exact outer invocation
-is ready, waiting, or complete with a normalized outcome.
-_Avoid_: Generic inspection of executor-specific journal events
+**Planned-attempt executor-work projection**:
+The controlled fake executor's current declaration that its complete work for
+one exact `(RunId, AttemptId)` is running, safely suspended, or terminal with a
+normalized result. Starting or resuming is a Dalph request, not another
+persisted executor state.
+_Avoid_: Generic inspection of executor-specific journal events, internal wait
 
 **Historical Ralph harness**:
 The one-off `scripts/ralph-run.sh` experiment and its execution formats.
@@ -319,6 +336,14 @@ exact claim, target-closure membership, and complete blockers needed before
 Dalph starts another long-running action for an existing attempt.
 _Avoid_: Initial attempt eligibility, coding-agent progress poll, global refresh
 
+## Post-milestone experimental executor vocabulary
+
+The following task-executor, task-work-provider, session, worker-process,
+evidence, reviewer, handback, retry, and restoration terms describe current
+experimental code. They are not requirements for the production-shaped
+fake-provider milestone. Issues #127 and #168 decide which terms remain in a
+production executor.
+
 **Task executor locator**:
 The branded locator selecting the configured executor for one planned task
 attempt. It is not a provider-assigned task-work-session identity.
@@ -432,9 +457,10 @@ this event.
 _Avoid_: Tracker execution admitted, task claim acquired, task execution admitted
 
 **Task execution admitted**:
-The coordinator admits one runnable planned task attempt into its bounded
-task-work capacity. Admission does not prove tracker scope or that a session,
-provider work unit, or worker process started.
+The coordinator admits one runnable planned task attempt, identified by its
+`RunId` and `AttemptId`, into bounded task-work capacity. The task keeps that
+position until its complete executor work is terminal or safely suspended.
+Admission does not prove that executor work started.
 _Avoid_: Claimed task eligibility observed, task execution started
 
 **Task execution started**:
@@ -574,8 +600,8 @@ One request made by the review-loop executor to a fresh independent
 reviewer, identified by an executor-internal workflow operation and durable
 reviewer-session identity before it crosses the reviewer boundary. Executor
 recovery resumes that exact invocation rather than creating another semantic
-round. The generic Dalph orchestrator sees only its outer invocation
-projection.
+round. This describes the current experimental implementation, not the
+milestone's planned-attempt executor boundary.
 _Avoid_: Review result, implementer invocation, retry attempt
 
 **Reviewer session**:
@@ -882,9 +908,9 @@ not the provider-owned task-work invocation that the interpreted operation may
 start or observe. Its finalizer and signal are live-runtime behavior, not
 guarantees after abrupt process death; later startup reconstructs instead. A
 live-runtime exit before intent makes the exact reserved task-admission position
-available. An exit after intent but before a result retains the position under
-`OperationId` until fresh provider evidence proves whether it is occupied or
-available.
+available. An exit after intent but before a result retains the position for
+the unfinished `(RunId, AttemptId)` until the complete planned-attempt executor
+work is terminal or safely suspended.
 _Avoid_: Activation coordinator, task executor, task-work invocation, worker process
 
 **Activation in progress**:
@@ -907,49 +933,30 @@ _Avoid_: Activation in progress, duplicate-ownership conflict, retryable activat
 
 **Task admission position**:
 One process-local unit of configured task-work capacity keyed by one task.
-Dalph reserves it while preparing work and marks it working after a matching
-fresh provider report. Dalph records at most one position per task even when
-two operation identities disagree. For example, if Dalph expects operation
-`prepare-A` but the provider reports active operation `worker-A`, task A holds
-one position in a correlation conflict; it does not hold two positions. The
-position is recreated after process loss from configuration, workflow
-responsibility, and fresh observations rather than restored as authority.
-Missing, unreadable, or conflicting provider evidence cannot make an
-ambiguously used position available.
+Dalph reserves it while preparing one planned task attempt. After executor work
+starts, the task keeps that position continuously until the executor returns a
+terminal result for the complete planned attempt or proves the complete attempt
+safely suspended after Dalph asked it to stop for later resume. The position is
+recreated after shared Dalph/fake-executor process loss from configuration and
+the unfinished planned-attempt responsibility rather than restored as
+authority.
 _Avoid_: Task claim, persisted capacity reservation, worker process
 
 **Task capacity state**:
-The process-local state of one task's single task admission position:
-`NotUsing`, `Reserved`, `AwaitingProviderEvidence`, `Working`, or
-`CorrelationConflict`. For example, recording intent changes task A from
-`Reserved` to `AwaitingProviderEvidence`; a matching active provider report
-changes it to `Working`; a matching terminal, interrupted, or absent report
-changes it to `NotUsing`; and an unknown report keeps it awaiting evidence.
-Those direct changes apply when the report matches the expected operation. In
-a `CorrelationConflict`, an unknown report keeps both operation identities and
-the conflict. A terminal report for only the differently correlated operation
-first returns the task to `AwaitingProviderEvidence`; only a later fresh report
-about the expected operation may mark it `Working` or `NotUsing`. For example,
-expected `prepare-A`, observed active `worker-A`, then unknown still means
-`CorrelationConflict(prepare-A, worker-A)`. If `worker-A` then ends, task A
-still waits for fresh evidence about `prepare-A`.
-_Avoid_: Two positions for one task, persisted worker status
-
-**Capacity correlation conflict**:
-The task-local condition in which Dalph's current capacity-holding
-`OperationId` and a fresh provider report name different operations for the
-same task. Dalph keeps one position unavailable, explains both identities, and
-continues unrelated work when another position exists. For example, with
-capacity two, task A may be in conflict for expected operation `prepare-A`
-versus reported operation `worker-A` while task B uses the second position.
-_Avoid_: Second occupied position, global capacity failure, silent release
+The process-local state of one task's single task admission position. The
+milestone needs to distinguish a temporary reservation, executor work in
+progress for one exact planned attempt, and suspension in progress. Absence
+from the task-position map means not using capacity. A terminal complete-
+attempt result or safe complete-attempt suspension removes the position.
+Executor-internal operations and identities do not appear in this state.
+_Avoid_: Two positions for one task, persisted worker status, provider
+correlation conflict
 
 **Capacity waiting**:
 The derived condition in which a runnable transition needing task-work capacity
-is excluded from the admission set because every task admission position is
-`Reserved`, `AwaitingProviderEvidence`, `Working`, or
-`CorrelationConflict`. For example, at capacity one, task B waits while task A
-has an unresolved provider-correlation conflict.
+is excluded from the admission set because every configured position is held
+by a reserved, in-progress, or suspending task. For example, at capacity one,
+task B waits while Task A's planned-attempt executor work is still in progress.
 _Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
 **Control command identity (provisional)**:
@@ -1035,38 +1042,33 @@ _Avoid_: User-requested task pause, dependency-blocked task, persisted pause clo
 **Task pausing**:
 The nonterminal state after Dalph accepts a user-requested task pause and before
 it confirms the task's safe pause boundary. Dalph selects no new
-forward-progress action for the task, but it continues the exact bounded wait,
-fresh result check, worker interruption, or provider observation needed to
-settle work already in flight. The reconstructed state carries a tagged pause
-progress reason naming that action and its exact subject. A paused grouping
-parent remains pausing while any covered descendant has not reached its safe
-boundary, and the reason names that descendant. The phase and reason are
-derived so a later UI can explain the delay without persisting separate UI
-state.
+forward-progress action for the task. If executor work was admitted, it asks
+the executor to safely suspend the complete planned attempt and retains the
+task-work position until that result. A paused grouping parent remains pausing
+while any covered descendant has not reached its safe boundary. The phase and
+reason are derived rather than persisted as UI state.
 _Avoid_: Task paused, dependency-blocked task, generic pending state
 
 **Task paused**:
 The confirmed task pause phase after every already-started bounded request has a
-known recorded result, every long-running agent invocation has stopped, no
-shared integration resource or task-work-capacity permit remains held for the
-task or a grouping-covered descendant, and their preserved responsibilities are
-explicit. An unresolved request, unreadable authority, or covered descendant
-still reaching its boundary keeps the selected parent task pausing with a
-concrete progress reason. The paused phase creates no polling loop or periodic
-authority read. Only a user Unpause request or a separately configured
-observation policy causes new reads for the task.
+known recorded result, every admitted planned attempt is safely suspended, no
+shared integration resource or task-work position remains held for the task or
+a grouping-covered descendant, and their preserved responsibilities are
+explicit. A covered descendant still reaching its boundary keeps the selected
+parent task pausing. The paused phase creates no polling loop.
 _Avoid_: Task pausing, dependency-blocked task, run blocked
 
 **Task resuming**:
 The nonterminal state after the Dalph user requests Unpause and before Dalph
 allows another forward-progress action for the task. Dalph freshly reads the
-task, claim, applicable task-graph facts, Git resources, and task-work-provider
-state required by the task's preserved responsibilities. Compatible facts
+task, claim, applicable task-graph facts, Git resources, and other accepted
+provider-neutral facts required by the task's preserved responsibilities.
+Compatible facts
 permit ordinary operation selection; changed or unreadable facts select the
 applicable reconciliation, wait, or isolation rule instead of restarting stale
-work. If Unpause is requested while pause actions remain in flight, Dalph first
-settles those exact actions and derives a progress reason rather than cancelling
-them or starting a competing worker.
+work. If Unpause is requested while safe suspension remains in progress, Dalph
+waits for that complete-attempt result rather than cancelling it or starting
+competing executor work.
 _Avoid_: Unpause command, task execution resumed, crash recovery
 
 **Dependency-blocked task**:
@@ -1078,9 +1080,9 @@ _Avoid_: User-requested task pause, persisted pause closure, grouping descendant
 
 **Dalph workflow journal**:
 The durable history of workflow-operation intents and observed outcomes that
-Dalph records. It contains only that history; current task, Git, task-work
-session, provider-work-unit, and worker-process state must be reread through
-their respective task-tracker, Git, or task-runner operations.
+Dalph records. It contains only that history; current task and Git facts must
+be reread through their accepted boundaries. The same-process fake executor
+has no surviving activity to reread after Dalph restarts.
 _Avoid_: Authority journal, audit log, semantic execution trace, tracker state
 
 **Journal event record**:
@@ -1135,18 +1137,19 @@ _Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired h
 **Startup run recovery**:
 The fail-closed process performed under coordinator ownership that discovers
 every journaled run without an age cutoff, validates each complete managed
-history, freshly rereads tracker and Git authority, and asks the injected
-executor to reconcile its internal provider, evidence, and reviewer authorities
-for the exact recorded attempts before live coordination begins.
+history, and freshly rereads accepted external authority facts. During the
+fake-provider milestone it recreates the same-process fake executor and
+continues each exact journal-reconstructed `(RunId, AttemptId)` when capacity
+permits; it does not search for surviving executor activity.
 _Avoid_: Process rehydration, recent-run scan, journal replay alone
 
 **Run termination**:
 The final Dalph-recorded disposition of a run: completed, blocked, cancelled, or
-failed. Dalph records any disposition only after all active task-work sessions,
-provider work units, and worker processes stop, or each retained resource is
-explicitly named, isolated, and recorded with recovery instructions, and all
-required cleanup finishes. A terminated run does not reopen; later work for the
-same target belongs to a new run.
+failed. Dalph records any disposition only after every admitted planned
+attempt's complete executor work is terminal or safely suspended, every other
+retained resource is explicitly named and disposed according to its accepted
+protocol, and all required cleanup finishes. A terminated run does not reopen;
+later work for the same target belongs to a new run.
 _Avoid_: Empty frontier, paused run, drained run
 
 **Task completed successfully**:

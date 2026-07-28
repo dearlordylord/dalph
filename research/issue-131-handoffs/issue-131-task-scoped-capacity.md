@@ -1,12 +1,19 @@
 # Issue #131 task-scoped capacity implementation handoff
 
+Status: superseded by issue #162. Do not implement this handoff.
+
+The accepted replacement uses the planned attempt's `RunId` and `AttemptId`,
+has no separate outer invocation or expected/reported identity mismatch, and
+keeps one task position until the complete attempt is terminal or safely
+suspended. See `docs/scenarios/issue-131-conflicting-capacity-observation.md`
+and the live #131 body.
+
 Issue: [#131](https://github.com/dearlordylord/dalph/issues/131)
 
-This handoff prepares a fresh `/implement` session. It changes the accepted
-specification and model, but deliberately does not repair the production
-controller.
+This historical handoff must not be given to an implementation agent. It
+records the superseded provider-correlation design only.
 
-## Accepted behavior
+## Superseded behavior — do not implement
 
 1. Dalph owns capacity. The executor does not request, declare, acquire, or
    release it. For example, Dalph says that continuing task A through the
