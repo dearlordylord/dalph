@@ -3,35 +3,35 @@ import {
   Layer
 } from "../../../node_modules/effect/dist/index.js"
 import {
-  ClaimOwner,
-  ClaimToken,
   GitCommitSha,
   OperationId,
   RunId,
   TaskExecutorLocator,
+  type TaskRevision,
   TaskWorkSessionLocator,
   WorktreeLocator,
   type Task
 } from "../../../packages/orchestrator/src/domain.ts"
 import { makeFreshTaskAttemptStage } from "../../../packages/orchestrator/src/fresh-task-attempt-stages.ts"
 import type { FreshWorkflowStage } from "../../../packages/orchestrator/src/fresh-workflow-stage.ts"
+import { taskRevisionFor } from "../../../packages/orchestrator/src/task-dag.ts"
 import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   OperationIdAllocator,
   PlannedTaskAttemptPlanner
 } from "../../../packages/orchestrator/src/task-work-planning.ts"
-import { TaskClaimAcquisition } from "../../../packages/orchestrator/src/tracker-mutation.ts"
+import type { ActiveTaskClaim } from "../../../packages/orchestrator/src/tracker-mutation.ts"
 import {
-  makeTaskClaimAcquisitionOperation,
   type TraceItem,
   WorkflowInterpreter
 } from "../../../packages/orchestrator/src/workflow.ts"
 import { makeDryRunWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/workflow-interpreters.ts"
 import { TrackerGraphReader } from "../../../packages/orchestrator/src/tracker-graph-reader.ts"
 
-const selectedExecutorInternalOperationOrder = [
+const productionWorkflowOperationOrder = [
   "AcquireTaskClaim",
+  "ObserveClaimedTaskEligibility",
   "RecordTaskAttemptPlan",
   "ReconcileTaskWorktree",
   "EstablishTaskWorkSession",
@@ -41,17 +41,47 @@ const selectedExecutorInternalOperationOrder = [
   "RecordImplementationDisposition"
 ] as const
 
-const outerMoveAt = (index: number): string | null =>
-  index < 4
-    ? selectedExecutorInternalOperationOrder[index] ?? null
-    : index < selectedExecutorInternalOperationOrder.length
+export const firstExecutorWorkflowStep = 5
+export const completedExecutorWorkflowStep = productionWorkflowOperationOrder.length
+export const executorInvocationCount =
+  completedExecutorWorkflowStep - firstExecutorWorkflowStep
+
+export type ClaimedTaskEligibility =
+  | "Pending"
+  | "Eligible"
+  | "NotEligible"
+  | "Unreadable"
+  | "ClaimUnavailable"
+export type ProductionWorkflowStatus =
+  | "InProgress"
+  | "ClaimedTaskNotEligible"
+  | "TrackerReadFailed"
+  | "ClaimAuthorityChanged"
+  | "ExecutorCompleted"
+  | "TaskSelectionUnavailable"
+
+const outerMoveAt = (
+  index: number,
+  eligibility: ClaimedTaskEligibility
+): string | null =>
+  index < 2
+    ? productionWorkflowOperationOrder[index] ?? null
+    : eligibility !== "Eligible"
+      ? null
+      : index < firstExecutorWorkflowStep
+        ? productionWorkflowOperationOrder[index] ?? null
+        : index < productionWorkflowOperationOrder.length
     ? "StartExecutorInvocation"
     : null
 
 export interface ProductionWorkflowProgress {
   readonly completedOperations: ReadonlyArray<string>
+  readonly completedExecutorInvocations: number
+  readonly executorInvocationCount: number
   readonly nextOperation: string | null
+  readonly status: ProductionWorkflowStatus
   readonly taskId: string
+  readonly taskRevision: TaskRevision | null
   readonly trace: ReadonlyArray<string>
 }
 
@@ -75,14 +105,17 @@ const environment = Layer.mergeAll(
 )
 
 /**
- * Replays the real production stage builders through the production dry-run
- * interpreter. Each requested step crosses exactly one WorkflowInterpreter
- * boundary; no Lab-only workflow state machine chooses the next operation.
+ * Replays the real production stage builders after the Lab driver's journaled
+ * exact-claim and controlled tracker boundaries. Individual step controls cross
+ * one downstream dry-run interpreter boundary; the coordinator control
+ * deliberately repeats those selected stages until the outer outcome.
  */
 export const replayProductionWorkflow = (
   task: Task,
   requestedSteps: number,
-  predecessorOperationId: OperationId
+  eligibility: ClaimedTaskEligibility,
+  activeClaim: ActiveTaskClaim | undefined,
+  attemptPredecessorOperationId: OperationId
 ): Effect.Effect<ProductionWorkflowProgress, unknown> =>
   Effect.gen(function*() {
     const allocator = yield* OperationIdAllocator
@@ -102,46 +135,110 @@ export const replayProductionWorkflow = (
     if (requestedSteps <= 0) {
       return {
         completedOperations,
-        nextOperation: outerMoveAt(0),
+        completedExecutorInvocations: 0,
+        executorInvocationCount,
+        nextOperation: outerMoveAt(0, eligibility),
+        status: "InProgress" as const,
         taskId: task.id,
+        taskRevision: taskRevisionFor(task),
         trace
       }
     }
 
-    const claimOperationId = yield* allocator.allocate()
-    const claimOperation = makeTaskClaimAcquisitionOperation({
-      acquisition: TaskClaimAcquisition.make({
-        operationId: claimOperationId,
-        owner: ClaimOwner.make("reducer-lab-owner"),
+    if (activeClaim === undefined) {
+      return {
+        completedOperations,
+        completedExecutorInvocations: 0,
+        executorInvocationCount,
+        nextOperation: null,
+        status: "ClaimAuthorityChanged" as const,
         taskId: task.id,
-        token: ClaimToken.make(`reducer-lab-token:${task.id}`)
-      }),
-      predecessorOperationIds: [predecessorOperationId]
-    })
-    yield* interpreter.acquireTaskClaim(claimOperation)
+        taskRevision: taskRevisionFor(task),
+        trace: ["selected · AcquireTaskClaim", "failed · exact claim unavailable"]
+      }
+    }
     completedOperations.push("AcquireTaskClaim")
-    trace.push("selected · AcquireTaskClaim", "observed · TaskClaimAcquisitionSimulated")
+    trace.push(
+      "selected · AcquireTaskClaim",
+      `observed · AuthoritativeTaskClaimAcquired · ${activeClaim.operationId}`
+    )
+
+    if (requestedSteps < 2 || eligibility === "Pending") {
+      return {
+        completedOperations,
+        completedExecutorInvocations: 0,
+        executorInvocationCount,
+        nextOperation: outerMoveAt(1, eligibility),
+        status: "InProgress" as const,
+        taskId: task.id,
+        taskRevision: taskRevisionFor(task),
+        trace
+      }
+    }
+
+    trace.push("selected · ObserveClaimedTaskEligibility")
+    if (eligibility === "Unreadable" || eligibility === "ClaimUnavailable") {
+      const status: ProductionWorkflowStatus = eligibility === "ClaimUnavailable"
+        ? "ClaimAuthorityChanged"
+        : "TrackerReadFailed"
+      return {
+        completedOperations,
+        completedExecutorInvocations: 0,
+        executorInvocationCount,
+        nextOperation: null,
+        status,
+        taskId: task.id,
+        taskRevision: taskRevisionFor(task),
+        trace
+      }
+    }
+    completedOperations.push("ObserveClaimedTaskEligibility")
+    trace.push(`observed · ${eligibility}`)
+    if (eligibility === "NotEligible") {
+      return {
+        completedOperations,
+        completedExecutorInvocations: 0,
+        executorInvocationCount,
+        nextOperation: null,
+        status: "ClaimedTaskNotEligible" as const,
+        taskId: task.id,
+        taskRevision: taskRevisionFor(task),
+        trace
+      }
+    }
 
     let stage: FreshWorkflowStage | undefined = yield* makeFreshTaskAttemptStage(
       { allocator, emit, interpreter, planner },
       task,
-      undefined,
-      claimOperationId
+      activeClaim,
+      attemptPredecessorOperationId
     )
     for (
-      let completedStages = 1;
+      let completedStages = 2;
       completedStages < requestedSteps && stage !== undefined;
       completedStages += 1
     ) {
-      currentOuterMove = outerMoveAt(completedStages) ?? "ExecutorInvocationCompleted"
+      currentOuterMove = outerMoveAt(completedStages, eligibility)
+        ?? "ExecutorInvocationCompleted"
       completedOperations.push(currentOuterMove)
       stage = yield* stage.run(() => Effect.void)
     }
 
+    const completedExecutorInvocations = completedOperations.filter(
+      (operation) => operation === "StartExecutorInvocation"
+    ).length
+    const nextOperation = outerMoveAt(completedOperations.length, eligibility)
+    const status: ProductionWorkflowStatus = nextOperation === null
+      ? "ExecutorCompleted"
+      : "InProgress"
     return {
       completedOperations,
-      nextOperation: outerMoveAt(completedOperations.length),
+      completedExecutorInvocations,
+      executorInvocationCount,
+      nextOperation,
+      status,
       taskId: task.id,
+      taskRevision: taskRevisionFor(task),
       trace
     }
   }).pipe(

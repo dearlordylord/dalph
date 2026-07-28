@@ -94,6 +94,40 @@ assert(
 )
 assertPresenterParity(observation.snapshot)
 
+const completedBeforeClaimAuthority = await executeCommand(observation.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Independent runnable work.",
+    id: "A",
+    lifecycle: "CompletedSuccessfully",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare A"
+  }
+})
+const completedBeforeClaimRead = await Effect.runPromise(executeLabMove(
+  completedBeforeClaimAuthority.snapshot,
+  availableMoveId(
+    completedBeforeClaimAuthority.snapshot,
+    "RecheckTaskBeforeClaim",
+    "A"
+  ),
+  completedBeforeClaimAuthority.snapshot.revision
+))
+assert(
+  completedBeforeClaimRead.snapshot.latestObservation
+    .find(({ id }) => id === "A")?.lifecycle === "CompletedSuccessfully",
+  "The coordinator must reread a fresh task before committing its claim intent"
+)
+assert(
+  !completedBeforeClaimRead.snapshot.moves.some(({ transition, subject }) =>
+    transition === "CommitFreshTaskClaimIntent"
+    && subject._tag === "Task"
+    && subject.taskId === "A"
+  ),
+  "A task completed before claim selection must never reach claim intent"
+)
+
 const capacityTwo = await Effect.runPromise(executeLabMove(
   observation.snapshot,
   availableMoveId(observation.snapshot, "SetTaskWorkCapacity"),
@@ -103,22 +137,155 @@ assert(capacityTwo.snapshot.capacity === 2, "Capacity move must reconstruct capa
 assert(capacityTwo.snapshot.admitted.length === 2, "Capacity two must admit A and C")
 assertPresenterParity(capacityTwo.snapshot)
 
-const claim = await Effect.runPromise(executeLabMove(
+const preclaimRead = await Effect.runPromise(executeLabMove(
   observation.snapshot,
-  availableMoveId(observation.snapshot, "CommitFreshTaskClaimIntent", "A"),
+  availableMoveId(observation.snapshot, "RecheckTaskBeforeClaim", "A"),
   observation.snapshot.revision
+))
+const claim = await Effect.runPromise(executeLabMove(
+  preclaimRead.snapshot,
+  availableMoveId(preclaimRead.snapshot, "CommitFreshTaskClaimIntent", "A"),
+  preclaimRead.snapshot.revision
 ))
 assert(claim.snapshot.responsibilities.length === 1, "Claim intent must create responsibility")
 assert(
   claim.snapshot.moves.some(({ transition, availability }) =>
-    transition === "RecordTaskAttemptPlan" && availability._tag === "Available"
+    transition === "ObserveClaimedTaskEligibility" && availability._tag === "Available"
   ),
-  "The production attempt-plan stage must be reachable after claim selection"
+  "The production claimed-task eligibility read must follow claim selection"
 )
 assertPresenterParity(claim.snapshot)
 
+const foreignClaimAuthority = await executeCommand(claim.snapshot, {
+  _tag: "SetTrackerClaim",
+  state: "Foreign",
+  taskId: "A"
+})
+const foreignClaimEligibility = await Effect.runPromise(executeLabMove(
+  foreignClaimAuthority.snapshot,
+  availableMoveId(
+    foreignClaimAuthority.snapshot,
+    "ObserveClaimedTaskEligibility",
+    "A"
+  ),
+  foreignClaimAuthority.snapshot.revision
+))
+assert(
+  foreignClaimEligibility.snapshot.workflowProgress[0]?.status
+    === "ClaimAuthorityChanged",
+  "A changed exact claim must stop before the graph read and attempt plan"
+)
+assert(
+  foreignClaimEligibility.snapshot.journal.length === claim.snapshot.journal.length,
+  "A changed exact claim must not fabricate a graph-read outcome"
+)
+
+const changedEligibleAuthority = await executeCommand(claim.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Independent runnable work.",
+    id: "A",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: ["D"],
+    title: "Prepare A"
+  }
+})
+const changedEligibleRead = await Effect.runPromise(executeLabMove(
+  changedEligibleAuthority.snapshot,
+  availableMoveId(
+    changedEligibleAuthority.snapshot,
+    "ObserveClaimedTaskEligibility",
+    "A"
+  ),
+  changedEligibleAuthority.snapshot.revision
+))
+assert(
+  changedEligibleRead.snapshot.workflowProgress[0]?.taskRevision
+    !== claim.snapshot.workflowProgress[0]?.taskRevision,
+  "Attempt planning must use the task revision returned by the fresh eligibility read"
+)
+assert(
+  changedEligibleRead.snapshot.workflowProgress[0]?.nextOperation
+    === "RecordTaskAttemptPlan",
+  "A changed but still eligible task must plan from the freshly read task"
+)
+
+const unreadableEligibilityAuthority = await executeCommand(claim.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Invalid during the claimed-task read.",
+    id: "B",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: ["missing"],
+    title: "Build B"
+  }
+})
+const unreadableEligibility = await Effect.runPromise(executeLabMove(
+  unreadableEligibilityAuthority.snapshot,
+  availableMoveId(
+    unreadableEligibilityAuthority.snapshot,
+    "ObserveClaimedTaskEligibility",
+    "A"
+  ),
+  unreadableEligibilityAuthority.snapshot.revision
+))
+assert(
+  unreadableEligibility.snapshot.workflowProgress[0]?.status === "TrackerReadFailed",
+  "An invalid claimed-task graph read must fail before later workflow moves"
+)
+assert(
+  !unreadableEligibility.snapshot.workflowProgress[0]?.trace.some(
+    (row) => row === "observed · Unreadable"
+  ),
+  "A failed graph read must not be presented as an observed outcome"
+)
+
+const completedAuthority = await executeCommand(claim.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Independent runnable work.",
+    id: "A",
+    lifecycle: "CompletedSuccessfully",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare A"
+  }
+})
+const completedEligibility = await Effect.runPromise(executeLabMove(
+  completedAuthority.snapshot,
+  availableMoveId(
+    completedAuthority.snapshot,
+    "ObserveClaimedTaskEligibility",
+    "A"
+  ),
+  completedAuthority.snapshot.revision
+))
+assert(
+  completedEligibility.snapshot.latestObservation
+    .find(({ id }) => id === "A")?.lifecycle === "CompletedSuccessfully",
+  "Claimed-task eligibility must reread current tracker authority"
+)
+assert(
+  completedEligibility.snapshot.workflowProgress
+    .find(({ taskId }) => taskId === "A")?.nextOperation === null,
+  "A task completed in the tracker must stop before attempt planning"
+)
+assert(
+  !completedEligibility.snapshot.moves.some(({ transition, subject }) =>
+    transition === "StartExecutorInvocation"
+    && subject._tag === "Task"
+    && subject.taskId === "A"
+  ),
+  "A completed task must not reach an executor invocation"
+)
+
 let completedWorkflow = claim.snapshot
+let completedExecutorClicks = 0
+let executorReadySnapshot: LabSnapshot | null = null
 for (const operation of [
+  "ObserveClaimedTaskEligibility",
   "RecordTaskAttemptPlan",
   "ReconcileTaskWorktree",
   "EstablishTaskWorkSession",
@@ -133,9 +300,28 @@ for (const operation of [
     completedWorkflow.revision
   ))
   completedWorkflow = execution.snapshot
+  if (operation === "StartExecutorInvocation") completedExecutorClicks += 1
+  const availableLabels = presentLab(completedWorkflow).actionGroups.flatMap(
+    ({ actions }) => actions.filter(({ enabled }) => enabled).map(({ label }) => label)
+  )
+  if (operation === "EstablishTaskWorkSession") {
+    executorReadySnapshot = completedWorkflow
+    assert(
+      availableLabels.includes("Start executor invocation 1 of 4 · A"),
+      "The first opaque executor invocation must show its ordinal"
+    )
+  }
+  if (operation === "StartExecutorInvocation" && completedExecutorClicks < 4) {
+    assert(
+      availableLabels.includes(
+        `Start executor invocation ${completedExecutorClicks + 1} of 4 · A`
+      ),
+      "Each opaque executor invocation must show distinct progress"
+    )
+  }
 }
 assert(
-  completedWorkflow.workflowProgress[0]?.completedOperations.length === 8,
+  completedWorkflow.workflowProgress[0]?.completedOperations.length === 9,
   "The Lab must reach the complete production path through opaque executor invocations"
 )
 assert(
@@ -143,6 +329,23 @@ assert(
   "The production-parity path must stop after the selected executor completes"
 )
 assertPresenterParity(completedWorkflow)
+
+if (executorReadySnapshot === null) {
+  throw new Error("The workflow did not reach executor readiness")
+}
+const automaticExecutorRun = await Effect.runPromise(executeLabMove(
+  executorReadySnapshot,
+  availableMoveId(
+    executorReadySnapshot,
+    "RunExecutorInvocationsToCompletion",
+    "A"
+  ),
+  executorReadySnapshot.revision
+))
+assert(
+  automaticExecutorRun.snapshot.workflowProgress[0]?.status === "ExecutorCompleted",
+  "One coordinator command must run consecutive opaque executor invocations to completion"
+)
 
 const editedB = await executeCommand(initial, {
   _tag: "ReplacedTrackerTask",

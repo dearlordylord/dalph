@@ -70,19 +70,35 @@ feature drift.
 The post-#133 driver uses revision-bearing fresh tasks, exact tagged admission
 reservations, one-transition-at-a-time admission, and the generic
 executor-invocation responsibility, transition, wait, and settlement vocabulary.
-After claim selection, it replays the real production task-attempt and
-selected-executor stage builders through the production dry-run interpreter.
-The orchestration surface shows claim, attempt plan, worktree reconciliation,
-work-session establishment, and opaque executor outer invocations. It does not
-promote the selected executor's internal execution, evidence, review, handback,
-or disposition operations into orchestrator stages.
+The Lab's controlled claim adapter returns an authoritative exact fake claim.
+The production journaled interpreter records that claim and every controlled
+graph read; the driver does not construct their journal events. After claim
+selection, the driver checks that exact claim and rereads the controlled
+tracker before attempt planning, then replays the real production task-attempt
+and selected-executor stage builders through dry-run downstream boundaries. A
+claimed task that is completed, missing, or blocked stops before planning, and
+the successful reread advances the latest observed graph.
+
+The orchestration surface shows claim, claimed-task eligibility, attempt plan,
+worktree reconciliation, work-session establishment, and four opaque executor
+outer invocations distinguished by ordinal. Production activates those
+invocations without requiring four operator clicks, so the Lab offers a
+coordinator command that runs the consecutive invocations to their outer
+outcome while retaining the individual step controls for inspection. The Lab
+does not promote the selected executor's internal execution, evidence, review,
+handback, or disposition operations into orchestrator stages.
 
 Provider-authoritative Git, session, executor, evidence, and review facts are
-not fabricated. The Lab labels this path as the production dry-run interpreter
-and displays its normalized outer trace separately from the durable workflow
-journal. It stops after the selected executor returns its completed outer
-outcome because current production code has no integration or tracker-task
-completion operation.
+not fabricated. The Lab labels the controlled claim/graph boundaries separately
+from the downstream dry-run interpreter and displays its normalized outer trace
+separately from the durable workflow journal. It stops after the selected
+executor returns its completed outer outcome because current production code
+has no integration or tracker-task completion operation.
+
+The architecture additionally requires an active-continuation tracker reread
+before later long-running executor invocations. Current production code does
+not implement that operation, so the Lab reports the production capability gap
+instead of fabricating the specified behavior.
 
 The current source boundary is not fully browser-safe: importing
 `managed-history.ts` reaches a static `@effect/platform-node` import through the

@@ -251,6 +251,49 @@ Calling the real browser-safe driver supplies behavioral parity. The presenter
 still requires deliberate human design; exhaustive union coverage cannot
 automatically produce useful wording or layout.
 
+Fresh-workflow replay includes the production claimed-task eligibility read
+between claim selection and attempt planning. That read crosses the controlled
+task-tracker boundary, updates the latest successful observation and durable
+coverage, and stops the attempt when the claimed task is no longer eligible.
+The Lab must not reuse the earlier observed task through this boundary.
+
+The selected executor may expose several consecutive outer invocations with the
+same coarse orchestrator transition. The Lab distinguishes them by ordinal
+without labeling them as review, evidence, or another executor-internal stage.
+Manual stepping is a Lab inspection affordance; production activation does not
+require an operator click for each invocation. A separate coordinator control
+may repeatedly execute the currently selected legal executor moves until the
+executor returns an outer outcome, while preserving individual step controls
+for state inspection.
+
+Accepted architecture that is absent from production remains a visible
+capability gap. In particular, the Lab does not invent the specified
+active-continuation tracker reread before later executor invocations until the
+production workflow owns that behavior.
+
+### Workflow parity scenarios
+
+These scenarios are executable in
+[`lab-engine.smoke.ts`](../../prototypes/reducer-lab/src/lab-engine.smoke.ts).
+They use the Lab's controlled task tracker and exact fake claim boundary; Git,
+task-work-provider, and selected-executor effects remain dry-run.
+
+Each row starts with a clean in-memory Dalph journal and no Git worktree,
+task-work session, or executor invocation unless the row says otherwise. The
+claim and graph commands complete synchronously with either an authoritative
+result or a typed failure, so ambiguous retry and coordinator-crash recovery do
+not apply to these rows; the Lab's separate crash/restart scenarios cover
+reconstruction from already-recorded journal facts.
+
+| Starting facts and trigger | Required boundary result and visible behavior | Smoke coverage |
+| --- | --- | --- |
+| A was observed open; the developer changes controlled tracker A to completed successfully before claim selection, then selects the pre-claim reread. | The task-tracker read records completed A as the latest successful observation. The coordinator must not commit A's claim intent. | “The coordinator must reread a fresh task before committing its claim intent” and “A task completed before claim selection must never reach claim intent.” |
+| The controlled adapter has returned Dalph's exact claim for open A; the developer changes A to completed successfully, then selects claimed-task eligibility. | The driver checks the exact claim, rereads the task graph, advances the latest observation, and stops before attempt planning, Git, or executor work. | “Claimed-task eligibility must reread current tracker authority” and “A task completed in the tracker must stop before attempt planning.” |
+| The controlled adapter has returned Dalph's exact claim for A; the developer replaces it with a foreign claim, then selects claimed-task eligibility. | The exact-claim check fails before the graph read. No graph outcome or later workflow move is recorded. | “A changed exact claim must stop before the graph read and attempt plan” and “A changed exact claim must not fabricate a graph-read outcome.” |
+| The controlled adapter has returned Dalph's exact claim for A; the developer adds completed prerequisite D while A remains eligible, then selects claimed-task eligibility. | The fresh graph read returns the changed A. Attempt planning uses that newly observed task revision rather than the task captured before claim acquisition. | “Attempt planning must use the task revision returned by the fresh eligibility read.” |
+| The controlled adapter has returned Dalph's exact claim for A; another tracker record makes the graph invalid, then the developer selects claimed-task eligibility. | The read records intent and exposes the typed projection failure, but records no successful graph outcome and authorizes no later workflow move. | “An invalid claimed-task graph read must fail before later workflow moves” and “A failed graph read must not be presented as an observed outcome.” |
+| A has an established dry-run task-work session and the selected executor declares four consecutive opaque outer invocations. | Individual controls show ordinals 1–4 without internal stage names. The coordinator control may activate all remaining legal invocations and stop at the executor's outer outcome. | “Each opaque executor invocation must show distinct progress” and “One coordinator command must run consecutive opaque executor invocations to completion.” |
+
 ## Browser boundary
 
 The Lab needs no backend. Pure Effect modules, reducers, selectors, schemas,

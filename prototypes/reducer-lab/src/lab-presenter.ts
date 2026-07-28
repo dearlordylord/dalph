@@ -116,8 +116,12 @@ const inputLabel = (action: LabAction): string => {
     case "DeletedTrackerTask": return `Delete tracker task ${action.taskId}`
     case "SetTrackerClaim": return `Set ${action.taskId} claim to ${action.state}`
     case "ObservedTrackerGraph": return "Observe tracker target closure"
+    case "RecheckedTaskBeforeClaim":
+      return `Reread current tracker graph before claiming ${action.taskId}`
     case "CommittedClaimIntent": return `Commit claim intent for ${action.taskId}`
     case "AdvancedTaskWorkflow": return `Advance production workflow for ${action.taskId}`
+    case "AdvancedExecutorProtocol":
+      return `Let the coordinator finish executor invocations for ${action.taskId}`
     case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.taskId}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
@@ -130,7 +134,7 @@ const inputLabel = (action: LabAction): string => {
 const subjectTask = (move: LabMove): string =>
   move.subject._tag === "Task" ? move.subject.taskId : ""
 
-const moveLabel = (move: LabMove): string => {
+const moveLabel = (move: LabMove, snapshot: LabSnapshot): string => {
   const taskId = subjectTask(move)
   switch (move.transition) {
     case "ObserveTrackerTarget": return "Observe tracker authority"
@@ -145,6 +149,8 @@ const moveLabel = (move: LabMove): string => {
     case "SupplyPausedFact": return `Paused fact · ${taskId}`
     case "CrashCoordinator": return "Crash coordinator"
     case "RestartCoordinator": return "Restart coordinator"
+    case "RunExecutorInvocationsToCompletion":
+      return `Run executor invocations to completion · ${taskId}`
     case "SetTaskWorkCapacity":
       return move.subject._tag === "Capacity"
         ? `Set capacity to ${move.subject.capacity}`
@@ -152,11 +158,24 @@ const moveLabel = (move: LabMove): string => {
     case "PauseRun": return "Pause run"
     case "PauseTask": return "Pause task"
     case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${taskId}`
+    case "RecheckTaskBeforeClaim":
+      return `Reread current task before claim · ${taskId}`
     case "AcquireTaskClaim": return `Acquire task claim · ${taskId}`
+    case "ObserveClaimedTaskEligibility":
+      return `Re-check claimed task eligibility · ${taskId}`
     case "RecordTaskAttemptPlan": return `Record attempt plan · ${taskId}`
     case "ReconcileTaskWorktree": return `Reconcile worktree · ${taskId}`
     case "EstablishTaskWorkSession": return `Establish work session · ${taskId}`
-    case "StartExecutorInvocation": return `Start executor invocation · ${taskId}`
+    case "StartExecutorInvocation": {
+      const progress = snapshot.workflowProgress.find(
+        (candidate) => candidate.taskId === taskId
+      )
+      return progress === undefined
+        ? `Start executor invocation · ${taskId}`
+        : `Start executor invocation ${
+          progress.completedExecutorInvocations + 1
+        } of ${progress.executorInvocationCount} · ${taskId}`
+    }
     default: return `${move.transition} · ${taskId}`
   }
 }
@@ -179,10 +198,14 @@ const unavailableReason = (
   }
 }
 
-const displayAction = (move: LabMove): LabDisplayAction => {
+const displayAction = (move: LabMove, snapshot: LabSnapshot): LabDisplayAction => {
   const status = move.availability._tag
   const reason = status === "Available"
-    ? move.origin === "TrackerAuthority"
+    ? move.transition === "RunExecutorInvocationsToCompletion"
+      ? "Lets the coordinator activate each immediately legal opaque executor invocation until the selected executor returns an outer outcome."
+      : move.transition === "RecheckTaskBeforeClaim"
+        ? "Runs production's fresh task-graph stage before any state-changing claim request."
+      : move.origin === "TrackerAuthority"
       ? "Changes or rereads the controlled tracker boundary. Save and Observe remain separate."
       : move.origin === "FrontierTransition"
         ? "Selected by the real frontier and admitted within current capacity."
@@ -199,7 +222,7 @@ const displayAction = (move: LabMove): LabDisplayAction => {
         : "",
     cssClass: status.toLowerCase(),
     enabled: status === "Available",
-    label: moveLabel(move),
+    label: moveLabel(move, snapshot),
     moveId: move.id,
     reason,
     status
@@ -291,12 +314,30 @@ const graphProjections = (snapshot: LabSnapshot): ReadonlyArray<TaskGraphProject
   ]
 }
 
+const workflowStatusLabel = (
+  progress: LabSnapshot["workflowProgress"][number]
+): string => {
+  switch (progress.status) {
+    case "InProgress": return "workflow has another selected move"
+    case "ClaimedTaskNotEligible":
+      return "fresh tracker read stopped the attempt before planning"
+    case "TrackerReadFailed":
+      return "tracker read failed; no later workflow move is authorized"
+    case "ClaimAuthorityChanged":
+      return "the exact owned claim changed; no graph read or later move is authorized"
+    case "ExecutorCompleted":
+      return "selected executor returned its completed outer outcome"
+    case "TaskSelectionUnavailable":
+      return "the claimed task was unavailable when the workflow was selected"
+  }
+}
+
 /** Converts one semantic snapshot into all wording, grouping, ordering, and styling intent. */
 export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   actionGroups: actionGroups.map(({ key, title }) => ({
     actions: snapshot.moves
       .filter(({ origin }) => origin === key)
-      .map(displayAction),
+      .map((move) => displayAction(move, snapshot)),
     key,
     title
   })),
@@ -327,7 +368,10 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   }`,
   notes: [
     "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
+    "The journaled controlled adapter records an exact fake claim; Dalph checks it and rereads current tracker authority before planning.",
     "The orchestrator sees opaque executor invocations. Review strategy and review events stay inside the selected executor protocol.",
+    "The four dry-run executor invocations are shown by ordinal; the coordinator control can run them to completion without four clicks.",
+    "Production has not implemented the specified active-continuation reread before every later executor invocation; the Lab does not fabricate it.",
     "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
     "Journal-reconstructed observation coverage is a membership set, not a graph; it retains no topology.",
     "The browser build still uses the documented temporary Node-platform shim."
@@ -342,10 +386,15 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     `${taskId} · ${kind} · began at journal #${beganAt}`
   ),
   workflowRows: snapshot.workflowProgress.flatMap((progress) => [
+    `${progress.taskId} · selected task revision: ${progress.taskRevision ?? "unavailable"}`,
     `${progress.taskId} · completed: ${progress.completedOperations.join(" → ") || "none"}`,
     progress.nextOperation === null
-      ? `${progress.taskId} · selected executor returned its completed outer outcome`
-      : `${progress.taskId} · next: ${progress.nextOperation}`,
+      ? `${progress.taskId} · ${workflowStatusLabel(progress)}`
+      : progress.nextOperation === "StartExecutorInvocation"
+        ? `${progress.taskId} · next: opaque executor invocation ${
+          progress.completedExecutorInvocations + 1
+        } of ${progress.executorInvocationCount}`
+        : `${progress.taskId} · next: ${progress.nextOperation}`,
     ...progress.trace.map((row) => `${progress.taskId} · ${row}`)
   ]),
   revision: snapshot.revision,

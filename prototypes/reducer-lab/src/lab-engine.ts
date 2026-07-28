@@ -1,24 +1,33 @@
 import { Effect, Schema as S } from "effect"
 import {
+  Effect as ProductionEffect,
+  Layer as ProductionLayer
+} from "../../../node_modules/effect/dist/index.js"
+import {
   ClaimOwner,
   ClaimToken,
   FixtureTarget,
   JournalPosition,
   OperationId,
   RunId,
+  type Task,
   TaskId,
   TaskWorkCapacity,
   TrackerRevision
 } from "../../../packages/orchestrator/src/domain.ts"
-import { workflowJournalEventVersion } from "../../../packages/orchestrator/src/journal-event-version.ts"
 import {
-  intentRecordKey,
-  outcomeRecordKey,
-  TaskClaimAcquisitionIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved,
+  JournalStore,
   type JournalRecord
 } from "../../../packages/orchestrator/src/journal-store.ts"
+import { journaledWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/journaled-workflow-interpreter.ts"
+import {
+  EvidenceStore,
+  ImplementationEvidenceSource
+} from "../../../packages/orchestrator/src/implementation-evidence.ts"
+import {
+  ImplementationReviewer,
+  ReviewFindingsHandback
+} from "../../../packages/orchestrator/src/implementation-review.ts"
 import { reduceManagedHistory } from "../../../packages/orchestrator/src/managed-history.ts"
 import {
   deriveRunFinalityDecision,
@@ -31,16 +40,35 @@ import {
 import { makeTaskAdmissionController } from "../../../packages/orchestrator/src/task-admission-controller.ts"
 import {
   projectTrackerSnapshot,
+  GraphProjectionError,
   taskRevisionFor,
   type ProjectionIssue,
   type TaskDagSnapshot
 } from "../../../packages/orchestrator/src/task-dag.ts"
-import { TaskClaimAcquisition } from "../../../packages/orchestrator/src/tracker-mutation.ts"
+import {
+  ActiveTaskClaim,
+  isExactTaskClaim,
+  TaskClaimAcquisition,
+  TaskClaimConflict
+} from "../../../packages/orchestrator/src/tracker-mutation.ts"
+import { taskExecutorTestLayer } from "../../../packages/orchestrator/src/task-execution.ts"
+import { TaskRunner } from "../../../packages/orchestrator/src/task-work-start.ts"
+import { TrackerGraphReader } from "../../../packages/orchestrator/src/tracker-graph-reader.ts"
+import {
+  AuthoritativeTaskClaimAcquired,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../../packages/orchestrator/src/workflow.ts"
+import { makeDryRunWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/workflow-interpreters.ts"
 import {
   makeTaskClaimAcquisitionOperation,
   makeTrackerGraphObservationOperation
 } from "../../../packages/orchestrator/src/workflow-operation.ts"
 import {
+  type ClaimedTaskEligibility,
+  completedExecutorWorkflowStep,
+  executorInvocationCount,
+  firstExecutorWorkflowStep,
   type ProductionWorkflowProgress,
   replayProductionWorkflow
 } from "./production-workflow-driver.ts"
@@ -81,8 +109,10 @@ export const LabAction = S.Union([
   S.TaggedStruct("DeletedTrackerTask", { taskId: S.String }),
   S.TaggedStruct("SetTrackerClaim", { state: TrackerClaimState, taskId: S.String }),
   S.TaggedStruct("ObservedTrackerGraph", {}),
+  S.TaggedStruct("RecheckedTaskBeforeClaim", { taskId: S.String }),
   S.TaggedStruct("CommittedClaimIntent", { taskId: S.String }),
   S.TaggedStruct("AdvancedTaskWorkflow", { taskId: S.String }),
+  S.TaggedStruct("AdvancedExecutorProtocol", { taskId: S.String }),
   S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, taskId: S.String }),
   S.TaggedStruct("CrashedCoordinator", {}),
   S.TaggedStruct("RestartedCoordinator", {}),
@@ -178,8 +208,19 @@ const ObservationAttempt = S.Union([
 ])
 const WorkflowProgress = S.Struct({
   completedOperations: S.Array(S.String),
+  completedExecutorInvocations: S.Number,
+  executorInvocationCount: S.Number,
   nextOperation: S.NullOr(S.String),
+  status: S.Literals([
+    "InProgress",
+    "ClaimedTaskNotEligible",
+    "TrackerReadFailed",
+    "ClaimAuthorityChanged",
+    "ExecutorCompleted",
+    "TaskSelectionUnavailable"
+  ]),
   taskId: S.String,
+  taskRevision: S.NullOr(S.String),
   trace: S.Array(S.String)
 })
 
@@ -291,59 +332,37 @@ const cloneTasks = (tasks: ReadonlyArray<ControlledTask>): Array<ControlledTask>
 
 const taskId = (value: string): TaskId => TaskId.make(value)
 
-const appendRecord = (
-  records: Array<JournalRecord>,
-  key: JournalRecord["key"],
-  event: JournalRecord["event"]
-): void => {
-  records.push({
-    event,
-    key,
-    position: JournalPosition.make(records.length + 1),
-    runId
-  })
-}
-
 const graphOperation = (
-  records: Array<JournalRecord>,
   ordinal: number,
-  explicitlyCoveredTaskIds: ReadonlyArray<string>
+  explicitlyCoveredTaskIds: ReadonlyArray<string>,
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
 ) => {
   const operationId = OperationId.make(`graph-observation-${ordinal}`)
   const operation = makeTrackerGraphObservationOperation(
     operationId,
     target,
-    [],
+    predecessorOperationIds,
     explicitlyCoveredTaskIds.map(taskId)
   )
-  appendRecord(records, intentRecordKey(operationId), trackerGraphObservationIntent(operation))
   return { operationId, operation }
 }
 
-const appendClaimIntent = (
-  records: Array<JournalRecord>,
+const claimOperation = (
+  ordinal: number,
   subjectTaskId: string,
   predecessorOperationId: OperationId
-): void => {
-  const operationId = OperationId.make(`claim-${subjectTaskId}-${records.length + 1}`)
+): ReturnType<typeof makeTaskClaimAcquisitionOperation> => {
+  const operationId = OperationId.make(`claim-${subjectTaskId}-${ordinal}`)
   const acquisition = TaskClaimAcquisition.make({
     operationId,
     owner,
     taskId: taskId(subjectTaskId),
-    token: ClaimToken.make(`claim-token-${subjectTaskId}-${records.length + 1}`)
+    token: ClaimToken.make(`claim-token-${subjectTaskId}-${ordinal}`)
   })
-  const operation = makeTaskClaimAcquisitionOperation({
+  return makeTaskClaimAcquisitionOperation({
     acquisition,
     predecessorOperationIds: [predecessorOperationId]
   })
-  appendRecord(
-    records,
-    intentRecordKey(operationId),
-    TaskClaimAcquisitionIntendedEvent.make({
-      operation,
-      version: workflowJournalEventVersion
-    })
-  )
 }
 
 const lifecycle = (tag: LabTaskLifecycle) => ({ _tag: tag } as const)
@@ -387,11 +406,16 @@ interface ProductionInput {
   readonly latestObservation: ReadonlyArray<ControlledTask>
   readonly latestProjected: TaskDagSnapshot | null
   readonly observationAttempt: LabSnapshot["observationAttempt"]
+  readonly preclaimReadyTaskIds: ReadonlySet<string>
   readonly records: ReadonlyArray<JournalRecord>
   readonly targetSettled: boolean
   readonly trackerClaims: ReadonlyArray<TrackerClaim>
   readonly trackerTasks: ReadonlyArray<ControlledTask>
+  readonly workflowAcquiredClaims: ReadonlyMap<string, ActiveTaskClaim>
+  readonly workflowAttemptPredecessors: ReadonlyMap<string, OperationId>
+  readonly workflowEligibility: ReadonlyMap<string, ClaimedTaskEligibility>
   readonly workflowSteps: ReadonlyMap<string, number>
+  readonly workflowTasks: ReadonlyMap<string, Task>
 }
 
 const buildProductionInput = (input: LabInput): ProductionInput => {
@@ -406,16 +430,184 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
   let capacity = 1
   let targetSettled = false
   let observationOrdinal = 0
+  let claimOrdinal = 0
   let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
   let latestObservation: ReadonlyArray<ControlledTask> = []
   let latestProjected: TaskDagSnapshot | null = null
   let hasSuccessfulObservation = false
   let observationAttempt: LabSnapshot["observationAttempt"] = { _tag: "NeverAttempted" }
+  const preclaimReadyTaskIds = new Set<string>()
+  const workflowAcquiredClaims = new Map<string, ActiveTaskClaim>()
+  const workflowAttemptPredecessors = new Map<string, OperationId>()
+  const workflowClaimAcquisitions = new Map<string, TaskClaimAcquisition>()
+  const workflowEligibility = new Map<string, ClaimedTaskEligibility>()
   const workflowSteps = new Map<string, number>()
+  const workflowTasks = new Map<string, Task>()
+  const activeClaims = new Map<string, ActiveTaskClaim>()
+
+  const journal = JournalStore.of({
+    append: (recordRunId, key, event) =>
+      ProductionEffect.sync(() => {
+        const existing = records.find((record) => record.key === key)
+        if (existing !== undefined) return existing
+        const record: JournalRecord = {
+          event,
+          key,
+          position: JournalPosition.make(records.length + 1),
+          runId: recordRunId
+        }
+        records.push(record)
+        return record
+      }),
+    read: (recordRunId) =>
+      ProductionEffect.succeed(records.filter((record) => record.runId === recordRunId)),
+    scan: () =>
+      ProductionEffect.succeed({
+        issues: [],
+        runs: records.length === 0 ? [] : [{ records: [...records], runId }]
+      })
+  })
+  const trackerReaderLayer = ProductionLayer.succeed(
+    TrackerGraphReader,
+    TrackerGraphReader.of({
+      read: () => {
+        const projected = projectTrackerSnapshot(projectionInput(
+          trackerTasks,
+          `tracker-revision-${observationOrdinal}`
+        ))
+        return projected._tag === "Invalid"
+          ? ProductionEffect.fail(new GraphProjectionError({ issues: projected.issues }))
+          : ProductionEffect.succeed(projected.snapshot)
+      }
+    })
+  )
+  const dryRunLayer = makeDryRunWorkflowInterpreterLayer().pipe(
+    ProductionLayer.provide(trackerReaderLayer)
+  )
+  const controlledBoundaryLayer = ProductionLayer.effect(
+    WorkflowInterpreter,
+    ProductionEffect.gen(function*() {
+      const dryRun = yield* WorkflowInterpreter
+      return WorkflowInterpreter.of({
+        ...dryRun,
+        acquireTaskClaim: (operation, onIntentRecorded = ProductionEffect.void) =>
+          ProductionEffect.gen(function*() {
+            yield* onIntentRecorded
+            const attempted = operation.acquisition
+            const current = activeClaims.get(attempted.taskId)
+            if (
+              trackerClaims.get(attempted.taskId) === "Unclaimed"
+              || (
+                current !== undefined
+                && isExactTaskClaim(current, ActiveTaskClaim.make(attempted))
+              )
+            ) {
+              const acquired = ActiveTaskClaim.make(attempted)
+              trackerClaims.set(attempted.taskId, "OwnedByLab")
+              activeClaims.set(attempted.taskId, acquired)
+              return AuthoritativeTaskClaimAcquired.make({ claim: acquired })
+            }
+            const observed = current ?? ActiveTaskClaim.make({
+              operationId: OperationId.make(`foreign-claim:${attempted.taskId}`),
+              owner: ClaimOwner.make("foreign-owner"),
+              taskId: attempted.taskId,
+              token: ClaimToken.make(`foreign-token:${attempted.taskId}`)
+            })
+            return yield* new TaskClaimConflict({ attempted, observed })
+          })
+      })
+    })
+  ).pipe(ProductionLayer.provide(dryRunLayer))
+  const unusedEvidenceLayer = ProductionLayer.merge(
+    ProductionLayer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: () => ProductionEffect.die("Lab boundary replay does not store evidence"),
+        read: () => ProductionEffect.die("Lab boundary replay does not read evidence")
+      })
+    ),
+    ProductionLayer.succeed(
+      ImplementationEvidenceSource,
+      ImplementationEvidenceSource.of({
+        readDiff: () => ProductionEffect.die("Lab boundary replay does not read Git")
+      })
+    )
+  )
+  const unusedReviewLayer = ProductionLayer.merge(
+    ProductionLayer.succeed(
+      ImplementationReviewer,
+      ImplementationReviewer.of({
+        createOrResume: () => ProductionEffect.die("Lab boundary replay does not invoke reviewers")
+      })
+    ),
+    ProductionLayer.succeed(
+      ReviewFindingsHandback,
+      ReviewFindingsHandback.of({
+        deliverOrResume: () => ProductionEffect.die("Lab boundary replay does not hand back findings")
+      })
+    )
+  )
+  const boundaryLayer = journaledWorkflowInterpreterLayer(
+    runId,
+    controlledBoundaryLayer,
+    taskExecutorTestLayer,
+    unusedEvidenceLayer,
+    unusedReviewLayer
+  ).pipe(
+    ProductionLayer.provide(ProductionLayer.succeed(
+      TaskRunner,
+      TaskRunner.of({
+        lookupTaskWorkSession: () => ProductionEffect.die("Lab boundary replay does not inspect sessions"),
+        requestTaskWorkStart: () => ProductionEffect.die("Lab boundary replay does not start sessions")
+      })
+    )),
+    ProductionLayer.provide(ProductionLayer.succeed(
+      WorkflowTrace,
+      WorkflowTrace.of({ emit: () => ProductionEffect.void })
+    )),
+    ProductionLayer.provide(ProductionLayer.succeed(JournalStore, journal))
+  )
+  const boundaryInterpreter = ProductionEffect.runSync(
+    ProductionEffect.gen(function*() {
+      return yield* WorkflowInterpreter
+    }).pipe(ProductionEffect.provide(boundaryLayer))
+  )
+
+  const observeTrackerGraph = (
+    explicitlyCoveredTaskIds: ReadonlyArray<string>,
+    predecessorOperationIds: ReadonlyArray<OperationId> = []
+  ): TaskDagSnapshot | null => {
+    observationOrdinal += 1
+    const operation = graphOperation(
+      observationOrdinal,
+      explicitlyCoveredTaskIds,
+      predecessorOperationIds
+    )
+    latestGraphOperationId = operation.operationId
+    const revision = `tracker-revision-${observationOrdinal}`
+    const result = ProductionEffect.runSync(
+      ProductionEffect.result(boundaryInterpreter.readTrackerGraph(operation.operation))
+    )
+    if (result._tag === "Failure") {
+      observationAttempt = {
+        _tag: "Failed",
+        issues: result.failure instanceof GraphProjectionError
+          ? result.failure.issues.map(issueText)
+          : [String(result.failure)]
+      }
+      return null
+    }
+    latestObservation = cloneTasks(trackerTasks)
+    latestProjected = result.success
+    hasSuccessfulObservation = true
+    observationAttempt = { _tag: "Succeeded", revision }
+    return result.success
+  }
 
   for (const action of input.actions) {
     switch (action._tag) {
       case "ReplacedTrackerTask": {
+        preclaimReadyTaskIds.clear()
         allAuthorityTaskIds.add(action.task.id)
         const index = trackerTasks.findIndex(({ id }) => id === action.task.id)
         trackerTasks = index === -1
@@ -429,48 +621,120 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
         break
       }
       case "DeletedTrackerTask":
+        preclaimReadyTaskIds.clear()
         allAuthorityTaskIds.add(action.taskId)
         trackerTasks = trackerTasks.filter(({ id }) => id !== action.taskId)
         trackerClaims.delete(action.taskId)
         break
       case "SetTrackerClaim":
         trackerClaims.set(action.taskId, action.state)
-        break
-      case "ObservedTrackerGraph": {
-        observationOrdinal += 1
-        const operation = graphOperation(records, observationOrdinal, [...allAuthorityTaskIds])
-        latestGraphOperationId = operation.operationId
-        const revision = `tracker-revision-${observationOrdinal}`
-        const projected = projectTrackerSnapshot(projectionInput(trackerTasks, revision))
-        if (projected._tag === "Invalid") {
-          observationAttempt = {
-            _tag: "Failed",
-            issues: projected.issues.map(issueText)
+        if (action.state === "OwnedByLab") {
+          const acquisition = workflowClaimAcquisitions.get(action.taskId)
+          if (acquisition !== undefined) {
+            activeClaims.set(action.taskId, ActiveTaskClaim.make(acquisition))
           }
         } else {
-          appendRecord(
-            records,
-            outcomeRecordKey(operation.operationId),
-            trackerGraphOutcomeObserved(operation.operationId, {
-              _tag: "TrackerGraphObserved",
-              revision: projected.snapshot.revision,
-              taskIds: projected.snapshot.taskIds()
-            })
-          )
-          latestObservation = cloneTasks(trackerTasks)
-          latestProjected = projected.snapshot
-          hasSuccessfulObservation = true
-          observationAttempt = { _tag: "Succeeded", revision }
+          activeClaims.delete(action.taskId)
+        }
+        break
+      case "ObservedTrackerGraph": {
+        preclaimReadyTaskIds.clear()
+        observeTrackerGraph([...allAuthorityTaskIds])
+        break
+      }
+      case "RecheckedTaskBeforeClaim": {
+        const projected = observeTrackerGraph([action.taskId])
+        if (
+          projected?.eligibleTasks().some(({ id }) => id === taskId(action.taskId))
+        ) {
+          preclaimReadyTaskIds.add(action.taskId)
         }
         break
       }
-      case "CommittedClaimIntent":
-        appendClaimIntent(records, action.taskId, latestGraphOperationId)
+      case "CommittedClaimIntent": {
+        const capturedObservation = projectTrackerSnapshot(
+          projectionInput(latestObservation, "claim-captured-observation")
+        )
+        const selectedTask = capturedObservation._tag === "Valid"
+          ? capturedObservation.snapshot.eligibleTasks().find(
+            ({ id }) => id === taskId(action.taskId)
+          )
+          : undefined
+        if (selectedTask !== undefined) workflowTasks.set(action.taskId, selectedTask)
+        workflowAttemptPredecessors.set(action.taskId, latestGraphOperationId)
+        claimOrdinal += 1
+        const operation = claimOperation(
+          claimOrdinal,
+          action.taskId,
+          latestGraphOperationId
+        )
+        const acquisition = operation.acquisition
+        workflowClaimAcquisitions.set(action.taskId, acquisition)
+        const claimResult = ProductionEffect.runSync(
+          ProductionEffect.result(boundaryInterpreter.acquireTaskClaim(operation))
+        )
+        if (
+          claimResult._tag === "Success"
+          && claimResult.success._tag === "AuthoritativeTaskClaimAcquired"
+        ) {
+          workflowAcquiredClaims.set(action.taskId, claimResult.success.claim)
+        }
+        workflowEligibility.set(action.taskId, "Pending")
         workflowSteps.set(action.taskId, 1)
         break
-      case "AdvancedTaskWorkflow":
-        workflowSteps.set(action.taskId, (workflowSteps.get(action.taskId) ?? 0) + 1)
+      }
+      case "AdvancedTaskWorkflow": {
+        const completedSteps = workflowSteps.get(action.taskId) ?? 0
+        if (
+          completedSteps === 1
+          && workflowEligibility.get(action.taskId) === "Pending"
+        ) {
+          const acquisition = workflowClaimAcquisitions.get(action.taskId)
+          const activeClaim = activeClaims.get(action.taskId)
+          if (
+            acquisition === undefined
+            || activeClaim === undefined
+            || !isExactTaskClaim(activeClaim, ActiveTaskClaim.make(acquisition))
+          ) {
+            workflowEligibility.set(action.taskId, "ClaimUnavailable")
+            workflowSteps.set(action.taskId, 2)
+            break
+          }
+          const projected = observeTrackerGraph(
+            [action.taskId],
+            [acquisition.operationId]
+          )
+          workflowAttemptPredecessors.set(action.taskId, latestGraphOperationId)
+          const admittedTask = projected?.eligibleTasks().find(
+            ({ id }) => id === taskId(action.taskId)
+          )
+          if (admittedTask !== undefined) {
+            workflowTasks.set(action.taskId, admittedTask)
+          }
+          workflowEligibility.set(
+            action.taskId,
+            projected === null
+              ? "Unreadable"
+              : admittedTask !== undefined
+                ? "Eligible"
+                : "NotEligible"
+          )
+          workflowSteps.set(action.taskId, 2)
+          break
+        }
+        workflowSteps.set(action.taskId, completedSteps + 1)
         break
+      }
+      case "AdvancedExecutorProtocol": {
+        const completedSteps = workflowSteps.get(action.taskId) ?? 0
+        if (
+          completedSteps >= firstExecutorWorkflowStep
+          && completedSteps < completedExecutorWorkflowStep
+        ) {
+          workflowSteps.set(action.taskId, completedExecutorWorkflowStep)
+        }
+        break
+      }
       case "SuppliedFreshFact":
         freshFacts.set(action.taskId, action.fact)
         break
@@ -504,11 +768,16 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
     latestObservation,
     latestProjected,
     observationAttempt,
+    preclaimReadyTaskIds,
     records,
     targetSettled,
     trackerClaims: [...trackerClaims].map(([taskId, state]) => ({ state, taskId })),
     trackerTasks,
-    workflowSteps
+    workflowAcquiredClaims,
+    workflowAttemptPredecessors,
+    workflowEligibility,
+    workflowSteps,
+    workflowTasks
   }
 }
 
@@ -554,6 +823,7 @@ const frontierMove = (
   transition: RunnableFrontierTransition,
   admitted: ReadonlyArray<RunnableFrontierTransition>,
   coordinatorRunning: boolean,
+  preclaimReadyTaskIds: ReadonlySet<string>,
   workflowProgress: ReadonlyMap<string, ProductionWorkflowProgress>
 ): LabMove => {
   const subjectTaskId = runnableTransitionTaskId(transition)
@@ -583,6 +853,23 @@ const frontierMove = (
         owningIssue: "prototype driver gap",
         reason: "ProductionTransitionNotDriven"
       }
+    )
+  }
+  if (!preclaimReadyTaskIds.has(subjectTaskId)) {
+    return move(
+      `workflow:recheck-before-claim:${subjectTaskId}`,
+      "FrontierTransition",
+      "RecheckTaskBeforeClaim",
+      { _tag: "Task", taskId: subjectTaskId },
+      coordinatorRunning
+        ? {
+          _tag: "Available",
+          input: {
+            _tag: "RecheckedTaskBeforeClaim",
+            taskId: subjectTaskId
+          }
+        }
+        : { _tag: "Waiting", reason: "CoordinatorStopped" }
     )
   }
   const isAdmitted = admitted.some((candidate) =>
@@ -742,17 +1029,26 @@ const reconstructThroughProduction = (
     const workflowProgress = yield* Effect.forEach(
       [...built.workflowSteps],
       ([subjectTaskId, steps]) => {
-        const task = built.latestProjected?.eligibleTasks().find(({ id }) => id === taskId(subjectTaskId))
+        const task = built.workflowTasks.get(subjectTaskId)
         return task === undefined
           ? Effect.succeed<ProductionWorkflowProgress>({
             completedOperations: [],
+            completedExecutorInvocations: 0,
+            executorInvocationCount,
             nextOperation: null,
+            status: "TaskSelectionUnavailable",
             taskId: subjectTaskId,
-            trace: ["Task is absent from the latest successful observation."]
+            taskRevision: null,
+            trace: ["No task was captured when the claim move was selected."]
           })
-          : replayProductionWorkflow(task, steps, built.latestGraphOperationId) as unknown as Effect.Effect<
-            ProductionWorkflowProgress
-          >
+          : replayProductionWorkflow(
+            task,
+            steps,
+            built.workflowEligibility.get(subjectTaskId) ?? "Pending",
+            built.workflowAcquiredClaims.get(subjectTaskId),
+            built.workflowAttemptPredecessors.get(subjectTaskId)
+              ?? built.latestGraphOperationId
+          ) as unknown as Effect.Effect<ProductionWorkflowProgress>
       }
     )
     const workflowProgressByTask = new Map(
@@ -877,6 +1173,7 @@ const reconstructThroughProduction = (
             transition,
             admitted,
             built.coordinatorRunning,
+            built.preclaimReadyTaskIds,
             workflowProgressByTask
           )
         ),
@@ -899,6 +1196,25 @@ const reconstructThroughProduction = (
                   }
                   : { _tag: "Waiting", reason: "CoordinatorStopped" }
               )]
+        ),
+        ...workflowProgress.flatMap((progress) =>
+          progress.nextOperation === "StartExecutorInvocation"
+            ? [move(
+              `coordinator:run-executor:${progress.taskId}:${progress.completedExecutorInvocations}`,
+              "CoordinatorProcess",
+              "RunExecutorInvocationsToCompletion",
+              { _tag: "Task", taskId: progress.taskId },
+              built.coordinatorRunning
+                ? {
+                  _tag: "Available",
+                  input: {
+                    _tag: "AdvancedExecutorProtocol",
+                    taskId: progress.taskId
+                  }
+                }
+                : { _tag: "Waiting", reason: "CoordinatorStopped" }
+            )]
+            : []
         ),
         ...driverMoves(
           built.coordinatorRunning,
