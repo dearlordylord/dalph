@@ -11,6 +11,10 @@
   "scripts": {
     "prepare": "husky",
     "build": "pnpm --filter './packages/**' --if-present run build",
+    "memory": "node scripts/project-memory.mjs",
+    "memory:update": "node scripts/update-project-memory-toolkit.mjs",
+    "memory:wake": "node scripts/project-memory.mjs wake",
+    "test:memory": "node --test scripts/project-memory.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "pnpm lint:code && pnpm check:duplicates",
     "lint:code": "eslint 'src/**/*.{ts,tsx}' 'packages/**/*.{ts,tsx,mjs}' 'scripts/**/*.{ts,mjs}' 'test/**/*.{ts,tsx}' '*.config.{ts,mjs}' --no-error-on-unmatched-pattern --max-warnings 0",

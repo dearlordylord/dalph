@@ -1,0 +1,1 @@
+#0 2026-07-28 Codex built-in Memories are disabled; checked-in OptMem is advisory, and only the master worktree publishes entries.                                                                                                                                                                                             

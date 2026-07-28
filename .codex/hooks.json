@@ -1,0 +1,20 @@
+{
+  "description": "Load Dalph's checked-in OptMem project memory.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/project-memory.mjs\" wake",
+            "commandWindows": "powershell.exe -NoProfile -Command \"$root = git rev-parse --show-toplevel; & node (Join-Path $root 'scripts/project-memory.mjs') wake\"",
+            "statusMessage": "Loading Dalph project memory",
+            "additionalContextLimit": 5000,
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
