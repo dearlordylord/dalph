@@ -14,36 +14,51 @@ and executor capabilities. “Interpreter” names this operation handler, not a
 environment or runtime mode; one Layer may intentionally combine real behavior
 at one boundary with simulated behavior at another.
 
-## Workflow Actions, Occurrences, and Lab Controls
+## Workflow Commands, Actions, Occurrences, and Events
 
-A workflow action is intentionally initiated by a named actor. A workflow
-occurrence is any concrete happening relevant to a run, including an action but
-also an unchosen coordinator crash, timeout, or process exit. Dalph may select
-an observation operation that later reports an occurrence; selecting the
-observation did not select the reported occurrence. A workflow-journal event is
-the durable record of Dalph's intent or observation and is not interchangeable
-with either the action or occurrence.
+A command, request, available capability, frontier proposal, or constructed
+workflow operation asks for or describes work that may happen. It is not a
+past-tense fact. A workflow occurrence is a concrete happening relevant to a
+run. An initiated action is an occurrence intentionally initiated by a typed
+actor; a non-action occurrence is not itself an action even when an action
+caused it, requested it, or caused Dalph to observe it.
 
-Production and test-support values exposed to a presentation must declare two
-independent facts in their originating tagged domain type:
+A workflow event is the immutable production domain value representing one
+past-tense occurrence. A journal event record is the durable storage envelope
+for such a value and is neither the physical occurrence nor external authority.
+Recording an operation intent, sending its request, receiving its boundary
+result, and observing an authority fact remain distinct events when the
+accepted protocol needs each fact.
 
-- whether the represented happening is an actor-selected action or an
-  occurrence without a selecting production actor; and
-- whether its immediate source is a production selection, an external
-  authority, a Lab fault injection, or an explicitly synthetic unproven input.
+Every production event type exposed to a generic consumer declares exactly one
+runtime-visible classification in its originating tagged domain type:
+`InitiatedAction` or `NonActionOccurrence`. An initiated action carries
+`initiatedBy`; a non-action occurrence does not copy an actor from a causally
+related action. Actor variants are usage-earned from accepted production
+actions. V1 has one `Operator` and no authentication boundary or operator
+identity. A new actor or event variant must make every exhaustive production
+projection and generic consumer fail typechecking until handled.
 
-A presentation may map those generic tags to colors, borders, and explanatory
-text. It must not maintain an operation-name, transition-name, or button-label
-map that independently decides the category. Adding a new happening variant
-must make its source declaration and every exhaustive consumer fail
-typechecking until handled.
+Concrete event types retain their exact domain names and their usage-shaped
+origin, causal-predecessor, authority-evidence, observation-evidence, freshness,
+coverage, and journal-position relationships. Those facts do not become a
+generic source or provenance category. An observation references an originating
+action only when production evidence establishes that relationship; reduction
+must reject a mismatched relationship instead of fabricating it.
 
-A Lab crash control is therefore a Lab-selected action that injects a valid
-production occurrence. A direct assertion of an authority fact without the
-required operation identity, read result, coverage, freshness, and journal
-relationship is instead a synthetic unproven input. The Lab may expose such an
-input for component exploration only when its type and presentation make that
-status explicit; it must not present it as a production workflow action.
+A presentation may map the two generic occurrence classifications and
+usage-earned actor variants to visual treatment. It must not maintain an
+operation-name, event-name, transition-name, button-label, Lab-source, or test-
+source map that independently decides semantics. Synthetic unsupported input
+fails the production type boundary rather than becoming another occurrence
+category.
+
+A dying coordinator cannot record its own death. The workflow journal contains
+no synthetic coordinator-crash event, and startup recovery reconstructs every
+retained prefix without requiring or inferring one. A future production value
+may represent that non-action occurrence only when an accepted external
+process-lifecycle boundary truthfully reports it; a Quint action, conformance
+control, missing journal row, or prototype control is not that evidence.
 
 ## Historical-Harness Boundary
 
@@ -398,7 +413,7 @@ foreign claim.
 
 When authored task instructions change before promotion, Dalph stops the exact
 active executor invocation and observes it to a terminal outer result. The
-Dalph user must then choose one of three distinct durable actions:
+Operator must then choose one of three distinct durable actions:
 
 1. Continue the existing attempt with an override naming the planned and newly
    observed fingerprints. The override does not claim that the executor

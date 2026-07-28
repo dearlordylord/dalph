@@ -377,8 +377,8 @@ select replacement, preservation, or failure explicitly.
 _Avoid_: Provider work unit absent, provider work unit temporarily unreadable, no matching task-work session reported
 
 **Dalph-assigned identity**:
-An identity Dalph creates before recording or requesting a workflow action, such
-as a `RunId` or `OperationId`.
+An identity Dalph creates before recording or executing a workflow operation,
+such as a `RunId` or `OperationId`.
 _Avoid_: Managed identity, provider-reported identity
 
 **Provider-reported identity**:
@@ -662,26 +662,33 @@ it. A coordinator process dying, a provider request timing out, a worker
 exiting, and a person editing a tracker task are workflow occurrences. An
 occurrence is not automatically a Dalph-selected operation, and the journal
 event that later records Dalph's observation is not the occurrence itself.
-_Avoid_: Workflow action, workflow operation, workflow-journal event, Lab control
+_Avoid_: Workflow operation, workflow event, journal event record
 
-**Workflow action**:
-A workflow occurrence intentionally initiated by a named actor, such as the
-Dalph user requesting Pause, Dalph asking the task tracker for a fresh read, or
-a person editing a tracker task. A coordinator crash is not a workflow action:
-it can happen in production, but no production actor selects it. A Lab control
-that deliberately injects a crash is a Lab action representing that production
-occurrence; it does not turn the represented crash into a production action.
-_Avoid_: Workflow occurrence without an initiating actor, journal event,
-unattributed external change
+**Initiated action**:
+A past-tense workflow occurrence intentionally initiated by a typed actor. Its
+production value carries `initiatedBy`; a command, request, available
+capability, proposal, or constructed operation is not yet an initiated action.
+_Avoid_: Command, intended action, actor-selected category
+
+**Non-action occurrence**:
+A past-tense workflow occurrence that is not itself an action, even when an
+initiated action requested it, caused it, or caused Dalph to observe it. It does
+not copy `initiatedBy` from a related action.
+_Avoid_: Uninitiated occurrence, action outcome as action
+
+**Workflow event**:
+The immutable production domain value representing one past-tense workflow
+occurrence. Its concrete tagged type retains the occurrence name,
+`InitiatedAction` or `NonActionOccurrence` classification, and only the
+usage-shaped causal or evidence relationships that production can prove.
+_Avoid_: Command, proposed operation, physical occurrence, journal event record
 
 **Workflow operation**:
-One named Dalph-selected workflow action or observation, such as requesting
-task-work start or recording a task-runner report. An observation may report a
-workflow occurrence that Dalph did not select. The operation, reported
-occurrence, and journal event recording the result remain distinct. A workflow
-operation is neither the whole task nor an individual SDK, CLI, or agent tool
-call.
-_Avoid_: Generic operation, tool call, task, external occurrence
+One named Dalph instruction describing a selected boundary action or
+observation, such as requesting task-work start or reading a task-runner
+report. The value is not the past-tense event proving intent commit, boundary
+invocation, or result.
+_Avoid_: Generic operation, tool call, task, workflow event
 
 **Workflow operation intent**:
 The immutable journal event recording one selected workflow operation before
@@ -720,7 +727,7 @@ _Avoid_: Attempt abandoned, task completed, external history rewritten
 
 **Continuation constraint**:
 One independently derived fact that prevents a named forward-progress action
-until its owning authority changes or the Dalph user records an accepted
+until its owning authority changes or Operator records an accepted
 disposition. It composes with pause and other constraints instead of becoming a
 combined task status.
 _Avoid_: Generic blocker, whole-run failure, persisted workflow stage
@@ -952,35 +959,15 @@ is excluded from the admission set because every task admission position is
 has an unresolved provider-correlation conflict.
 _Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
-**Control command identity (provisional)**:
-The branded `ControlCommandId` carried by one exact user control request in the
-current issue #62 implementation. That implementation stores the received
-request in the run's workflow journal and uses the identity to distinguish an
-exact redelivery from contradictory reuse. This is not an accepted requirement
-to persist receipt or allocate an identity before append. Issue #155 decides
-what durable fact proves Dalph applied a Pause or Unpause direction, whether
-that fact needs an identity, and which boundary would create one. It remains
-distinct from the `OperationId` of any later workflow action.
-_Avoid_: Accepted command-ID protocol, applied Pause or Unpause evidence,
-operation identity, run identity, provider request identity
-
-**Authenticated operator identity**:
-The branded local-transport identity of the Dalph user who issued one exact
-control command. The authenticating transport supplies it to the
-transport-independent control service; decoding a client payload does not
-authenticate the user. Recording the identity provides command attribution and
-does not grant task-claim, Git, executor, or provider authority.
-_Avoid_: Claim owner identity, provider-user identity, client-supplied username
-
-**Dalph user**:
-The single human actor who issues pause, unpause, interruption, cancellation,
-and other control commands to Dalph. V1 records the authenticated operator
-identity on each command but does not define roles, multi-user authorization
-policy, or transfer command authority between users.
-_Avoid_: Claim owner identity, provider-user identity, authorization role
+**Operator**:
+The single human actor who issues Pause, Unpause, interruption, cancellation,
+and other control commands to Dalph. V1 has no authentication boundary,
+operator identity, roles, multi-operator attribution, or transfer of control
+authority.
+_Avoid_: Dalph user, authenticated operator identity, authorization role
 
 **User-requested run pause**:
-The durable pause of one exact `RunId` requested by the Dalph user. Dalph
+The durable pause of one exact `RunId` requested by Operator. Dalph
 selects no new forward-progress action for any task in that run after each
 already-started action reaches its specified safe boundary. A run pause does
 not create a user-requested task pause for each task. Unpausing the run removes
@@ -1008,10 +995,10 @@ claimed and pausing.
 _Avoid_: Task lifecycle, task claim state, combined task status
 
 **User-requested task pause**:
-The durable pause of one exact `(RunId, TaskId)` pair requested by the Dalph
-user. After the request reaches its specified safe boundary, Dalph does not
+The durable pause of one exact `(RunId, TaskId)` pair requested by Operator.
+After the request reaches its specified safe boundary, Dalph does not
 select new forward-progress actions for that task in that run. A task-graph
-change does not remove the pause; the Dalph user must request Unpause. A
+change does not remove the pause; Operator must request Unpause. A
 later run containing the same tracker task does not inherit the pause. The
 task's prerequisites and dependents do not become paused merely because this
 task is paused. Its transitive grouping descendants receive grouping-pause
@@ -1053,12 +1040,12 @@ task or a grouping-covered descendant, and their preserved responsibilities are
 explicit. An unresolved request, unreadable authority, or covered descendant
 still reaching its boundary keeps the selected parent task pausing with a
 concrete progress reason. The paused phase creates no polling loop or periodic
-authority read. Only a user Unpause request or a separately configured
+authority read. Only an Operator Unpause request or a separately configured
 observation policy causes new reads for the task.
 _Avoid_: Task pausing, dependency-blocked task, run blocked
 
 **Task resuming**:
-The nonterminal state after the Dalph user requests Unpause and before Dalph
+The nonterminal state after Operator requests Unpause and before Dalph
 allows another forward-progress action for the task. Dalph freshly reads the
 task, claim, applicable task-graph facts, Git resources, and task-work-provider
 state required by the task's preserved responsibilities. Compatible facts
