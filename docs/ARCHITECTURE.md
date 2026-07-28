@@ -168,7 +168,7 @@ boundary; the
 decides what may continue afterward. Unpausing alone never reconciles changed
 task intent.
 
-## Pause and Resume
+## Pause, Unpause, and Resumption
 
 A user-requested task pause does not cancel a bounded state-changing request
 that Dalph already sent for that task. The request may be a quick local Git call
@@ -190,18 +190,26 @@ rules.
 A user-requested run pause is one run-level state, not a batch of
 user-requested task pauses. It prevents selection of new forward-progress
 operations across the run while each already-started task action reaches the
-same boundary it would use for a task pause. Resuming the run removes only the
+same boundary it would use for a task pause. Unpausing the run removes only the
 run-level state; any independently requested task pause remains in force.
 
 The control surface records four distinct durable commands in the run's
 workflow journal before selecting any resulting boundary action: request run
-pause, request run resume, request task pause, and request task resume. They set
-the requested direction for one exact pause subject; they are not reference
-counts. Repeating Pause does not stack another pause or require another Resume.
+pause, request run unpause, request task pause, and request task unpause. They
+set the requested direction for one exact pause subject; they are not reference
+counts. Repeating Pause does not stack another pause or require another
+Unpause.
 Each carries a branded `ControlCommandId`; an exact identity-and-payload
 delivery retry is idempotent, while reusing the identity for a different command
 is a typed contradiction. A later command with a new identity may change the
 requested direction without cancelling an already-started safety action.
+
+Issue #155 reconsiders the preceding receipt-durability protocol. A control
+request that disappears before Dalph applies its direction may be lost. The
+replacement design must retain enough durable evidence to reconstruct an
+applied Pause or Unpause direction without treating receipt alone as applied;
+command-id allocation remains undecided. Issues #134 and #135 do not consume
+the provisional receipt protocol until that decision closes.
 
 The pause reducer maintains run pause and per-task pause phases independently
 from tracker lifecycle, task claims, workflow stages, and resource
@@ -210,7 +218,7 @@ their Cartesian product as one task-status enum. A pause request therefore does
 not acquire a missing claim, release an existing claim, or replace either claim
 fact; an unclaimed task can remain paused.
 
-The journal records user pause and resume commands, not `Pausing` or `Paused`
+The current journal records user Pause and Unpause commands, not `Pausing` or `Paused`
 status updates. The pure pause reducer derives each phase and its tagged
 progress reason from those commands, ordinary workflow outcomes, current
 grouping coverage, and outstanding responsibilities. A task pause remains
@@ -221,7 +229,7 @@ Every task pause is scoped to one exact `(RunId, TaskId)` pair. A terminated run
 never reopens, and a later run that observes the same tracker task does not
 inherit the earlier run's pause. Restarting a coordinator for a nonterminal
 paused run reconstructs that same run and pause from its journal, then remains
-passive until resume. A new run and a resumed paused run both read current
+passive until Unpause. A new run and an unpaused run both read current
 tracker facts; neither restores a saved task graph.
 
 A task pause covers the selected task and every task reached by following
@@ -281,7 +289,7 @@ shared resource, Dalph does not begin that integration attempt. A future
 cancel-integration policy is a separate command and does not change pause
 semantics.
 
-A user resume request moves a task into `TaskResuming`; it does not
+A user Unpause request moves a task into `TaskResuming`; it does not
 directly start or resume a worker. Dalph freshly rereads the exact task, claim,
 applicable dependency and grouping facts, Git resources, task-work session,
 worker or provider work unit, evidence, review, handback, and integration facts
@@ -293,11 +301,11 @@ without stale task work restarting. The canonical
 [external-change table](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#active-task-continuation-and-external-changes)
 owns those per-observation choices.
 
-If the user requests resume while a task is still pausing, Dalph records the
+If the user requests Unpause while a task is still pausing, Dalph records the
 new requested destination but does not cancel an already-sent interruption or
 start another worker. It first observes or reconciles the original worker and
 every other already-started operation to their safe boundaries, then performs
-the ordinary resume reads. The derived progress reason names the operation that
+the ordinary resuming reads. The derived progress reason names the operation that
 still prevents resumption.
 
 Pause handling does not select a replacement task or execute a pause-specific
@@ -314,7 +322,7 @@ fresh observation, and resumption semantics before pause may select it.
 A confirmed task or run pause is passive. Pause state by itself schedules no
 polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
 review read. The workflow journal preserves the pause and outstanding
-responsibilities. A user resume request triggers the required fresh reads; a
+responsibilities. A user Unpause request triggers the required fresh reads; a
 separately accepted observation policy may also read paused subjects without
 authorizing forward progress.
 
@@ -544,7 +552,7 @@ responsibility for both.
 
 If responsible task `A` is paused after its worker stops, it retains its claim
 and recoverable resources but holds no admission position. Fresh task `B` may
-use the sole position. A later resume request triggers `A`'s required fresh
+use the sole position. A later Unpause request triggers `A`'s required fresh
 reads while `B` continues. If `A` becomes ready before `B` finishes, it derives
 capacity waiting without a journal event. When `B` releases the position, `A`
 is admitted before fresh task `C`; if `A` is paused, blocked, or isolated

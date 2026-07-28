@@ -878,13 +878,17 @@ is excluded from the admission set because every task admission position is
 reserved or occupied.
 _Avoid_: Durable waiting status, retry deferral, dependency-blocked task
 
-**Control command identity**:
-The branded `ControlCommandId` assigned to one exact user control command before
-Dalph appends that command to a run's workflow journal. Redelivery of the same
-identity and payload is idempotent; reusing the identity with a different
-command or subject is a typed contradiction. It is distinct from the
-`OperationId` of any workflow action later selected to carry out the command.
-_Avoid_: Operation identity, run identity, provider request identity
+**Control command identity (provisional)**:
+The branded `ControlCommandId` carried by one exact user control request in the
+current issue #62 implementation. That implementation stores the received
+request in the run's workflow journal and uses the identity to distinguish an
+exact redelivery from contradictory reuse. This is not an accepted requirement
+to persist receipt or allocate an identity before append. Issue #155 decides
+what durable fact proves Dalph applied a Pause or Unpause direction, whether
+that fact needs an identity, and which boundary would create one. It remains
+distinct from the `OperationId` of any later workflow action.
+_Avoid_: Accepted command-ID protocol, applied Pause or Unpause evidence,
+operation identity, run identity, provider request identity
 
 **Authenticated operator identity**:
 The branded local-transport identity of the Dalph user who issued one exact
@@ -895,23 +899,24 @@ does not grant task-claim, Git, executor, or provider authority.
 _Avoid_: Claim owner identity, provider-user identity, client-supplied username
 
 **Dalph user**:
-The single human actor who issues pause, resume, interruption, cancellation, and
-other control commands to Dalph. V1 records the authenticated operator identity
-on each command but does not define roles, multi-user authorization policy, or
-transfer command authority between users.
+The single human actor who issues pause, unpause, interruption, cancellation,
+and other control commands to Dalph. V1 records the authenticated operator
+identity on each command but does not define roles, multi-user authorization
+policy, or transfer command authority between users.
 _Avoid_: Claim owner identity, provider-user identity, authorization role
 
 **User-requested run pause**:
 The durable pause of one exact `RunId` requested by the Dalph user. Dalph
 selects no new forward-progress action for any task in that run after each
 already-started action reaches its specified safe boundary. A run pause does
-not create a user-requested task pause for each task. Resuming the run removes
-only the run pause; independently paused tasks remain paused.
+not create a user-requested task pause for each task. Unpausing the run removes
+only the run pause; independently paused tasks remain paused. Resuming describes
+later workflow progress after the Unpause direction.
 _Avoid_: Collection of task pauses, run termination, run blocked
 
 **Run pause phase**:
 The reconstructed pause dimension for one run: unpaused, pausing, paused, or
-resuming. Dalph derives it from the run's durable user pause and resume commands
+resuming. Dalph derives it from the run's accepted Pause or Unpause direction
 and the safe-boundary progress of every affected task; it does not write a
 separate phase record. One task or grouping-covered descendant still reaching a
 safe boundary keeps the run pausing and supplies its tagged progress reason.
@@ -919,8 +924,8 @@ _Avoid_: Run termination, collection of task pause phases, persisted run status
 
 **Task pause phase**:
 The reconstructed pause dimension for one task in one run: unpaused, pausing,
-paused, or resuming. Dalph derives it from durable user pause and resume
-commands, ordinary workflow outcomes, current grouping-pause coverage, and
+paused, or resuming. Dalph derives it from the accepted user Pause or Unpause
+direction, ordinary workflow outcomes, current grouping-pause coverage, and
 outstanding responsibilities; it does not write a separate phase record. The
 phase composes with rather than replaces the task tracker's lifecycle and claim
 facts, the task's workflow stage, and its resource responsibilities. For
@@ -932,7 +937,7 @@ _Avoid_: Task lifecycle, task claim state, combined task status
 The durable pause of one exact `(RunId, TaskId)` pair requested by the Dalph
 user. After the request reaches its specified safe boundary, Dalph does not
 select new forward-progress actions for that task in that run. A task-graph
-change does not remove the pause; the Dalph user must request its resume. A
+change does not remove the pause; the Dalph user must request Unpause. A
 later run containing the same tracker task does not inherit the pause. The
 task's prerequisites and dependents do not become paused merely because this
 task is paused. Its transitive grouping descendants receive grouping-pause
@@ -954,7 +959,7 @@ ancestor or sibling, or require the parent task to complete.
 _Avoid_: User-requested task pause, dependency-blocked task, persisted pause closure
 
 **Task pausing**:
-The nonterminal state after Dalph records a user-requested task pause and before
+The nonterminal state after Dalph accepts a user-requested task pause and before
 it confirms the task's safe pause boundary. Dalph selects no new
 forward-progress action for the task, but it continues the exact bounded wait,
 fresh result check, worker interruption, or provider observation needed to
@@ -974,21 +979,21 @@ task or a grouping-covered descendant, and their preserved responsibilities are
 explicit. An unresolved request, unreadable authority, or covered descendant
 still reaching its boundary keeps the selected parent task pausing with a
 concrete progress reason. The paused phase creates no polling loop or periodic
-authority read. Only a user resume request or a separately configured
+authority read. Only a user Unpause request or a separately configured
 observation policy causes new reads for the task.
 _Avoid_: Task pausing, dependency-blocked task, run blocked
 
 **Task resuming**:
-The nonterminal state after the Dalph user requests resume and before Dalph
+The nonterminal state after the Dalph user requests Unpause and before Dalph
 allows another forward-progress action for the task. Dalph freshly reads the
 task, claim, applicable task-graph facts, Git resources, and task-work-provider
 state required by the task's preserved responsibilities. Compatible facts
 permit ordinary operation selection; changed or unreadable facts select the
 applicable reconciliation, wait, or isolation rule instead of restarting stale
-work. If resume is requested while pause actions remain in flight, Dalph first
+work. If Unpause is requested while pause actions remain in flight, Dalph first
 settles those exact actions and derives a progress reason rather than cancelling
 them or starting a competing worker.
-_Avoid_: Task execution resumed, user-requested task pause removed, crash recovery
+_Avoid_: Unpause command, task execution resumed, crash recovery
 
 **Dependency-blocked task**:
 A task that a fresh task-tracker read reports has at least one unsatisfied

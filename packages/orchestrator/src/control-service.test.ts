@@ -19,25 +19,25 @@ const command = {
 } as const
 
 describe("ControlService", () => {
-  it.effect("decodes and records the four exact pause directions with the authenticated operator", () =>
+  it.effect("records explicit pause and unpause directions without claiming work resumed", () =>
     Effect.gen(function*() {
       const control = yield* ControlService
       const journal = yield* JournalStore
       const inputs = [
         {
           _tag: "RequestRunPause",
-          commandId: ControlCommandId.make("run-pause"),
+          commandId: ControlCommandId.make("command-2"),
           runId
         },
         {
-          _tag: "RequestRunResume",
-          commandId: ControlCommandId.make("run-resume"),
+          _tag: "RequestRunUnpause",
+          commandId: ControlCommandId.make("command-3"),
           runId
         },
         command,
         {
-          _tag: "RequestTaskResume",
-          commandId: ControlCommandId.make("task-resume"),
+          _tag: "RequestTaskUnpause",
+          commandId: ControlCommandId.make("command-4"),
           runId,
           taskId: TaskId.make("task-a")
         }
@@ -102,7 +102,7 @@ describe("ControlService", () => {
       const control = yield* ControlService
       yield* control.record(operatorId, command)
       const contradictions = [
-        control.record(operatorId, { ...command, _tag: "RequestTaskResume" }),
+        control.record(operatorId, { ...command, _tag: "RequestTaskUnpause" }),
         control.record(operatorId, { ...command, taskId: TaskId.make("task-b") }),
         control.record(AuthenticatedOperatorIdentity.make("another-user"), command)
       ]
@@ -206,7 +206,7 @@ describe("ControlService", () => {
         const journal = yield* JournalStore
         const redelivered = yield* control.record(operatorId, command)
         const contradiction = yield* Effect.flip(
-          control.record(operatorId, { ...command, _tag: "RequestTaskResume" })
+          control.record(operatorId, { ...command, _tag: "RequestTaskUnpause" })
         )
         return {
           contradiction,

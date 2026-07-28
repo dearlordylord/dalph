@@ -47,7 +47,7 @@ it does not apply instead of inventing an event.
 If an answer is unknown, write the competing real-world outcomes. Do not hide
 the decision behind alternatives such as “global versus scoped identity.”
 
-## Example form: a duplicated pause request
+## Example form: GitHub applies a claim but Dalph loses the response
 
 This is an illustration of the required level of explanation, not a second
 source of Dalph product behavior. Assume the accepted feature specification
@@ -56,54 +56,41 @@ authoritative.
 
 ### Starting situation
 
-Dalph claimed GitHub issue 2 by adding the repository label used as its claim
-record. It created one worktree for issue 2 and started an executor session in
-that worktree. GitHub issue 3 still lists issue 2 as a prerequisite, so Dalph
-has not started issue 3.
+Dalph reads GitHub and finds issue 2 eligible. GitHub issue 3 still lists issue
+2 as a prerequisite, so issue 3 is not eligible. Dalph has not created a
+worktree or started an executor for either issue.
 
-### Person and outside event
+No person directly triggers the next step. The running Dalph coordinator
+selects issue 2 from the current eligible tasks.
 
-Alice presses “pause issue 2.” Her browser sends command `pause-click-17`.
-Dalph receives the command and records Alice, issue 2's run, and the requested
-pause direction in the workflow journal. The response is lost before Alice's
-browser receives it, so the browser sends `pause-click-17` again.
+### Dalph action and outside event
 
-### Dalph behavior
+Dalph records that it intends to add its exact claim label to issue 2. It asks
+GitHub to create the claim. GitHub adds the label, but the network connection
+fails before Dalph receives the response.
 
-Dalph reads the workflow journal for issue 2's run. It finds the same command
-identifier with the same person, run, and requested direction. Dalph returns
-the first journal record instead of appending a second record.
+### Crash and recovery
 
-At this boundary Dalph does not claim that issue 2 has stopped. It does not
-interrupt the executor, remove the GitHub claim label, delete the worktree, or
-start issue 3. Later workflow code owns those decisions and must first account
-for the executor session and issue 3's current dependency.
-
-### Crash and retry
-
-If Dalph crashes after the journal append but before returning the response, a
-new Dalph process reads the same durable record and treats the browser retry as
-the same click. Exactly one pause request remains recorded.
+Dalph crashes before it records what GitHub did. After restart, Dalph reads its
+journal and sees the claim intent without an outcome. It checks issue 2 in
+GitHub before trying to create another claim. GitHub reports the exact matching
+claim label, so Dalph records that observed result and continues from the
+existing claim.
 
 ### Visible result and forbidden result
 
-Alice sees one accepted pause request. She may still see issue 2 as “pausing”
-while its executor reaches the separately specified stopping point. She must
-not see two pause requests, a silently deleted claim, or issue 3 starting merely
-because the pause command was recorded.
+The maintainer sees one claim on issue 2. Dalph must not create a second claim,
+change another user's claim, start issue 3 while its prerequisite is
+unsatisfied, or treat the lost response as proof that GitHub did nothing.
 
 ### Acceptance-test mapping
 
-- Record one command when the browser delivers `pause-click-17` twice.
-- Close and reopen the SQLite journal, deliver `pause-click-17` again, and
-  return the original record.
-- Within issue 2's run, reuse `pause-click-17` for a different person, task, or
-  direction and return a visible contradiction instead of changing the first
-  record.
-
-This example does not decide what happens if a browser reuses
-`pause-click-17` for another run. An accepted feature specification must show
-the competing user-visible outcomes and choose one before implementation.
+- Record claim intent before asking GitHub to add the label.
+- After a lost response and process restart, check GitHub before another create.
+- Treat one exact matching claim as applied, a conflicting claim as a typed
+  conflict, and an unreadable GitHub response as no permission to retry.
+- Keep issue 3 ineligible until a fresh GitHub read reports its prerequisite
+  satisfied.
 
 ## Plan and implementation format
 
@@ -111,9 +98,9 @@ An implementation plan starts with the operational scenarios. Each plan step
 names which scenario outcome it delivers and which test will prove it. Types,
 events, services, reducers, models, and adapters follow those mappings.
 
-Test names should describe the actor and observable behavior. Prefer “records
-one pause request when Alice's browser retries after a lost response” over
-“supports idempotent command acquisition.”
+Test names should describe the actor and observable behavior. Prefer “checks
+GitHub after losing the claim response and keeps the existing claim” over
+“supports idempotent acquisition.”
 
 ## Handoff evidence
 

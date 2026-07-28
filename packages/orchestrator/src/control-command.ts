@@ -11,7 +11,7 @@ export const ControlCommandRequest = Schema.TaggedUnion({
     commandId: ControlCommandId,
     runId: RunId
   },
-  RequestRunResume: {
+  RequestRunUnpause: {
     commandId: ControlCommandId,
     runId: RunId
   },
@@ -20,7 +20,7 @@ export const ControlCommandRequest = Schema.TaggedUnion({
     runId: RunId,
     taskId: TaskId
   },
-  RequestTaskResume: {
+  RequestTaskUnpause: {
     commandId: ControlCommandId,
     runId: RunId,
     taskId: TaskId
@@ -38,7 +38,7 @@ export const ControlCommand = Schema.TaggedUnion({
     operatorId: AuthenticatedOperatorIdentity,
     runId: RunId
   },
-  RequestRunResume: {
+  RequestRunUnpause: {
     commandId: ControlCommandId,
     operatorId: AuthenticatedOperatorIdentity,
     runId: RunId
@@ -49,7 +49,7 @@ export const ControlCommand = Schema.TaggedUnion({
     runId: RunId,
     taskId: TaskId
   },
-  RequestTaskResume: {
+  RequestTaskUnpause: {
     commandId: ControlCommandId,
     operatorId: AuthenticatedOperatorIdentity,
     runId: RunId,
