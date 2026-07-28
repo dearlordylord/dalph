@@ -1284,15 +1284,14 @@ for (
         "unknownCapacityEvidenceRetainsExactConflictReached",
         "matchingCapacityAbsenceReleasesPositionReached",
         "matchingCapacityInterruptionReleasesPositionReached",
-        "capacityTwoConflictAdmitsIndependentTaskReached",
-        "invalidCapacityHistoryRejectedBeforeFrontierReached"
+        "capacityTwoConflictAdmitsIndependentTaskReached"
       ]
     },
     {
       capacity: 1,
       driverFactory: makeReconstructionDriver(1, 0, false, [0]),
       init: "initAwaitingProviderEvidenceActivationProfile",
-      maxSteps: 3,
+      maxSteps: 1,
       name: "capacity one explaining why C waits behind conflicted A",
       nTraces: 2,
       seed: "13107",
@@ -1303,12 +1302,23 @@ for (
       capacity: 2,
       driverFactory: makeReconstructionDriver(2, 0, false, [0], true),
       init: "initCorrelationConflictActivationProfile",
-      maxSteps: 1,
+      maxSteps: 3,
       name: "restart reconstructing the exact provider correlation conflict",
       nTraces: 2,
       seed: "13108",
       step: "capacityCorrelationReconstructionConnectionStep",
       witnesses: ["restartReconstructsExactCapacityConflictReached"]
+    },
+    {
+      capacity: 2,
+      driverFactory: makeReconstructionDriver(2, undefined, true),
+      init: "initInvalidCurrentCapacityHistory",
+      maxSteps: 1,
+      name: "invalid current capacity history rejected before frontier derivation",
+      nTraces: 2,
+      seed: "13109",
+      step: "validateCurrentCapacityHistoryBeforeReconstruction",
+      witnesses: ["invalidCapacityHistoryRejectedBeforeFrontierReached"]
     }
   ] as const
 ) {
@@ -1334,38 +1344,22 @@ for (
   )
 }
 
-for (
-  const { action: profile, seed, witness } of [
-    {
-      action: "taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage",
-      seed: "145",
-      witness: "taskTrackerProvenAbsenceReadReached"
-    },
-    {
-      action: "taskTrackerReturnsTargetClosureReadWithPredecessor",
-      seed: "146",
-      witness: "taskTrackerIncomparableMembershipReadReached"
-    },
-    {
-      action: "taskTrackerReturnsTargetClosureReadAtNextRevision",
-      seed: "147",
-      witness: "taskTrackerCompatibleReplacementReadReached"
-    }
-  ] as const
-) {
-  quintIt(it.effect, `replays M2 ${profile} through the production graph reducer`, {
-    backend: "typescript",
-    driverFactory: makeReconstructionDriver(2),
-    main: "frontierRecoveryCapacityTwo",
-    maxSteps: 2,
-    nTraces: 2,
-    seed,
-    spec: "specs/frontierRecovery.qnt",
-    step: profile,
-    stateCheck: reconstructionStateCheck,
-    witnesses: [witness]
-  }, 30_000)
-}
+quintIt(it.effect, "replays the seeded M2 tracker-read portfolio through the production graph reducer", {
+  backend: "typescript",
+  driverFactory: makeReconstructionDriver(2),
+  main: "frontierRecoveryCapacityTwo",
+  maxSteps: 1,
+  nTraces: 8,
+  seed: "145",
+  spec: "specs/frontierRecovery.qnt",
+  step: "taskTrackerReadConnectionPortfolioStep",
+  stateCheck: reconstructionStateCheck,
+  witnesses: [
+    "taskTrackerProvenAbsenceReadReached",
+    "taskTrackerIncomparableMembershipReadReached",
+    "taskTrackerCompatibleReplacementReadReached"
+  ]
+}, 30_000)
 
 quintIt(
   it.effect,

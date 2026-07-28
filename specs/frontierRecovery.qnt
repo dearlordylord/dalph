@@ -3160,7 +3160,14 @@ module frontierRecovery {
     capacityCorrelationAbsentConnectionStep,
     capacityCorrelationInterruptedConnectionStep,
     capacityCorrelationAdmissionConnectionStep,
-    validateCurrentCapacityHistoryBeforeReconstruction,
+  }
+
+  // The three tracker-read shapes share one initializer and adapter, so one
+  // witnessed portfolio avoids paying three identical Quint startup costs.
+  action taskTrackerReadConnectionPortfolioStep: bool = any {
+    taskTrackerReturnsTargetClosureReadWithExplicitAbsenceCoverage,
+    taskTrackerReturnsTargetClosureReadWithPredecessor,
+    taskTrackerReturnsTargetClosureReadAtNextRevision,
   }
 
   // Focused executable prefix: derive current work, reserve the canonical
