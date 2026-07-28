@@ -312,6 +312,11 @@ const availableReason = (move: LabMove): string => {
   }
 }
 
+/**
+ * Transitional frozen presentation: do not maintain this per-origin map.
+ * Replace it with generic presentation over production-typed happening and
+ * provenance tags, then delete this map together with LabMoveOrigin.
+ */
 const groupPresentationByOrigin = {
   ProductionFrontierSelection: {
     availableStatus: "PRODUCTION FRONTIER MOVE EXECUTABLE",

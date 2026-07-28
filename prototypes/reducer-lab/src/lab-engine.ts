@@ -235,6 +235,12 @@ export type LabSnapshotRevision = typeof LabSnapshotRevision.Type
 export const LabMoveId = S.String.pipe(S.brand("LabMoveId"))
 export type LabMoveId = typeof LabMoveId.Type
 
+/**
+ * Transitional frozen inventory: do not add, rename, or reclassify entries to
+ * accommodate another happening. If a new case needs classification, replace
+ * this Lab-owned origin inventory with the production-typed action/occurrence
+ * and provenance classification, then delete the matching presenter map.
+ */
 export const LabMoveOrigin = S.Literals([
   "ProductionFrontierSelection",
   "FakeTaskTracker",
