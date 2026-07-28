@@ -24,72 +24,73 @@ const excluded = (reason: string) => ({ reason, status: "IntentionallyExcluded" 
 export const workflowOperationCoverage = {
   AcquireTaskClaim: interactive("Selected claim intents can be committed."),
   EstablishTaskWorkSession: interactive("The production stage runs through the dry-run interpreter."),
-  ExecuteTaskWork: observable("The selected executor projects this internal stage as an opaque outer invocation."),
-  HandBackReviewFindings: observable("The selected executor keeps handback inside its internal protocol."),
+  ExecuteTaskWork: interactive("The controlled executor is invoked through the selected executor's opaque outer protocol."),
+  HandBackReviewFindings: interactive("Controlled review findings cross the journaled handback boundary."),
   ReadTrackerGraph: interactive("The controlled tracker can be observed repeatedly."),
   ReconcileTaskWorktree: interactive("The production stage runs through the dry-run interpreter."),
-  RecordImplementationDisposition: observable("The selected executor normalizes its terminal internal result to an outer outcome."),
+  RecordImplementationDisposition: interactive("The selected executor journals its exact terminal disposition."),
   RecordTaskAttemptPlan: interactive("The production stage plans the exact attempt."),
-  ReviewImplementation: observable("The selected executor keeps review strategy inside its internal protocol."),
-  SealImplementationEvidence: observable("The selected executor keeps evidence artifacts inside its internal protocol.")
+  ReviewImplementation: interactive("The controlled independent reviewer is invoked inside the selected executor protocol."),
+  SealImplementationEvidence: interactive("The controlled content-addressed evidence store is invoked inside the selected executor protocol.")
 } satisfies Coverage<WorkflowOperation>
 
 /** Journal events are consequences of driver operations, never raw UI buttons. */
 export const workflowJournalEventCoverage = {
-  ImplementationConvergenceDispositionRecorded: excluded("No implementation convergence driver."),
-  ImplementationEvidenceSealed: excluded("No evidence-store driver."),
-  ImplementationEvidenceSealingIntended: excluded("No evidence-store driver."),
-  ImplementationReviewCompleted: excluded("No reviewer driver."),
-  ImplementationReviewIntended: excluded("No reviewer driver."),
-  ReviewFindingsHandbackCompleted: excluded("No reviewer handback driver."),
-  ReviewFindingsHandbackIntended: excluded("No reviewer handback driver."),
-  TaskAttemptPlanned: excluded("No attempt-planning driver."),
-  TaskClaimAcquired: excluded("Claim outcome reconciliation is not implemented in the current driver."),
+  ControlCommandRecorded: interactive("Produced by authenticated pause and unpause controls."),
+  ImplementationConvergenceDispositionRecorded: interactive("Produced when the controlled selected executor accepts the implementation."),
+  ImplementationEvidenceSealed: interactive("Produced through the controlled evidence store."),
+  ImplementationEvidenceSealingIntended: interactive("Produced before controlled evidence sealing."),
+  ImplementationReviewCompleted: interactive("Produced through the controlled independent reviewer."),
+  ImplementationReviewIntended: interactive("Produced before the controlled independent reviewer is invoked."),
+  ReviewFindingsHandbackCompleted: interactive("Produced when controlled findings are returned to the exact implementer session."),
+  ReviewFindingsHandbackIntended: interactive("Produced before controlled findings handback."),
+  TaskAttemptPlanned: interactive("Produced by the real attempt-planning stage."),
+  TaskClaimAcquired: interactive("Produced by the controlled exact-claim adapter."),
   TaskClaimAcquisitionIntended: interactive("Produced by an admitted claim move."),
-  TaskExecutionIntentRecorded: excluded("No executor driver."),
-  TaskExecutionObservationFailed: excluded("No executor authority driver."),
-  TaskExecutionOutcomeObserved: excluded("No executor authority driver."),
-  TaskExecutionReported: excluded("No executor authority driver."),
-  TaskExecutionRequestAttemptRecorded: excluded("No executor driver."),
-  TaskExecutionRequestFailed: excluded("No executor driver."),
-  TaskExecutionRequestReturned: excluded("No executor driver."),
-  TaskWorkSessionEstablished: excluded("No task-work provider driver."),
-  TaskWorkSessionEstablishmentIntentRecorded: excluded("No task-work provider driver."),
-  TaskWorkSessionLookupFailed: excluded("No task-work provider driver."),
-  TaskWorkSessionLookupRequested: excluded("No task-work provider driver."),
-  TaskWorkSessionReported: excluded("No task-work provider driver."),
+  TaskExecutionIntentRecorded: interactive("Produced before the controlled executor request."),
+  TaskExecutionObservationFailed: interactive("Produced by the selectable executor-observation failure."),
+  TaskExecutionOutcomeObserved: interactive("Produced from a successful controlled executor observation."),
+  TaskExecutionReported: interactive("Produced from the controlled executor report."),
+  TaskExecutionRequestAttemptRecorded: interactive("Produced before the controlled executor request."),
+  TaskExecutionRequestFailed: interactive("Produced by the selectable executor-request failure."),
+  TaskExecutionRequestReturned: interactive("Produced by the controlled executor acknowledgement."),
+  TaskWorkSessionEstablished: interactive("Produced from the controlled task-work provider."),
+  TaskWorkSessionEstablishmentIntentRecorded: interactive("Produced before task-work session establishment."),
+  TaskWorkSessionLookupFailed: interactive("Produced by the selectable task-work lookup failure."),
+  TaskWorkSessionLookupRequested: interactive("Produced before the controlled task-work provider lookup."),
+  TaskWorkSessionReported: interactive("Produced from the controlled task-work provider report."),
   TaskWorkSessionResultReported: excluded("No task-work provider driver."),
-  TaskWorkStartRequestAcknowledged: excluded("No task-work provider driver."),
-  TaskWorkStartRequestFailed: excluded("No task-work provider driver."),
-  TaskWorkStartRequested: excluded("No task-work provider driver."),
-  TaskWorktreeReady: excluded("No Git authority driver."),
-  TaskWorktreeReconciliationIntended: excluded("No Git authority driver."),
-  TechnicalRetryDeferralSuperseded: excluded("No technical-retry clock driver."),
-  TechnicalRetryPolicyCaptured: excluded("No technical-retry driver."),
-  TechnicalRetryScheduled: excluded("No technical-retry clock driver."),
+  TaskWorkStartRequestAcknowledged: interactive("Produced by the controlled task-work provider acknowledgement."),
+  TaskWorkStartRequestFailed: interactive("Produced by the selectable task-work start failure."),
+  TaskWorkStartRequested: interactive("Produced before the controlled task-work provider request."),
+  TaskWorktreeReady: interactive("Produced from the controlled authoritative Git proof."),
+  TaskWorktreeReconciliationIntended: interactive("Produced before controlled Git reconciliation."),
+  TechnicalRetryDeferralSuperseded: interactive("Produced immediately before the controlled retry invocation."),
+  TechnicalRetryPolicyCaptured: interactive("Produced when the journaled review or handback boundary captures its retry policy."),
+  TechnicalRetryScheduled: interactive("Produced when a controlled technical failure schedules its bounded retry."),
   TrackerGraphObservationIntentRecorded: interactive("Produced by observing the controlled tracker."),
   TrackerGraphOutcomeObserved: interactive("Produced by observing the controlled tracker.")
 } satisfies Coverage<WorkflowJournalEvent>
 
 export const responsibilityCoverage = {
-  ExecutorInvocationResponsibility: excluded("No executor-boundary driver."),
+  ExecutorInvocationResponsibility: interactive("Created by the controlled journaled executor boundary."),
   TaskClaimResponsibility: interactive("Created by a committed claim intent."),
-  TaskWorkSessionResponsibility: excluded("No task-work provider driver."),
-  TaskWorktreeResponsibility: excluded("No Git authority driver.")
+  TaskWorkSessionResponsibility: interactive("Created by the controlled journaled task-work provider."),
+  TaskWorktreeResponsibility: interactive("Created by the controlled journaled Git boundary.")
 } satisfies Coverage<WorkflowResponsibilityEntry>
 
 export const dispositionCoverage = {
-  DependencyWait: observable("The graph editor constructs prerequisites; current eligibility filters blocked tasks before this selector seam."),
-  ExecutorInvocationSettled: observable("The real selector supports it; the current driver does not settle executor invocations."),
-  ExecutorInvocationWait: observable("The real selector supports it; the current driver does not retry executor invocations."),
-  FinalOutcome: observable("Tracker lifecycle is editable; this responsibility disposition requires a later production responsibility stage."),
+  DependencyWait: interactive("Available for every exact outstanding responsibility."),
+  ExecutorInvocationSettled: interactive("Available for exact executor-invocation responsibilities."),
+  ExecutorInvocationWait: interactive("Available for exact executor-invocation responsibilities."),
+  FinalOutcome: interactive("Derived from observed tracker lifecycle or supplied directly per responsibility."),
   ForeignClaimIsolation: interactive("Available as a fresh authority fact."),
   MissingClaim: interactive("Available as a fresh authority fact."),
   Paused: interactive("Available at the selector seam, while reconstructed pause remains absent."),
   Ready: interactive("Available as a fresh authority fact."),
-  Relinquished: observable("The real selector supports it; no relinquishment command is driven."),
-  Settled: observable("The real selector supports it; no completion protocol is driven."),
-  UnreadableFactWait: observable("The real selector supports it; no failing authority adapter is driven.")
+  Relinquished: interactive("Available for every exact outstanding responsibility."),
+  Settled: interactive("Available for every exact outstanding responsibility."),
+  UnreadableFactWait: interactive("Available for every exact outstanding responsibility.")
 } satisfies Coverage<ResponsibilityDisposition>
 
 export const transitionCoverage = {
@@ -97,10 +98,10 @@ export const transitionCoverage = {
   CheckTaskWorkSession: observable("Shown when selected; driver execution is visibly missing."),
   CommitFreshTaskClaimIntent: interactive("Can be executed when admitted."),
   ContinueExecutorInvocation: observable("Shown when selected; executor execution is visibly missing."),
-  ContinueFreshWorkflowOperation: observable("Shown when selected; driver execution is visibly missing."),
+  ContinueFreshWorkflowOperation: interactive("The current production stage can be executed one operation at a time."),
   ReconcileTaskClaim: observable("Shown when selected; driver execution is visibly missing."),
   ReconcileTaskWorktree: observable("Shown when selected; driver execution is visibly missing."),
-  StartExecutorInvocation: observable("Shown when selected; executor execution is visibly missing.")
+  StartExecutorInvocation: interactive("The current selected-executor stage can be executed one invocation at a time.")
 } satisfies Coverage<RunnableFrontierTransition>
 
 export const explanationCoverage = {
@@ -114,7 +115,7 @@ export const explanationCoverage = {
   Pause: observable("Rendered from a paused fresh fact."),
   Relinquishment: observable("Rendered if reached by the production selector."),
   Settlement: observable("Rendered if reached by the production selector."),
-  TypedIssue: observable("Rendered if the production selector rejects its fresh facts."),
+  TypedIssue: interactive("Selectable missing and duplicate fact cardinalities reach the production typed issue."),
   UnreadableFactWait: observable("Rendered if reached by the production selector.")
 } satisfies Coverage<FrontierExplanation>
 

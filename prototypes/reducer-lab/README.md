@@ -54,6 +54,9 @@ the stable `TaskGraphProjection`.
 
 Capacity, target settlement, claims, and coordinator lifetime are inputs in the
 branch history, so undo, redo, and forks restore them consistently.
+Primary and Secondary select two independent controlled tracker targets. Each
+retains its own task authority, while observations from both flow through the
+same production target-closure reconstruction.
 
 FoldKit dispatches only a semantic move ID and the opaque revision of the
 snapshot it rendered. A Command asks the driver to revalidate that exact move;
@@ -74,26 +77,52 @@ The Lab's controlled claim adapter returns an authoritative exact fake claim.
 The production journaled interpreter records that claim and every controlled
 graph read; the driver does not construct their journal events. After claim
 selection, the driver checks that exact claim and rereads the controlled
-tracker before attempt planning, then replays the real production task-attempt
-and selected-executor stage builders through dry-run downstream boundaries. A
+tracker before attempt planning, then runs the real production task-attempt
+and selected-executor stage builders through controlled authoritative Git,
+task-work-provider, executor, evidence-store, and reviewer adapters. Every
+durable event is produced by the production journaled interpreter. A
 claimed task that is completed, missing, or blocked stops before planning, and
 the successful reread advances the latest observed graph.
 
 The orchestration surface shows claim, claimed-task eligibility, attempt plan,
-worktree reconciliation, work-session establishment, and four opaque executor
-outer invocations distinguished by ordinal. Production activates those
-invocations without requiring four operator clicks, so the Lab offers a
-coordinator command that runs the consecutive invocations to their outer
-outcome while retaining the individual step controls for inspection. The Lab
-does not promote the selected executor's internal execution, evidence, review,
-handback, or disposition operations into orchestrator stages.
+worktree reconciliation, work-session establishment, and opaque executor outer
+invocations distinguished by ordinal. The accepted path currently takes four;
+review findings add handback, rework, evidence, and another review invocation.
+Production activates them without requiring individual operator clicks, so the
+Lab offers a coordinator command that runs the selected protocol to its outer
+outcome while retaining individual step controls for inspection. The Lab does
+not promote execution, evidence, review, handback, or disposition into generic
+orchestrator stages.
 
-Provider-authoritative Git, session, executor, evidence, and review facts are
-not fabricated. The Lab labels the controlled claim/graph boundaries separately
-from the downstream dry-run interpreter and displays its normalized outer trace
-separately from the durable workflow journal. It stops after the selected
-executor returns its completed outer outcome because current production code
-has no integration or tracker-task completion operation.
+Controlled boundary behavior can be switched before or during a branch. The
+choices reach production task-work lookup/start failures, executor
+request/observation failures, failed/interrupted/resource-emergency execution
+outcomes, reviewer findings and handback, and reviewer/handback technical retry.
+The view selects authority behavior; the production journaled interpreter
+creates every resulting intent, failure, retry, outcome, and convergence event.
+
+The controlled authorities return typed production boundary results rather
+than constructing journal events. Their intent and outcome records drive the
+same managed-history fold as production, so exact worktree, session, executor,
+evidence, review, and convergence responsibilities remain inspectable by
+operation identity. The developer can then mark the task complete in controlled
+tracker authority and explicitly observe it; the production frontier reports
+the task's final outcome and offers no further transition for it. There is no
+fictional integration or tracker mutation operation because current production
+code has none.
+
+Every production responsibility disposition is selectable for one exact
+outstanding operation, including dependency wait, final tracker outcome,
+relinquishment, settlement, unreadability, and executor wait/settlement.
+Frontier and admission rows retain the exact operation identity instead of
+collapsing simultaneous responsibilities by task.
+
+After a coordinator crash and restart, the Lab obtains the production recovery
+frontier. **Activate recovered responsibilities to quiescence** calls
+`activateRecoveredResponsibilities`; it does not invoke a recovered operation
+directly or manufacture the private activation-ownership capability. The smoke
+scenario interrupts after the first selected-executor outcome and proves that
+production recovery reaches the same convergence disposition.
 
 The architecture additionally requires an active-continuation tracker reread
 before later long-running executor invocations. Current production code does
@@ -135,13 +164,15 @@ domain state. Issue #132's activation seam now owns the real process-local
 selection and execution correlations; this revision remains only a browser
 command revalidation token.
 
-The parity scenario now proves that a task observed from the graph editor can
+The parity scenarios now prove that a task observed from the graph editor can
 be advanced, one real production move at a time, through the current coarse
-executor boundary. Internal review strategy remains hidden; after the selected
-executor returns its completed outer outcome, the Lab offers no fictional
-integration or tracker-completion step.
+executor boundary and its complete durable journal chain, then externally
+completed and observed through the tracker boundary. They also cover the
+selected executor's production failure, retry, findings, handback, and rework
+branches while keeping those stages opaque to the generic orchestrator.
 
-The prototype intentionally keeps whole-run and task pause controls disabled:
-the current reconstructed pause reducer always returns `RunUnpaused` and
-`NoTaskPauses`. Issues #62, #134, and #135 own that missing command and reducer
-behavior.
+The prototype invokes the current authenticated whole-run and task pause/unpause
+command service and shows its `ControlCommandRecorded` events. The current
+reconstructed pause reducer still returns `RunUnpaused` and `NoTaskPauses`;
+the Lab does not pretend that recording a request has already applied the
+still-unimplemented derived pause state.

@@ -120,6 +120,7 @@ export type Message = typeof Message.Type
 const emptyViewModel: LabViewModel = {
   actionGroups: [],
   admittedRows: [],
+  appliedThrough: "computing",
   capacityStatus: "computing · capacity 1",
   claimRows: [],
   coordinatorClass: "good",
@@ -882,6 +883,7 @@ export const view = (model: Model): Document => {
 
           h.div([h.Class("state-grid")], [
             stateCard(h, "Responsibility", h.div([], [
+              h.p([h.Class("metric")], [viewModel.appliedThrough]),
               listOrEmpty(
                 h,
                 viewModel.responsibilityRows,
@@ -910,14 +912,14 @@ export const view = (model: Model): Document => {
 
           stateCard(h, "Task implementation workflow", h.div([], [
             h.p([], [
-              "Operation selections and dry-run results. These rows are not durable workflow-journal events."
+              "Operation selections drive controlled authoritative adapters through the production journaled interpreter. The journal below is the reducer input."
             ]),
             listOrEmpty(
               h,
               viewModel.workflowRows,
               "Observe the tracker, then select a claim move to begin a production task workflow."
             )
-          ]), "REAL PRODUCTION STAGES + DRY-RUN INTERPRETER"),
+          ]), "REAL PRODUCTION STAGES + CONTROLLED AUTHORITIES"),
 
           h.section([h.Class("card journal")], [
             h.p([h.Class("eyebrow")], ["EXACT INPUT TO THE FOLD"]),
@@ -925,9 +927,17 @@ export const view = (model: Model): Document => {
             viewModel.journal.length === 0
               ? h.p([h.Class("empty")], ["No records."])
               : h.table([], [
-                h.thead([], [h.tr([], [h.th([], ["#"]), h.th([], ["Durable journal event"])])]),
-                h.tbody([], viewModel.journal.map(({ position, tag }) =>
-                  h.tr([], [h.td([], [String(position)]), h.td([], [tag])])
+                h.thead([], [h.tr([], [
+                  h.th([], ["#"]),
+                  h.th([], ["Durable journal event"]),
+                  h.th([], ["Production operation"])
+                ])]),
+                h.tbody([], viewModel.journal.map(({ operationTag, position, tag }) =>
+                  h.tr([], [
+                    h.td([], [String(position)]),
+                    h.td([], [tag]),
+                    h.td([], [operationTag ?? "—"])
+                  ])
                 ))
               ]),
             ...viewModel.errors.map((error) => h.p([h.Class("error")], [error]))

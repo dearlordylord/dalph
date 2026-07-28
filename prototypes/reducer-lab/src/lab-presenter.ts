@@ -26,6 +26,7 @@ const LabActionGroup = S.Struct({
 })
 
 const LabJournalRow = S.Struct({
+  operationTag: S.NullOr(S.String),
   position: S.Number,
   tag: S.String
 })
@@ -83,6 +84,7 @@ const ClaimRow = S.Struct({
 export const LabViewModel = S.Struct({
   actionGroups: S.Array(LabActionGroup),
   admittedRows: S.Array(S.String),
+  appliedThrough: S.String,
   capacityStatus: S.String,
   claimRows: S.Array(ClaimRow),
   coordinatorClass: S.String,
@@ -122,12 +124,27 @@ const inputLabel = (action: LabAction): string => {
     case "AdvancedTaskWorkflow": return `Advance production workflow for ${action.taskId}`
     case "AdvancedExecutorProtocol":
       return `Let the coordinator finish executor invocations for ${action.taskId}`
-    case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.taskId}`
+    case "ActivatedRecoveredResponsibilities":
+      return `Activate recovered responsibilities for ${action.taskId}`
+    case "SuppliedFreshFact":
+      return `Supply ${action.fact} fact for ${action.taskId} · ${action.operationId}`
+    case "SuppliedFreshFactCardinality":
+      return `Supply ${action.cardinality.toLowerCase()} fresh facts for ${
+        action.taskId
+      } · ${action.operationId}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
     case "ChangedCapacity": return `Set capacity to ${action.capacity}`
+    case "ChangedBoundaryBehavior":
+      return `Set controlled boundary behavior to ${action.behavior}`
+    case "ChangedTrackerTarget":
+      return `Select controlled tracker target ${action.target}`
     case "ChangedTargetSettlement":
       return `Mark tracker target ${action.settled ? "settled" : "unsettled"}`
+    case "RequestedRunPause": return "Request run pause"
+    case "RequestedRunUnpause": return "Request run unpause"
+    case "RequestedTaskPause": return `Request ${action.taskId} pause`
+    case "RequestedTaskUnpause": return `Request ${action.taskId} unpause`
   }
 }
 
@@ -136,27 +153,63 @@ const subjectTask = (move: LabMove): string =>
 
 const moveLabel = (move: LabMove, snapshot: LabSnapshot): string => {
   const taskId = subjectTask(move)
+  const responsibilityOperation = move.availability._tag === "Available"
+    && (
+      move.availability.input._tag === "SuppliedFreshFact"
+      || move.availability.input._tag === "SuppliedFreshFactCardinality"
+    )
+    ? ` · ${move.availability.input.operationId}`
+    : ""
   switch (move.transition) {
     case "ObserveTrackerTarget": return "Observe tracker authority"
+    case "SelectControlledTrackerTarget":
+      return move.availability._tag === "Available"
+        && move.availability.input._tag === "ChangedTrackerTarget"
+        ? `Tracker target · ${move.availability.input.target}`
+        : "Select controlled tracker target"
     case "SetTrackerTargetSettlement":
       return move.availability._tag === "Available"
         && move.availability.input._tag === "ChangedTargetSettlement"
         ? `Mark target ${move.availability.input.settled ? "settled" : "unsettled"}`
         : "Change target settlement"
-    case "SupplyReadyFact": return `Ready fact · ${taskId}`
-    case "SupplyForeignClaimFact": return `Foreign claim fact · ${taskId}`
-    case "SupplyMissingClaimFact": return `Missing claim fact · ${taskId}`
-    case "SupplyPausedFact": return `Paused fact · ${taskId}`
+    case "SupplyReadyFact": return `Ready fact · ${taskId}${responsibilityOperation}`
+    case "SupplyForeignClaimFact": return `Foreign claim fact · ${taskId}${responsibilityOperation}`
+    case "SupplyMissingClaimFact": return `Missing claim fact · ${taskId}${responsibilityOperation}`
+    case "SupplyPausedFact": return `Paused fact · ${taskId}${responsibilityOperation}`
+    case "SupplyDependencyWaitFact": return `Dependency wait · ${taskId}${responsibilityOperation}`
+    case "SupplyCompletedFact": return `Tracker completed · ${taskId}${responsibilityOperation}`
+    case "SupplyFailedFact": return `Tracker failed · ${taskId}${responsibilityOperation}`
+    case "SupplyBlockedFact": return `Tracker blocked · ${taskId}${responsibilityOperation}`
+    case "SupplyCancelledFact": return `Tracker cancelled · ${taskId}${responsibilityOperation}`
+    case "SupplyRelinquishedFact": return `Relinquished · ${taskId}${responsibilityOperation}`
+    case "SupplySettledFact": return `Responsibility settled · ${taskId}${responsibilityOperation}`
+    case "SupplyUnreadableFact": return `Task-tracker unreadable · ${taskId}${responsibilityOperation}`
+    case "SupplyExecutorWaitFact": return `Executor retry wait · ${taskId}${responsibilityOperation}`
+    case "SupplyExecutorSettledFact":
+      return `Executor invocation settled · ${taskId}${responsibilityOperation}`
+    case "SupplyMissingFreshFacts":
+      return `Omit fresh facts · ${taskId}${responsibilityOperation}`
+    case "SupplyDuplicateFreshFacts":
+      return `Duplicate fresh facts · ${taskId}${responsibilityOperation}`
     case "CrashCoordinator": return "Crash coordinator"
     case "RestartCoordinator": return "Restart coordinator"
     case "RunExecutorInvocationsToCompletion":
       return `Run executor invocations to completion · ${taskId}`
+    case "RunRecoveredResponsibilitiesToQuiescence":
+      return "Activate recovered responsibilities to quiescence"
     case "SetTaskWorkCapacity":
       return move.subject._tag === "Capacity"
         ? `Set capacity to ${move.subject.capacity}`
         : "Set capacity"
-    case "PauseRun": return "Pause run"
-    case "PauseTask": return "Pause task"
+    case "SetBoundaryBehavior":
+      return move.availability._tag === "Available"
+        && move.availability.input._tag === "ChangedBoundaryBehavior"
+        ? `Boundary behavior · ${move.availability.input.behavior}`
+        : "Change controlled boundary behavior"
+    case "RequestRunPause": return "Request run pause"
+    case "RequestRunUnpause": return "Request run unpause"
+    case "RequestTaskPause": return `Request task pause · ${taskId}`
+    case "RequestTaskUnpause": return `Request task unpause · ${taskId}`
     case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${taskId}`
     case "RecheckTaskBeforeClaim":
       return `Reread current task before claim · ${taskId}`
@@ -325,8 +378,12 @@ const workflowStatusLabel = (
       return "tracker read failed; no later workflow move is authorized"
     case "ClaimAuthorityChanged":
       return "the exact owned claim changed; no graph read or later move is authorized"
+    case "BoundaryFailed":
+      return "the selected production boundary returned a typed failure"
     case "ExecutorCompleted":
       return "selected executor returned its completed outer outcome"
+    case "RecoveryIncomplete":
+      return "recovery stopped without durable proof of terminal convergence"
     case "TaskSelectionUnavailable":
       return "the claimed task was unavailable when the workflow was selected"
   }
@@ -341,7 +398,12 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     key,
     title
   })),
-  admittedRows: snapshot.admitted.map(({ tag, taskId }) => `${taskId} · ${tag}`),
+  admittedRows: snapshot.admitted.map(({ operationId, tag, taskId }) =>
+    `${taskId} · ${tag}${operationId === null ? "" : ` · ${operationId}`}`
+  ),
+  appliedThrough: snapshot.appliedThrough === null
+    ? "No journal record applied"
+    : `Applied through journal #${snapshot.appliedThrough}`,
   capacityStatus: `${snapshot.status} · capacity ${snapshot.capacity}`,
   claimRows: snapshot.trackerClaims,
   coordinatorClass: snapshot.coordinatorRunning ? "good" : "stopped",
@@ -355,11 +417,20 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   finality: snapshot.finalityReason === null
     ? snapshot.finalityTag
     : `${snapshot.finalityTag} · ${snapshot.finalityReason}`,
-  frontierRows: snapshot.frontier.map(({ tag, taskId }) => `${taskId} · ${tag}`),
-  graphKnowledgeRows: snapshot.graphKnowledge.map(({ kind, observationCount, taskIds }) =>
+  frontierRows: snapshot.frontier.map(({ operationId, tag, taskId }) =>
+    `${taskId} · ${tag}${operationId === null ? "" : ` · ${operationId}`}`
+  ),
+  graphKnowledgeRows: snapshot.graphKnowledge.flatMap(({
+    details,
+    kind,
+    observationCount,
+    taskIds
+  }) => [
     taskIds.length > 0
       ? `${kind} · [${taskIds.join(", ")}]`
-      : `${kind} · ${observationCount} observations`
+      : `${kind} · ${observationCount} observations`,
+    ...details.map((detail) => `↳ ${detail}`)
+  ]
   ),
   graphProjections: graphProjections(snapshot),
   journal: snapshot.journal,
@@ -370,7 +441,8 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
     "The journaled controlled adapter records an exact fake claim; Dalph checks it and rereads current tracker authority before planning.",
     "The orchestrator sees opaque executor invocations. Review strategy and review events stay inside the selected executor protocol.",
-    "The four dry-run executor invocations are shown by ordinal; the coordinator control can run them to completion without four clicks.",
+    "Opaque executor invocations cross journaled production boundaries and are shown by ordinal; the coordinator control runs the current path to completion without repeated clicks.",
+    "Pause and unpause controls record production ControlCommandRecorded events. Production reconstruction still reports RunUnpaused / NoTaskPauses until the later pause-state issues land.",
     "Production has not implemented the specified active-continuation reread before every later executor invocation; the Lab does not fabricate it.",
     "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
     "Journal-reconstructed observation coverage is a membership set, not a graph; it retains no topology.",
@@ -382,12 +454,13 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
       ? `Successful observation · ${snapshot.observationAttempt.revision}`
       : `Observation failed · ${snapshot.observationAttempt.issues.join("; ")}`,
   reservedTasksMetric: `Reserved: ${snapshot.reservedTaskIds.join(", ") || "none"}`,
-  responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, taskId }) =>
-    `${taskId} · ${kind} · began at journal #${beganAt}`
+  responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, operationId, taskId }) =>
+    `${taskId} · ${kind} · ${operationId} · began at journal #${beganAt}`
   ),
   workflowRows: snapshot.workflowProgress.flatMap((progress) => [
     `${progress.taskId} · selected task revision: ${progress.taskRevision ?? "unavailable"}`,
     `${progress.taskId} · completed: ${progress.completedOperations.join(" → ") || "none"}`,
+    `${progress.taskId} · production transition: ${progress.nextTransition ?? "none"}`,
     progress.nextOperation === null
       ? `${progress.taskId} · ${workflowStatusLabel(progress)}`
       : progress.nextOperation === "StartExecutorInvocation"
@@ -404,6 +477,8 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   taskPause: snapshot.taskPause,
   timelineLabels: snapshot.input.actions.map(inputLabel),
   trackerAuthorityState:
-    `Authority: [${snapshot.trackerTasks.map(({ id }) => id).join(", ") || "empty"}]. ` +
+    `${snapshot.controlledTrackerTarget} authority: [${
+      snapshot.trackerTasks.map(({ id }) => id).join(", ") || "empty"
+    }]. ` +
     `Observed: [${snapshot.latestObservation.map(({ id }) => id).join(", ") || "nothing"}].`
 })

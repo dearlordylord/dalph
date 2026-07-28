@@ -24,10 +24,9 @@ import {
 import type { ActiveTaskClaim } from "../../../packages/orchestrator/src/tracker-mutation.ts"
 import {
   type TraceItem,
-  WorkflowInterpreter
+  WorkflowInterpreter,
+  type WorkflowInterpreterService
 } from "../../../packages/orchestrator/src/workflow.ts"
-import { makeDryRunWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/workflow-interpreters.ts"
-import { TrackerGraphReader } from "../../../packages/orchestrator/src/tracker-graph-reader.ts"
 
 const productionWorkflowOperationOrder = [
   "AcquireTaskClaim",
@@ -43,8 +42,13 @@ const productionWorkflowOperationOrder = [
 
 export const firstExecutorWorkflowStep = 5
 export const completedExecutorWorkflowStep = productionWorkflowOperationOrder.length
+export const coordinatorExecutorWorkflowStepLimit = 32
 export const executorInvocationCount =
   completedExecutorWorkflowStep - firstExecutorWorkflowStep
+export const completedProductionWorkflowOperations = [
+  ...productionWorkflowOperationOrder.slice(0, firstExecutorWorkflowStep),
+  ...Array.from({ length: executorInvocationCount }, () => "StartExecutorInvocation")
+]
 
 export type ClaimedTaskEligibility =
   | "Pending"
@@ -57,7 +61,9 @@ export type ProductionWorkflowStatus =
   | "ClaimedTaskNotEligible"
   | "TrackerReadFailed"
   | "ClaimAuthorityChanged"
+  | "BoundaryFailed"
   | "ExecutorCompleted"
+  | "RecoveryIncomplete"
   | "TaskSelectionUnavailable"
 
 const outerMoveAt = (
@@ -74,11 +80,22 @@ const outerMoveAt = (
     ? "StartExecutorInvocation"
     : null
 
+const outerTransitionAt = (
+  index: number,
+  eligibility: ClaimedTaskEligibility
+): string | null => {
+  if (outerMoveAt(index, eligibility) === null) return null
+  if (index === 0) return "CommitFreshTaskClaimIntent"
+  if (index < firstExecutorWorkflowStep) return "ContinueFreshWorkflowOperation"
+  return "StartExecutorInvocation"
+}
+
 export interface ProductionWorkflowProgress {
   readonly completedOperations: ReadonlyArray<string>
   readonly completedExecutorInvocations: number
   readonly executorInvocationCount: number
   readonly nextOperation: string | null
+  readonly nextTransition: string | null
   readonly status: ProductionWorkflowStatus
   readonly taskId: string
   readonly taskRevision: TaskRevision | null
@@ -87,22 +104,18 @@ export interface ProductionWorkflowProgress {
 
 const runId = RunId.make("reducer-lab-run")
 
-const environment = Layer.mergeAll(
-  deterministicOperationIdAllocatorLayer("reducer-lab-workflow"),
-  deterministicPlannedTaskAttemptLayer({
-    baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
-    executor: TaskExecutorLocator.make("executor:reducer-lab"),
-    runId,
-    sessionRoot: TaskWorkSessionLocator.make("session:reducer-lab"),
-    worktreeRoot: WorktreeLocator.make("/reducer-lab")
-  }),
-  makeDryRunWorkflowInterpreterLayer().pipe(
-    Layer.provide(Layer.succeed(
-      TrackerGraphReader,
-      TrackerGraphReader.of({ read: () => Effect.die("workflow-stage replay does not read the tracker") })
-    ))
+const environment = (interpreter: WorkflowInterpreterService) =>
+  Layer.mergeAll(
+    deterministicOperationIdAllocatorLayer("reducer-lab-workflow"),
+    deterministicPlannedTaskAttemptLayer({
+      baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+      executor: TaskExecutorLocator.make("executor:reducer-lab"),
+      runId,
+      sessionRoot: TaskWorkSessionLocator.make("session:reducer-lab"),
+      worktreeRoot: WorktreeLocator.make("/reducer-lab")
+    }),
+    Layer.succeed(WorkflowInterpreter, interpreter)
   )
-)
 
 /**
  * Replays the real production stage builders after the Lab driver's journaled
@@ -115,7 +128,8 @@ export const replayProductionWorkflow = (
   requestedSteps: number,
   eligibility: ClaimedTaskEligibility,
   activeClaim: ActiveTaskClaim | undefined,
-  attemptPredecessorOperationId: OperationId
+  attemptPredecessorOperationId: OperationId,
+  interpreter: WorkflowInterpreterService
 ): Effect.Effect<ProductionWorkflowProgress, unknown> =>
   Effect.gen(function*() {
     const allocator = yield* OperationIdAllocator
@@ -138,6 +152,7 @@ export const replayProductionWorkflow = (
         completedExecutorInvocations: 0,
         executorInvocationCount,
         nextOperation: outerMoveAt(0, eligibility),
+        nextTransition: outerTransitionAt(0, eligibility),
         status: "InProgress" as const,
         taskId: task.id,
         taskRevision: taskRevisionFor(task),
@@ -151,6 +166,7 @@ export const replayProductionWorkflow = (
         completedExecutorInvocations: 0,
         executorInvocationCount,
         nextOperation: null,
+        nextTransition: null,
         status: "ClaimAuthorityChanged" as const,
         taskId: task.id,
         taskRevision: taskRevisionFor(task),
@@ -169,6 +185,7 @@ export const replayProductionWorkflow = (
         completedExecutorInvocations: 0,
         executorInvocationCount,
         nextOperation: outerMoveAt(1, eligibility),
+        nextTransition: outerTransitionAt(1, eligibility),
         status: "InProgress" as const,
         taskId: task.id,
         taskRevision: taskRevisionFor(task),
@@ -186,6 +203,7 @@ export const replayProductionWorkflow = (
         completedExecutorInvocations: 0,
         executorInvocationCount,
         nextOperation: null,
+        nextTransition: null,
         status,
         taskId: task.id,
         taskRevision: taskRevisionFor(task),
@@ -200,6 +218,7 @@ export const replayProductionWorkflow = (
         completedExecutorInvocations: 0,
         executorInvocationCount,
         nextOperation: null,
+        nextTransition: null,
         status: "ClaimedTaskNotEligible" as const,
         taskId: task.id,
         taskRevision: taskRevisionFor(task),
@@ -227,20 +246,31 @@ export const replayProductionWorkflow = (
     const completedExecutorInvocations = completedOperations.filter(
       (operation) => operation === "StartExecutorInvocation"
     ).length
-    const nextOperation = outerMoveAt(completedOperations.length, eligibility)
+    const nextOperation = stage === undefined
+      ? null
+      : completedOperations.length >= firstExecutorWorkflowStep
+        ? "StartExecutorInvocation"
+        : outerMoveAt(completedOperations.length, eligibility)
+    const nextTransition = nextOperation === "StartExecutorInvocation"
+      ? "StartExecutorInvocation"
+      : outerTransitionAt(completedOperations.length, eligibility)
     const status: ProductionWorkflowStatus = nextOperation === null
       ? "ExecutorCompleted"
       : "InProgress"
     return {
       completedOperations,
       completedExecutorInvocations,
-      executorInvocationCount,
+      executorInvocationCount: Math.max(
+        executorInvocationCount,
+        completedExecutorInvocations + (stage === undefined ? 0 : 1)
+      ),
       nextOperation,
+      nextTransition,
       status,
       taskId: task.id,
       taskRevision: taskRevisionFor(task),
       trace
     }
   }).pipe(
-    Effect.provide(environment)
+    Effect.provide(environment(interpreter))
   )

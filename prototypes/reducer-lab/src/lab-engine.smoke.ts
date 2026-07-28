@@ -9,6 +9,13 @@ import {
 } from "./lab-engine.ts"
 import { presentLab } from "./lab-presenter.ts"
 import { type Model, update, view } from "./main.ts"
+import {
+  dispositionCoverage,
+  responsibilityCoverage,
+  transitionCoverage,
+  workflowJournalEventCoverage,
+  workflowOperationCoverage
+} from "./reducer-surface.ts"
 
 const assert = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
@@ -36,12 +43,41 @@ const availableMoveId = (
 const executeCommand = (snapshot: LabSnapshot, input: LabAction) =>
   Effect.runPromise(executeLabCommand(snapshot, input, snapshot.revision))
 
+const setBoundaryBehavior = (
+  snapshot: LabSnapshot,
+  behavior: Extract<LabAction, { readonly _tag: "ChangedBoundaryBehavior" }>["behavior"]
+) => {
+  const candidate = snapshot.moves.find((move) =>
+    move.availability._tag === "Available"
+    && move.availability.input._tag === "ChangedBoundaryBehavior"
+    && move.availability.input.behavior === behavior
+  )
+  if (candidate === undefined) throw new Error(`Missing ${behavior} boundary control`)
+  return Effect.runPromise(executeLabMove(snapshot, candidate.id, snapshot.revision))
+}
+
+const setTrackerTarget = (
+  snapshot: LabSnapshot,
+  target: Extract<LabAction, { readonly _tag: "ChangedTrackerTarget" }>["target"]
+) => {
+  const candidate = snapshot.moves.find((move) =>
+    move.availability._tag === "Available"
+    && move.availability.input._tag === "ChangedTrackerTarget"
+    && move.availability.input.target === target
+  )
+  if (candidate === undefined) throw new Error(`Missing ${target} tracker-target control`)
+  return Effect.runPromise(executeLabMove(snapshot, candidate.id, snapshot.revision))
+}
+
 const assertPresenterParity = (snapshot: LabSnapshot): void => {
   const displayed = presentLab(snapshot).actionGroups.flatMap(({ actions }) =>
     actions.map(({ moveId }) => moveId)
   )
   assert(displayed.length === snapshot.moves.length, "Presenter omitted or duplicated a move")
-  assert(new Set(displayed).size === displayed.length, "Presenter emitted a move more than once")
+  assert(
+    new Set(displayed).size === displayed.length,
+    `Presenter emitted a move more than once: ${displayed.join(", ")}`
+  )
   for (const move of snapshot.moves) {
     assert(displayed.includes(move.id), `Presenter omitted ${move.id}`)
   }
@@ -52,6 +88,50 @@ assert(initial.latestObservation.length === 0, "Initial state must have no obser
 assert(initial.trackerTasks.length === 4, "Initial controlled tracker must contain A–D")
 assert(initial.authorityIssues.length === 0, "Initial tracker authority must be valid")
 assertPresenterParity(initial)
+
+const secondaryTarget = await setTrackerTarget(initial, "Secondary")
+assert(
+  secondaryTarget.snapshot.trackerTasks.length === 0,
+  "Independent controlled tracker targets must not share task authority"
+)
+const secondaryTask = await executeCommand(secondaryTarget.snapshot, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Independent secondary-target work.",
+    id: "X",
+    lifecycle: "Open",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare X"
+  }
+})
+const secondaryObserved = await Effect.runPromise(executeLabMove(
+  secondaryTask.snapshot,
+  availableMoveId(secondaryTask.snapshot, "ObserveTrackerTarget"),
+  secondaryTask.snapshot.revision
+))
+const primaryAgain = await setTrackerTarget(secondaryObserved.snapshot, "Primary")
+assert(
+  primaryAgain.snapshot.trackerTasks.length === 4,
+  "Switching targets must restore that target's independent controlled authority"
+)
+assert(
+  primaryAgain.snapshot.latestObservation.length === 0,
+  "Switching targets must not present another target's latest observation"
+)
+assert(
+  !primaryAgain.snapshot.trackerClaims.some(({ taskId }) => taskId === "X"),
+  "Switching targets must not present another target's claims"
+)
+const bothTargetsObserved = await Effect.runPromise(executeLabMove(
+  primaryAgain.snapshot,
+  availableMoveId(primaryAgain.snapshot, "ObserveTrackerTarget"),
+  primaryAgain.snapshot.revision
+))
+assert(
+  bothTargetsObserved.snapshot.graphKnowledge.length === 2,
+  "Production reconstruction must retain both independently observed target closures"
+)
 
 const initialModel: Model = {
   activeBranchId: 1,
@@ -91,6 +171,14 @@ assert(
 assert(
   observedView.graphKnowledgeRows.some((row) => row.includes("[A, B, C, D]")),
   "Journal-reconstructed observation coverage must remain visible as a membership row"
+)
+assert(
+  observedView.graphKnowledgeRows.some((row) => row.includes("revision tracker-revision-1")),
+  "Durable graph knowledge must expose its exact tracker revision"
+)
+assert(
+  observation.snapshot.appliedThrough === 2,
+  "The Lab must expose the exact journal position applied by production reconstruction"
 )
 assertPresenterParity(observation.snapshot)
 
@@ -283,7 +371,15 @@ assert(
 
 let completedWorkflow = claim.snapshot
 let completedExecutorClicks = 0
+let worktreeReadySnapshot: LabSnapshot | null = null
 let executorReadySnapshot: LabSnapshot | null = null
+let executorResponsibilitySnapshot: LabSnapshot | null = null
+const reachedProductionTransitions = new Set([
+  ...observation.snapshot.frontier.map(({ tag }) => tag),
+  ...claim.snapshot.workflowProgress.flatMap(({ nextTransition }) =>
+    nextTransition === null ? [] : [nextTransition]
+  )
+])
 for (const operation of [
   "ObserveClaimedTaskEligibility",
   "RecordTaskAttemptPlan",
@@ -300,6 +396,11 @@ for (const operation of [
     completedWorkflow.revision
   ))
   completedWorkflow = execution.snapshot
+  for (const progress of completedWorkflow.workflowProgress) {
+    if (progress.nextTransition !== null) {
+      reachedProductionTransitions.add(progress.nextTransition)
+    }
+  }
   if (operation === "StartExecutorInvocation") completedExecutorClicks += 1
   const availableLabels = presentLab(completedWorkflow).actionGroups.flatMap(
     ({ actions }) => actions.filter(({ enabled }) => enabled).map(({ label }) => label)
@@ -311,7 +412,11 @@ for (const operation of [
       "The first opaque executor invocation must show its ordinal"
     )
   }
+  if (operation === "ReconcileTaskWorktree") {
+    worktreeReadySnapshot = completedWorkflow
+  }
   if (operation === "StartExecutorInvocation" && completedExecutorClicks < 4) {
+    if (completedExecutorClicks === 1) executorResponsibilitySnapshot = completedWorkflow
     assert(
       availableLabels.includes(
         `Start executor invocation ${completedExecutorClicks + 1} of 4 · A`
@@ -328,11 +433,290 @@ assert(
   completedWorkflow.workflowProgress[0]?.nextOperation === null,
   "The production-parity path must stop after the selected executor completes"
 )
+for (const expectedEvent of [
+  "TaskClaimAcquired",
+  "TaskAttemptPlanned",
+  "TaskWorktreeReady",
+  "TaskWorkSessionEstablished",
+  "TaskExecutionOutcomeObserved",
+  "ImplementationEvidenceSealed",
+  "ImplementationReviewCompleted",
+  "ImplementationConvergenceDispositionRecorded"
+] as const) {
+  assert(
+    completedWorkflow.journal.some(({ tag }) => tag === expectedEvent),
+    `The complete production path must journal ${expectedEvent}`
+  )
+}
+assert(
+  completedWorkflow.responsibilities.length > 0,
+  "Implementation completion must not fabricate tracker settlement"
+)
 assertPresenterParity(completedWorkflow)
+
+if (worktreeReadySnapshot === null || executorReadySnapshot === null) {
+  throw new Error("The workflow did not reach its controlled provider boundaries")
+}
+
+const behaviorSnapshots = new Array<LabSnapshot>()
+for (const [behavior, expectedEvent] of [
+  ["SessionLookupFails", "TaskWorkSessionLookupFailed"],
+  ["SessionStartFails", "TaskWorkStartRequestFailed"]
+] as const) {
+  const configured = await setBoundaryBehavior(worktreeReadySnapshot, behavior)
+  const failed = await Effect.runPromise(executeLabMove(
+    configured.snapshot,
+    availableMoveId(configured.snapshot, "EstablishTaskWorkSession", "A"),
+    configured.snapshot.revision
+  ))
+  behaviorSnapshots.push(failed.snapshot)
+  assert(
+    failed.snapshot.workflowProgress[0]?.status === "BoundaryFailed",
+    `${behavior} must remain visible as a typed production boundary failure`
+  )
+  assert(
+    failed.snapshot.journal.some(({ tag }) => tag === expectedEvent),
+    `${behavior} must journal ${expectedEvent}`
+  )
+}
+
+const executorBehaviorEvents = [
+  ["ExecutionRequestFails", "TaskExecutionRequestFailed"],
+  ["ExecutionObservationFails", "TaskExecutionObservationFailed"],
+  ["ExecutionFails", "ImplementationConvergenceDispositionRecorded"],
+  ["ExecutionInterrupted", "ImplementationConvergenceDispositionRecorded"],
+  ["ResourceEmergency", "ImplementationConvergenceDispositionRecorded"],
+  ["ReviewFindingsThenAccepted", "ReviewFindingsHandbackCompleted"],
+  ["ReviewRetriesThenAccepted", "TechnicalRetryDeferralSuperseded"],
+  ["HandbackRetriesThenAccepted", "TechnicalRetryDeferralSuperseded"]
+] as const
+for (const [behavior, expectedEvent] of executorBehaviorEvents) {
+  const configured = await setBoundaryBehavior(executorReadySnapshot, behavior)
+  const executed = await Effect.runPromise(executeLabMove(
+    configured.snapshot,
+    availableMoveId(
+      configured.snapshot,
+      "RunExecutorInvocationsToCompletion",
+      "A"
+    ),
+    configured.snapshot.revision
+  ))
+  behaviorSnapshots.push(executed.snapshot)
+  assert(
+    executed.snapshot.journal.some(({ tag }) => tag === expectedEvent),
+    `${behavior} must journal ${expectedEvent} through the production workflow`
+  )
+  if (behavior === "ExecutionObservationFails") {
+    assert(
+      executed.snapshot.workflowProgress[0]?.status === "BoundaryFailed",
+      "An executor observation failure must stay visible and resumable"
+    )
+  } else {
+    assert(
+      executed.snapshot.workflowProgress[0]?.status === "ExecutorCompleted",
+      `${behavior} must reach the production executor's terminal outer outcome`
+    )
+  }
+}
+
+const trackerCompletedA = await executeCommand(completedWorkflow, {
+  _tag: "ReplacedTrackerTask",
+  task: {
+    body: "Independent runnable work.",
+    id: "A",
+    lifecycle: "CompletedSuccessfully",
+    parentTaskId: null,
+    prerequisiteIds: [],
+    title: "Prepare A"
+  }
+})
+const observedCompletedA = await Effect.runPromise(executeLabMove(
+  trackerCompletedA.snapshot,
+  availableMoveId(trackerCompletedA.snapshot, "ObserveTrackerTarget"),
+  trackerCompletedA.snapshot.revision
+))
+assert(
+  observedCompletedA.snapshot.latestObservation.find(({ id }) => id === "A")
+    ?.lifecycle === "CompletedSuccessfully",
+  "Tracker completion must become the latest successful observation"
+)
+assert(
+  observedCompletedA.snapshot.explanations.some(({ tag, taskId }) =>
+    tag === "FinalOutcome" && taskId === "A"
+  ),
+  "Observed tracker completion must settle A's outstanding responsibilities as final outcomes"
+)
+assert(
+  !observedCompletedA.snapshot.frontier.some(({ taskId }) => taskId === "A"),
+  "A completed task must have no remaining runnable workflow transition"
+)
+
+const pauseRequested = await Effect.runPromise(executeLabMove(
+  initial,
+  availableMoveId(initial, "RequestRunPause"),
+  initial.revision
+))
+assert(
+  pauseRequested.snapshot.journal.some(({ tag }) => tag === "ControlCommandRecorded"),
+  "The Lab must invoke production's authenticated pause-command journal boundary"
+)
+assert(
+  pauseRequested.snapshot.runPause === "RunUnpaused",
+  "Recording a pause request must not fabricate the still-unimplemented derived pause state"
+)
+
+const reachedJournalTags = new Set([
+  ...completedWorkflow.journal.map(({ tag }) => tag),
+  ...pauseRequested.snapshot.journal.map(({ tag }) => tag),
+  ...behaviorSnapshots.flatMap(({ journal }) => journal.map(({ tag }) => tag))
+])
+for (const [tag, coverage] of Object.entries(workflowJournalEventCoverage)) {
+  if (coverage.status === "Interactive") {
+    assert(
+      reachedJournalTags.has(tag),
+      `Interactive journal coverage must have a reachability scenario for ${tag}`
+    )
+  }
+}
+const reachedResponsibilityKinds = new Set([
+  ...claim.snapshot.responsibilities.map(({ kind }) => kind),
+  ...completedWorkflow.responsibilities.map(({ kind }) => kind)
+])
+for (const [tag, coverage] of Object.entries(responsibilityCoverage)) {
+  if (coverage.status === "Interactive") {
+    assert(
+      reachedResponsibilityKinds.has(tag),
+      `Interactive responsibility coverage must have a reachability scenario for ${tag}`
+    )
+  }
+}
+for (const [tag, coverage] of Object.entries(transitionCoverage)) {
+  if (coverage.status === "Interactive") {
+    assert(
+      reachedProductionTransitions.has(tag),
+      `Interactive transition coverage must have a reachability scenario for ${tag}`
+    )
+  }
+}
+const reachedWorkflowOperations = new Set([
+  ...observation.snapshot.journal.flatMap(({ operationTag }) =>
+    operationTag === null ? [] : [operationTag]
+  ),
+  ...completedWorkflow.journal.flatMap(({ operationTag }) =>
+    operationTag === null ? [] : [operationTag]
+  ),
+  ...behaviorSnapshots.flatMap(({ journal }) =>
+    journal.flatMap(({ operationTag }) =>
+      operationTag === null ? [] : [operationTag]
+    )
+  )
+])
+for (const [tag, coverage] of Object.entries(workflowOperationCoverage)) {
+  if (coverage.status === "Interactive") {
+    assert(
+      reachedWorkflowOperations.has(tag),
+      `Interactive workflow-operation coverage must have a reachability scenario for ${tag}`
+    )
+  }
+}
+
+const dispositionScenarios = [
+  ["Ready", "CheckTaskClaim"],
+  ["ForeignClaim", "Isolation"],
+  ["MissingClaim", "ReconcileTaskClaim"],
+  ["Paused", "Pause"],
+  ["DependencyWait", "DependencyWait"],
+  ["Completed", "FinalOutcome"],
+  ["Failed", "FinalOutcome"],
+  ["Blocked", "FinalOutcome"],
+  ["Cancelled", "FinalOutcome"],
+  ["Relinquished", "Relinquishment"],
+  ["Settled", "Settlement"],
+  ["Unreadable", "UnreadableFactWait"]
+] as const
+for (const [fact, expected] of dispositionScenarios) {
+  const supplied = await Effect.runPromise(executeLabMove(
+    claim.snapshot,
+    availableMoveId(claim.snapshot, `Supply${fact}Fact`, "A"),
+    claim.snapshot.revision
+  ))
+  assert(
+    supplied.snapshot.frontier.some(({ tag }) => tag === expected)
+      || supplied.snapshot.explanations.some(({ tag }) => tag === expected),
+    `${fact} must reach production ${expected}`
+  )
+}
+for (const cardinality of ["Missing", "Duplicate"] as const) {
+  const supplied = await Effect.runPromise(executeLabMove(
+    claim.snapshot,
+    availableMoveId(claim.snapshot, `Supply${cardinality}FreshFacts`, "A"),
+    claim.snapshot.revision
+  ))
+  assert(
+    supplied.snapshot.explanations.some(({ tag }) => tag === "TypedIssue"),
+    `${cardinality} fresh facts must reach the production TypedIssue explanation`
+  )
+}
+
+if (executorResponsibilitySnapshot === null) {
+  throw new Error("The workflow did not create an executor responsibility")
+}
+for (const [fact, expected] of [
+  ["ExecutorWait", "ExecutorInvocationWait"],
+  ["ExecutorSettled", "ExecutorInvocationSettlement"]
+] as const) {
+  const supplied = await Effect.runPromise(executeLabMove(
+    executorResponsibilitySnapshot,
+    availableMoveId(executorResponsibilitySnapshot, `Supply${fact}Fact`, "A"),
+    executorResponsibilitySnapshot.revision
+  ))
+  assert(
+    supplied.snapshot.explanations.some(({ tag }) => tag === expected),
+    `${fact} must reach production ${expected}`
+  )
+}
+assert(
+  Object.values(dispositionCoverage).every(({ status }) => status === "Interactive"),
+  "Every production responsibility disposition must remain interactive"
+)
 
 if (executorReadySnapshot === null) {
   throw new Error("The workflow did not reach executor readiness")
 }
+const crashedDuringExecutor = await Effect.runPromise(executeLabMove(
+  executorResponsibilitySnapshot,
+  availableMoveId(executorResponsibilitySnapshot, "CrashCoordinator"),
+  executorResponsibilitySnapshot.revision
+))
+const restartedDuringExecutor = await Effect.runPromise(executeLabMove(
+  crashedDuringExecutor.snapshot,
+  availableMoveId(crashedDuringExecutor.snapshot, "RestartCoordinator"),
+  crashedDuringExecutor.snapshot.revision
+))
+const recoveredToQuiescence = await Effect.runPromise(executeLabMove(
+  restartedDuringExecutor.snapshot,
+  availableMoveId(
+    restartedDuringExecutor.snapshot,
+    "RunRecoveredResponsibilitiesToQuiescence",
+    "A"
+  ),
+  restartedDuringExecutor.snapshot.revision
+))
+assert(
+  recoveredToQuiescence.snapshot.journal.some(
+    ({ tag }) => tag === "ImplementationConvergenceDispositionRecorded"
+  ),
+  "Restart must route recovered executor work through production activation to quiescence"
+)
+assert(
+  recoveredToQuiescence.snapshot.workflowProgress[0]?.status === "ExecutorCompleted",
+  "Recovered production activation must synchronize visible workflow progress"
+)
+assert(
+  recoveredToQuiescence.snapshot.workflowProgress[0]?.completedOperations.length === 9,
+  "Recovered progress must count only this task's authoritative operation outcomes"
+)
+
 const automaticExecutorRun = await Effect.runPromise(executeLabMove(
   executorReadySnapshot,
   availableMoveId(

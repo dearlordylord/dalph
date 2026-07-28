@@ -1,39 +1,73 @@
+import { sha256 } from "@noble/hashes/sha2.js"
+import { bytesToHex } from "@noble/hashes/utils.js"
 import { Effect, Schema as S } from "effect"
 import {
   Effect as ProductionEffect,
   Layer as ProductionLayer
 } from "../../../node_modules/effect/dist/index.js"
 import {
+  AuthenticatedOperatorIdentity,
   ClaimOwner,
   ClaimToken,
+  ControlCommandId,
+  FailedProcessExitCode,
   FixtureTarget,
   JournalPosition,
   OperationId,
+  ProviderObservationId,
+  ProviderRequestId,
+  ReviewFindingId,
   RunId,
   type Task,
   TaskId,
+  TaskWorkSessionId,
   TaskWorkCapacity,
-  TrackerRevision
+  TechnicalRetryNotBefore,
+  TrackerRevision,
+  WorkerProcessId
 } from "../../../packages/orchestrator/src/domain.ts"
+import { ControlService, controlServiceLayer } from "../../../packages/orchestrator/src/control-service.ts"
+import {
+  ExecutorOuterInvocationOutcome,
+  ExecutorOuterInvocationWait
+} from "../../../packages/orchestrator/src/executor-boundary.ts"
+import { PlannedWorktreeReady } from "../../../packages/orchestrator/src/git-worktree.ts"
 import {
   JournalStore,
   type JournalRecord
 } from "../../../packages/orchestrator/src/journal-store.ts"
 import { journaledWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/journaled-workflow-interpreter.ts"
 import {
+  EvidenceDigest,
+  EvidenceReference,
   EvidenceStore,
+  EvidenceStoreFailure,
   ImplementationEvidenceSource
 } from "../../../packages/orchestrator/src/implementation-evidence.ts"
 import {
+  ImplementationReviewDisposition,
   ImplementationReviewer,
-  ReviewFindingsHandback
+  ImplementationReviewInvocationFailure,
+  ReviewFindingsHandback,
+  ReviewFindingsHandbackAcknowledged,
+  ReviewFindingsHandbackFailure
 } from "../../../packages/orchestrator/src/implementation-review.ts"
 import { reduceManagedHistory } from "../../../packages/orchestrator/src/managed-history.ts"
+import {
+  activateRecoveredResponsibilities,
+  makeManagedRecoveryActivation
+} from "../../../packages/orchestrator/src/managed-activation.ts"
+import {
+  type WorkflowResponsibilityEntry,
+  workflowResponsibilityOperationId
+} from "../../../packages/orchestrator/src/reconstructed-managed-run-state.ts"
 import {
   deriveRunFinalityDecision,
   deriveRunnableFrontier,
   ResponsibilityDisposition,
+  runnableTransitionOperationId,
   runnableTransitionTaskId,
+  type RunnableFrontier,
   type FrontierExplanation as ProductionFrontierExplanation,
   type RunnableFrontierTransition
 } from "../../../packages/orchestrator/src/runnable-frontier.ts"
@@ -51,12 +85,30 @@ import {
   TaskClaimAcquisition,
   TaskClaimConflict
 } from "../../../packages/orchestrator/src/tracker-mutation.ts"
-import { taskExecutorTestLayer } from "../../../packages/orchestrator/src/task-execution.ts"
-import { TaskRunner } from "../../../packages/orchestrator/src/task-work-start.ts"
+import {
+  FailedTaskExecutionReported,
+  InterruptedTaskExecutionReported,
+  ResourceEmergencyTaskExecutionReported,
+  SuccessfulTaskExecutionReported,
+  TaskExecutionObservationFailure,
+  TaskExecutionRequestAcknowledgement,
+  TaskExecutionRequestFailure,
+  TaskExecutor
+} from "../../../packages/orchestrator/src/task-execution.ts"
+import {
+  MatchingTaskWorkSessionReported,
+  NoMatchingTaskWorkSessionReported,
+  TaskRunner,
+  TaskWorkSessionLookupFailure,
+  TaskWorkStartRequestAcknowledgement,
+  TaskWorkStartRequestFailure
+} from "../../../packages/orchestrator/src/task-work-start.ts"
 import { TrackerGraphReader } from "../../../packages/orchestrator/src/tracker-graph-reader.ts"
+import { AuthoritativeTaskWorktreeReady } from "../../../packages/orchestrator/src/task-worktree-reconciliation.ts"
 import {
   AuthoritativeTaskClaimAcquired,
   WorkflowInterpreter,
+  type WorkflowInterpreterService,
   WorkflowTrace
 } from "../../../packages/orchestrator/src/workflow.ts"
 import { makeDryRunWorkflowInterpreterLayer } from "../../../packages/orchestrator/src/workflow-interpreters.ts"
@@ -66,7 +118,9 @@ import {
 } from "../../../packages/orchestrator/src/workflow-operation.ts"
 import {
   type ClaimedTaskEligibility,
+  completedProductionWorkflowOperations,
   completedExecutorWorkflowStep,
+  coordinatorExecutorWorkflowStepLimit,
   executorInvocationCount,
   firstExecutorWorkflowStep,
   type ProductionWorkflowProgress,
@@ -100,8 +154,40 @@ export type TrackerClaimState = typeof TrackerClaimState.Type
 const TrackerClaim = S.Struct({ state: TrackerClaimState, taskId: S.String })
 export type TrackerClaim = typeof TrackerClaim.Type
 
-export const FreshFact = S.Literals(["Ready", "ForeignClaim", "MissingClaim", "Paused"])
+export const FreshFact = S.Literals([
+  "Ready",
+  "ForeignClaim",
+  "MissingClaim",
+  "Paused",
+  "DependencyWait",
+  "Completed",
+  "Failed",
+  "Blocked",
+  "Cancelled",
+  "Relinquished",
+  "Settled",
+  "Unreadable",
+  "ExecutorWait",
+  "ExecutorSettled"
+])
 export type FreshFact = typeof FreshFact.Type
+
+export const BoundaryBehavior = S.Literals([
+  "Successful",
+  "SessionLookupFails",
+  "SessionStartFails",
+  "ExecutionRequestFails",
+  "ExecutionObservationFails",
+  "ExecutionFails",
+  "ExecutionInterrupted",
+  "ResourceEmergency",
+  "ReviewFindingsThenAccepted",
+  "ReviewRetriesThenAccepted",
+  "HandbackRetriesThenAccepted"
+])
+export type BoundaryBehavior = typeof BoundaryBehavior.Type
+export const ControlledTrackerTarget = S.Literals(["Primary", "Secondary"])
+export type ControlledTrackerTarget = typeof ControlledTrackerTarget.Type
 
 /** One explicit, replayable input accepted by the Reducer Lab driver. */
 export const LabAction = S.Union([
@@ -113,11 +199,27 @@ export const LabAction = S.Union([
   S.TaggedStruct("CommittedClaimIntent", { taskId: S.String }),
   S.TaggedStruct("AdvancedTaskWorkflow", { taskId: S.String }),
   S.TaggedStruct("AdvancedExecutorProtocol", { taskId: S.String }),
-  S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, taskId: S.String }),
+  S.TaggedStruct("ActivatedRecoveredResponsibilities", { taskId: S.String }),
+  S.TaggedStruct("SuppliedFreshFact", {
+    fact: FreshFact,
+    operationId: S.String,
+    taskId: S.String
+  }),
+  S.TaggedStruct("SuppliedFreshFactCardinality", {
+    cardinality: S.Literals(["Missing", "Duplicate"]),
+    operationId: S.String,
+    taskId: S.String
+  }),
   S.TaggedStruct("CrashedCoordinator", {}),
   S.TaggedStruct("RestartedCoordinator", {}),
   S.TaggedStruct("ChangedCapacity", { capacity: S.Number }),
-  S.TaggedStruct("ChangedTargetSettlement", { settled: S.Boolean })
+  S.TaggedStruct("ChangedTargetSettlement", { settled: S.Boolean }),
+  S.TaggedStruct("ChangedBoundaryBehavior", { behavior: BoundaryBehavior }),
+  S.TaggedStruct("ChangedTrackerTarget", { target: ControlledTrackerTarget }),
+  S.TaggedStruct("RequestedRunPause", {}),
+  S.TaggedStruct("RequestedRunUnpause", {}),
+  S.TaggedStruct("RequestedTaskPause", { taskId: S.String }),
+  S.TaggedStruct("RequestedTaskUnpause", { taskId: S.String })
 ])
 export type LabAction = typeof LabAction.Type
 
@@ -185,18 +287,28 @@ export const LabMove = S.Struct({
 })
 export interface LabMove extends S.Schema.Type<typeof LabMove> {}
 
-const Decision = S.Struct({ tag: S.String, taskId: S.String })
+const Decision = S.Struct({
+  operationId: S.NullOr(S.String),
+  tag: S.String,
+  taskId: S.String
+})
 const Responsibility = S.Struct({
   beganAt: S.Number,
   kind: S.String,
+  operationId: S.String,
   taskId: S.String
 })
-const JournalRow = S.Struct({ position: S.Number, tag: S.String })
+const JournalRow = S.Struct({
+  operationTag: S.NullOr(S.String),
+  position: S.Number,
+  tag: S.String
+})
 const FrontierExplanation = S.Struct({
   tag: S.String,
   taskId: S.NullOr(S.String)
 })
 const GraphKnowledge = S.Struct({
+  details: S.Array(S.String),
   kind: S.String,
   observationCount: S.Number,
   taskIds: S.Array(S.String)
@@ -211,12 +323,15 @@ const WorkflowProgress = S.Struct({
   completedExecutorInvocations: S.Number,
   executorInvocationCount: S.Number,
   nextOperation: S.NullOr(S.String),
+  nextTransition: S.NullOr(S.String),
   status: S.Literals([
     "InProgress",
     "ClaimedTaskNotEligible",
     "TrackerReadFailed",
     "ClaimAuthorityChanged",
+    "BoundaryFailed",
     "ExecutorCompleted",
+    "RecoveryIncomplete",
     "TaskSelectionUnavailable"
   ]),
   taskId: S.String,
@@ -227,7 +342,10 @@ const WorkflowProgress = S.Struct({
 /** Semantic result reconstructed by real production reducers plus controlled Lab inputs. */
 export const LabSnapshot = S.Struct({
   admitted: S.Array(Decision),
+  appliedThrough: S.NullOr(S.Number),
   authorityIssues: S.Array(S.String),
+  boundaryBehavior: BoundaryBehavior,
+  controlledTrackerTarget: ControlledTrackerTarget,
   capacity: S.Number,
   coordinatorRunning: S.Boolean,
   errors: S.Array(S.String),
@@ -289,7 +407,8 @@ export const LabMoveExecution = S.Struct({
 export interface LabMoveExecution extends S.Schema.Type<typeof LabMoveExecution> {}
 
 const runId = RunId.make("reducer-lab-run")
-const target = FixtureTarget.make("reducer-lab-target")
+const trackerTarget = (controlled: ControlledTrackerTarget) =>
+  FixtureTarget.make(`reducer-lab-target:${controlled.toLowerCase()}`)
 const owner = ClaimOwner.make("reducer-lab-owner")
 
 export const initialTrackerTasks: ReadonlyArray<ControlledTask> = [
@@ -334,13 +453,14 @@ const taskId = (value: string): TaskId => TaskId.make(value)
 
 const graphOperation = (
   ordinal: number,
+  controlledTarget: ControlledTrackerTarget,
   explicitlyCoveredTaskIds: ReadonlyArray<string>,
   predecessorOperationIds: ReadonlyArray<OperationId> = []
 ) => {
   const operationId = OperationId.make(`graph-observation-${ordinal}`)
   const operation = makeTrackerGraphObservationOperation(
     operationId,
-    target,
+    trackerTarget(controlledTarget),
     predecessorOperationIds,
     explicitlyCoveredTaskIds.map(taskId)
   )
@@ -397,16 +517,23 @@ const issueText = (issue: ProjectionIssue): string => {
 }
 
 interface ProductionInput {
+  readonly activateRecovery: (capacity: number) => Promise<void>
   readonly authorityIssues: ReadonlyArray<string>
+  readonly boundaryBehavior: BoundaryBehavior
+  readonly controlledTrackerTarget: ControlledTrackerTarget
+  readonly boundaryInterpreter: WorkflowInterpreterService
   readonly capacity: number
   readonly coordinatorRunning: boolean
-  readonly freshFacts: ReadonlyMap<string, FreshFact>
+  readonly freshFacts: ReadonlyMap<string, ReadonlyArray<FreshFact>>
   readonly hasSuccessfulObservation: boolean
+  readonly hasRestartedCoordinator: boolean
   readonly latestGraphOperationId: OperationId
   readonly latestObservation: ReadonlyArray<ControlledTask>
   readonly latestProjected: TaskDagSnapshot | null
   readonly observationAttempt: LabSnapshot["observationAttempt"]
   readonly preclaimReadyTaskIds: ReadonlySet<string>
+  readonly recoveryRequests: ReadonlyArray<number>
+  readonly readRecoveredFrontier: () => RunnableFrontier
   readonly records: ReadonlyArray<JournalRecord>
   readonly targetSettled: boolean
   readonly trackerClaims: ReadonlyArray<TrackerClaim>
@@ -414,23 +541,56 @@ interface ProductionInput {
   readonly workflowAcquiredClaims: ReadonlyMap<string, ActiveTaskClaim>
   readonly workflowAttemptPredecessors: ReadonlyMap<string, OperationId>
   readonly workflowEligibility: ReadonlyMap<string, ClaimedTaskEligibility>
+  readonly workflowFailures: ReadonlyMap<string, string>
   readonly workflowSteps: ReadonlyMap<string, number>
   readonly workflowTasks: ReadonlyMap<string, Task>
 }
 
-const buildProductionInput = (input: LabInput): ProductionInput => {
+const buildProductionInput = async (input: LabInput): Promise<ProductionInput> => {
   const records = new Array<JournalRecord>()
-  const freshFacts = new Map<string, FreshFact>()
-  let trackerTasks = cloneTasks(initialTrackerTasks)
-  const trackerClaims = new Map<string, TrackerClaimState>(
-    trackerTasks.map(({ id }) => [id, "Unclaimed"])
-  )
-  const allAuthorityTaskIds = new Set(trackerTasks.map(({ id }) => id))
+  const freshFacts = new Map<string, ReadonlyArray<FreshFact>>()
+  const trackerTasksByTarget = new Map<ControlledTrackerTarget, Array<ControlledTask>>([
+    ["Primary", cloneTasks(initialTrackerTasks)],
+    ["Secondary", []]
+  ])
+  const trackerClaimsByTarget = new Map<
+    ControlledTrackerTarget,
+    Map<string, TrackerClaimState>
+  >([
+    ["Primary", new Map(initialTrackerTasks.map(({ id }) => [id, "Unclaimed"]))],
+    ["Secondary", new Map()]
+  ])
+  const authorityTaskIdsByTarget = new Map<
+    ControlledTrackerTarget,
+    Set<string>
+  >([
+    ["Primary", new Set(initialTrackerTasks.map(({ id }) => id))],
+    ["Secondary", new Set()]
+  ])
+  const latestObservationByTarget = new Map<
+    ControlledTrackerTarget,
+    ReadonlyArray<ControlledTask>
+  >()
+  const latestProjectionByTarget = new Map<
+    ControlledTrackerTarget,
+    TaskDagSnapshot
+  >()
+  const observationAttemptByTarget = new Map<
+    ControlledTrackerTarget,
+    LabSnapshot["observationAttempt"]
+  >()
+  let controlledTrackerTarget: ControlledTrackerTarget = "Primary"
+  let trackerTasks = trackerTasksByTarget.get(controlledTrackerTarget) ?? []
+  let trackerClaims = trackerClaimsByTarget.get(controlledTrackerTarget) ?? new Map()
+  let allAuthorityTaskIds = authorityTaskIdsByTarget.get(controlledTrackerTarget) ?? new Set()
   let coordinatorRunning = true
+  let hasRestartedCoordinator = false
   let capacity = 1
   let targetSettled = false
+  let boundaryBehavior: BoundaryBehavior = "Successful"
   let observationOrdinal = 0
   let claimOrdinal = 0
+  let controlOrdinal = 0
   let latestGraphOperationId = OperationId.make("graph-observation-unavailable")
   let latestObservation: ReadonlyArray<ControlledTask> = []
   let latestProjected: TaskDagSnapshot | null = null
@@ -441,9 +601,35 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
   const workflowAttemptPredecessors = new Map<string, OperationId>()
   const workflowClaimAcquisitions = new Map<string, TaskClaimAcquisition>()
   const workflowEligibility = new Map<string, ClaimedTaskEligibility>()
+  const workflowFailures = new Map<string, string>()
   const workflowSteps = new Map<string, number>()
   const workflowTasks = new Map<string, Task>()
   const activeClaims = new Map<string, ActiveTaskClaim>()
+  const recoveryRequests = new Array<number>()
+  const persistControlledTarget = (): void => {
+    trackerTasksByTarget.set(controlledTrackerTarget, trackerTasks)
+    trackerClaimsByTarget.set(controlledTrackerTarget, trackerClaims)
+    authorityTaskIdsByTarget.set(controlledTrackerTarget, allAuthorityTaskIds)
+    if (hasSuccessfulObservation) {
+      latestObservationByTarget.set(controlledTrackerTarget, latestObservation)
+    }
+    if (latestProjected !== null) {
+      latestProjectionByTarget.set(controlledTrackerTarget, latestProjected)
+    }
+    observationAttemptByTarget.set(controlledTrackerTarget, observationAttempt)
+  }
+  const selectControlledTarget = (next: ControlledTrackerTarget): void => {
+    persistControlledTarget()
+    controlledTrackerTarget = next
+    trackerTasks = trackerTasksByTarget.get(next) ?? []
+    trackerClaims = trackerClaimsByTarget.get(next) ?? new Map()
+    allAuthorityTaskIds = authorityTaskIdsByTarget.get(next) ?? new Set()
+    latestObservation = latestObservationByTarget.get(next) ?? []
+    latestProjected = latestProjectionByTarget.get(next) ?? null
+    hasSuccessfulObservation = latestObservationByTarget.has(next)
+    observationAttempt = observationAttemptByTarget.get(next) ?? { _tag: "NeverAttempted" }
+    preclaimReadyTaskIds.clear()
+  }
 
   const journal = JournalStore.of({
     append: (recordRunId, key, event) =>
@@ -467,6 +653,40 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
         runs: records.length === 0 ? [] : [{ records: [...records], runId }]
       })
   })
+  const control = ProductionEffect.runSync(
+    ProductionEffect.gen(function*() {
+      return yield* ControlService
+    }).pipe(ProductionEffect.provide(
+      controlServiceLayer.pipe(
+        ProductionLayer.provide(ProductionLayer.succeed(JournalStore, journal))
+      )
+    ))
+  )
+  const recordControl = (
+    command:
+      | "RequestRunPause"
+      | "RequestRunUnpause"
+      | "RequestTaskPause"
+      | "RequestTaskUnpause",
+    taskId?: string
+  ): void => {
+    controlOrdinal += 1
+    ProductionEffect.runSync(control.record(
+      AuthenticatedOperatorIdentity.make("reducer-lab-operator"),
+      command === "RequestRunPause" || command === "RequestRunUnpause"
+        ? {
+          _tag: command,
+          commandId: ControlCommandId.make(`reducer-lab-control-${controlOrdinal}`),
+          runId
+        }
+        : {
+          _tag: command,
+          commandId: ControlCommandId.make(`reducer-lab-control-${controlOrdinal}`),
+          runId,
+          taskId: TaskId.make(taskId ?? "unknown-task")
+        }
+    ))
+  }
   const trackerReaderLayer = ProductionLayer.succeed(
     TrackerGraphReader,
     TrackerGraphReader.of({
@@ -514,53 +734,234 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
               token: ClaimToken.make(`foreign-token:${attempted.taskId}`)
             })
             return yield* new TaskClaimConflict({ attempted, observed })
-          })
+          }),
+        reconcileTaskWorktree: (operation) =>
+          ProductionEffect.succeed(AuthoritativeTaskWorktreeReady.make({
+            proof: PlannedWorktreeReady.make({
+              baseSha: operation.plannedAttempt.baseSha,
+              branch: operation.plannedAttempt.branch,
+              headSha: operation.plannedAttempt.baseSha,
+              worktree: operation.plannedAttempt.worktree
+            })
+          }))
       })
     })
   ).pipe(ProductionLayer.provide(dryRunLayer))
-  const unusedEvidenceLayer = ProductionLayer.merge(
-    ProductionLayer.succeed(
-      EvidenceStore,
-      EvidenceStore.of({
-        put: () => ProductionEffect.die("Lab boundary replay does not store evidence"),
-        read: () => ProductionEffect.die("Lab boundary replay does not read evidence")
-      })
-    ),
-    ProductionLayer.succeed(
-      ImplementationEvidenceSource,
-      ImplementationEvidenceSource.of({
-        readDiff: () => ProductionEffect.die("Lab boundary replay does not read Git")
-      })
-    )
+  const taskRunnerLayer = ProductionLayer.succeed(
+    TaskRunner,
+    TaskRunner.of({
+      lookupTaskWorkSession: (lookup) => {
+        const observationId = ProviderObservationId.make(
+          `lab-session-observation:${lookup.operationId}`
+        )
+        if (boundaryBehavior === "SessionLookupFails") {
+          return ProductionEffect.fail(new TaskWorkSessionLookupFailure({
+            detail: "controlled task-work session lookup failed",
+            observationId
+          }))
+        }
+        if (boundaryBehavior === "SessionStartFails") {
+          return ProductionEffect.succeed(NoMatchingTaskWorkSessionReported.make({
+            observationId
+          }))
+        }
+        return ProductionEffect.succeed(MatchingTaskWorkSessionReported.make({
+          observationId,
+          sessionId: TaskWorkSessionId.make(`lab-session:${lookup.operationId}`),
+          work: { _tag: "NoProviderWorkReported" }
+        }))
+      },
+      requestTaskWorkStart: (request) => {
+        const observationId = ProviderObservationId.make(
+          `lab-session-request:${request.operationId}`
+        )
+        return boundaryBehavior === "SessionStartFails"
+          ? ProductionEffect.fail(new TaskWorkStartRequestFailure({
+            detail: "controlled task-work start request failed",
+            observationId
+          }))
+          : ProductionEffect.succeed(TaskWorkStartRequestAcknowledgement.make({
+            observationId,
+            providerRequestId: ProviderRequestId.make(
+              `lab-session-provider:${request.operationId}`
+            )
+          }))
+      }
+    })
   )
-  const unusedReviewLayer = ProductionLayer.merge(
+  const taskExecutorLayer = ProductionLayer.succeed(
+    TaskExecutor,
+    TaskExecutor.of({
+      observeTaskExecution: (lookup) => {
+        const observationId = ProviderObservationId.make(
+          `lab-execution-observation:${lookup.operationId}`
+        )
+        const evidence = {
+          observationId,
+          operationId: lookup.operationId,
+          processId: WorkerProcessId.make(1),
+          sessionId: lookup.sessionId
+        }
+        switch (boundaryBehavior) {
+          case "ExecutionObservationFails":
+            return ProductionEffect.fail(new TaskExecutionObservationFailure({
+              detail: "controlled task-execution observation failed",
+              observationId,
+              operationId: lookup.operationId
+            }))
+          case "ExecutionFails":
+            return ProductionEffect.succeed(FailedTaskExecutionReported.make({
+              ...evidence,
+              exitCode: FailedProcessExitCode.make(1),
+              partialOutput: "controlled execution failed",
+              wipPreserved: true
+            }))
+          case "ExecutionInterrupted":
+            return ProductionEffect.succeed(InterruptedTaskExecutionReported.make({
+              ...evidence,
+              partialOutput: "controlled execution interrupted",
+              wipPreserved: true
+            }))
+          case "ResourceEmergency":
+            return ProductionEffect.succeed(ResourceEmergencyTaskExecutionReported.make({
+              ...evidence,
+              cause: "MemoryExhausted",
+              detail: "controlled resource emergency",
+              partialOutput: "controlled execution stopped",
+              wipPreserved: true
+            }))
+          default:
+            return ProductionEffect.succeed(SuccessfulTaskExecutionReported.make({
+              ...evidence,
+              output: "controlled executor completed successfully"
+            }))
+        }
+      },
+      requestTaskExecution: (request) => {
+        const observationId = ProviderObservationId.make(
+          `lab-execution-request:${request.operationId}`
+        )
+        return boundaryBehavior === "ExecutionRequestFails"
+          ? ProductionEffect.fail(new TaskExecutionRequestFailure({
+            detail: "controlled task-execution request failed",
+            observationId,
+            operationId: request.operationId
+          }))
+          : ProductionEffect.succeed(TaskExecutionRequestAcknowledgement.make({
+            observationId,
+            providerRequestId: ProviderRequestId.make(
+              `lab-execution-provider:${request.operationId}`
+            )
+          }))
+      }
+    })
+  )
+  const reviewResults = new Map<string, typeof ImplementationReviewDisposition.Type>()
+  const reviewAttempts = new Map<string, number>()
+  const handbackAttempts = new Map<string, number>()
+  const reviewLayer = ProductionLayer.merge(
     ProductionLayer.succeed(
       ImplementationReviewer,
       ImplementationReviewer.of({
-        createOrResume: () => ProductionEffect.die("Lab boundary replay does not invoke reviewers")
+        createOrResume: (request) =>
+          ProductionEffect.gen(function*() {
+            const existing = reviewResults.get(request.operationId)
+            if (existing !== undefined) return existing
+            const attempt = (reviewAttempts.get(request.operationId) ?? 0) + 1
+            reviewAttempts.set(request.operationId, attempt)
+            if (boundaryBehavior === "ReviewRetriesThenAccepted" && attempt === 1) {
+              return yield* new ImplementationReviewInvocationFailure({
+                detail: "controlled reviewer invocation failed once",
+                operationId: request.operationId,
+                reviewerSessionId: request.reviewerSessionId
+              })
+            }
+            const disposition =
+              (
+                boundaryBehavior === "ReviewFindingsThenAccepted"
+                || boundaryBehavior === "HandbackRetriesThenAccepted"
+              )
+              && request.round === 1
+                ? ImplementationReviewDisposition.cases.Findings.make({
+                  findings: [{
+                    findingId: ReviewFindingId.make(
+                      `controlled-finding:${request.operationId}`
+                    ),
+                    text: "controlled semantic review finding"
+                  }]
+                })
+                : ImplementationReviewDisposition.cases.Accepted.make({})
+            reviewResults.set(request.operationId, disposition)
+            return disposition
+          })
       })
     ),
     ProductionLayer.succeed(
       ReviewFindingsHandback,
       ReviewFindingsHandback.of({
-        deliverOrResume: () => ProductionEffect.die("Lab boundary replay does not hand back findings")
+        deliverOrResume: (request) =>
+          ProductionEffect.gen(function*() {
+            const attempt = (handbackAttempts.get(request.operationId) ?? 0) + 1
+            handbackAttempts.set(request.operationId, attempt)
+            if (boundaryBehavior === "HandbackRetriesThenAccepted" && attempt === 1) {
+              return yield* new ReviewFindingsHandbackFailure({
+                detail: "controlled findings handback failed once",
+                operationId: request.operationId
+              })
+            }
+            return ReviewFindingsHandbackAcknowledged.make({
+              operationId: request.operationId,
+              reviewEvidenceReference: request.review.manifestReference
+            })
+          })
+      })
+    )
+  )
+  const evidenceObjects = new Map<string, Uint8Array>()
+  const digestFor = (bytes: Uint8Array): typeof EvidenceDigest.Type =>
+    EvidenceDigest.make(bytesToHex(sha256(bytes)))
+  const evidenceLayer = ProductionLayer.merge(
+    ProductionLayer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: (bytes) =>
+          ProductionEffect.sync(() => {
+            const copy = bytes.slice()
+            const digest = digestFor(copy)
+            evidenceObjects.set(digest, copy)
+            return EvidenceReference.make({ byteLength: copy.byteLength, digest })
+          }),
+        read: (reference) =>
+          ProductionEffect.gen(function*() {
+            const bytes = evidenceObjects.get(reference.digest)
+            if (bytes === undefined || bytes.byteLength !== reference.byteLength) {
+              return yield* new EvidenceStoreFailure({
+                detail: `controlled evidence ${reference.digest} is unavailable`,
+                operation: "EvidenceStore.read"
+              })
+            }
+            return bytes.slice()
+          })
+      })
+    ),
+    ProductionLayer.succeed(
+      ImplementationEvidenceSource,
+      ImplementationEvidenceSource.of({
+        readDiff: () =>
+          ProductionEffect.succeed(
+            new TextEncoder().encode("controlled implementation diff")
+          )
       })
     )
   )
   const boundaryLayer = journaledWorkflowInterpreterLayer(
     runId,
     controlledBoundaryLayer,
-    taskExecutorTestLayer,
-    unusedEvidenceLayer,
-    unusedReviewLayer
+    taskExecutorLayer,
+    evidenceLayer,
+    reviewLayer
   ).pipe(
-    ProductionLayer.provide(ProductionLayer.succeed(
-      TaskRunner,
-      TaskRunner.of({
-        lookupTaskWorkSession: () => ProductionEffect.die("Lab boundary replay does not inspect sessions"),
-        requestTaskWorkStart: () => ProductionEffect.die("Lab boundary replay does not start sessions")
-      })
-    )),
+    ProductionLayer.provide(taskRunnerLayer),
     ProductionLayer.provide(ProductionLayer.succeed(
       WorkflowTrace,
       WorkflowTrace.of({ emit: () => ProductionEffect.void })
@@ -572,6 +973,34 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
       return yield* WorkflowInterpreter
     }).pipe(ProductionEffect.provide(boundaryLayer))
   )
+  const traceService = WorkflowTrace.of({ emit: () => ProductionEffect.void })
+  const recoveryEnvironment = ProductionLayer.mergeAll(
+    ProductionLayer.succeed(JournalStore, journal),
+    ProductionLayer.succeed(WorkflowInterpreter, boundaryInterpreter),
+    ProductionLayer.succeed(WorkflowTrace, traceService)
+  )
+  const materializeWorkflow = async (subjectTaskId: string): Promise<void> => {
+    const task = workflowTasks.get(subjectTaskId)
+    if (task === undefined) return
+    const result = await ProductionEffect.runPromise(ProductionEffect.result(replayProductionWorkflow(
+      task,
+      workflowSteps.get(subjectTaskId) ?? 0,
+      workflowEligibility.get(subjectTaskId) ?? "Pending",
+      workflowAcquiredClaims.get(subjectTaskId),
+      workflowAttemptPredecessors.get(subjectTaskId) ?? latestGraphOperationId,
+      boundaryInterpreter
+    )))
+    if (result._tag === "Failure") {
+      workflowFailures.set(subjectTaskId, String(result.failure))
+    } else {
+      workflowFailures.delete(subjectTaskId)
+    }
+  }
+  const activateRecovery = (requestedCapacity: number) =>
+      activateRecoveredResponsibilities(
+        runId,
+        TaskWorkCapacity.make(requestedCapacity)
+      ).pipe(ProductionEffect.provide(recoveryEnvironment))
 
   const observeTrackerGraph = (
     explicitlyCoveredTaskIds: ReadonlyArray<string>,
@@ -580,6 +1009,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
     observationOrdinal += 1
     const operation = graphOperation(
       observationOrdinal,
+      controlledTrackerTarget,
       explicitlyCoveredTaskIds,
       predecessorOperationIds
     )
@@ -618,12 +1048,14 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
               : task
           )
         if (!trackerClaims.has(action.task.id)) trackerClaims.set(action.task.id, "Unclaimed")
+        trackerTasksByTarget.set(controlledTrackerTarget, trackerTasks)
         break
       }
       case "DeletedTrackerTask":
         preclaimReadyTaskIds.clear()
         allAuthorityTaskIds.add(action.taskId)
         trackerTasks = trackerTasks.filter(({ id }) => id !== action.taskId)
+        trackerTasksByTarget.set(controlledTrackerTarget, trackerTasks)
         trackerClaims.delete(action.taskId)
         break
       case "SetTrackerClaim":
@@ -681,6 +1113,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
         }
         workflowEligibility.set(action.taskId, "Pending")
         workflowSteps.set(action.taskId, 1)
+        await materializeWorkflow(action.taskId)
         break
       }
       case "AdvancedTaskWorkflow": {
@@ -698,6 +1131,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
           ) {
             workflowEligibility.set(action.taskId, "ClaimUnavailable")
             workflowSteps.set(action.taskId, 2)
+            await materializeWorkflow(action.taskId)
             break
           }
           const projected = observeTrackerGraph(
@@ -720,29 +1154,42 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
                 : "NotEligible"
           )
           workflowSteps.set(action.taskId, 2)
+          await materializeWorkflow(action.taskId)
           break
         }
         workflowSteps.set(action.taskId, completedSteps + 1)
+        await materializeWorkflow(action.taskId)
         break
       }
       case "AdvancedExecutorProtocol": {
         const completedSteps = workflowSteps.get(action.taskId) ?? 0
         if (
           completedSteps >= firstExecutorWorkflowStep
-          && completedSteps < completedExecutorWorkflowStep
+          && completedSteps < coordinatorExecutorWorkflowStepLimit
         ) {
-          workflowSteps.set(action.taskId, completedExecutorWorkflowStep)
+          workflowSteps.set(action.taskId, coordinatorExecutorWorkflowStepLimit)
+          await materializeWorkflow(action.taskId)
         }
         break
       }
+      case "ActivatedRecoveredResponsibilities":
+        recoveryRequests.push(capacity)
+        break
       case "SuppliedFreshFact":
-        freshFacts.set(action.taskId, action.fact)
+        freshFacts.set(action.operationId, [action.fact])
+        break
+      case "SuppliedFreshFactCardinality":
+        freshFacts.set(
+          action.operationId,
+          action.cardinality === "Missing" ? [] : ["Ready", "Ready"]
+        )
         break
       case "CrashedCoordinator":
         coordinatorRunning = false
         break
       case "RestartedCoordinator":
         coordinatorRunning = true
+        hasRestartedCoordinator = true
         break
       case "ChangedCapacity":
         capacity = action.capacity
@@ -750,25 +1197,61 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
       case "ChangedTargetSettlement":
         targetSettled = action.settled
         break
+      case "ChangedBoundaryBehavior":
+        boundaryBehavior = action.behavior
+        for (const failedTaskId of [...workflowFailures.keys()]) {
+          await materializeWorkflow(failedTaskId)
+        }
+        break
+      case "ChangedTrackerTarget":
+        selectControlledTarget(action.target)
+        break
+      case "RequestedRunPause":
+        recordControl("RequestRunPause")
+        break
+      case "RequestedRunUnpause":
+        recordControl("RequestRunUnpause")
+        break
+      case "RequestedTaskPause":
+        recordControl("RequestTaskPause", action.taskId)
+        break
+      case "RequestedTaskUnpause":
+        recordControl("RequestTaskUnpause", action.taskId)
+        break
     }
+    persistControlledTarget()
   }
 
   return {
+    activateRecovery: (requestedCapacity) =>
+      ProductionEffect.runPromise(activateRecovery(requestedCapacity)),
     authorityIssues: (() => {
       const current = projectTrackerSnapshot(
         projectionInput(trackerTasks, "controlled-authority")
       )
       return current._tag === "Invalid" ? current.issues.map(issueText) : []
     })(),
+    boundaryBehavior,
+    controlledTrackerTarget,
+    boundaryInterpreter,
     capacity,
     coordinatorRunning,
     freshFacts,
     hasSuccessfulObservation,
+    hasRestartedCoordinator,
     latestGraphOperationId,
     latestObservation,
     latestProjected,
     observationAttempt,
     preclaimReadyTaskIds,
+    readRecoveredFrontier: () =>
+      ProductionEffect.runSync(
+        ProductionEffect.gen(function*() {
+          const recovery = yield* makeManagedRecoveryActivation(runId)
+          return yield* recovery.readFrontier
+        }).pipe(ProductionEffect.provide(recoveryEnvironment))
+      ),
+    recoveryRequests,
     records,
     targetSettled,
     trackerClaims: [...trackerClaims].map(([taskId, state]) => ({ state, taskId })),
@@ -776,6 +1259,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
     workflowAcquiredClaims,
     workflowAttemptPredecessors,
     workflowEligibility,
+    workflowFailures,
     workflowSteps,
     workflowTasks
   }
@@ -791,16 +1275,148 @@ const revisionFor = (input: LabInput): LabSnapshotRevision => {
   return LabSnapshotRevision.make(`snapshot-${input.actions.length}-${(hash >>> 0).toString(16)}`)
 }
 
-const dispositionFor = (fact: FreshFact) => {
+const journalOperationTag = (
+  event: JournalRecord["event"]
+): string | null => {
+  if (!("operation" in event) || event.operation === null) return null
+  const operation = event.operation as { readonly _tag?: unknown }
+  return typeof operation._tag === "string" ? operation._tag : null
+}
+
+const journaledWorkflowOperationsForTask = (
+  records: ReadonlyArray<JournalRecord>,
+  subjectTaskId: string
+): ReadonlyArray<string> => {
+  const subject = taskId(subjectTaskId)
+  const claimOperationIds = new Set(records.flatMap(({ event }) =>
+    event._tag === "TaskClaimAcquisitionIntended"
+      && event.operation.acquisition.taskId === subject
+      ? [event.operation.acquisition.operationId]
+      : []
+  ))
+  const claimedGraphOperationIds = new Set(records.flatMap(({ event }) =>
+    event._tag === "TrackerGraphObservationIntentRecorded"
+      && event.operation.predecessorOperationIds.some((operationId) =>
+        claimOperationIds.has(operationId)
+      )
+      ? [event.operation.operationId]
+      : []
+  ))
+  const worktreeTaskByOperation = new Map(records.flatMap(({ event }) =>
+    event._tag === "TaskWorktreeReconciliationIntended"
+      ? [[event.operation.operationId, event.operation.plannedAttempt.taskId] as const]
+      : []
+  ))
+  const sessionTaskByOperation = new Map(records.flatMap(({ event }) =>
+    event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
+      ? [[event.operation.request.operationId, event.operation.request.plannedAttempt.taskId] as const]
+      : []
+  ))
+  const executionTaskByOperation = new Map(records.flatMap(({ event }) =>
+    event._tag === "TaskExecutionIntentRecorded"
+      ? [[event.operation.request.operationId, event.operation.request.plannedAttempt.taskId] as const]
+      : []
+  ))
+  const handbackTaskByOperation = new Map(records.flatMap(({ event }) =>
+    event._tag === "ReviewFindingsHandbackIntended"
+      ? [[event.operation.request.operationId, event.operation.request.plannedAttempt.taskId] as const]
+      : []
+  ))
+  return records.flatMap(({ event }) => {
+    switch (event._tag) {
+      case "TaskClaimAcquired":
+        return event.claim.taskId === subject
+          ? ["AcquireTaskClaim"]
+          : []
+      case "TrackerGraphOutcomeObserved":
+        return claimedGraphOperationIds.has(event.operationId)
+          ? ["ObserveClaimedTaskEligibility"]
+          : []
+      case "TaskAttemptPlanned":
+        return event.operation.plannedAttempt.taskId === subject
+          ? ["RecordTaskAttemptPlan"]
+          : []
+      case "TaskWorktreeReady":
+        return worktreeTaskByOperation.get(event.operationId) === subject
+          ? ["ReconcileTaskWorktree"]
+          : []
+      case "TaskWorkSessionEstablished":
+        return sessionTaskByOperation.get(event.outcome.operationId) === subject
+          ? ["EstablishTaskWorkSession"]
+          : []
+      case "TaskExecutionOutcomeObserved":
+        return executionTaskByOperation.get(event.outcome.outcome.operationId) === subject
+          ? ["StartExecutorInvocation"]
+          : []
+      case "ImplementationEvidenceSealed":
+        return event.sealed.manifest.taskId === subject
+          ? ["StartExecutorInvocation"]
+          : []
+      case "ImplementationReviewCompleted":
+        return event.review.manifest.plannedAttempt.taskId === subject
+          ? ["StartExecutorInvocation"]
+          : []
+      case "ReviewFindingsHandbackCompleted":
+        return handbackTaskByOperation.get(event.acknowledgement.operationId) === subject
+          ? ["StartExecutorInvocation"]
+          : []
+      case "ImplementationConvergenceDispositionRecorded":
+        return event.operation.request._tag
+          === "AuthorizedImplementationConvergenceDisposition"
+          && event.operation.request.disposition.subject.plannedAttempt.taskId === subject
+          ? ["StartExecutorInvocation"]
+          : []
+      default:
+        return []
+    }
+  })
+}
+
+const dispositionFor = (
+  fact: FreshFact,
+  responsibility: WorkflowResponsibilityEntry
+) => {
   switch (fact) {
     case "Ready": return ResponsibilityDisposition.Ready()
     case "ForeignClaim": return ResponsibilityDisposition.ForeignClaimIsolation()
     case "MissingClaim": return ResponsibilityDisposition.MissingClaim()
     case "Paused": return ResponsibilityDisposition.Paused()
+    case "DependencyWait":
+      return ResponsibilityDisposition.DependencyWait({
+        prerequisiteTaskIds: [TaskId.make("controlled-prerequisite")]
+      })
+    case "Completed": return ResponsibilityDisposition.FinalOutcome({ outcome: "Completed" })
+    case "Failed": return ResponsibilityDisposition.FinalOutcome({ outcome: "Failed" })
+    case "Blocked": return ResponsibilityDisposition.FinalOutcome({ outcome: "Blocked" })
+    case "Cancelled": return ResponsibilityDisposition.FinalOutcome({ outcome: "Cancelled" })
+    case "Relinquished":
+      return ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
+    case "Settled":
+      return ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" })
+    case "Unreadable":
+      return ResponsibilityDisposition.UnreadableFactWait({ boundary: "TaskTracker" })
+    case "ExecutorWait":
+      return responsibility._tag === "ExecutorInvocationResponsibility"
+        ? ResponsibilityDisposition.ExecutorInvocationWait({
+          wait: ExecutorOuterInvocationWait.cases.RetryScheduled.make({
+            correlation: responsibility.invocation.correlation,
+            notBefore: TechnicalRetryNotBefore.make(1)
+          })
+        })
+        : ResponsibilityDisposition.Ready()
+    case "ExecutorSettled":
+      return responsibility._tag === "ExecutorInvocationResponsibility"
+        ? ResponsibilityDisposition.ExecutorInvocationSettled({
+          outcome: ExecutorOuterInvocationOutcome.cases.Completed.make({
+            correlation: responsibility.invocation.correlation
+          })
+        })
+        : ResponsibilityDisposition.Ready()
   }
 }
 
 const decision = (transition: RunnableFrontierTransition) => ({
+  operationId: runnableTransitionOperationId(transition) ?? null,
   tag: transition._tag,
   taskId: runnableTransitionTaskId(transition)
 })
@@ -819,38 +1435,31 @@ const move = (
   transition
 })
 
+const transitionIdentity = (transition: RunnableFrontierTransition): string =>
+  `${transition._tag}:${runnableTransitionTaskId(transition)}:${
+    runnableTransitionOperationId(transition) ?? "fresh"
+  }`
+
 const frontierMove = (
   transition: RunnableFrontierTransition,
   admitted: ReadonlyArray<RunnableFrontierTransition>,
   coordinatorRunning: boolean,
   preclaimReadyTaskIds: ReadonlySet<string>,
-  workflowProgress: ReadonlyMap<string, ProductionWorkflowProgress>
+  recoverableTransitionIds: ReadonlySet<string>
 ): LabMove => {
   const subjectTaskId = runnableTransitionTaskId(transition)
-  const progress = workflowProgress.get(subjectTaskId)
-  if (progress !== undefined && progress.nextOperation !== null) {
-    return move(
-      `workflow:advance:${subjectTaskId}:${progress.completedOperations.length}`,
-      "FrontierTransition",
-      progress.nextOperation,
-      { _tag: "Task", taskId: subjectTaskId },
-      coordinatorRunning
-        ? {
-          _tag: "Available",
-          input: { _tag: "AdvancedTaskWorkflow", taskId: subjectTaskId }
-        }
-        : { _tag: "Waiting", reason: "CoordinatorStopped" }
-    )
-  }
   if (transition._tag !== "CommitFreshTaskClaimIntent") {
+    const operationId = runnableTransitionOperationId(transition)
     return move(
-      `frontier:${transition._tag}:${subjectTaskId}`,
+      `frontier:${transition._tag}:${subjectTaskId}:${operationId ?? "fresh"}`,
       "FrontierTransition",
       transition._tag,
       { _tag: "Task", taskId: subjectTaskId },
       {
         _tag: "DriverMissing",
-        owningIssue: "prototype driver gap",
+        owningIssue: recoverableTransitionIds.has(transitionIdentity(transition))
+          ? "use the production recovery coordinator control"
+          : "not selected by production recovery",
         reason: "ProductionTransitionNotDriven"
       }
     )
@@ -895,9 +1504,40 @@ const frontierMove = (
 const driverMoves = (
   coordinatorRunning: boolean,
   capacity: number,
+  boundaryBehavior: BoundaryBehavior,
+  controlledTrackerTarget: ControlledTrackerTarget,
   targetSettled: boolean,
-  responsibilities: LabSnapshot["responsibilities"]
+  responsibilities: LabSnapshot["responsibilities"],
+  trackerTasks: ReadonlyArray<ControlledTask>
 ): ReadonlyArray<LabMove> => [
+  ...ControlledTrackerTarget.literals.map((controlledTarget) =>
+    move(
+      `tracker:set-target:${controlledTarget}`,
+      "TrackerAuthority",
+      "SelectControlledTrackerTarget",
+      { _tag: "TrackerTarget" },
+      controlledTrackerTarget === controlledTarget
+        ? { _tag: "NotCurrent", reason: "AlreadyCurrent" }
+        : {
+          _tag: "Available",
+          input: { _tag: "ChangedTrackerTarget", target: controlledTarget }
+        }
+    )
+  ),
+  ...BoundaryBehavior.literals.map((behavior) =>
+    move(
+      `boundary:set-behavior:${behavior}`,
+      "LabCapability",
+      "SetBoundaryBehavior",
+      { _tag: "Run" },
+      boundaryBehavior === behavior
+        ? { _tag: "NotCurrent", reason: "AlreadyCurrent" }
+        : {
+          _tag: "Available",
+          input: { _tag: "ChangedBoundaryBehavior", behavior }
+        }
+    )
+  ),
   move(
     "tracker:observe-target",
     "TrackerAuthority",
@@ -917,19 +1557,54 @@ const driverMoves = (
       input: { _tag: "ChangedTargetSettlement", settled: !targetSettled }
     }
   ),
-  ...responsibilities.flatMap(({ taskId }) =>
-    (["Ready", "ForeignClaim", "MissingClaim", "Paused"] as const).map((fact) =>
+  ...responsibilities.flatMap(({ kind, operationId, taskId }) =>
+    [
+      ...([
+      "Ready",
+      "ForeignClaim",
+      "MissingClaim",
+      "Paused",
+      "DependencyWait",
+      "Completed",
+      "Failed",
+      "Blocked",
+      "Cancelled",
+      "Relinquished",
+      "Settled",
+      "Unreadable",
+      ...(kind === "ExecutorInvocationResponsibility"
+        ? ["ExecutorWait", "ExecutorSettled"] as const
+        : [])
+      ] as const).map((fact) =>
       move(
-        `tracker:supply-fact:${taskId}:${fact}`,
+        `tracker:supply-fact:${operationId}:${fact}`,
         "TrackerAuthority",
         `Supply${fact}Fact`,
         { _tag: "Task", taskId },
         {
           _tag: "Available",
-          input: { _tag: "SuppliedFreshFact", fact, taskId }
+          input: { _tag: "SuppliedFreshFact", fact, operationId, taskId }
         }
       )
-    )
+      ),
+      ...(["Missing", "Duplicate"] as const).map((cardinality) =>
+        move(
+          `tracker:supply-cardinality:${operationId}:${cardinality}`,
+          "TrackerAuthority",
+          `Supply${cardinality}FreshFacts`,
+          { _tag: "Task", taskId },
+          {
+            _tag: "Available",
+            input: {
+              _tag: "SuppliedFreshFactCardinality",
+              cardinality,
+              operationId,
+              taskId
+            }
+          }
+        )
+      )
+    ]
   ),
   move(
     "coordinator:crash",
@@ -964,27 +1639,47 @@ const driverMoves = (
     )
   ),
   move(
-    "capability:pause-run",
+    "control:pause-run",
     "LabCapability",
-    "PauseRun",
+    "RequestRunPause",
     { _tag: "Run" },
     {
-      _tag: "Planned",
-      owningIssue: "#134",
-      reason: "ProductionPauseStateAbsent"
+      _tag: "Available",
+      input: { _tag: "RequestedRunPause" }
     }
   ),
   move(
-    "capability:pause-task",
+    "control:unpause-run",
     "LabCapability",
-    "PauseTask",
-    { _tag: "Task", taskId: "A" },
+    "RequestRunUnpause",
+    { _tag: "Run" },
     {
-      _tag: "Planned",
-      owningIssue: "#135",
-      reason: "ProductionPauseStateAbsent"
+      _tag: "Available",
+      input: { _tag: "RequestedRunUnpause" }
     }
-  )
+  ),
+  ...trackerTasks.flatMap(({ id: taskId }) => [
+    move(
+      `control:pause-task:${taskId}`,
+      "LabCapability",
+      "RequestTaskPause",
+      { _tag: "Task", taskId },
+      {
+        _tag: "Available",
+        input: { _tag: "RequestedTaskPause", taskId }
+      }
+    ),
+    move(
+      `control:unpause-task:${taskId}`,
+      "LabCapability",
+      "RequestTaskUnpause",
+      { _tag: "Task", taskId },
+      {
+        _tag: "Available",
+        input: { _tag: "RequestedTaskUnpause", taskId }
+      }
+    )
+  ])
 ]
 
 const emptyProductionSnapshot = (
@@ -993,7 +1688,10 @@ const emptyProductionSnapshot = (
   errors: ReadonlyArray<string>
 ): LabSnapshot => ({
   admitted: [],
+  appliedThrough: null,
   authorityIssues: built.authorityIssues,
+  boundaryBehavior: built.boundaryBehavior,
+  controlledTrackerTarget: built.controlledTrackerTarget,
   capacity: built.capacity,
   coordinatorRunning: built.coordinatorRunning,
   errors,
@@ -1004,9 +1702,21 @@ const emptyProductionSnapshot = (
   graphKnowledge: [],
   hasSuccessfulObservation: built.hasSuccessfulObservation,
   input,
-  journal: built.records.map(({ event, position }) => ({ position, tag: event._tag })),
+  journal: built.records.map(({ event, position }) => ({
+    operationTag: journalOperationTag(event),
+    position,
+    tag: event._tag
+  })),
   latestObservation: built.latestObservation,
-  moves: driverMoves(built.coordinatorRunning, built.capacity, built.targetSettled, []),
+  moves: driverMoves(
+    built.coordinatorRunning,
+    built.capacity,
+    built.boundaryBehavior,
+    built.controlledTrackerTarget,
+    built.targetSettled,
+    [],
+    built.trackerTasks
+  ),
   observationAttempt: built.observationAttempt,
   reservedTaskIds: [],
   responsibilities: [],
@@ -1025,7 +1735,14 @@ const reconstructThroughProduction = (
   input: LabInput
 ): Effect.Effect<LabSnapshot> =>
   Effect.gen(function*() {
-    const built = buildProductionInput(input)
+    const built = yield* Effect.promise(() => buildProductionInput(input))
+    yield* Effect.forEach(
+      built.recoveryRequests,
+      (requestedCapacity) =>
+        Effect.promise(() => built.activateRecovery(requestedCapacity)),
+      { concurrency: 1, discard: true }
+    )
+    const recoveredFrontierAfterActivation = built.readRecoveredFrontier()
     const workflowProgress = yield* Effect.forEach(
       [...built.workflowSteps],
       ([subjectTaskId, steps]) => {
@@ -1036,23 +1753,97 @@ const reconstructThroughProduction = (
             completedExecutorInvocations: 0,
             executorInvocationCount,
             nextOperation: null,
+            nextTransition: null,
             status: "TaskSelectionUnavailable",
             taskId: subjectTaskId,
             taskRevision: null,
             trace: ["No task was captured when the claim move was selected."]
           })
+          : built.workflowFailures.has(subjectTaskId)
+          ? Effect.succeed<ProductionWorkflowProgress>({
+            completedExecutorInvocations: Math.max(
+              0,
+              Math.min(executorInvocationCount, steps - firstExecutorWorkflowStep - 1)
+            ),
+            completedOperations: completedProductionWorkflowOperations.slice(
+              0,
+              Math.max(0, steps - 1)
+            ),
+            executorInvocationCount,
+            nextOperation: null,
+            nextTransition: null,
+            status: "BoundaryFailed",
+            taskId: subjectTaskId,
+            taskRevision: taskRevisionFor(task),
+            trace: [
+              `Production boundary failed · ${built.workflowFailures.get(subjectTaskId)}`
+            ]
+          })
+          : built.recoveryRequests.length > 0
+          ? (() => {
+            const recoveredOperations = journaledWorkflowOperationsForTask(
+              built.records,
+              subjectTaskId
+            )
+            const recoveredInvocationCount = recoveredOperations.filter(
+              (operation) => operation === "StartExecutorInvocation"
+            ).length
+            const hasTerminalDisposition = built.records.some(({ event }) =>
+              event._tag === "ImplementationConvergenceDispositionRecorded"
+              && event.operation.request._tag
+                === "AuthorizedImplementationConvergenceDisposition"
+              && event.operation.request.disposition.subject.plannedAttempt.taskId
+                === taskId(subjectTaskId)
+            )
+            const outstandingTransition = recoveredFrontierAfterActivation.transitions.find(
+              (transition) => runnableTransitionTaskId(transition) === taskId(subjectTaskId)
+            )
+            return hasTerminalDisposition && outstandingTransition === undefined
+              ? Effect.succeed<ProductionWorkflowProgress>({
+                completedExecutorInvocations: recoveredInvocationCount,
+                completedOperations: recoveredOperations,
+                executorInvocationCount: Math.max(
+                  executorInvocationCount,
+                  recoveredInvocationCount
+                ),
+                nextOperation: null,
+                nextTransition: null,
+                status: "ExecutorCompleted",
+                taskId: subjectTaskId,
+                taskRevision: taskRevisionFor(task),
+                trace: [
+                  "Production recovery recorded this task's terminal convergence disposition and left no recovered transition."
+                ]
+              })
+              : Effect.succeed<ProductionWorkflowProgress>({
+                completedExecutorInvocations: recoveredInvocationCount,
+                completedOperations: recoveredOperations,
+                executorInvocationCount: Math.max(
+                  executorInvocationCount,
+                  recoveredInvocationCount + (outstandingTransition === undefined ? 0 : 1)
+                ),
+                nextOperation: outstandingTransition?._tag ?? null,
+                nextTransition: outstandingTransition?._tag ?? null,
+                status: "RecoveryIncomplete",
+                taskId: subjectTaskId,
+                taskRevision: taskRevisionFor(task),
+                trace: [
+                  outstandingTransition === undefined
+                    ? "Production recovery stopped without a terminal convergence disposition."
+                    : `Production recovery stopped at ${outstandingTransition._tag}.`
+                ]
+              })
+          })()
           : replayProductionWorkflow(
             task,
             steps,
             built.workflowEligibility.get(subjectTaskId) ?? "Pending",
             built.workflowAcquiredClaims.get(subjectTaskId),
             built.workflowAttemptPredecessors.get(subjectTaskId)
-              ?? built.latestGraphOperationId
+              ?? built.latestGraphOperationId,
+            built.boundaryInterpreter
           ) as unknown as Effect.Effect<ProductionWorkflowProgress>
       }
-    )
-    const workflowProgressByTask = new Map(
-      workflowProgress.map((progress) => [progress.taskId, progress])
     )
     const reduced = reduceManagedHistory(runId, built.records)
     if (reduced._tag === "InvalidManagedHistory") {
@@ -1064,16 +1855,25 @@ const reconstructThroughProduction = (
     }
 
     const run = reduced.managedRun
-    const responsibilityFacts = run.responsibility.entries.map((responsibility) => {
+    const responsibilityFacts = run.responsibility.entries.flatMap((responsibility) => {
       const responsibilityTaskId = responsibility._tag === "ExecutorInvocationResponsibility"
         ? responsibility.invocation.correlation.taskId
         : responsibility.taskId
-      return {
-        disposition: dispositionFor(built.freshFacts.get(responsibilityTaskId) ?? "Ready"),
+      const observedLifecycle = built.latestObservation.find(
+        ({ id }) => id === responsibilityTaskId
+      )?.lifecycle
+      const operationId = workflowResponsibilityOperationId(responsibility)
+      const facts: ReadonlyArray<FreshFact> = observedLifecycle === "CompletedSuccessfully"
+        ? ["Completed"]
+        : observedLifecycle === "TerminalWithoutSuccess"
+          ? ["Failed"]
+          : built.freshFacts.get(operationId) ?? ["Ready"]
+      return facts.map((fact) => ({
+        disposition: dispositionFor(fact, responsibility),
         responsibility
-      }
+      }))
     })
-    const frontier = deriveRunnableFrontier({
+    const controlledFrontier = deriveRunnableFrontier({
       freshEligibleTasks: built.latestProjected?.eligibleTasks().map((task) => ({
         taskId: task.id,
         taskRevision: taskRevisionFor(task)
@@ -1081,6 +1881,25 @@ const reconstructThroughProduction = (
       responsibility: run.responsibility,
       responsibilityFacts
     })
+    const recoveredFrontier = built.readRecoveredFrontier()
+    const transitionsByIdentity = new Map<string, RunnableFrontierTransition>()
+    for (const transition of [
+      ...controlledFrontier.transitions,
+      ...recoveredFrontier.transitions
+    ]) {
+      transitionsByIdentity.set(transitionIdentity(transition), transition)
+    }
+    const frontier: RunnableFrontier = {
+      explanations: [
+        ...controlledFrontier.explanations,
+        ...recoveredFrontier.explanations
+      ],
+      transitions: [...transitionsByIdentity.values()]
+    }
+    const recoverableTransitionIds = new Set(
+      recoveredFrontier.transitions.map(transitionIdentity)
+    )
+    const firstRecoveredTransition = recoveredFrontier.transitions[0]
     // The repository currently pins Effect beta.99 while FoldKit pins beta.101.
     // Vite aliases both imports to beta.101 at runtime; this cast bridges only
     // the duplicate nominal Effect type identities seen by TypeScript.
@@ -1132,6 +1951,7 @@ const reconstructThroughProduction = (
     const responsibilities = run.responsibility.entries.map((entry) => ({
       beganAt: entry.beganAt,
       kind: entry._tag,
+      operationId: workflowResponsibilityOperationId(entry),
       taskId: entry._tag === "ExecutorInvocationResponsibility"
         ? entry.invocation.correlation.taskId
         : entry.taskId
@@ -1139,7 +1959,10 @@ const reconstructThroughProduction = (
 
     return {
       admitted: admitted.map(decision),
+      appliedThrough: run.appliedThrough,
       authorityIssues: built.authorityIssues,
+      boundaryBehavior: built.boundaryBehavior,
+      controlledTrackerTarget: built.controlledTrackerTarget,
       capacity: built.capacity,
       coordinatorRunning: built.coordinatorRunning,
       errors: [],
@@ -1153,11 +1976,20 @@ const reconstructThroughProduction = (
       graphKnowledge: run.graphKnowledge.targetClosures.map((knowledge) =>
         knowledge._tag === "TaskTrackerTargetClosureObserved"
           ? {
+            details: [
+              `revision ${knowledge.revision}`,
+              `covered [${knowledge.explicitlyCoveredTaskIds.join(", ")}]`,
+              `proven absent [${knowledge.provenAbsentTaskIds.join(", ")}]`,
+              `observed at #${knowledge.observedAt}`
+            ],
             kind: knowledge._tag,
             observationCount: 1,
             taskIds: knowledge.taskIds
           }
           : {
+            details: knowledge.observations.map((observation) =>
+              `${observation.revision} · [${observation.taskIds.join(", ")}] · #${observation.observedAt}`
+            ),
             kind: knowledge._tag,
             observationCount: knowledge.observations.length,
             taskIds: []
@@ -1165,7 +1997,11 @@ const reconstructThroughProduction = (
       ),
       hasSuccessfulObservation: built.hasSuccessfulObservation,
       input,
-      journal: built.records.map(({ event, position }) => ({ position, tag: event._tag })),
+      journal: built.records.map(({ event, position }) => ({
+        operationTag: journalOperationTag(event),
+        position,
+        tag: event._tag
+      })),
       latestObservation: built.latestObservation,
       moves: [
         ...frontier.transitions.map((transition) =>
@@ -1174,17 +2010,13 @@ const reconstructThroughProduction = (
             admitted,
             built.coordinatorRunning,
             built.preclaimReadyTaskIds,
-            workflowProgressByTask
+            recoverableTransitionIds
           )
         ),
         ...workflowProgress.flatMap((progress) =>
           progress.nextOperation === null
             ? []
-            : frontier.transitions.some((transition) =>
-              runnableTransitionTaskId(transition) === progress.taskId
-            )
-              ? []
-              : [move(
+            : [move(
                 `workflow:advance:${progress.taskId}:${progress.completedOperations.length}`,
                 "FrontierTransition",
                 progress.nextOperation,
@@ -1216,11 +2048,34 @@ const reconstructThroughProduction = (
             )]
             : []
         ),
+        ...(built.hasRestartedCoordinator && firstRecoveredTransition !== undefined
+          ? [move(
+            "coordinator:activate-recovered",
+            "CoordinatorProcess",
+            "RunRecoveredResponsibilitiesToQuiescence",
+            {
+              _tag: "Task",
+              taskId: runnableTransitionTaskId(firstRecoveredTransition)
+            },
+            built.coordinatorRunning
+              ? {
+                _tag: "Available",
+                input: {
+                  _tag: "ActivatedRecoveredResponsibilities",
+                  taskId: runnableTransitionTaskId(firstRecoveredTransition)
+                }
+              }
+              : { _tag: "Waiting", reason: "CoordinatorStopped" }
+          )]
+          : []),
         ...driverMoves(
           built.coordinatorRunning,
           built.capacity,
+          built.boundaryBehavior,
+          built.controlledTrackerTarget,
           built.targetSettled,
-          responsibilities
+          responsibilities,
+          built.trackerTasks
         )
       ],
       observationAttempt: built.observationAttempt,
