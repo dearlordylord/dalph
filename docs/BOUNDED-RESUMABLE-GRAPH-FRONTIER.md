@@ -121,7 +121,7 @@ sessions do not consume capacity by themselves.
 
 ### Executor outer protocol
 
-The selected executor adapter translates its internal implementation,
+The review-loop executor translates its internal implementation,
 restoration, evidence, review, and findings algorithm into opaque outer
 invocations. Generic reconstruction and activation retain only each
 invocation's exact task-and-invocation correlation, declared resource use,
@@ -129,14 +129,39 @@ named wait or interruption, and normalized outcome. They do not inspect logs,
 output, evidence manifests, or executor artifacts to infer a current worker or
 reviewer.
 
-The current adapter retains same-session findings return, an independent
+The review-loop executor retains same-session findings return, an independent
 reviewer identity for each semantic round, separate technical and semantic
 retry scopes, bounded non-convergence, and immutable evidence. Continuing an
-unresolved outer invocation calls the selected adapter with its exact
+unresolved outer invocation calls the injected executor bundle with its exact
 correlation; the adapter freshly asks the provider to create, discover, or
 resume the bound worker or reviewer rather than deriving provider state from
 the Dalph journal. Configurable executor pipelines remain outside this
 protocol's scope.
+
+Source ownership must tell the same story as the runtime boundary. Generic
+reconstruction, frontier, admission, activation, workflow-operation, and
+workflow-interpreter modules may not import or expose review-loop internal
+operations, events, artifacts, recovery stages, provider adapters, or stage
+names. The application composition root installs one review-loop executor
+bundle; generic code receives only its outer reconstruction, projection,
+continuation, observation, validation, and wake capabilities.
+
+The review-loop executor owns the meaning, schema, validation, and
+interpretation of its internal journal payloads. The generic journal reads and
+writes physical rows, checks their record keys and positions, and stores their
+payloads. The application composition gives executor-owned payloads to the
+injected executor codec instead of teaching the generic journal their internal
+tags. Because Dalph has no released product database, the implementation may
+replace the current unreleased event envelope, tags, or codec composition
+without adding legacy migrations or compatibility wrappers.
+
+The accepted chronological scenarios and test seams are recorded in
+[review-loop executor source-boundary scenarios](scenarios/review-loop-executor-source-boundary.md).
+A stage-name-free test executor proves the outer interface without creating a
+second production executor, registry, configuration surface, or switching
+command. [Issue #158](https://github.com/dearlordylord/dalph/issues/158) owns
+the v1 source refactor. Issue #127 owns v2 per-attempt executor identity and
+multi-executor recovery.
 
 ### Recovery activation
 

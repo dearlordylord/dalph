@@ -21,12 +21,18 @@ not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
 **Dalph executor**:
-The Dalph component that owns one selected task-implementation algorithm,
-including its coding-agent invocations, review strategy, internal restoration,
-and internal implementation or review artifacts.
+The Dalph component that owns one task-implementation algorithm, including its
+coding-agent invocations, internal restoration, and algorithm-specific
+artifacts.
 _Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
 
-The current review-capable executor is transitionally co-located in
+**Review-loop executor**:
+The current Dalph executor whose task-implementation algorithm repeatedly
+captures evidence, invokes a fresh reviewer, returns findings to the
+implementer, and stops with acceptance or bounded non-convergence.
+_Avoid_: Selected executor, universal review pipeline, Dalph orchestrator
+
+The review-loop executor is transitionally co-located in
 `packages/orchestrator` and shares internal `WorkflowOperation` and
 `WorkflowInterpreter` types with orchestration code. File placement and shared
 type names do not make its review strategy part of the Dalph orchestrator.
@@ -42,13 +48,13 @@ provider observation, interruption, continuation, and outcome.
 _Avoid_: Task identity alone, log correlation, artifact identity
 
 **Executor outer invocation resource use**:
-The task-work capacity positions that the selected executor declares for one
+The task-work capacity positions that an executor declares for one
 outer invocation independently of that invocation's internal purpose or name.
 _Avoid_: Review capacity, operation-name capacity
 
 **Executor outer invocation wait**:
-The selected executor's named reason and exact correlation for why Dalph
-cannot yet continue one outer invocation. A scheduled wait carries the branded
+An executor's named reason and exact correlation for why Dalph cannot yet
+continue one outer invocation. A scheduled wait carries the branded
 absolute retry deadline.
 _Avoid_: Internal executor stage, inferred log state
 
@@ -58,12 +64,12 @@ outer execution was interrupted.
 _Avoid_: Process exit alone, coordinator cancellation
 
 **Executor outer invocation outcome**:
-The selected executor's normalized completed, failed, interrupted, or
+An executor's normalized completed, failed, interrupted, or
 non-convergent result for one exact outer invocation.
 _Avoid_: Internal review result, raw provider response
 
 **Executor outer invocation projection**:
-The selected executor's current declaration that one exact outer invocation
+An executor's current declaration that one exact outer invocation
 is ready, waiting, or complete with a normalized outcome.
 _Avoid_: Generic inspection of executor-specific journal events
 
@@ -483,7 +489,7 @@ _Avoid_: Workflow journal event, cached output, review result
 **Implementation evidence manifest**:
 The immutable implementation-stage record that names the exact successful task
 execution operation as its causal predecessor and references the complete
-content-addressed executor-output and Git-diff objects. The current selected
+content-addressed executor-output and Git-diff objects. The review-loop
 executor seals the manifest only after both referenced objects are readable
 from the EvidenceStore.
 _Avoid_: Partial evidence, mutable report, task completion
@@ -541,7 +547,7 @@ review round, but its technical retry ordinal is a separate branded fact.
 _Avoid_: Semantic review round, task attempt, coordinator recovery budget
 
 **Technical retry scheduled**:
-The Dalph workflow-journal fact that the current selected executor records
+The Dalph workflow-journal fact that the review-loop executor records
 after one typed technical invocation failure and before waiting. It binds the
 active technical retry scope, next technical retry ordinal, capped delay, and
 absolute `notBefore` read from the Effect clock. It does not prove that the
@@ -551,7 +557,7 @@ deferral-supersession intent.
 _Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
 
 **Technical retry deferral superseded**:
-The Dalph workflow-journal intent that the current selected executor records
+The Dalph workflow-journal intent that the review-loop executor records
 after one scheduled retry becomes eligible and immediately before that
 executor asks the same provider invocation to create or rediscover its exact
 result. It retires exactly that scope and retry ordinal's deferral. It does not
@@ -562,7 +568,7 @@ and before that invocation's durable outcome.
 _Avoid_: Retry completed, timer fired, semantic review advanced
 
 **Reviewer invocation**:
-One request made by the current selected executor to a fresh independent
+One request made by the review-loop executor to a fresh independent
 reviewer, identified by an executor-internal workflow operation and durable
 reviewer-session identity before it crosses the reviewer boundary. Executor
 recovery resumes that exact invocation rather than creating another semantic
@@ -581,7 +587,7 @@ An immutable content-addressed manifest that references its immediate evidence
 predecessor, binds the planned task attempt, exact worktree, latest implementer
 invocation and session, reviewer session, and semantic round, and retains the
 complete finding history together with the reviewer disposition in the current
-review-capable executor protocol.
+review-loop executor protocol.
 The current review contract has no partial-resolution state: every finding in
 that history remains unresolved and is supplied to the next fresh reviewer
 until one accepted disposition resolves the complete set. The accepted manifest
@@ -1071,7 +1077,7 @@ _Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired h
 **Startup run recovery**:
 The fail-closed process performed under coordinator ownership that discovers
 every journaled run without an age cutoff, validates each complete managed
-history, freshly rereads tracker and Git authority, and asks the selected
+history, freshly rereads tracker and Git authority, and asks the injected
 executor to reconcile its internal provider, evidence, and reviewer authorities
 for the exact recorded attempts before live coordination begins.
 _Avoid_: Process rehydration, recent-run scan, journal replay alone

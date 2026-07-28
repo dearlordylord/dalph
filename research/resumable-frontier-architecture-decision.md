@@ -54,7 +54,7 @@ review-protocol implementations.
 | [`task-dag.ts`](../packages/orchestrator/src/task-dag.ts), tracker graph readers, and graph outcome types | Refactor and deepen | Retain provider decoding, identity normalization, closure validation, cycle detection, and deterministic task ordering. Replace `eligibleTasks()` as an orchestration interface with normalized graph facts carrying declared coverage, completeness, consistency, freshness, and proven absence. A graph-knowledge reducer, not graph membership, supplies the selector's facts. |
 | [`workflow-operation.ts`](../packages/orchestrator/src/workflow-operation.ts), [`workflow.ts`](../packages/orchestrator/src/workflow.ts), and journaled interpreters | Retain and refactor at the edges | Preserve the operation algebra, `WorkflowInterpreter` seam, Layer substitution, stable `OperationId`, and intent-before-effect ordering. Add accepted control, read, constraint, responsibility, integration, completion, and disposition operations as current consumers require them; remove mode-shaped or obsolete operations only when their callers migrate. |
 | Claim, worktree, session-establishment, and task-execution protocol modules | Retain | Their exact identity, immutable payload, causal predecessor, fresh-result-check, typed conflict, and reconcile-before-retry behavior provide leverage across ordinary and restarted execution and correspond to `AmbiguityBoundaryV1`. Adapt their results into the new reconstructed-state reducers instead of reimplementing them. |
-| Implementation evidence, review, handback, retry, and convergence modules | Retain as the current protocol; refactor behind the executor seam | The accepted current protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports declared outer transitions, waits, correlation identities, capacity use, and outcomes; issue #127 owns whether later executors make review optional or store different internal evidence. |
+| Implementation evidence, review, handback, retry, and convergence modules | Retain as the review-loop executor; refactor behind the executor seam | The accepted review-loop protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports declared outer transitions, waits, correlation identities, capacity use, and outcomes; issue #127 owns whether later executors make review optional or store different internal evidence. |
 | Existing focused protocol, Schema, property, SQLite, and interpreter-equivalence tests | Retain where their production seam survives | Keep tests that prove an exact retained boundary contract. Replace tests that assert `ManagedRunRecoveryStageEntry`, one-shot traversal, or global startup blockage. Every behavior slice also updates the owning Quint model, test-only adapter, semantic trace, and applicable in-memory and SQLite P0–P6 conformance-test cut points. These labels are test vocabulary, never production stages or states. |
 
 ## Why the current topology is replaced
@@ -155,6 +155,23 @@ are architectural blocking edges, not tickets.
    its accepted behavior. Do not decide configurable pipelines here; preserve
    issue #127's ability to replace this adapter without changing the outer
    frontier and responsibility modules.
+
+### Executor source-boundary reconciliation
+
+The later
+[review-loop executor source-boundary decision](review-loop-executor-source-boundary-decision.md)
+clarifies the preceding baseline disposition. The retained generic
+`WorkflowOperation` and `WorkflowInterpreter` seams contain only
+orchestrator-facing members. Review-loop internal operations, events,
+validation, reconstruction, artifacts, and provider adapters move behind one
+injected executor bundle in an enforced module tree. A stage-name-free test
+bundle proves the seam without adding production executor selection.
+
+Issue #127 remains the v2 owner for per-attempt executor identity,
+configuration, event routing across multiple executor protocols, missing
+executor handling, and operator-visible restart under another executor. The
+current v1 source refactor may replace unreleased journal schemas without
+preserving repository fixtures as compatibility targets.
 
 No slice may temporarily create a second durable frontier, capacity record,
 responsibility rollup, or UI state. A compatibility adapter is acceptable only
