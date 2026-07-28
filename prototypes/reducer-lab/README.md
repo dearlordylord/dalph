@@ -69,9 +69,19 @@ feature drift.
 The post-#133 driver uses revision-bearing fresh tasks, exact tagged admission
 reservations, one-transition-at-a-time admission, and the generic
 executor-invocation responsibility, transition, wait, and settlement vocabulary.
-It intentionally does not fake an executor driver, Git authority, pause reducer,
-or other missing production behavior; those selected transitions remain visible
-as capability gaps.
+After claim selection, it replays the real production task-attempt and
+selected-executor stage builders through the production dry-run interpreter.
+The orchestration surface shows claim, attempt plan, worktree reconciliation,
+work-session establishment, and opaque executor outer invocations. It does not
+promote the selected executor's internal execution, evidence, review, handback,
+or disposition operations into orchestrator stages.
+
+Provider-authoritative Git, session, executor, evidence, and review facts are
+not fabricated. The Lab labels this path as the production dry-run interpreter
+and displays its normalized outer trace separately from the durable workflow
+journal. It stops after the selected executor returns its completed outer
+outcome because current production code has no integration or tracker-task
+completion operation.
 
 The current source boundary is not fully browser-safe: importing
 `managed-history.ts` reaches a static `@effect/platform-node` import through the
@@ -107,6 +117,12 @@ adapter. Keep it as part of this experiment; do not promote it to production
 domain state. Issue #132's activation seam now owns the real process-local
 selection and execution correlations; this revision remains only a browser
 command revalidation token.
+
+The parity scenario now proves that a task observed from the graph editor can
+be advanced, one real production move at a time, through the current coarse
+executor boundary. Internal review strategy remains hidden; after the selected
+executor returns its completed outer outcome, the Lab offers no fictional
+integration or tracker-completion step.
 
 The prototype intentionally keeps whole-run and task pause controls disabled:
 the current reconstructed pause reducer always returns `RunUnpaused` and

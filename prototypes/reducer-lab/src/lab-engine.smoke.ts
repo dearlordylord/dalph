@@ -101,10 +101,39 @@ const claim = await Effect.runPromise(executeLabMove(
 ))
 assert(claim.snapshot.responsibilities.length === 1, "Claim intent must create responsibility")
 assert(
-  claim.snapshot.moves.some(({ availability }) => availability._tag === "DriverMissing"),
-  "An unimplemented real frontier transition must remain visible"
+  claim.snapshot.moves.some(({ transition, availability }) =>
+    transition === "RecordTaskAttemptPlan" && availability._tag === "Available"
+  ),
+  "The production attempt-plan stage must be reachable after claim selection"
 )
 assertPresenterParity(claim.snapshot)
+
+let completedWorkflow = claim.snapshot
+for (const operation of [
+  "RecordTaskAttemptPlan",
+  "ReconcileTaskWorktree",
+  "EstablishTaskWorkSession",
+  "StartExecutorInvocation",
+  "StartExecutorInvocation",
+  "StartExecutorInvocation",
+  "StartExecutorInvocation"
+] as const) {
+  const execution = await Effect.runPromise(executeLabMove(
+    completedWorkflow,
+    availableMoveId(completedWorkflow, operation, "A"),
+    completedWorkflow.revision
+  ))
+  completedWorkflow = execution.snapshot
+}
+assert(
+  completedWorkflow.workflowProgress[0]?.completedOperations.length === 8,
+  "The Lab must reach the complete production path through opaque executor invocations"
+)
+assert(
+  completedWorkflow.workflowProgress[0]?.nextOperation === null,
+  "The production-parity path must stop after the selected executor completes"
+)
+assertPresenterParity(completedWorkflow)
 
 const editedB = await executeCommand(initial, {
   _tag: "ReplacedTrackerTask",

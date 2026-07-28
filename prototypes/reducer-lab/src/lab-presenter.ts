@@ -100,6 +100,7 @@ export const LabViewModel = S.Struct({
   observationStatus: S.String,
   reservedTasksMetric: S.String,
   responsibilityRows: S.Array(S.String),
+  workflowRows: S.Array(S.String),
   revision: S.String,
   runPause: S.String,
   status: S.String,
@@ -117,6 +118,7 @@ const inputLabel = (action: LabAction): string => {
     case "SetTrackerClaim": return `Set ${action.taskId} claim to ${action.state}`
     case "ObservedTrackerGraph": return "Observe tracker target closure"
     case "CommittedClaimIntent": return `Commit claim intent for ${action.taskId}`
+    case "AdvancedTaskWorkflow": return `Advance production workflow for ${action.taskId}`
     case "SuppliedFreshFact": return `Supply ${action.fact} fact for ${action.taskId}`
     case "CrashedCoordinator": return "Crash coordinator"
     case "RestartedCoordinator": return "Restart coordinator"
@@ -151,6 +153,11 @@ const moveLabel = (move: LabMove): string => {
     case "PauseRun": return "Pause run"
     case "PauseTask": return "Pause task"
     case "CommitFreshTaskClaimIntent": return `Commit fresh claim intent · ${taskId}`
+    case "AcquireTaskClaim": return `Acquire task claim · ${taskId}`
+    case "RecordTaskAttemptPlan": return `Record attempt plan · ${taskId}`
+    case "ReconcileTaskWorktree": return `Reconcile worktree · ${taskId}`
+    case "EstablishTaskWorkSession": return `Establish work session · ${taskId}`
+    case "StartExecutorInvocation": return `Start executor invocation · ${taskId}`
     default: return `${move.transition} · ${taskId}`
   }
 }
@@ -349,6 +356,7 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
     `Latest successful observation: ${snapshot.latestObservation.map(({ id }) => id).join(", ") || "none"}`,
   notes: [
     "Task-card Save changes the controlled tracker only. Observe crosses the read boundary.",
+    "The orchestrator sees opaque executor invocations. Review strategy and review events stay inside the selected executor protocol.",
     "Invalid tracker topology records observation intent and a typed failure, but no successful outcome.",
     "Durable graph knowledge currently retains target-closure membership, not dependency or grouping edges.",
     "The browser build still uses the documented temporary Node-platform shim."
@@ -362,6 +370,13 @@ export const presentLab = (snapshot: LabSnapshot): LabViewModel => ({
   responsibilityRows: snapshot.responsibilities.map(({ beganAt, kind, taskId }) =>
     `${taskId} · ${kind} · began at journal #${beganAt}`
   ),
+  workflowRows: snapshot.workflowProgress.flatMap((progress) => [
+    `${progress.taskId} · completed: ${progress.completedOperations.join(" → ") || "none"}`,
+    progress.nextOperation === null
+      ? `${progress.taskId} · selected executor returned its completed outer outcome`
+      : `${progress.taskId} · next: ${progress.nextOperation}`,
+    ...progress.trace.map((row) => `${progress.taskId} · ${row}`)
+  ]),
   revision: snapshot.revision,
   runPause: snapshot.runPause,
   status: snapshot.status,

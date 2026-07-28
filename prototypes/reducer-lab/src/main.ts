@@ -136,6 +136,7 @@ const emptyViewModel: LabViewModel = {
   observationStatus: "computing",
   reservedTasksMetric: "Reserved: computing",
   responsibilityRows: [],
+  workflowRows: [],
   revision: "computing",
   runPause: "computing",
   status: "computing",
@@ -792,7 +793,7 @@ export const view = (model: Model): Document => {
           h.h2([], [`${branch.name} · cursor ${branch.cursor}/${branch.actions.length}`]),
           h.ol([h.Class("steps")], [
             h.li([], [
-              button(h, "0 · Empty journal", MovedCursor({ cursor: 0 }), branch.cursor === 0, "step")
+              button(h, "0 · Empty input history", MovedCursor({ cursor: 0 }), branch.cursor === 0, "step")
             ]),
             ...viewModel.timelineLabels.map((label, index) =>
               h.li([], [
@@ -902,13 +903,24 @@ export const view = (model: Model): Document => {
             ]), "PRODUCTION STATE + VISIBLE GAPS")
           ]),
 
+          stateCard(h, "Task implementation workflow", h.div([], [
+            h.p([], [
+              "Operation selections and dry-run results. These rows are not durable workflow-journal events."
+            ]),
+            listOrEmpty(
+              h,
+              viewModel.workflowRows,
+              "Observe the tracker, then select a claim move to begin a production task workflow."
+            )
+          ]), "REAL PRODUCTION STAGES + DRY-RUN INTERPRETER"),
+
           h.section([h.Class("card journal")], [
             h.p([h.Class("eyebrow")], ["EXACT INPUT TO THE FOLD"]),
             h.h2([], ["Workflow journal"]),
             viewModel.journal.length === 0
               ? h.p([h.Class("empty")], ["No records."])
               : h.table([], [
-                h.thead([], [h.tr([], [h.th([], ["#"]), h.th([], ["Event"])])]),
+                h.thead([], [h.tr([], [h.th([], ["#"]), h.th([], ["Durable journal event"])])]),
                 h.tbody([], viewModel.journal.map(({ position, tag }) =>
                   h.tr([], [h.td([], [String(position)]), h.td([], [tag])])
                 ))

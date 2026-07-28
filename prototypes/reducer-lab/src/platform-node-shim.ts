@@ -9,3 +9,7 @@ import { Layer } from "effect"
 export const NodeServices = {
   layer: Layer.empty
 }
+
+export const NodeFileSystem = {
+  layer: Layer.empty
+}

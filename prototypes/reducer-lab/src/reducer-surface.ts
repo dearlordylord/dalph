@@ -23,15 +23,15 @@ const excluded = (reason: string) => ({ reason, status: "IntentionallyExcluded" 
 /** Adding an operation to the production algebra makes this prototype fail typechecking until classified. */
 export const workflowOperationCoverage = {
   AcquireTaskClaim: interactive("Selected claim intents can be committed."),
-  EstablishTaskWorkSession: excluded("The current driver cannot execute work-session operations."),
-  ExecuteTaskWork: excluded("The current driver does not run task executors."),
-  HandBackReviewFindings: excluded("Review handback is outside this reducer slice."),
+  EstablishTaskWorkSession: interactive("The production stage runs through the dry-run interpreter."),
+  ExecuteTaskWork: observable("The selected executor projects this internal stage as an opaque outer invocation."),
+  HandBackReviewFindings: observable("The selected executor keeps handback inside its internal protocol."),
   ReadTrackerGraph: interactive("The controlled tracker can be observed repeatedly."),
-  ReconcileTaskWorktree: excluded("Git authority is not yet controlled by this driver."),
-  RecordImplementationDisposition: excluded("Implementation convergence is outside this reducer slice."),
-  RecordTaskAttemptPlan: excluded("Attempt planning is outside this reducer slice."),
-  ReviewImplementation: excluded("Reviewer execution is outside this reducer slice."),
-  SealImplementationEvidence: excluded("Evidence storage is outside this reducer slice.")
+  ReconcileTaskWorktree: interactive("The production stage runs through the dry-run interpreter."),
+  RecordImplementationDisposition: observable("The selected executor normalizes its terminal internal result to an outer outcome."),
+  RecordTaskAttemptPlan: interactive("The production stage plans the exact attempt."),
+  ReviewImplementation: observable("The selected executor keeps review strategy inside its internal protocol."),
+  SealImplementationEvidence: observable("The selected executor keeps evidence artifacts inside its internal protocol.")
 } satisfies Coverage<WorkflowOperation>
 
 /** Journal events are consequences of driver operations, never raw UI buttons. */

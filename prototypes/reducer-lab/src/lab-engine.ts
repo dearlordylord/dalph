@@ -40,6 +40,10 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTrackerGraphObservationOperation
 } from "../../../packages/orchestrator/src/workflow-operation.ts"
+import {
+  type ProductionWorkflowProgress,
+  replayProductionWorkflow
+} from "./production-workflow-driver.ts"
 
 export const LabTaskLifecycle = S.Literals([
   "Open",
@@ -78,6 +82,7 @@ export const LabAction = S.Union([
   S.TaggedStruct("SetTrackerClaim", { state: TrackerClaimState, taskId: S.String }),
   S.TaggedStruct("ObservedTrackerGraph", {}),
   S.TaggedStruct("CommittedClaimIntent", { taskId: S.String }),
+  S.TaggedStruct("AdvancedTaskWorkflow", { taskId: S.String }),
   S.TaggedStruct("SuppliedFreshFact", { fact: FreshFact, taskId: S.String }),
   S.TaggedStruct("CrashedCoordinator", {}),
   S.TaggedStruct("RestartedCoordinator", {}),
@@ -171,6 +176,12 @@ const ObservationAttempt = S.Union([
   S.TaggedStruct("Succeeded", { revision: S.String }),
   S.TaggedStruct("Failed", { issues: S.Array(S.String) })
 ])
+const WorkflowProgress = S.Struct({
+  completedOperations: S.Array(S.String),
+  nextOperation: S.NullOr(S.String),
+  taskId: S.String,
+  trace: S.Array(S.String)
+})
 
 /** Semantic result reconstructed by real production reducers plus controlled Lab inputs. */
 export const LabSnapshot = S.Struct({
@@ -198,7 +209,8 @@ export const LabSnapshot = S.Struct({
   targetSettled: S.Boolean,
   taskPause: S.String,
   trackerClaims: S.Array(TrackerClaim),
-  trackerTasks: S.Array(ControlledTask)
+  trackerTasks: S.Array(ControlledTask),
+  workflowProgress: S.Array(WorkflowProgress)
 })
 export interface LabSnapshot extends S.Schema.Type<typeof LabSnapshot> {}
 
@@ -379,6 +391,7 @@ interface ProductionInput {
   readonly targetSettled: boolean
   readonly trackerClaims: ReadonlyArray<TrackerClaim>
   readonly trackerTasks: ReadonlyArray<ControlledTask>
+  readonly workflowSteps: ReadonlyMap<string, number>
 }
 
 const buildProductionInput = (input: LabInput): ProductionInput => {
@@ -398,6 +411,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
   let latestProjected: TaskDagSnapshot | null = null
   let hasSuccessfulObservation = false
   let observationAttempt: LabSnapshot["observationAttempt"] = { _tag: "NeverAttempted" }
+  const workflowSteps = new Map<string, number>()
 
   for (const action of input.actions) {
     switch (action._tag) {
@@ -452,6 +466,10 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
       }
       case "CommittedClaimIntent":
         appendClaimIntent(records, action.taskId, latestGraphOperationId)
+        workflowSteps.set(action.taskId, 1)
+        break
+      case "AdvancedTaskWorkflow":
+        workflowSteps.set(action.taskId, (workflowSteps.get(action.taskId) ?? 0) + 1)
         break
       case "SuppliedFreshFact":
         freshFacts.set(action.taskId, action.fact)
@@ -490,6 +508,7 @@ const buildProductionInput = (input: LabInput): ProductionInput => {
     targetSettled,
     trackerClaims: [...trackerClaims].map(([taskId, state]) => ({ state, taskId })),
     trackerTasks,
+    workflowSteps
   }
 }
 
@@ -534,9 +553,25 @@ const move = (
 const frontierMove = (
   transition: RunnableFrontierTransition,
   admitted: ReadonlyArray<RunnableFrontierTransition>,
-  coordinatorRunning: boolean
+  coordinatorRunning: boolean,
+  workflowProgress: ReadonlyMap<string, ProductionWorkflowProgress>
 ): LabMove => {
   const subjectTaskId = runnableTransitionTaskId(transition)
+  const progress = workflowProgress.get(subjectTaskId)
+  if (progress !== undefined && progress.nextOperation !== null) {
+    return move(
+      `workflow:advance:${subjectTaskId}:${progress.completedOperations.length}`,
+      "FrontierTransition",
+      progress.nextOperation,
+      { _tag: "Task", taskId: subjectTaskId },
+      coordinatorRunning
+        ? {
+          _tag: "Available",
+          input: { _tag: "AdvancedTaskWorkflow", taskId: subjectTaskId }
+        }
+        : { _tag: "Waiting", reason: "CoordinatorStopped" }
+    )
+  }
   if (transition._tag !== "CommitFreshTaskClaimIntent") {
     return move(
       `frontier:${transition._tag}:${subjectTaskId}`,
@@ -694,7 +729,8 @@ const emptyProductionSnapshot = (
   targetSettled: built.targetSettled,
   taskPause: "Unknown",
   trackerClaims: built.trackerClaims,
-  trackerTasks: built.trackerTasks
+  trackerTasks: built.trackerTasks,
+  workflowProgress: []
 })
 
 /** Narrow adapter around current production reconstruction, selection, and admission. */
@@ -703,6 +739,25 @@ const reconstructThroughProduction = (
 ): Effect.Effect<LabSnapshot> =>
   Effect.gen(function*() {
     const built = buildProductionInput(input)
+    const workflowProgress = yield* Effect.forEach(
+      [...built.workflowSteps],
+      ([subjectTaskId, steps]) => {
+        const task = built.latestProjected?.eligibleTasks().find(({ id }) => id === taskId(subjectTaskId))
+        return task === undefined
+          ? Effect.succeed<ProductionWorkflowProgress>({
+            completedOperations: [],
+            nextOperation: null,
+            taskId: subjectTaskId,
+            trace: ["Task is absent from the latest successful observation."]
+          })
+          : replayProductionWorkflow(task, steps, built.latestGraphOperationId) as unknown as Effect.Effect<
+            ProductionWorkflowProgress
+          >
+      }
+    )
+    const workflowProgressByTask = new Map(
+      workflowProgress.map((progress) => [progress.taskId, progress])
+    )
     const reduced = reduceManagedHistory(runId, built.records)
     if (reduced._tag === "InvalidManagedHistory") {
       return emptyProductionSnapshot(
@@ -818,7 +873,32 @@ const reconstructThroughProduction = (
       latestObservation: built.latestObservation,
       moves: [
         ...frontier.transitions.map((transition) =>
-          frontierMove(transition, admitted, built.coordinatorRunning)
+          frontierMove(
+            transition,
+            admitted,
+            built.coordinatorRunning,
+            workflowProgressByTask
+          )
+        ),
+        ...workflowProgress.flatMap((progress) =>
+          progress.nextOperation === null
+            ? []
+            : frontier.transitions.some((transition) =>
+              runnableTransitionTaskId(transition) === progress.taskId
+            )
+              ? []
+              : [move(
+                `workflow:advance:${progress.taskId}:${progress.completedOperations.length}`,
+                "FrontierTransition",
+                progress.nextOperation,
+                { _tag: "Task", taskId: progress.taskId },
+                built.coordinatorRunning
+                  ? {
+                    _tag: "Available",
+                    input: { _tag: "AdvancedTaskWorkflow", taskId: progress.taskId }
+                  }
+                  : { _tag: "Waiting", reason: "CoordinatorStopped" }
+              )]
         ),
         ...driverMoves(
           built.coordinatorRunning,
@@ -836,7 +916,8 @@ const reconstructThroughProduction = (
       targetSettled: built.targetSettled,
       taskPause: run.pause.tasks._tag,
       trackerClaims: built.trackerClaims,
-      trackerTasks: built.trackerTasks
+      trackerTasks: built.trackerTasks,
+      workflowProgress
     }
   })
 
