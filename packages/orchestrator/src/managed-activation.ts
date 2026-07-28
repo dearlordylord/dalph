@@ -29,6 +29,7 @@ import {
 } from "./selected-executor-protocol.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 import {
+  currentTaskCapacityPositions,
   makeTaskAdmissionController,
   type MultipleCurrentTaskCapacityOperations,
   validateCurrentTaskCapacityFacts
@@ -205,11 +206,15 @@ const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier
       })
     )
     yield* validateCurrentTaskCapacityFacts(responsibilityFacts)
-    return deriveRunnableFrontier({
+    const frontier = deriveRunnableFrontier({
       freshEligibleTasks: [],
       responsibility: reduction.managedRun.responsibility,
       responsibilityFacts
     })
+    return {
+      ...frontier,
+      currentTaskCapacityPositions: currentTaskCapacityPositions(responsibilityFacts)
+    }
   }
 )
 
@@ -289,18 +294,8 @@ export const makeManagedRecoveryActivation = Effect.fn(
     >
   ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
   const initial = yield* readRecoveredFrontier(runId)
-  const reconstructedReservedPositions = initial.transitions.flatMap(
-    (transition) =>
-      transition._tag === "ContinueExecutorInvocation"
-        && transition.capacityRequirement._tag === "OneTaskWorkPosition"
-        && !capacityEvidence.freshlyReleasedOperationIds.has(
-          transition.invocation.correlation.invocationId
-        )
-        ? [{
-          operationId: transition.invocation.correlation.invocationId,
-          taskId: transition.invocation.correlation.taskId
-        }]
-        : []
+  const reconstructedReservedPositions = initial.currentTaskCapacityPositions.filter(
+    ({ operationId }) => !capacityEvidence.freshlyReleasedOperationIds.has(operationId)
   )
   const readFrontier = Effect.fn(
     "ManagedActivation.readActivationFrontier"

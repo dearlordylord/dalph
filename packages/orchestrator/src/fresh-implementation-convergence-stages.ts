@@ -5,8 +5,6 @@ import {
   type FreshImplementationConvergenceOptions,
   type FreshImplementationConvergenceStage,
   freshImplementationTransition,
-  noTaskWorkCapacityRequirement as noCapacity,
-  oneTaskWorkCapacityRequirement as usesCapacity,
   priorImplementationReviewEvidence
 } from "./implementation-convergence-stage.js"
 import { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
@@ -67,7 +65,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
       transition: freshImplementationTransition(
         operation.request.operationId,
         options.task,
-        usesCapacity
+        "TaskExecution"
       ),
       run: (recordActivationIntent) =>
         Effect.gen(function*() {
@@ -136,12 +134,12 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           ? freshImplementationTransition(
             operation.request.operationId,
             options.task,
-            usesCapacity
+            "ReviewFindingsHandback"
           )
           : continuedImplementationTransition(
             operation.request.operationId,
             options.task,
-            usesCapacity
+            "ReviewFindingsHandback"
           ),
         run: (recordActivationIntent) =>
           Effect.gen(function*() {
@@ -234,12 +232,12 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
           ? freshImplementationTransition(
             operationId,
             options.task,
-            usesCapacity
+            "ImplementationReview"
           )
           : continuedImplementationTransition(
             operationId,
             options.task,
-            usesCapacity
+            "ImplementationReview"
           ),
         run: (recordActivationIntent) =>
           Effect.gen(function*() {
@@ -331,7 +329,7 @@ export const makeFreshImplementationConvergenceStage = Effect.fn(
         transition: freshImplementationTransition(
           operation.operationId,
           options.task,
-          noCapacity
+          "ImplementationEvidenceSealing"
         ),
         run: () =>
           Effect.gen(function*() {

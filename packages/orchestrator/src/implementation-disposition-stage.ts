@@ -7,7 +7,6 @@ import type {
 import { freshImplementationTransition } from "./implementation-convergence-stage.js"
 import { ImplementationConvergenceDispositionRecordedTrace } from "./implementation-convergence-trace.js"
 import type { ImplementationConvergenceDisposition } from "./implementation-convergence.js"
-import { noTaskWorkCapacityRequirement } from "./task-work-capacity.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import { OperationSelected } from "./tracker-workflow-trace.js"
 import { makeImplementationDispositionOperation } from "./workflow-operation.js"
@@ -32,7 +31,7 @@ export const makeImplementationDispositionStage = Effect.fn(
     transition: freshImplementationTransition(
       operation.request.operationId,
       options.task,
-      noTaskWorkCapacityRequirement
+      "ImplementationDisposition"
     ),
     run: () =>
       Effect.gen(function*() {

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Option } from "effect"
+import { Effect, Option, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -22,9 +22,10 @@ import {
   TaskWorkCapacity,
   TaskWorkSessionId,
   TaskWorkSessionLocator,
+  TechnicalRetryNotBefore,
   WorktreeLocator
 } from "./domain.js"
-import { makeExecutorOuterInvocation } from "./executor-boundary.js"
+import { ExecutorOuterInvocationWait, makeExecutorOuterInvocation } from "./executor-boundary.js"
 import { EvidenceDigest, EvidenceReference } from "./implementation-evidence.js"
 import {
   ImplementationReviewDisposition,
@@ -350,7 +351,8 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
         },
         taskId: taskA
       }],
-      reservedTaskIds: [taskA]
+      reservedTaskIds: [taskA],
+      taskStates: expect.any(Array)
     })
 
     const admission = yield* controller.admit({
@@ -432,11 +434,11 @@ it.effect("rebuilds, updates, and releases exact process-local positions", () =>
       operationId: OperationId.make("capacity-C-invocation"),
       taskId: taskC
     })
-    expect((yield* controller.snapshot()).occupied).toContainEqual({
-      observationId: "capacity-C-reobservation",
-      operationId: "capacity-C-reobserved",
-      taskId: taskC
-    })
+    expect(
+      (yield* controller.snapshot()).taskStates.some(
+        (entry) => entry.taskId === taskC
+      )
+    ).toBe(false)
     yield* controller.applyFreshInvocationObservation({
       _tag: "FreshCapacityReleased",
       observationId: ProviderObservationId.make("capacity-C-stopped"),
@@ -569,6 +571,24 @@ it.effect("counts a mismatched provider operation once and admits another task a
         }, RunId.make("mismatched-capacity-run"))
       )
     ).toEqual([freshTransition(independentlyRunnableTaskId)])
+    expect(yield* controller.taskStates()).toEqual([
+      {
+        state: {
+          _tag: "CorrelationConflict",
+          expectedOperationId,
+          observationId: "mismatched-capacity-observation",
+          observedOperationId: "reported-capacity-operation"
+        },
+        taskId: conflictedTaskId
+      },
+      {
+        state: {
+          _tag: "Reserved",
+          selected: expect.any(Object)
+        },
+        taskId: independentlyRunnableTaskId
+      }
+    ])
   }))
 
 it.effect("keeps another task waiting behind one unresolved task at capacity one", () =>
@@ -601,6 +621,15 @@ it.effect("keeps another task waiting behind one unresolved task at capacity one
       }],
       transition: Option.none()
     })
+    expect(yield* controller.taskStates()).toEqual([{
+      state: {
+        _tag: "CorrelationConflict",
+        expectedOperationId: "capacity-one-expected-operation",
+        observationId: "capacity-one-observation",
+        observedOperationId: "capacity-one-observed-operation"
+      },
+      taskId: conflictedTaskId
+    }])
   }))
 
 it.effect("requires a matching fresh report before making a conflicted task available", () =>
@@ -710,13 +739,30 @@ it.effect("restart rereads the provider and recreates the exact correlation conf
   Effect.gen(function*() {
     const taskId = TaskId.make("restart-conflict-task")
     const expectedOperationId = OperationId.make("restart-conflict-expected")
-    const controllerBeforeCrash = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [{
+    const providerReports = yield* Ref.make([
+      {
         observationId: ProviderObservationId.make("restart-before-observation"),
         operationId: OperationId.make("restart-before-observed-operation"),
         taskId
-      }],
+      },
+      {
+        observationId: ProviderObservationId.make("restart-after-observation"),
+        operationId: OperationId.make("restart-after-observed-operation"),
+        taskId
+      }
+    ])
+    const readProvider = Ref.modify(providerReports, ([next, ...remaining]) =>
+      [
+        next,
+        remaining
+      ] as const)
+    const beforeCrashReport = yield* readProvider
+    if (beforeCrashReport === undefined) {
+      return yield* Effect.die("expected pre-crash provider report")
+    }
+    const controllerBeforeCrash = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: [beforeCrashReport],
       reconstructedReservedPositions: [{
         operationId: expectedOperationId,
         taskId
@@ -726,13 +772,13 @@ it.effect("restart rereads the provider and recreates the exact correlation conf
       observedOperationId: "restart-before-observed-operation"
     })
 
+    const afterRestartReport = yield* readProvider
+    if (afterRestartReport === undefined) {
+      return yield* Effect.die("restart must reread the provider")
+    }
     const controllerAfterRestart = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [{
-        observationId: ProviderObservationId.make("restart-after-observation"),
-        operationId: OperationId.make("restart-after-observed-operation"),
-        taskId
-      }],
+      freshOccupiedInvocations: [afterRestartReport],
       reconstructedReservedPositions: [{
         operationId: expectedOperationId,
         taskId
@@ -748,6 +794,7 @@ it.effect("restart rereads the provider and recreates the exact correlation conf
       },
       taskId
     }])
+    expect(yield* Ref.get(providerReports)).toEqual([])
   }))
 
 it.effect("unknown evidence holds one position while absence releases it", () =>
@@ -1018,10 +1065,7 @@ it.effect("keeps exact task and operation correlation across every fresh provide
       operationId: expectedOperationId,
       taskId
     })
-    expect((yield* controller.taskStates())[0]?.state).toMatchObject({
-      _tag: "Working",
-      operationId: observedOperationId
-    })
+    expect(yield* controller.taskStates()).toEqual([])
 
     const reservedTaskId = TaskId.make("reserved-provider-correlation-task")
     yield* controller.admit({
@@ -1072,6 +1116,46 @@ it.effect("validates only current capacity-holding executor operations", () =>
     ])
   }))
 
+it.effect("rejects two waiting current capacity operations for one task", () =>
+  Effect.gen(function*() {
+    const firstOperationId = OperationId.make("waiting-capacity-first")
+    const secondOperationId = OperationId.make("waiting-capacity-second")
+    const waitFor = (operationId: OperationId) =>
+      ResponsibilityDisposition.ExecutorInvocationWait({
+        wait: ExecutorOuterInvocationWait.cases.RetryScheduled.make({
+          correlation: {
+            invocationId: operationId,
+            taskId
+          },
+          notBefore: TechnicalRetryNotBefore.make(20)
+        })
+      })
+    const result = yield* Effect.result(validateCurrentTaskCapacityFacts([
+      {
+        disposition: waitFor(firstOperationId),
+        responsibility: executorResponsibility(
+          JournalPosition.make(20),
+          firstOperationId
+        )
+      },
+      {
+        disposition: waitFor(secondOperationId),
+        responsibility: executorResponsibility(
+          JournalPosition.make(21),
+          secondOperationId
+        )
+      }
+    ]))
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Success") return
+    expect(result.failure).toMatchObject({
+      _tag: "MultipleCurrentTaskCapacityOperations",
+      operationIds: [firstOperationId, secondOperationId],
+      taskId
+    })
+  }))
+
 it.effect("rejects two current capacity operations for one task during reconstruction", () =>
   Effect.gen(function*() {
     const taskId = TaskId.make("invalid-capacity-history-task")
@@ -1100,6 +1184,34 @@ it.effect("rejects two current capacity operations for one task during reconstru
     expect(result.failure.taskId).toBe(taskId)
   }))
 
+it.effect("rejects multiple fresh active observations for one task", () =>
+  Effect.gen(function*() {
+    const result = yield* Effect.result(makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      freshOccupiedInvocations: [
+        {
+          observationId: ProviderObservationId.make("duplicate-active-first"),
+          operationId: OperationId.make("duplicate-active-first"),
+          taskId
+        },
+        {
+          observationId: ProviderObservationId.make("duplicate-active-second"),
+          operationId: OperationId.make("duplicate-active-second"),
+          taskId
+        }
+      ],
+      reconstructedReservedPositions: []
+    }))
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Success") return
+    expect(result.failure).toMatchObject({
+      _tag: "MultipleFreshTaskCapacityObservations",
+      operationIds: ["duplicate-active-first", "duplicate-active-second"],
+      taskId
+    })
+  }))
+
 it.effect("fails closed for stale reservation mutations and retains conflicting provider evidence", () =>
   Effect.gen(function*() {
     const runId = RunId.make("stale-reservation-run")
@@ -1125,11 +1237,7 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
     ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
     expect(yield* controller.snapshot()).toEqual({
       capacity: 1,
-      occupied: [{
-        observationId: "conflicting-observation",
-        operationId: "conflicting-operation",
-        taskId
-      }],
+      occupied: [],
       reservedPositions: [{
         correlation: {
           _tag: "OperationReservation",
@@ -1137,7 +1245,16 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
         },
         taskId
       }],
-      reservedTaskIds: [taskId]
+      reservedTaskIds: [taskId],
+      taskStates: [{
+        state: {
+          _tag: "CorrelationConflict",
+          expectedOperationId: originalOperationId,
+          observationId: "conflicting-observation",
+          observedOperationId: "conflicting-operation"
+        },
+        taskId
+      }]
     })
 
     const selected = makeSelectedTransitionIdentity(
@@ -1164,25 +1281,8 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
 
     expect(
       yield* controller.releaseTaskAdmissionPosition(originalOperationId)
-    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
-    expect((yield* controller.snapshot()).occupied).toEqual([{
-      observationId: "conflicting-observation",
-      operationId: "conflicting-operation",
-      taskId
-    }])
-    expect(
-      yield* controller.admit({
-        explanations: [],
-        transitions: [freshTransition(waitingTaskId)]
-      }, runId)
-    ).toEqual({
-      explanations: [{
-        _tag: "CapacityWait",
-        taskId: waitingTaskId,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      }],
-      transition: Option.none()
-    })
+    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    expect((yield* controller.snapshot()).taskStates).toEqual([])
     expect(
       yield* controller.releaseTaskAdmissionPosition(originalOperationId)
     ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
@@ -1193,7 +1293,7 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
         operationId: OperationId.make("conflicting-operation"),
         taskId
       })
-    ).toEqual({ _tag: "AdmissionMayNowBePossible" })
+    ).toEqual({ _tag: "AdmissionAvailabilityUnchanged" })
     expect(
       admittedTransitions(
         yield* controller.admit({
@@ -1227,11 +1327,7 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
     })
     expect(yield* reconstructed.snapshot()).toEqual({
       capacity: 1,
-      occupied: [{
-        observationId: "repeated-conflicting-observation",
-        operationId: "conflicting-operation",
-        taskId
-      }],
+      occupied: [],
       reservedPositions: [{
         correlation: {
           _tag: "OperationReservation",
@@ -1239,7 +1335,16 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
         },
         taskId
       }],
-      reservedTaskIds: [taskId]
+      reservedTaskIds: [taskId],
+      taskStates: [{
+        state: {
+          _tag: "CorrelationConflict",
+          expectedOperationId: originalOperationId,
+          observationId: "repeated-conflicting-observation",
+          observedOperationId: "conflicting-operation"
+        },
+        taskId
+      }]
     })
     yield* reconstructed.applyFreshInvocationObservation({
       _tag: "FreshCapacityReleased",
@@ -1269,7 +1374,14 @@ it.effect("fails closed for stale reservation mutations and retains conflicting 
         },
         taskId
       }],
-      reservedTaskIds: [taskId]
+      reservedTaskIds: [taskId],
+      taskStates: [{
+        state: {
+          _tag: "AwaitingProviderEvidence",
+          operationId: originalOperationId
+        },
+        taskId
+      }]
     })
   }))
 

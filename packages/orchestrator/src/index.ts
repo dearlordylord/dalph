@@ -158,6 +158,7 @@ export {
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./sqlite-journal-store.js"
+export { MultipleFreshTaskCapacityObservations, type TaskCapacityEntry } from "./task-admission-controller.js"
 export {
   TaskAttemptPlanAcknowledged,
   TaskAttemptPlanHistoryContradiction,
@@ -192,7 +193,9 @@ export * from "./task-execution.js"
 export {
   noTaskWorkCapacityRequirement,
   oneTaskWorkCapacityRequirement,
-  TaskWorkCapacityRequirement
+  type TaskWorkCapacityActivity,
+  TaskWorkCapacityRequirement,
+  taskWorkCapacityRequirementFor
 } from "./task-work-capacity.js"
 export {
   deterministicOperationIdAllocatorLayer,

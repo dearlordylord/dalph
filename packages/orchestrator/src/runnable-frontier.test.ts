@@ -86,7 +86,8 @@ it.effect("admits only the canonical first fresh task when one position is avail
         },
         taskId: taskA
       }],
-      reservedTaskIds: [taskA]
+      reservedTaskIds: [taskA],
+      taskStates: expect.any(Array)
     })
   }))
 

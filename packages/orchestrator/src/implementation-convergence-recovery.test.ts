@@ -89,6 +89,7 @@ import {
   makeManagedRecoveryActivation,
   observeRecoveredAdmissionCapacity
 } from "./managed-activation.js"
+import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import {
   makeImplementationDispositionOperation,
   makeImplementationReviewOperation,
@@ -550,6 +551,44 @@ it.effect("reuses sealed implementation evidence after a crash without sealing i
         operationId: differentlyCorrelatedOperationId,
         taskId: TaskId.make("implementation-convergence-recovery-task")
       }])
+    yield* executor.setObservations([
+      RunningTaskExecutionReported.make({
+        observationId: ProviderObservationId.make(
+          "fresh-differently-correlated-observation"
+        ),
+        operationId: differentlyCorrelatedOperationId,
+        processId: successfulExecution.processId,
+        sessionId
+      })
+    ])
+    const restartedEvidence = yield* observeUnresolvedExecution
+    const restartedActivation = yield* makeManagedRecoveryActivation(
+      runId,
+      restartedEvidence
+    ).pipe(
+      Effect.provideService(
+        JournalStore,
+        JournalStore.of({
+          ...journal,
+          read: () => Effect.succeed(unresolvedExecutionRecords)
+        })
+      )
+    )
+    const restartedController = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(1),
+      freshOccupiedInvocations: restartedActivation.capacityEvidence.freshOccupiedInvocations,
+      freshlyReleasedOperationIds: restartedActivation.capacityEvidence.freshlyReleasedOperationIds,
+      reconstructedReservedPositions: restartedActivation.reconstructedReservedPositions
+    })
+    expect(yield* restartedController.taskStates()).toEqual([{
+      state: {
+        _tag: "CorrelationConflict",
+        expectedOperationId: successfulExecution.operationId,
+        observationId: "fresh-differently-correlated-observation",
+        observedOperationId: differentlyCorrelatedOperationId
+      },
+      taskId: TaskId.make("implementation-convergence-recovery-task")
+    }])
     yield* executor.setObservations([
       AmbiguousTaskExecutionReported.make({
         detail: "provider lookup cannot determine the current outcome",

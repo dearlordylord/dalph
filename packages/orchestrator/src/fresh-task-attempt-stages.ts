@@ -19,7 +19,7 @@ import {
   TaskWorkSessionEstablishmentSimulatedTrace
 } from "./task-execution-trace.js"
 import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
-import { oneTaskWorkCapacityRequirement } from "./task-work-capacity.js"
+import { taskWorkCapacityRequirementFor } from "./task-work-capacity.js"
 import type { OperationIdAllocatorService, PlannedTaskAttemptPlannerService } from "./task-work-planning.js"
 import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -51,7 +51,7 @@ const freshExecutorTransition = (
   task: Task
 ) =>
   FrontierTransition.StartExecutorInvocation({
-    capacityRequirement: oneTaskWorkCapacityRequirement,
+    capacityRequirement: taskWorkCapacityRequirementFor("TaskExecution"),
     invocation: makeExecutorOuterInvocation(
       operationId,
       task.id

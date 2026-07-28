@@ -104,6 +104,17 @@ export class MultipleCurrentTaskCapacityOperations
   )
 {}
 
+/** Fresh provider input named more than one active operation for one task. */
+export class MultipleFreshTaskCapacityObservations
+  extends Schema.TaggedErrorClass<MultipleFreshTaskCapacityObservations>()(
+    "MultipleFreshTaskCapacityObservations",
+    {
+      operationIds: Schema.Array(OperationIdSchema),
+      taskId: TaskIdSchema
+    }
+  )
+{}
+
 type TaskAdmissionReservationCorrelation =
   | {
     readonly _tag: "SelectedTransitionReservation"
@@ -138,13 +149,15 @@ type TaskCapacityState = Data.TaggedEnum<{
 
 const TaskCapacityState = Data.taggedEnum<TaskCapacityState>()
 
-interface TaskCapacityEntry {
+export interface TaskCapacityEntry {
   readonly state: TaskCapacityState
   readonly taskId: TaskId
 }
 
 export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
+  /** The authoritative one-entry-per-task capacity projection. */
+  readonly taskStates: ReadonlyArray<TaskCapacityEntry>
   /** Fresh active reports, derived from the task-keyed states for presentation. */
   readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
   /** Held expected-operation or pre-intent correlations, derived for activation handoff. */
@@ -337,21 +350,43 @@ const validateCurrentTaskCapacityOperations = (
   return duplicate === undefined ? Effect.void : Effect.fail(duplicate)
 }
 
+export const currentTaskCapacityPositions = (
+  facts: ReadonlyArray<ResponsibilityFreshFacts>
+): MakeTaskAdmissionControllerInput["reconstructedReservedPositions"] =>
+  facts.flatMap(({ disposition, responsibility }) =>
+    disposition._tag !== "ExecutorInvocationSettled"
+      && responsibility._tag === "ExecutorInvocationResponsibility"
+      && responsibility.capacityRequirement._tag === "OneTaskWorkPosition"
+      ? [{
+        operationId: responsibility.invocation.correlation.invocationId,
+        taskId: responsibility.invocation.correlation.taskId
+      }]
+      : []
+  )
+
 export const validateCurrentTaskCapacityFacts = (
   facts: ReadonlyArray<ResponsibilityFreshFacts>
 ): Effect.Effect<void, MultipleCurrentTaskCapacityOperations> =>
-  validateCurrentTaskCapacityOperations(
-    facts.flatMap(({ disposition, responsibility }) =>
-      disposition._tag === "Ready"
-        && responsibility._tag === "ExecutorInvocationResponsibility"
-        && responsibility.capacityRequirement._tag === "OneTaskWorkPosition"
-        ? [{
-          operationId: responsibility.invocation.correlation.invocationId,
-          taskId: responsibility.invocation.correlation.taskId
-        }]
-        : []
-    )
-  )
+  validateCurrentTaskCapacityOperations(currentTaskCapacityPositions(facts))
+
+const validateFreshTaskCapacityObservations = (
+  observations: ReadonlyArray<FreshCapacityConsumingInvocation>
+): Effect.Effect<void, MultipleFreshTaskCapacityObservations> => {
+  for (const observation of observations) {
+    const operationIds = observations
+      .filter(({ taskId }) => taskId === observation.taskId)
+      .map(({ operationId }) => operationId)
+    if (operationIds.length > 1) {
+      return Effect.fail(
+        new MultipleFreshTaskCapacityObservations({
+          operationIds,
+          taskId: observation.taskId
+        })
+      )
+    }
+  }
+  return Effect.void
+}
 
 const reconstructedTaskStates = (
   input: MakeTaskAdmissionControllerInput
@@ -458,14 +493,7 @@ const applyInactiveObservation = (
       )
     }
     if (taskState.expectedOperationId === observation.operationId) {
-      return replaceTaskState(
-        current,
-        observation.taskId,
-        TaskCapacityState.Working({
-          observationId: taskState.observationId,
-          operationId: taskState.observedOperationId
-        })
-      )
+      return replaceTaskState(current, observation.taskId, undefined)
     }
     return current
   }
@@ -507,12 +535,6 @@ const derivedSnapshot = (
           operationId: state.operationId,
           taskId
         }]
-        : state._tag === "CorrelationConflict"
-        ? [{
-          observationId: state.observationId,
-          operationId: state.observedOperationId,
-          taskId
-        }]
         : []
   )
   const reservedPositions = current.taskStates.flatMap(
@@ -542,7 +564,8 @@ const derivedSnapshot = (
     capacity: current.capacity,
     occupied,
     reservedPositions,
-    reservedTaskIds: reservedPositions.map(({ taskId }) => taskId)
+    reservedTaskIds: reservedPositions.map(({ taskId }) => taskId),
+    taskStates: current.taskStates
   }
 }
 
@@ -553,6 +576,7 @@ export const makeTaskAdmissionController = Effect.fn(
   yield* validateCurrentTaskCapacityOperations(
     input.reconstructedReservedPositions
   )
+  yield* validateFreshTaskCapacityObservations(input.freshOccupiedInvocations)
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
     releasedOperationIds: input.freshlyReleasedOperationIds ?? new Set(),
@@ -703,10 +727,7 @@ export const makeTaskAdmissionController = Effect.fn(
         }
         const nextTaskState = entry?.state._tag === "CorrelationConflict"
           ? entry.state.expectedOperationId === operationId
-            ? TaskCapacityState.Working({
-              observationId: entry.state.observationId,
-              operationId: entry.state.observedOperationId
-            })
+            ? undefined
             : TaskCapacityState.AwaitingProviderEvidence({
               operationId: entry.state.expectedOperationId
             })
