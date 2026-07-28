@@ -26,6 +26,11 @@ including its coding-agent invocations, review strategy, internal restoration,
 and internal implementation or review artifacts.
 _Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
 
+The current review-capable executor is transitionally co-located in
+`packages/orchestrator` and shares internal `WorkflowOperation` and
+`WorkflowInterpreter` types with orchestration code. File placement and shared
+type names do not make its review strategy part of the Dalph orchestrator.
+
 **Executor outer invocation**:
 One executor-declared unit that Dalph may start, continue, wait for, interrupt,
 or normalize into an outcome without learning the executor's internal stage.
@@ -478,8 +483,9 @@ _Avoid_: Workflow journal event, cached output, review result
 **Implementation evidence manifest**:
 The immutable implementation-stage record that names the exact successful task
 execution operation as its causal predecessor and references the complete
-content-addressed executor-output and Git-diff objects. Dalph seals the manifest
-only after both referenced objects are readable from the EvidenceStore.
+content-addressed executor-output and Git-diff objects. The current selected
+executor seals the manifest only after both referenced objects are readable
+from the EvidenceStore.
 _Avoid_: Partial evidence, mutable report, task completion
 
 **Implementation review authorization**:
@@ -535,29 +541,33 @@ review round, but its technical retry ordinal is a separate branded fact.
 _Avoid_: Semantic review round, task attempt, coordinator recovery budget
 
 **Technical retry scheduled**:
-The Dalph workflow-journal fact recorded after one typed technical invocation
-failure and before waiting. It binds the active technical retry scope, next
-technical retry ordinal, capped delay, and absolute `notBefore` read from the
-Effect clock. It does not prove that the retry began and does not make a
-coordinator interruption by itself consume or preserve budget; later recovery
-compares it with an exact deferral-supersession intent.
+The Dalph workflow-journal fact that the current selected executor records
+after one typed technical invocation failure and before waiting. It binds the
+active technical retry scope, next technical retry ordinal, capped delay, and
+absolute `notBefore` read from the Effect clock. It does not prove that the
+retry began and does not make a coordinator interruption by itself consume or
+preserve budget; later recovery compares it with an exact
+deferral-supersession intent.
 _Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
 
 **Technical retry deferral superseded**:
-The Dalph workflow-journal intent recorded after one scheduled retry becomes
-eligible and immediately before Dalph asks the same provider invocation to
-create or rediscover its exact result. It retires exactly that scope and retry
-ordinal's deferral. It does not prove that the request crossed the provider
-boundary or consume another technical retry or semantic review round.
+The Dalph workflow-journal intent that the current selected executor records
+after one scheduled retry becomes eligible and immediately before that
+executor asks the same provider invocation to create or rediscover its exact
+result. It retires exactly that scope and retry ordinal's deferral. It does not
+prove that the request crossed the provider boundary or consume another
+technical retry or semantic review round.
 Like its matching schedule, it is valid only after the exact invocation intent
 and before that invocation's durable outcome.
 _Avoid_: Retry completed, timer fired, semantic review advanced
 
 **Reviewer invocation**:
-One request to a fresh independent reviewer, identified by its workflow
-operation and durable reviewer-session identity before it crosses the reviewer
-boundary. Restart resumes that exact invocation rather than creating another
-semantic round.
+One request made by the current selected executor to a fresh independent
+reviewer, identified by an executor-internal workflow operation and durable
+reviewer-session identity before it crosses the reviewer boundary. Executor
+recovery resumes that exact invocation rather than creating another semantic
+round. The generic Dalph orchestrator sees only its outer invocation
+projection.
 _Avoid_: Review result, implementer invocation, retry attempt
 
 **Reviewer session**:
@@ -1061,8 +1071,9 @@ _Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired h
 **Startup run recovery**:
 The fail-closed process performed under coordinator ownership that discovers
 every journaled run without an age cutoff, validates each complete managed
-history, and freshly rereads the tracker, Git, executor, evidence, and reviewer
-authorities for the exact recorded attempts before live coordination begins.
+history, freshly rereads tracker and Git authority, and asks the selected
+executor to reconcile its internal provider, evidence, and reviewer authorities
+for the exact recorded attempts before live coordination begins.
 _Avoid_: Process rehydration, recent-run scan, journal replay alone
 
 **Run termination**:

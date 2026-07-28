@@ -252,23 +252,27 @@ blocks the dependent; pause never reverses that edge or persists its transitive
 dependent closure.
 
 Under the current review-capable executor protocol, an active reviewer or
-findings-handback agent is long-running task work for pause purposes. Dalph
-asks its provider to interrupt that exact invocation,
-preserves the committed workflow operation, reviewer session, every already
-recorded immutable evidence object, and unresolved finding history, and later
-resumes the same invocation. It does not invent a partial review disposition or
-let reviewer work continue merely because the invocation does not change Git or
-the task tracker. These are concrete stages of the current protocol, not
-permanent Dalph core stages. [Future research](https://github.com/dearlordylord/dalph/issues/127)
-must permit an executor to govern its own optional review and restoration
-protocol without making review evidence a universal completion requirement.
+findings-handback agent is long-running task work for pause purposes. The
+generic Dalph orchestrator sees only an opaque executor outer invocation. It
+asks the selected executor to interrupt that exact outer invocation. The
+selected executor preserves its internal workflow operation, reviewer session,
+every already recorded immutable evidence object, and unresolved finding
+history, and later resumes that invocation. The selected executor does not
+invent a partial review disposition or let reviewer work continue merely
+because the invocation does not change Git or the task tracker. Review and
+handback are concrete stages of the current selected executor protocol, not
+permanent Dalph orchestrator stages.
+
+[Future research](https://github.com/dearlordylord/dalph/issues/127) must permit
+an executor to govern its own optional review and restoration protocol without
+making review evidence a universal completion requirement.
 
 If implementation evidence capture has already begun when pause is requested,
-Dalph lets that bounded local Git-and-EvidenceStore operation finish and seal
-its immutable evidence manifest. The manifest preserves the exact worker output
-and worktree diff that later resume and review require. Pause does not select
-evidence capture if it has not begun, and it does not select the subsequent
-review after an in-flight capture finishes.
+the selected executor lets that bounded local Git-and-EvidenceStore operation
+finish and seal its immutable evidence manifest. The manifest preserves the
+exact worker output and worktree diff that later resume and review require.
+Pause does not select evidence capture if it has not begun, and it does not
+select the subsequent review after an in-flight capture finishes.
 
 Pause never selects a not-yet-started cleanup or disposition action. If an exact
 cleanup request already crossed its boundary, the request follows the same
@@ -912,13 +916,30 @@ allocate a replacement operation identity, or discard the worktree. Dry-run
 uses the planned session locator in the same exhaustive operation algebra but
 cannot fabricate a provider session or process identity.
 
+## Current Selected Executor Internals
+
+The following evidence, review, findings-handback, retry, and convergence
+sections describe the current review-capable **Dalph executor**, not the generic
+Dalph orchestrator. The executor translates each internal action into an opaque
+outer invocation, wait, correlation, resource-use declaration, or outcome
+before generic reconstruction, frontier selection, admission, or activation
+uses it.
+
+The present source layout is transitional. The selected executor remains
+co-located in `packages/orchestrator` and its internal operations still share
+the `WorkflowOperation` and `WorkflowInterpreter` algebras. That placement and
+those shared type names do not transfer review ownership to the orchestrator.
+Issue #127 is currently future research for executor composition and import
+direction; it is not a scheduled implementation that splits these internal
+operations or packages.
+
 ## Immutable Implementation Evidence
 
-Only a successful exact task-execution outcome selects implementation-evidence
-sealing. The sealing operation directly names that execution operation as its
-causal predecessor. It reads the completed attempt's Git diff through the Git
-boundary and stores the diff and bounded executor output as separate immutable
-EvidenceStore objects.
+Within the current selected executor, only a successful exact task-execution
+outcome selects implementation-evidence sealing. The sealing operation directly
+names that execution operation as its causal predecessor. The selected executor
+reads the completed attempt's Git diff through the Git boundary and stores the
+diff and bounded executor output as separate immutable EvidenceStore objects.
 
 Diff collection snapshots the exact linked worktree through a scoped temporary
 Git index and object database. The repository's real object database is exposed
@@ -936,9 +957,10 @@ The implementation-stage manifest is stored last and references both evidence
 objects, the planned Base SHA, task, run, and successful execution predecessor.
 Consequently, a crash can leave unreachable content-addressed objects but never
 a manifest that authorizes review before all referenced bytes are sealed.
-Recovery repeats the same content-addressed writes and returns an already
-journaled sealed outcome when present. A journaled live interpreter requires
-the exact successful execution outcome before it records sealing intent.
+Selected-executor recovery repeats the same content-addressed writes and
+returns an already journaled sealed outcome when present. The selected
+executor's journaled live interpreter requires the exact successful execution
+outcome before it records sealing intent.
 
 Dry-run and deterministic-test interpreters select the same sealing operation
 after their execution projection, but emit only
@@ -948,35 +970,37 @@ cannot pass the implementation-review authorization boundary.
 
 ## Fresh Implementation Review And Exact Handback
 
-One semantic review round begins only from a complete implementation-review
-authorization. Before invoking a reviewer, Dalph records the exact review
-operation, semantic round, and fresh reviewer-session identity. The request
-binds the same planned task attempt and worktree, the latest successful implementer
-invocation, and its exact provider session. Journal validation rejects a stale
-invocation, reused reviewer session, foreign provider session, or cross-attempt
-continuation before either provider boundary is called.
+One semantic review round inside the current selected executor begins only from
+a complete implementation-review authorization. Before invoking a reviewer,
+the selected executor records the exact internal review operation, semantic
+round, and fresh reviewer-session identity in the Dalph workflow journal. The
+request binds the same planned task attempt and worktree, the latest successful
+implementer invocation, and its exact provider session. Journal validation
+rejects a stale invocation, reused reviewer session, foreign provider session,
+or cross-attempt continuation before either provider boundary is called.
 
-The reviewer returns either acceptance or at least one typed finding. Dalph
-stores that disposition in a content-addressed review manifest whose immediate
-predecessor is the sealed implementation evidence for the first round or the
-prior review evidence for a later round. Every manifest retains the complete
-finding history. A later round must advance by exactly one semantic ordinal,
-preserve the exact unresolved finding history, and use a fresh reviewer
-session. Its predecessor must be findings, followed by the exact acknowledged
-handback and a newer successful implementer invocation in the same established
-session; that invocation's newly sealed evidence alone can admit the review.
+The reviewer returns either acceptance or at least one typed finding. The
+selected executor stores that disposition in a content-addressed review
+manifest whose immediate predecessor is the sealed implementation evidence for
+the first round or the prior review evidence for a later round. Every manifest
+retains the complete finding history. A later round must advance by exactly one
+semantic ordinal, preserve the exact unresolved finding history, and use a
+fresh reviewer session. Its predecessor must be findings, followed by the exact
+acknowledged handback and a newer successful implementer invocation in the same
+established session; that invocation's newly sealed evidence alone can admit
+the review.
 
 Findings select a separate handback operation. The handback request carries the
 immutable review evidence and repeats the exact planned task attempt, worktree,
 implementer invocation, and provider session binding. The journal records
 intent before provider delivery and records acknowledgement afterward.
-Recovery reuses the journaled review or handback operation and session; it does
-not allocate another semantic round. Reviewer and handback adapters implement
-provider-enforced create-or-resume contracts: reviewer work is idempotent by
-operation plus reviewer-session identity, and findings delivery is idempotent
-by handback operation. An exact repeated payload returns the first accepted
-result without duplicating provider work; reuse of a key with a different
-payload fails.
+Selected-executor recovery reuses the journaled review or handback operation
+and session; it does not allocate another semantic round. Reviewer and handback
+adapters implement provider-enforced create-or-resume contracts: reviewer work
+is idempotent by operation plus reviewer-session identity, and findings
+delivery is idempotent by handback operation. An exact repeated payload returns
+the first accepted result without duplicating provider work; reuse of a key
+with a different payload fails.
 
 Dry-run and deterministic-test interpreters select the same review operation
 after simulated evidence sealing but return
@@ -986,13 +1010,14 @@ handback.
 
 ## Bounded Technical Invocation Scheduling
 
-Before the journaled interpreter invokes one reviewer or sends one findings
-handback, it captures a positive technical retry limit, positive initial delay,
-and maximum delay for that exact active scope. Reviewer scope binds the review
-operation, reviewer session, and semantic review round. Findings-handback scope
-binds its operation, reviewed operation, and the same semantic round. Technical
-retry ordinals and semantic review rounds are distinct branded values; a
-provider invocation failure never creates another semantic round.
+Before the selected executor's journaled interpreter invokes one reviewer or
+sends one findings handback, it captures a positive technical retry limit,
+positive initial delay, and maximum delay for that exact active scope. Reviewer
+scope binds the executor-internal review operation, reviewer session, and
+semantic review round. Findings-handback scope binds its operation, reviewed
+operation, and the same semantic round. Technical retry ordinals and semantic
+review rounds are distinct branded values; a provider invocation failure never
+creates another semantic round.
 The current default permits three retries after the first invocation, begins at
 100 milliseconds, and caps each delay at five seconds; every active scope
 persists those values rather than depending on later defaults.
@@ -1002,21 +1027,23 @@ Only `ImplementationReviewInvocationFailure` and
 applies exponential delay capped by the captured maximum and stops after the
 captured retry limit. Before each wait it records the next technical retry
 ordinal, capped delay, and absolute `notBefore` from the Effect clock in the
-Dalph workflow journal. Production and tests execute this same scheduling
-algebra; deterministic tests advance `TestClock`. Dry-run has no provider
-invocation and therefore cannot fabricate a technical failure or scheduled
-retry fact.
+Dalph workflow journal. Production and test compositions execute this same
+selected-executor scheduling algebra; deterministic tests advance `TestClock`.
+Dry-run has no provider invocation and therefore cannot fabricate a technical
+failure or scheduled retry fact.
 If clock-plus-delay arithmetic cannot produce a nonnegative safe-integer
 `notBefore`, scheduling fails with `TechnicalRetryScheduleOverflow` before a
 schedule fact is appended, a timer waits, or another provider invocation runs.
 
 Coordinator ownership failure and Effect interruption are not technical
-invocation failures and bypass this schedule. On restart, the interpreter
-reuses the captured policy and exact invocation scope. A scheduled deferral in
-the future waits only `notBefore - now` through the Effect clock; an overdue
-deferral is immediately eligible. Immediately before the next provider call,
-the journal records `TechnicalRetryDeferralSuperseded` for that exact ordinal.
-A later typed technical failure alone may schedule the following ordinal.
+invocation failures and bypass this schedule. On restart, the selected
+executor's interpreter reuses the captured policy and exact invocation scope. A
+scheduled deferral in the future waits only `notBefore - now` through the Effect
+clock; an overdue deferral is immediately eligible. Immediately before the next
+provider call, the selected executor records
+`TechnicalRetryDeferralSuperseded` in the Dalph workflow journal for that exact
+ordinal. A later typed technical failure alone may schedule the following
+ordinal.
 Every schedule and supersession must follow the exact review or handback intent
 and precede its durable outcome; policy capture alone may precede the intent.
 Technical-retry events form one coherent version-3 protocol, and decoding does
@@ -1034,9 +1061,9 @@ superseded. Dry-run still fabricates no provider invocation or retry fact.
 
 ## Bounded Implementation Convergence
 
-The live implementation control plane captures a positive semantic review
-round limit and runs one explicit bounded loop. A successful execution seals
-immutable evidence and selects a fresh independent reviewer. Acceptance records
+The current selected executor captures a positive semantic review round limit
+and runs one explicit bounded loop. A successful execution seals immutable
+evidence and selects a fresh independent reviewer. Acceptance records
 `Accepted`. Findings below the limit are handed back to the exact implementer
 invocation and provider session, then select a newer execution in that same
 session and a fresh reviewer session. Each later reviewer receives the complete
@@ -1047,20 +1074,22 @@ Semantic non-convergence is distinct from technical retry exhaustion. Exhausted
 reviewer transport records `ReviewTechnicalRetryExhausted`; exhausted findings
 delivery records `HandbackTechnicalRetryExhausted`. Nonzero execution exit,
 interruption, and demonstrated resource emergency also have distinct final
-current-protocol outcomes. A resource emergency requires explicit provider evidence for
-memory, process-capacity, or storage exhaustion and forbids automatic retry of
-the unchanged execution; Dalph never infers it from an exit code.
+current-protocol outcomes. A resource emergency requires explicit provider
+evidence for memory, process-capacity, or storage exhaustion and forbids
+automatic retry of the unchanged execution; the selected executor never infers
+it from an exit code.
 
-Every current-protocol final outcome retains the exact active claim, planned task attempt,
-authoritative ready-worktree operation and proof, provider session, applicable
-findings/evidence chain, and selecting failure or outcome. Its direct
-predecessor must contain exactly the embedded review, request, or execution
-outcome; operation identity alone is insufficient. The journal permits one disposition per
-attempt and rejects later attempt events. Restart first reconciles unresolved
-provider intents, then reconstructs the last durable convergence stage. It
-reuses an unresolved review or handback operation, continues an acknowledged
-handback with same-session execution, and does not allocate a semantic round or
-reviewer session merely because the coordinator restarted.
+Every current-protocol final outcome retains the exact active claim, planned
+task attempt, authoritative ready-worktree operation and proof, provider
+session, applicable findings/evidence chain, and selecting failure or outcome.
+Its direct predecessor must contain exactly the embedded review, request, or
+execution outcome; operation identity alone is insufficient. The journal
+permits one disposition per attempt and rejects later attempt events. Restart
+first reconciles unresolved provider intents, then reconstructs the last
+durable convergence stage. It reuses an unresolved review or handback
+operation, continues an acknowledged handback with same-session execution, and
+does not allocate a semantic round or reviewer session merely because the
+coordinator restarted.
 
 Dry-run selects the same bounded workflow shape but records only an
 `ImplementationConvergenceSimulated` projection. It cannot fabricate a claim,
