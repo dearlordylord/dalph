@@ -37,6 +37,13 @@ import {
 import { type TaskExecutionReport, TaskExecutor } from "./task-execution.js"
 import type { WorkflowInterpreter, WorkflowInterpreterService, WorkflowTrace } from "./workflow.js"
 
+/**
+ * Transitional #158 composition warning:
+ * this generic module still imports the concrete review-loop adapter and
+ * consumes its internal operation identities. Do not copy this dependency
+ * into new generic code. #158 replaces it with an injected executor bundle
+ * that emits one normalized outer lifecycle.
+ */
 type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]: Effect.Error<
     ReturnType<WorkflowInterpreterService[Key]>

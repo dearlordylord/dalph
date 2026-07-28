@@ -103,6 +103,8 @@ export const freshImplementationTransition = (
   task: Task,
   activity: TaskWorkCapacityActivity
 ): RunnableFrontierTransition =>
+  // Transitional #158 adapter: this executor-private operation is still
+  // surfaced as a generic transition. It is not a distinct outer invocation.
   FrontierTransition.StartExecutorInvocation({
     capacityRequirement: taskWorkCapacityRequirementFor(activity),
     invocation: makeExecutorOuterInvocation(
@@ -116,6 +118,7 @@ export const continuedImplementationTransition = (
   task: Task,
   activity: TaskWorkCapacityActivity
 ): RunnableFrontierTransition =>
+  // Transitional #158 adapter; see `freshImplementationTransition`.
   FrontierTransition.ContinueExecutorInvocation({
     capacityRequirement: taskWorkCapacityRequirementFor(activity),
     invocation: makeExecutorOuterInvocation(

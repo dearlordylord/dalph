@@ -41,8 +41,13 @@ const plannedAttemptFor = (
 
 /**
  * The selected executor owns this fixed evidence and semantic-review
- * algorithm. Generic reconstruction receives only its declared outer
- * invocation identity and Dalph's capacity requirement.
+ * algorithm.
+ *
+ * Transitional #158 warning: the branches below currently expose its
+ * executor-internal intents as generic responsibilities. They preserve the
+ * unreleased implementation's behavior, but they are not the accepted outer
+ * boundary and must not be copied. #158 replaces them with one responsibility
+ * for the complete opaque executor invocation.
  */
 const selectedExecutorResponsibilityFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -116,7 +121,11 @@ const selectedExecutorResponsibilityFor = (
   return undefined
 }
 
-/** Finds selected-protocol intents that could not produce an outer subject. */
+/**
+ * Transitional #158 validation paired with the responsibility projection
+ * above. Internal review intents disappear from this generic protocol when the
+ * truthful source boundary lands.
+ */
 const unresolvedSelectedExecutorSubjects = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: WorkflowResponsibilityState,
@@ -261,7 +270,10 @@ const selectedExecutorOutcomeFor = (
       selectedExecutorTerminalFailureOutcome(correlation, terminalFailure)
     )
   }
-  const event = outerOutcomeEventFor(records, correlation.invocationId)
+  const event = outerOutcomeEventFor(
+    records,
+    correlation.invocationId
+  )
   if (event === undefined) return Option.none()
   if (event._tag === "TaskExecutionOutcomeObserved") {
     const outcome = event.outcome.outcome
@@ -300,7 +312,8 @@ export const selectedExecutorProjectionFor = (
   }
   const retry = records.findLast(({ event }) =>
     event._tag === "TechnicalRetryScheduled"
-    && event.scope.operationId === invocation.correlation.invocationId
+    && event.scope.operationId
+      === invocation.correlation.invocationId
     && !records.some(({ event: candidate }) =>
       candidate._tag === "TechnicalRetryDeferralSuperseded"
       && candidate.scope.operationId === event.scope.operationId

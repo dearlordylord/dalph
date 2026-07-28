@@ -1,5 +1,11 @@
 # Model 2 (M2) reconstructed-run and frontier conformance inventory
 
+All operation identities used by Model 2 capacity positions and executor
+reports refer to the one opaque executor invocation that Dalph started for a
+task. The executor's implementation, evidence, review, handback, retry,
+restoration, and convergence operations are private and absent from this
+generic model.
+
 Model 2 is the Quint model for graph/frontier recovery. This inventory covers
 reconstruction followed by the same runnable-frontier selector used without a
 restart. Each row names the concrete actor, action, and boundary before the
