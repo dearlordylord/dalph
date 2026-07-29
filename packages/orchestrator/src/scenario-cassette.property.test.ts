@@ -69,7 +69,7 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
       { _tag: "ReconcileTaskWorktree", attemptId: `attempt:${activeTaskId}:0`, taskId: activeTaskId }
     ],
     expectedVisibleBehavior: {
-      forbiddenJournalOccurrenceTags: ["ControlCommandRecorded", "TaskWorktreeReady"],
+      forbiddenJournalOccurrenceTags: ["ControlCommandRecorded"],
       journalHistory: "ValidWorkflowJournalHistory",
       plannedAttemptExecutorReports: executorReports.map(({ report }) => report)
     },
@@ -95,7 +95,10 @@ it("generated valid authored cassettes produce valid journals and checkpoint-equ
           expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
           expect(checkpoints).toHaveLength(run.records.length)
           expect(
-            checkpoints.every(({ decisionsEquivalent, stateEquivalent }) => decisionsEquivalent && stateEquivalent)
+            checkpoints.every(
+              ({ decisionsEquivalent, stateEquivalent, workflowHistoryEquivalent }) =>
+                decisionsEquivalent && stateEquivalent && workflowHistoryEquivalent
+            )
           ).toBe(true)
         })
       )

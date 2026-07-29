@@ -98,7 +98,7 @@ const recordTaskBoundaryEntry = (
     case "TaskWorktreeReady":
       return { _tag: "TaskWorktreeReady", operationId: event.operationId, proof: event.proof }
     case "TaskWorktreeReconciliationIntended":
-      return { _tag: "TaskWorktreeReconciliationInitiated", operation: event.operation }
+      return { _tag: "TaskWorktreeReconciliationIntended", operation: event.operation }
   }
 }
 
@@ -147,7 +147,7 @@ const eventForTaskBoundaryEntry = (
         | "TaskClaimAcquired"
         | "TaskClaimAcquisitionIntended"
         | "TaskWorktreeReady"
-        | "TaskWorktreeReconciliationInitiated"
+        | "TaskWorktreeReconciliationIntended"
     }
   >
 ): WorkflowJournalEvent => {
@@ -167,7 +167,7 @@ const eventForTaskBoundaryEntry = (
         proof: entry.proof,
         version: workflowJournalEventVersion
       })
-    case "TaskWorktreeReconciliationInitiated":
+    case "TaskWorktreeReconciliationIntended":
       return TaskWorktreeReconciliationIntendedEvent.make({
         operation: entry.operation,
         version: workflowJournalEventVersion
@@ -234,9 +234,6 @@ export const foldRecordedCassette = (cassette: RecordedCassetteType) =>
   reduceWorkflowJournalHistory(cassette.runId, recordsFor(cassette))
 
 const semanticJson = (value: unknown): string => JSON.stringify(value)
-const orderedBefore = -1
-const orderedSame = 0
-const orderedAfter = 1
 
 const semanticResponsibility = (
   history: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
@@ -252,13 +249,9 @@ const semanticResponsibility = (
           return { _tag: entry._tag, operation: entry.operation, taskId: entry.taskId }
       }
     })
-    .toSorted((left, right) => {
-      const leftJson = semanticJson(left)
-      const rightJson = semanticJson(right)
-      return leftJson < rightJson ? orderedBefore : leftJson > rightJson ? orderedAfter : orderedSame
-    })
+    .toSorted((left, right) => semanticJson(left).localeCompare(semanticJson(right)))
 
-const semanticOutcomeState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
+const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
     : {
@@ -268,15 +261,11 @@ const semanticOutcomeState = (history: ReturnType<typeof reduceWorkflowJournalHi
         runId: history.runId
       }
 
-const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
+const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
-    ? semanticOutcomeState(history)
+    ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
     : {
         appliedThroughOccurrenceCount: history.runState.workflowHistory.records.length,
-        graphKnowledge: history.runState.graphKnowledge,
-        pause: history.runState.pause,
-        responsibility: semanticResponsibility(history),
-        runId: history.runId,
         workflowHistory: history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
       }
 
@@ -284,7 +273,7 @@ export interface RecordedCassetteCheckpoint {
   readonly checkpoint: number
   readonly decisionsEquivalent: boolean
   readonly stateEquivalent: boolean
-  readonly visibleOutcomeEquivalent: boolean
+  readonly workflowHistoryEquivalent: boolean
 }
 
 const checkpointComparison = (
@@ -298,7 +287,8 @@ const checkpointComparison = (
     actual._tag === "ValidWorkflowJournalHistory" &&
     semanticJson(expected.recoveryFrontier) === semanticJson(actual.recoveryFrontier),
   stateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
-  visibleOutcomeEquivalent: semanticJson(semanticOutcomeState(expected)) === semanticJson(semanticOutcomeState(actual))
+  workflowHistoryEquivalent:
+    semanticJson(semanticWorkflowHistory(expected)) === semanticJson(semanticWorkflowHistory(actual))
 })
 
 /** Compares source and recorded folds after every corresponding occurrence. */
@@ -363,8 +353,8 @@ const lyricForTaskBoundaryEntry = (
       return `Dalph intended to claim task ${entry.operation.acquisition.taskId}.`
     case "TaskWorktreeReady":
       return `Git showed worktree ${entry.proof.worktree} ready at ${entry.proof.headSha}.`
-    case "TaskWorktreeReconciliationInitiated":
-      return `Dalph coordinator initiated worktree reconciliation for attempt ${entry.operation.plannedAttempt.attemptId}.`
+    case "TaskWorktreeReconciliationIntended":
+      return `Dalph recorded its intent to reconcile the worktree for attempt ${entry.operation.plannedAttempt.attemptId}.`
   }
 }
 

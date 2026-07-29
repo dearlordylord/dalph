@@ -52,7 +52,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ])
   },
   TaskWorktreeReady: { operationId: OperationId, proof: PlannedWorktreeReady },
-  TaskWorktreeReconciliationInitiated: { operation: WorkflowOperation.cases.ReconcileTaskWorktree }
+  TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
