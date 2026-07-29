@@ -10,7 +10,7 @@ import {
 } from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-workflow-stage.js"
-import { ManagedRecoveryActivation, type ManagedRecoveryActivationError } from "./managed-activation.js"
+import { RunRecoveryActivation, type RunRecoveryActivationError } from "./run-recovery-activation.js"
 import {
   type RunnableFrontier,
   type RunnableFrontierTransition,
@@ -52,7 +52,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
   const claimPlanner = yield* TaskClaimAcquisitionPlanner
   const planner = yield* PlannedTaskAttemptPlanner
   const trace = yield* WorkflowTrace
-  const recovery = yield* ManagedRecoveryActivation
+  const recovery = yield* RunRecoveryActivation
   const graphOperation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
   yield* trace.emit(OperationSelected.make({ operation: graphOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(graphOperation)
@@ -166,7 +166,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
 
   interface WorkflowOperationCompletion {
     readonly acknowledged: Deferred.Deferred<void>
-    readonly exit: Exit.Exit<FreshWorkflowStage | undefined, FreshWorkflowStageError | ManagedRecoveryActivationError>
+    readonly exit: Exit.Exit<FreshWorkflowStage | undefined, FreshWorkflowStageError | RunRecoveryActivationError>
     readonly stage: FreshWorkflowStage | undefined
   }
   const completions = yield* Queue.unbounded<WorkflowOperationCompletion>()
@@ -213,16 +213,16 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
         admissionController,
         readFrontier: readFrontier(),
         runId:
-          recovery._tag === "AuthoritativeManagedRunActivation" ? recovery.runId : RunId.make(`workflow:${target}`),
+          recovery._tag === "AuthoritativeRunRecoveryActivation" ? recovery.runId : RunId.make(`workflow:${target}`),
         runTransition: (transition, execution) =>
           Effect.gen(function* () {
             const stage = (yield* Ref.get(stages)).find((candidate) => candidate.transition === transition)
             const operation: Effect.Effect<
               FreshWorkflowStage | undefined,
-              FreshWorkflowStageError | ManagedRecoveryActivationError
+              FreshWorkflowStageError | RunRecoveryActivationError
             > = Option.match(Option.fromUndefinedOr(stage), {
               onNone: () =>
-                recovery._tag === "AuthoritativeManagedRunActivation"
+                recovery._tag === "AuthoritativeRunRecoveryActivation"
                   ? recovery
                       .runTransition(transition, execution)
                       .pipe(Effect.as<FreshWorkflowStage | undefined>(undefined))

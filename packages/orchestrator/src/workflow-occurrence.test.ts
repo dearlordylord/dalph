@@ -21,7 +21,7 @@ import {
 } from "./journal-store.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { intentRecordKey, outcomeRecordKey } from "./journal-record-key.js"
-import { makeManagedRecoveryActivation, ManagedRecoveryActivation } from "./managed-activation.js"
+import { makeRunRecoveryActivation, RunRecoveryActivation } from "./run-recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "./planned-attempt-executor.js"
 import { trustedPlannedAttemptRecoveryAuthorityLayer } from "./planned-attempt-recovery-authority.js"
 import { projectTrackerSnapshot } from "./task-dag.js"
@@ -265,9 +265,9 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         controlledFakePlannedAttemptExecutorLayer,
         trustedPlannedAttemptRecoveryAuthorityLayer
       )
-      const recovery = yield* makeManagedRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
+      const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
       const workflowLayer = Layer.mergeAll(
-        Layer.succeed(ManagedRecoveryActivation, recovery),
+        Layer.succeed(RunRecoveryActivation, recovery),
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Layer.succeed(

@@ -12,32 +12,32 @@ import { describeJournalEvent } from "./journal-event-descriptor.js"
 import type { JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
 import {
   duplicateUnfinishedTaskAttemptIssue,
-  type InvalidManagedHistory,
-  ManagedHistoryIdentityIssue,
-  type ManagedHistoryIssue,
-  ManagedHistorySemanticIssue,
-  type ValidManagedHistory
-} from "./managed-history-result.js"
-import { deriveManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
+  type InvalidWorkflowJournalHistory,
+  WorkflowJournalHistoryIdentityIssue,
+  type WorkflowJournalHistoryIssue,
+  WorkflowJournalHistorySemanticIssue,
+  type ValidWorkflowJournalHistory
+} from "./workflow-journal-history-result.js"
+import { deriveRunRecoveryFrontier } from "./run-recovery-frontier.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
-import { reconstructValidatedManagedRunState } from "./reconstructed-managed-run.js"
+import { reconstructValidatedRunState } from "./reconstructed-run.js"
 
 const identityIssue = (
-  issues: Array<ManagedHistoryIssue>,
+  issues: Array<WorkflowJournalHistoryIssue>,
   runId: RunId,
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(new ManagedHistoryIdentityIssue({ detail, position, runId }))
+  issues.push(new WorkflowJournalHistoryIdentityIssue({ detail, position, runId }))
 }
 
 const semanticIssue = (
-  issues: Array<ManagedHistoryIssue>,
+  issues: Array<WorkflowJournalHistoryIssue>,
   runId: RunId,
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(new ManagedHistorySemanticIssue({ detail, position, runId }))
+  issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
 }
 
 interface FoldIndexes {
@@ -68,7 +68,7 @@ const validateRecordEnvelope = (
   index: number,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): boolean => {
   const expectedPosition = index + 1
   if (record.position !== expectedPosition) {
@@ -103,7 +103,7 @@ const validateOperationEvent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag !== "OperationEventDescriptor") return
@@ -150,7 +150,7 @@ const validatePlan = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskAttemptPlanned") return
   const plannedAttempt = record.event.operation.plannedAttempt
@@ -173,7 +173,7 @@ const validateClaim = (
   record: JournalRecord,
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskClaimAcquired") return
   const acquired = record.event.claim
@@ -197,7 +197,7 @@ const validateExecutorEvent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   const event = record.event
   if (event._tag === "PlannedAttemptExecutorWorkStarted") {
@@ -264,7 +264,7 @@ const validateExecutorEvent = (
 const validateOneUnfinishedAttemptPerTask = (
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<ManagedHistoryIssue>
+  issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   const unfinishedByTask = new Map<
     TaskId,
@@ -294,11 +294,11 @@ const validateOneUnfinishedAttemptPerTask = (
  * Validates all decoded records before reconstruction or any outside call.
  * The fold retains every issue it can establish from the immutable history.
  */
-export const reduceManagedHistory = (
+export const reduceWorkflowJournalHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
-): ValidManagedHistory | InvalidManagedHistory => {
-  const issues = new Array<ManagedHistoryIssue>()
+): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  const issues = new Array<WorkflowJournalHistoryIssue>()
   const indexes = emptyIndexes()
   records.forEach((record, index) => {
     const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
@@ -332,13 +332,13 @@ export const reduceManagedHistory = (
   })
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   if (issues.length > 0) {
-    return { _tag: "InvalidManagedHistory", issues, records, runId }
+    return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
   }
   return {
-    _tag: "ValidManagedHistory",
-    managedRun: reconstructValidatedManagedRunState(runId, records),
+    _tag: "ValidWorkflowJournalHistory",
+    runState: reconstructValidatedRunState(runId, records),
     records,
-    recoveryStage: deriveManagedRunRecoveryStage(records),
+    recoveryFrontier: deriveRunRecoveryFrontier(records),
     runId
   }
 }

@@ -18,7 +18,7 @@ import {
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { attemptPlanRecordKey, plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
 import { JournalRecord, JournalStore, TaskAttemptPlannedEvent } from "./journal-store.js"
-import { activateRecoveredResponsibilities } from "./managed-activation.js"
+import { activateRecoveredResponsibilities } from "./run-recovery-activation.js"
 import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
 import { PlannedAttemptExecutor } from "./planned-attempt-executor.js"
 import { PlannedAttemptRecoveryAuthority } from "./planned-attempt-recovery-authority.js"
@@ -69,7 +69,8 @@ const firstAttempt = plannedAttempt("attempt-A-3")
 const secondAttempt = plannedAttempt("attempt-A-4")
 const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(secondAttempt, 3)]
 
-const failIfCalled = (boundary: string) => Effect.die(`${boundary} must not be called for invalid managed history`)
+const failIfCalled = (boundary: string) =>
+  Effect.die(`${boundary} must not be called for invalid workflow-journal history`)
 
 const boundaryLayer = Layer.mergeAll(
   Layer.succeed(
@@ -115,7 +116,7 @@ it.effect(
       const failure = yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(Effect.flip)
 
       expect(failure).toMatchObject({
-        _tag: "InvalidManagedHistory",
+        _tag: "InvalidWorkflowJournalHistory",
         issues: [
           expect.objectContaining({
             _tag: "DuplicateUnfinishedTaskAttemptIssue",

@@ -63,14 +63,14 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
   const secondKey = JournalRecordKey.make("operation:two:intent")
 
   describe(`${name} JournalStore contract`, () => {
-    it.effect("returns empty managed history for an unknown run", () =>
+    it.effect("returns empty workflow-journal history for an unknown run", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
         expect(yield* journal.read(RunId.make("unknown-run"))).toEqual([])
       }).pipe(Effect.provide(makeLayer()))
     )
 
-    it.effect("assigns canonical positions and returns ordered managed history", () =>
+    it.effect("assigns canonical positions and returns ordered workflow-journal history", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const first = yield* journal.append(runId, firstKey, intent("one", "task-1"))

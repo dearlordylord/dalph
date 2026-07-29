@@ -15,7 +15,7 @@ import {
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { attemptPlanRecordKey, plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
 import { type JournalRecord, TaskAttemptPlannedEvent } from "./journal-store.js"
-import { reduceManagedHistory } from "./managed-history.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
 import { makeTaskAttemptPlanOperation } from "./workflow-operation.js"
 
@@ -59,10 +59,10 @@ const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number)
 it("lower reducer identifies duplicate unfinished planned-attempt executor work", () => {
   const first = attempt("attempt-A-3")
   const second = attempt("attempt-A-4")
-  const reduction = reduceManagedHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
+  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
 
-  expect(reduction._tag).toBe("InvalidManagedHistory")
-  if (reduction._tag !== "InvalidManagedHistory") return
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",
@@ -76,7 +76,7 @@ it("lower reducer identifies duplicate unfinished planned-attempt executor work"
 it("rejects a second start for the same planned attempt without merging it", () => {
   const plannedAttempt = attempt("attempt-A-3")
   const records = planAndStart(plannedAttempt, 1)
-  const reduction = reduceManagedHistory(runId, [
+  const reduction = reduceWorkflowJournalHistory(runId, [
     ...records,
     {
       event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
@@ -86,8 +86,8 @@ it("rejects a second start for the same planned attempt without merging it", () 
     }
   ])
 
-  expect(reduction._tag).toBe("InvalidManagedHistory")
-  if (reduction._tag !== "InvalidManagedHistory") return
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",

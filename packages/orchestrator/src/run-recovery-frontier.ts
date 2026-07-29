@@ -5,10 +5,10 @@ import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
 /**
- * One exact next durable boundary for a task entering or continuing managed work.
+ * One exact next durable boundary for a task entering or continuing Dalph-coordinated work.
  * It is reduced from journal history and is never appended to that history.
  */
-export const ManagedRunRecoveryStageEntry = Schema.TaggedUnion({
+export const RunRecoveryFrontierEntry = Schema.TaggedUnion({
   TaskClaimAcquisitionNeeded: { observationOperation: WorkflowOperation.cases.ReadTrackerGraph, taskId: TaskId },
   TaskClaimAcquisitionUnresolved: { operation: WorkflowOperation.cases.AcquireTaskClaim },
   TaskEligibilityRefreshNeeded: {
@@ -32,9 +32,9 @@ export const ManagedRunRecoveryStageEntry = Schema.TaggedUnion({
   PlannedAttemptExecutorWorkUnresolved: { planOperation: WorkflowOperation.cases.RecordTaskAttemptPlan },
   Terminal: { plannedAttempt: PlannedTaskAttempt }
 })
-export type ManagedRunRecoveryStageEntry = typeof ManagedRunRecoveryStageEntry.Type
+export type RunRecoveryFrontierEntry = typeof RunRecoveryFrontierEntry.Type
 
-export const NonterminalRecoveryStageTag = Schema.Literals([
+export const NonterminalRecoveryFrontierTag = Schema.Literals([
   "TaskClaimAcquisitionNeeded",
   "TaskClaimAcquisitionUnresolved",
   "TaskEligibilityRefreshNeeded",
@@ -47,31 +47,31 @@ export const NonterminalRecoveryStageTag = Schema.Literals([
 ])
 
 /**
- * The complete non-persisted recovery frontier for one managed run.
+ * The complete non-persisted recovery frontier for one Dalph run.
  * Every acknowledged planned task attempt or unfinished pre-attempt task contributes one entry.
  */
-export const ManagedRunRecoveryStage = Schema.Struct({ entries: Schema.Array(ManagedRunRecoveryStageEntry) })
-export type ManagedRunRecoveryStage = typeof ManagedRunRecoveryStage.Type
+export const RunRecoveryFrontier = Schema.Struct({ entries: Schema.Array(RunRecoveryFrontierEntry) })
+export type RunRecoveryFrontier = typeof RunRecoveryFrontier.Type
 
 const sameAttempt = plannedTaskAttemptEquivalence
 
-const stageForAttempt = (
+const recoveryEntryForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
-): ManagedRunRecoveryStageEntry => {
+): RunRecoveryFrontierEntry => {
   const plannedAttempt = planOperation.plannedAttempt
   const worktreeIntent = records.find(
     ({ event }) =>
       event._tag === "TaskWorktreeReconciliationIntended" && sameAttempt(event.operation.plannedAttempt, plannedAttempt)
   )?.event
   if (worktreeIntent?._tag !== "TaskWorktreeReconciliationIntended") {
-    return ManagedRunRecoveryStageEntry.cases.TaskWorktreeReconciliationNeeded.make({ authority: "Git", planOperation })
+    return RunRecoveryFrontierEntry.cases.TaskWorktreeReconciliationNeeded.make({ authority: "Git", planOperation })
   }
   const worktreeReady = records.some(
     ({ event }) => event._tag === "TaskWorktreeReady" && event.operationId === worktreeIntent.operation.operationId
   )
   if (!worktreeReady) {
-    return ManagedRunRecoveryStageEntry.cases.TaskWorktreeReconciliationUnresolved.make({
+    return RunRecoveryFrontierEntry.cases.TaskWorktreeReconciliationUnresolved.make({
       operation: worktreeIntent.operation
     })
   }
@@ -81,7 +81,7 @@ const stageForAttempt = (
       event._tag === "PlannedAttemptExecutorWorkStarted" && sameAttempt(event.plannedAttempt, plannedAttempt)
   )
   if (!started) {
-    return ManagedRunRecoveryStageEntry.cases.PlannedAttemptExecutorWorkNeeded.make({ planOperation })
+    return RunRecoveryFrontierEntry.cases.PlannedAttemptExecutorWorkNeeded.make({ planOperation })
   }
   const latestReport = records.findLast(
     ({ event }) =>
@@ -90,19 +90,19 @@ const stageForAttempt = (
       event.report.correlation.runId === plannedAttempt.runId
   )?.event
   return latestReport?._tag === "PlannedAttemptExecutorWorkReported" && latestReport.report._tag === "Terminal"
-    ? ManagedRunRecoveryStageEntry.cases.Terminal.make({ plannedAttempt })
-    : ManagedRunRecoveryStageEntry.cases.PlannedAttemptExecutorWorkUnresolved.make({ planOperation })
+    ? RunRecoveryFrontierEntry.cases.Terminal.make({ plannedAttempt })
+    : RunRecoveryFrontierEntry.cases.PlannedAttemptExecutorWorkUnresolved.make({ planOperation })
 }
 
-/** Reduces immutable managed history into one total run-level recovery stage. */
-export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalRecord>): ManagedRunRecoveryStage => {
+/** Reduces immutable workflow-journal history into one total run-level recovery frontier. */
+export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>): RunRecoveryFrontier => {
   const plannedStages = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned" ? [stageForAttempt(records, event.operation)] : []
+    event._tag === "TaskAttemptPlanned" ? [recoveryEntryForAttempt(records, event.operation)] : []
   )
   const plannedTaskIds = new Set(
     records.flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt.taskId] : []))
   )
-  const unplannedClaims = records.flatMap<ManagedRunRecoveryStageEntry>(({ event }) => {
+  const unplannedClaims = records.flatMap<RunRecoveryFrontierEntry>(({ event }) => {
     if (event._tag !== "TaskClaimAcquisitionIntended" || plannedTaskIds.has(event.operation.acquisition.taskId))
       return []
     const acquired = records.some(
@@ -111,7 +111,7 @@ export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalReco
         candidate.claim.operationId === event.operation.acquisition.operationId
     )
     if (!acquired) {
-      return [ManagedRunRecoveryStageEntry.cases.TaskClaimAcquisitionUnresolved.make({ operation: event.operation })]
+      return [RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionUnresolved.make({ operation: event.operation })]
     }
     const admission = records.findLast(
       ({ event: candidate }) =>
@@ -126,7 +126,7 @@ export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalReco
       )?.event
       return priorObservation?._tag === "TrackerGraphObservationIntentRecorded"
         ? [
-            ManagedRunRecoveryStageEntry.cases.TaskEligibilityRefreshNeeded.make({
+            RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshNeeded.make({
               claimOperation: event.operation,
               observationOperation: priorObservation.operation
             })
@@ -139,13 +139,13 @@ export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalReco
     )
     return observed
       ? [
-          ManagedRunRecoveryStageEntry.cases.TaskAttemptPlanNeeded.make({
+          RunRecoveryFrontierEntry.cases.TaskAttemptPlanNeeded.make({
             claimOperation: event.operation,
             observationOperation: admission.operation
           })
         ]
       : [
-          ManagedRunRecoveryStageEntry.cases.TaskEligibilityRefreshUnresolved.make({
+          RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshUnresolved.make({
             claimOperation: event.operation,
             operation: admission.operation
           })
@@ -169,7 +169,7 @@ export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalReco
         claimedTaskIds.has(taskId) || plannedTaskIds.has(taskId)
           ? []
           : [
-              ManagedRunRecoveryStageEntry.cases.TaskClaimAcquisitionNeeded.make({
+              RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionNeeded.make({
                 observationOperation: observation.operation,
                 taskId
               })
@@ -179,5 +179,5 @@ export const deriveManagedRunRecoveryStage = (records: ReadonlyArray<JournalReco
     .filter(
       (entry, index, entries) => entries.findLastIndex((candidate) => candidate.taskId === entry.taskId) === index
     )
-  return ManagedRunRecoveryStage.make({ entries: [...plannedStages, ...unplannedClaims, ...unclaimedTasks] })
+  return RunRecoveryFrontier.make({ entries: [...plannedStages, ...unplannedClaims, ...unclaimedTasks] })
 }

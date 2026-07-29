@@ -162,6 +162,38 @@ One durable Dalph coordination instance for one task-tracker target. It begins
 when Dalph records a fresh `RunId` and ends with one run termination record.
 _Avoid_: Process, task, historical harness run
 
+**Workflow-journal history**:
+The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
+It contains only facts Dalph recorded about its workflow; Git history,
+task-tracker history, executor-internal history, and process logs remain owned
+by their respective systems.
+_Avoid_: Run history, external-system history, current authority facts
+
+**Workflow-journal history reduction**:
+The pure fold that validates one workflow-journal history, reconstructs its run
+state, and derives its recovery frontier. It returns every history issue it can
+establish instead of adopting, repairing, or discarding contradictory records.
+_Avoid_: History validation alone, journal decoding, coordinator rehydration
+
+**Reconstructed run state**:
+The process-local composition of graph knowledge, outstanding workflow
+responsibilities, applied pause directions, and workflow-journal records for
+one `RunId`. Dalph derives it from workflow-journal history; it is neither
+persisted authority nor a runnable frontier.
+_Avoid_: Managed run state, serialized coordinator, current external state
+
+**Run recovery frontier**:
+The process-local projection naming the next durable boundary, unresolved
+boundary, or terminal attempt for every task represented by one reduced
+workflow-journal history. Dalph does not persist this projection.
+_Avoid_: Recovery stage, runnable frontier, persisted recovery state
+
+**Run recovery activation**:
+The application capability that reads a reconstructed run's current runnable
+frontier and executes its recovered transitions through the ordinary
+activation and capacity path.
+_Avoid_: Managed activation, process restart, separate recovery scheduler
+
 **Task-tracker target**:
 The grouping root or query that tells a task-tracker adapter where to begin
 collecting tasks for one run. It selects the starting membership; prerequisite
@@ -236,7 +268,7 @@ Two successful `TaskGraphFactsUpdated` events report incompatible facts for one
 subject without comparable provider evidence proving which fact is newer. The
 conflict makes only that fact or dependent graph region unavailable pending a
 focused reread.
-_Avoid_: Invalid managed history, whole-run blocker, last-journal-event wins
+_Avoid_: Invalid workflow-journal history, whole-run blocker, last-journal-event wins
 
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
@@ -250,7 +282,7 @@ A typed task-tracker adapter failure proving that provider reads used for one
 requested task-graph result cannot form one valid normalized value. It exposes
 the contradiction to the caller-selected task-graph read policy instead of
 returning a potentially mixed-time result.
-_Avoid_: Potentially mixed-time task-graph read, invalid managed history, provider retry policy
+_Avoid_: Potentially mixed-time task-graph read, invalid workflow-journal history, provider retry policy
 
 **Task-graph read policy**:
 The caller-selected, bounded policy for retrying one failed provider page and

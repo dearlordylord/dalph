@@ -2,21 +2,21 @@ import { Schema } from "effect"
 import { AttemptId, JournalPosition, RunId, TaskId } from "./domain.js"
 import type { PlannedTaskAttempt } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
-import type { ManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
-import type { ReconstructedManagedRunState } from "./reconstructed-managed-run-state.js"
+import type { RunRecoveryFrontier } from "./run-recovery-frontier.js"
+import type { ReconstructedRunState } from "./reconstructed-run-state.js"
 
-const ManagedHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
+const WorkflowJournalHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
 
 /** A journal record's key, event identity, or planned-attempt owner disagree. */
-export class ManagedHistoryIdentityIssue extends Schema.TaggedErrorClass<ManagedHistoryIdentityIssue>()(
-  "ManagedHistoryIdentityIssue",
-  ManagedHistoryIssueFields
+export class WorkflowJournalHistoryIdentityIssue extends Schema.TaggedErrorClass<WorkflowJournalHistoryIdentityIssue>()(
+  "WorkflowJournalHistoryIdentityIssue",
+  WorkflowJournalHistoryIssueFields
 ) {}
 
 /** Ordered decoded events violate the generic workflow transition algebra. */
-export class ManagedHistorySemanticIssue extends Schema.TaggedErrorClass<ManagedHistorySemanticIssue>()(
-  "ManagedHistorySemanticIssue",
-  ManagedHistoryIssueFields
+export class WorkflowJournalHistorySemanticIssue extends Schema.TaggedErrorClass<WorkflowJournalHistorySemanticIssue>()(
+  "WorkflowJournalHistorySemanticIssue",
+  WorkflowJournalHistoryIssueFields
 ) {}
 
 /** Two journal records claim unfinished executor work for the same task. */
@@ -30,10 +30,10 @@ export class DuplicateUnfinishedTaskAttemptIssue extends Schema.TaggedErrorClass
   }
 ) {}
 
-export type ManagedHistoryIssue =
+export type WorkflowJournalHistoryIssue =
   | DuplicateUnfinishedTaskAttemptIssue
-  | ManagedHistoryIdentityIssue
-  | ManagedHistorySemanticIssue
+  | WorkflowJournalHistoryIdentityIssue
+  | WorkflowJournalHistorySemanticIssue
 
 export const duplicateUnfinishedTaskAttemptIssue = (
   runId: RunId,
@@ -49,17 +49,17 @@ export const duplicateUnfinishedTaskAttemptIssue = (
     taskId: second.taskId
   })
 
-export interface ValidManagedHistory {
-  readonly _tag: "ValidManagedHistory"
-  readonly managedRun: ReconstructedManagedRunState
+export interface ValidWorkflowJournalHistory {
+  readonly _tag: "ValidWorkflowJournalHistory"
+  readonly runState: ReconstructedRunState
   readonly records: ReadonlyArray<JournalRecord>
-  readonly recoveryStage: ManagedRunRecoveryStage
+  readonly recoveryFrontier: RunRecoveryFrontier
   readonly runId: RunId
 }
 
-export interface InvalidManagedHistory {
-  readonly _tag: "InvalidManagedHistory"
-  readonly issues: ReadonlyArray<ManagedHistoryIssue>
+export interface InvalidWorkflowJournalHistory {
+  readonly _tag: "InvalidWorkflowJournalHistory"
+  readonly issues: ReadonlyArray<WorkflowJournalHistoryIssue>
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
 }

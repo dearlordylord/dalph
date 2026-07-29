@@ -40,7 +40,7 @@ When the process-local controller's snapshot changes so future admission may be
 possible—including after a complete planned attempt becomes terminal, becomes
 safely suspended, or a pre-start reservation is cancelled—the Dalph
 coordinator reads the current
-reconstructed managed-run state and controller snapshot and derives the
+reconstructed run state and controller snapshot and derives the
 frontier and admission set again. It performs a workflow-selected external
 boundary read only when the decision's required knowledge is unavailable; this
 controller change alone does not require complete restart reconstruction. A

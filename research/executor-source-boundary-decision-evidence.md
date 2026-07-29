@@ -39,11 +39,11 @@ needs implementation, evidence capture, review, handback, or recovery, the
 selected review-capable executor still performs the same steps and generic
 Dalph still schedules only opaque outer invocations. The defect is that the
 source boundary does not tell that same story. Generic reconstruction and
-activation currently import the selected executor directly, generic managed
-history validates review/convergence facts, and the shared operation/interpreter
-algebra exposes review and handback methods. A focused ticket can correct those
-dependencies without adding executor selection, a registry, plugins,
-configuration, or a second production executor.
+activation currently import the selected executor directly, generic
+workflow-journal history validates review/convergence facts, and the shared
+operation/interpreter algebra exposes review and handback methods. A focused
+ticket can correct those dependencies without adding executor selection, a
+registry, plugins, configuration, or a second production executor.
 
 This is Wayfinder work because the accepted map must reconcile a closed ticket's
 written result with the surviving source graph before it publishes the remaining
@@ -83,15 +83,15 @@ only correlation, declared capacity, waits, interruption, and outcomes
 ([executor-boundary.ts lines 4–79](../packages/orchestrator/src/executor-boundary.ts#L4-L79)).
 However:
 
-- `managed-history.ts` imports the selected executor directly
-  ([line 23](../packages/orchestrator/src/managed-history.ts#L23)) and itself
+- `workflow-journal-history.ts` imports the selected executor directly
+  ([line 23](../packages/orchestrator/src/workflow-journal-history.ts#L23)) and itself
   validates implementation dispositions and review/handback retry exhaustion
-  ([lines 340–403](../packages/orchestrator/src/managed-history.ts#L340-L403));
-- `managed-activation.ts` directly imports reconstruction, projection,
+  ([lines 340–403](../packages/orchestrator/src/workflow-journal-history.ts#L340-L403));
+- `run-recovery-activation.ts` directly imports reconstruction, projection,
   continuation, stage recovery, and worker lookup from the selected executor
-  ([lines 23–29](../packages/orchestrator/src/managed-activation.ts#L23-L29)) and
+  ([lines 23–29](../packages/orchestrator/src/run-recovery-activation.ts#L23-L29)) and
   calls its projection while deriving the generic frontier
-  ([lines 147–205](../packages/orchestrator/src/managed-activation.ts#L147-L205));
+  ([lines 147–205](../packages/orchestrator/src/run-recovery-activation.ts#L147-L205));
 - the common `WorkflowOperation` identity projection still switches over
   `SealImplementationEvidence`, `ReviewImplementation`,
   `HandBackReviewFindings`, and `RecordImplementationDisposition`
@@ -104,7 +104,7 @@ However:
 
 The follow-up verification accurately records the mismatch: it says behavior
 was covered while import direction remained protected only by review/scans, and
-that `managed-history.ts` and `managed-activation.ts` select the protocol
+that `workflow-journal-history.ts` and `run-recovery-activation.ts` select the protocol
 directly
 ([lines 117–125](issue-131-handoffs/issue-133-followup-verification.md#L117-L125),
 [lines 128–166](issue-131-handoffs/issue-133-followup-verification.md#L128-L166)).
@@ -189,7 +189,7 @@ internals.
 
 This package split follows the accepted authority table: the executor owns its
 algorithm, sessions/invocations, review/restoration strategy, and internal
-artifacts; the workflow journal owns only recorded managed workflow history
+artifacts; the workflow journal owns only recorded workflow-journal history
 ([specification lines 48–60](../docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#L48-L60)).
 “Executor owns internal journal events” means it owns their schema, meaning,
 validation, and interpretation; it does not create a second persistence

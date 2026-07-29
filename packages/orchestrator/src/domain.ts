@@ -66,7 +66,7 @@ export type ClaimOwner = typeof ClaimOwner.Type
 export const ClaimToken = Schema.NonEmptyString.pipe(Schema.brand("ClaimToken"))
 export type ClaimToken = typeof ClaimToken.Type
 
-/** Identifies one recoverable managed traversal, not a task or operation. */
+/** Identifies one durable Dalph coordination run, not a task or operation. */
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type
 
@@ -114,7 +114,7 @@ const isValidTaskBranchRef = (ref: string): boolean => {
     ref.includes("@{") ||
     ref.endsWith("/") ||
     ref.endsWith(".") ||
-    /[\u0000-\u0020\u007f~^:?*\[\\]/.test(ref)
+    /[\u0000-\u0020\u007f~^:?*[\\]/.test(ref)
   )
     return false
   return ref.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"))
@@ -129,7 +129,7 @@ export type TaskBranchRef = typeof TaskBranchRef.Type
 export const TaskExecutorLocator = Schema.NonEmptyString.pipe(Schema.brand("TaskExecutorLocator"))
 export type TaskExecutorLocator = typeof TaskExecutorLocator.Type
 
-/** Identifies one durable managed-history fact within a run. */
+/** Identifies one durable workflow-journal-history fact within a run. */
 export const JournalRecordKey = Schema.NonEmptyString.pipe(Schema.brand("JournalRecordKey"))
 export type JournalRecordKey = typeof JournalRecordKey.Type
 

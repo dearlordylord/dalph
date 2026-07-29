@@ -54,7 +54,7 @@ const emptySnapshot = snapshotOf(projectTrackerSnapshot({ revision: "support-v2"
 
 it("loads the current public surface without compatibility exports", () => {
   expect(PublicApi.PlannedAttemptExecutor).toBeDefined()
-  expect(PublicApi.ManagedRunRecoveryStage).toBeDefined()
+  expect(PublicApi.RunRecoveryFrontier).toBeDefined()
   expect(dryRunWorkflowInterpreterLayer).toBeDefined()
   expect(new JournalBoundaryDecodeIssue({ detail: "bad row", rowOrdinal: 1, runId: null })._tag).toBe(
     "JournalBoundaryDecodeIssue"

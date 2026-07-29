@@ -3,8 +3,8 @@ import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecuti
 import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId, type TaskWorkCapacity } from "./domain.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import { JournalStore, type JournalStoreError } from "./journal-store.js"
-import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
-import { reduceManagedHistory } from "./managed-history.js"
+import { workflowJournalTransitionRuleFor } from "./workflow-journal-transition.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import {
   continuePlannedAttemptExecutorWork,
   requestPlannedAttemptExecutorSuspension
@@ -19,10 +19,10 @@ import {
   type PlannedAttemptRecoveryAuthorityError
 } from "./planned-attempt-recovery-authority.js"
 import {
-  type ReconstructedManagedRunState,
+  type ReconstructedRunState,
   reconstructedTaskIsPaused,
   workflowResponsibilityOperationId
-} from "./reconstructed-managed-run-state.js"
+} from "./reconstructed-run-state.js"
 import type { ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
 import {
   deriveRunnableFrontier,
@@ -38,34 +38,31 @@ type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
 }[keyof WorkflowInterpreterService]
 
-type InvalidManagedHistory = Extract<
-  ReturnType<typeof reduceManagedHistory>,
-  { readonly _tag: "InvalidManagedHistory" }
+type InvalidWorkflowJournalHistory = Extract<
+  ReturnType<typeof reduceWorkflowJournalHistory>,
+  { readonly _tag: "InvalidWorkflowJournalHistory" }
 >
 
-export type ManagedRecoveryActivationError =
+export type RunRecoveryActivationError =
   | Effect.Error<ReturnType<typeof continuePlannedAttemptExecutorWork>>
-  | Effect.Error<ReturnType<typeof requestPlannedAttemptExecutorSuspension>>
-  | InvalidManagedHistory
+  | InvalidWorkflowJournalHistory
   | InterpreterError
   | JournalStoreError
   | PlannedAttemptRecoveryAuthorityError
 
 /** Derives which journaled responsibilities are still unfinished. */
-const deriveJournalResponsibilityFacts = (
-  managedRun: ReconstructedManagedRunState
-): ReadonlyArray<ResponsibilityFreshFacts> => {
-  const records = managedRun.workflowHistory.records
+const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): ReadonlyArray<ResponsibilityFreshFacts> => {
+  const records = runState.workflowHistory.records
   const settledOperationIds = new Set(
     records.flatMap(({ event }) => {
-      const transition = managedHistoryTransitionRuleFor(event._tag)
+      const transition = workflowJournalTransitionRuleFor(event._tag)
       const descriptor = describeJournalEvent(event)
       return transition?._tag === "Outcome" && descriptor._tag === "OperationEventDescriptor"
         ? [descriptor.operationId]
         : []
     })
   )
-  return managedRun.responsibility.entries.map((responsibility) => {
+  return runState.responsibility.entries.map((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") {
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
@@ -81,7 +78,7 @@ const deriveJournalResponsibilityFacts = (
         event.report.correlation.runId === responsibility.plannedAttempt.runId &&
         event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
     )?.event
-    const paused = reconstructedTaskIsPaused(managedRun.pause, responsibility.plannedAttempt.taskId)
+    const paused = reconstructedTaskIsPaused(runState.pause, responsibility.plannedAttempt.taskId)
     const disposition =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Terminal"
         ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
@@ -96,72 +93,71 @@ const deriveJournalResponsibilityFacts = (
   })
 }
 
-/** True when the journal still assigns work to this managed run. */
-export const hasUnfinishedManagedRunResponsibility = (managedRun: ReconstructedManagedRunState): boolean =>
-  deriveJournalResponsibilityFacts(managedRun).some(
+/** True when the journal still assigns work to this Dalph run. */
+export const hasUnfinishedRunResponsibility = (runState: ReconstructedRunState): boolean =>
+  deriveJournalResponsibilityFacts(runState).some(
     ({ disposition }) => disposition._tag !== "Settled" && disposition._tag !== "PlannedAttemptExecutorWorkTerminal"
   )
 
-const readRecoveredFrontier = Effect.fn("ManagedActivation.readRecoveredFrontier")(function* (runId: RunId) {
+const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (runId: RunId) {
   const journal = yield* JournalStore
-  const reduction = reduceManagedHistory(runId, yield* journal.read(runId))
-  if (reduction._tag === "InvalidManagedHistory") {
+  const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+  if (reduction._tag === "InvalidWorkflowJournalHistory") {
     return yield* Effect.fail(reduction)
   }
   return deriveRunnableFrontier({
     freshEligibleTasks: [],
-    responsibility: reduction.managedRun.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(reduction.managedRun)
+    responsibility: reduction.runState.responsibility,
+    responsibilityFacts: deriveJournalResponsibilityFacts(reduction.runState)
   })
 })
 
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction with its executor capability.
-interface ManagedActivationSource {
+interface RunRecoveryActivationSource {
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, ManagedRecoveryActivationError>
-  readonly readFrontier: Effect.Effect<RunnableFrontier, ManagedRecoveryActivationError, never>
+  ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
+  readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
     readonly attemptId: AttemptId
     readonly runId: RunId
     readonly taskId: TaskId
   }>
-  readonly waitForNextExecutorWake: Effect.Effect<void, ManagedRecoveryActivationError, never>
+  readonly waitForNextExecutorWake: Effect.Effect<void, RunRecoveryActivationError, never>
 }
 
 /** A journal-backed source can execute recovered transitions for its exact run. */
 // eslint-disable-next-line functional/no-mixed-types -- The discriminated source carries the exact run and its sole recovered-transition capability.
-interface AuthoritativeManagedRunActivation extends ManagedActivationSource {
-  readonly _tag: "AuthoritativeManagedRunActivation"
+interface AuthoritativeRunRecoveryActivation extends RunRecoveryActivationSource {
+  readonly _tag: "AuthoritativeRunRecoveryActivation"
   readonly runId: RunId
   readonly runTransition: (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
-  ) => Effect.Effect<void, ManagedRecoveryActivationError, never>
+  ) => Effect.Effect<void, RunRecoveryActivationError, never>
 }
 
 /** A non-journaled composition has no recovered-transition capability. */
-interface SyntheticFreshOnlyActivation extends ManagedActivationSource {
+interface SyntheticFreshOnlyActivation extends RunRecoveryActivationSource {
   readonly _tag: "SyntheticFreshOnlyActivation"
 }
 
-type ManagedRecoveryActivationService = AuthoritativeManagedRunActivation | SyntheticFreshOnlyActivation
+type RunRecoveryActivationService = AuthoritativeRunRecoveryActivation | SyntheticFreshOnlyActivation
 
 /**
  * Current-run recovered work source. It owns no selector, admission controller,
  * or runner; a caller composes these transitions into its one activation loop.
  */
-export class ManagedRecoveryActivation extends Context.Service<
-  ManagedRecoveryActivation,
-  ManagedRecoveryActivationService
->()("@dalph/ManagedRecoveryActivation") {}
+export class RunRecoveryActivation extends Context.Service<RunRecoveryActivation, RunRecoveryActivationService>()(
+  "@dalph/RunRecoveryActivation"
+) {}
 
 /** Explicit fresh-only composition for dry-run and deterministic tests. */
-export const emptyManagedRecoveryActivationLayer = Layer.effect(
-  ManagedRecoveryActivation,
+export const emptyRunRecoveryActivationLayer = Layer.effect(
+  RunRecoveryActivation,
   PlannedAttemptExecutor.pipe(
     Effect.map((executor) =>
-      ManagedRecoveryActivation.of({
+      RunRecoveryActivation.of({
         _tag: "SyntheticFreshOnlyActivation",
         continuePlannedAttemptExecutorWork: (plannedAttempt) => executor.startOrContinue(plannedAttempt),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
@@ -172,7 +168,7 @@ export const emptyManagedRecoveryActivationLayer = Layer.effect(
   )
 )
 
-export const makeManagedRecoveryActivation = Effect.fn("ManagedActivation.makeRecoverySource")(function* (
+export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
   runId: RunId
 ) {
   const dependencies = yield* Effect.context<JournalStore | WorkflowInterpreter | WorkflowTrace>()
@@ -182,12 +178,12 @@ export const makeManagedRecoveryActivation = Effect.fn("ManagedActivation.makeRe
     effect: Effect.Effect<A, E, JournalStore | WorkflowInterpreter | WorkflowTrace>
   ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
   const journal = yield* JournalStore
-  const initialReduction = reduceManagedHistory(runId, yield* journal.read(runId))
-  if (initialReduction._tag === "InvalidManagedHistory") {
+  const initialReduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+  if (initialReduction._tag === "InvalidWorkflowJournalHistory") {
     return yield* Effect.fail(initialReduction)
   }
-  const initialRecords = initialReduction.managedRun.workflowHistory.records
-  const reconstructedPlannedAttemptPositions = initialReduction.managedRun.responsibility.entries.flatMap(
+  const initialRecords = initialReduction.runState.workflowHistory.records
+  const reconstructedPlannedAttemptPositions = initialReduction.runState.responsibility.entries.flatMap(
     (responsibility) => {
       if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
       const report = initialRecords.findLast(
@@ -208,13 +204,13 @@ export const makeManagedRecoveryActivation = Effect.fn("ManagedActivation.makeRe
           ]
     }
   )
-  const readFrontier = Effect.fn("ManagedActivation.readActivationFrontier")(function* () {
+  const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
     return yield* readRecoveredFrontier(runId)
   })
-  const waitForNextExecutorWake = Effect.fn("ManagedActivation.waitForNextExecutorWake")(function* () {
+  const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(function* () {
     return
   })
-  const runTransition = Effect.fn("ManagedActivation.runTransition")(function* (
+  const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
   ) {
@@ -240,7 +236,7 @@ export const makeManagedRecoveryActivation = Effect.fn("ManagedActivation.makeRe
     yield* recoverRunnableTransition(runId, transition)
   })
   return {
-    _tag: "AuthoritativeManagedRunActivation",
+    _tag: "AuthoritativeRunRecoveryActivation",
     continuePlannedAttemptExecutorWork: (plannedAttempt) =>
       provideDependencies(
         recoveryAuthority
@@ -258,22 +254,22 @@ export const makeManagedRecoveryActivation = Effect.fn("ManagedActivation.makeRe
     runId,
     runTransition: (transition, execution) => provideDependencies(runTransition(transition, execution)),
     waitForNextExecutorWake: provideDependencies(waitForNextExecutorWake())
-  } satisfies AuthoritativeManagedRunActivation
+  } satisfies AuthoritativeRunRecoveryActivation
 })
 
 /**
  * Routes every already-intended recovered responsibility through the same
  * serial selector/admission/ownership loop used by fresh activation.
  */
-export const activateRecoveredResponsibilities = Effect.fn("ManagedActivation.activateRecoveredResponsibilities")(
+export const activateRecoveredResponsibilities = Effect.fn("RunRecoveryActivation.activateRecoveredResponsibilities")(
   function* (runId: RunId, capacity: TaskWorkCapacity) {
-    const recovery = yield* makeManagedRecoveryActivation(runId)
+    const recovery = yield* makeRunRecoveryActivation(runId)
     const admissionController = yield* makeTaskAdmissionController({
       capacity,
       reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
     })
-    const completed = yield* Queue.unbounded<Exit.Exit<void, ManagedRecoveryActivationError>>()
-    const readFrontier: Effect.Effect<RunnableFrontier, ManagedRecoveryActivationError> = recovery.readFrontier
+    const completed = yield* Queue.unbounded<Exit.Exit<void, RunRecoveryActivationError>>()
+    const readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError> = recovery.readFrontier
 
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -281,7 +277,7 @@ export const activateRecoveredResponsibilities = Effect.fn("ManagedActivation.ac
           admissionController,
           readFrontier,
           runId,
-          runTransition: (transition, execution): Effect.Effect<void, ManagedRecoveryActivationError> =>
+          runTransition: (transition, execution): Effect.Effect<void, RunRecoveryActivationError> =>
             Effect.gen(function* () {
               const exit = yield* recovery.runTransition(transition, execution).pipe(Effect.exit)
               yield* Queue.offer(completed, exit)
@@ -289,7 +285,7 @@ export const activateRecoveredResponsibilities = Effect.fn("ManagedActivation.ac
             })
         })
 
-        function drainRecoveredResponsibilities(): Effect.Effect<void, ManagedRecoveryActivationError> {
+        function drainRecoveredResponsibilities(): Effect.Effect<void, RunRecoveryActivationError> {
           return Effect.gen(function* () {
             yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
             const next = (yield* recovery.readFrontier).transitions[0]

@@ -177,7 +177,7 @@ export interface ReconstructedWorkflowHistory {
 }
 
 /** Validated process-local composition; never persisted frontier or capacity. */
-export interface ReconstructedManagedRunState {
+export interface ReconstructedRunState {
   readonly appliedThrough: JournalPosition | null
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly pause: ReconstructedPauseState
@@ -186,19 +186,16 @@ export interface ReconstructedManagedRunState {
   readonly workflowHistory: ReconstructedWorkflowHistory
 }
 
-export const ReconstructedManagedRunInvariantIssue = Schema.TaggedUnion({
+export const ReconstructedRunInvariantIssue = Schema.TaggedUnion({
   GraphKnowledgeHistoryMismatch: { operationId: OperationId, position: JournalPosition },
   ResponsibilityHistoryMismatch: { operationId: OperationId, position: JournalPosition },
   PlannedAttemptExecutorWorkHistoryMismatch: { attemptId: AttemptId, position: JournalPosition }
 })
-export type ReconstructedManagedRunInvariantIssue = typeof ReconstructedManagedRunInvariantIssue.Type
+export type ReconstructedRunInvariantIssue = typeof ReconstructedRunInvariantIssue.Type
 
-export type ReconstructedManagedRunResult =
-  | { readonly _tag: "ValidReconstructedManagedRun"; readonly state: ReconstructedManagedRunState }
+export type ReconstructedRunResult =
+  | { readonly _tag: "ValidReconstructedRun"; readonly state: ReconstructedRunState }
   | {
-      readonly _tag: "InvalidReconstructedManagedRun"
-      readonly issues: readonly [
-        ReconstructedManagedRunInvariantIssue,
-        ...ReadonlyArray<ReconstructedManagedRunInvariantIssue>
-      ]
+      readonly _tag: "InvalidReconstructedRun"
+      readonly issues: readonly [ReconstructedRunInvariantIssue, ...ReadonlyArray<ReconstructedRunInvariantIssue>]
     }

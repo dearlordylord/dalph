@@ -191,7 +191,7 @@ identity.
 
 ## Consequences
 
-The workflow algebra, journal schema, managed-history reducer, and recovery
+The workflow algebra, journal schema, workflow-journal-history reducer, and recovery
 model must represent the eligibility-observation intent, its authoritative and
 simulated outcomes, and the causal validation described above. Journal schema
 evolution must preserve readable supported history without treating a prior

@@ -18,7 +18,7 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
-import { ManagedRecoveryActivation } from "./managed-activation.js"
+import { RunRecoveryActivation } from "./run-recovery-activation.js"
 import { plannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
 import { FrontierExplanation, RunnableFrontierTransition } from "./runnable-frontier.js"
 import { TaskAttemptPlanRecordAcknowledged } from "./task-attempt-plan-recording.js"
@@ -65,8 +65,8 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     const active = yield* Ref.make(true)
     const ran = yield* Ref.make(0)
     const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
-    const recovery = ManagedRecoveryActivation.of({
-      _tag: "AuthoritativeManagedRunActivation",
+    const recovery = RunRecoveryActivation.of({
+      _tag: "AuthoritativeRunRecoveryActivation",
       continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
       readFrontier: Ref.get(active).pipe(
         Effect.map((isActive) => ({ explanations: [], transitions: isActive ? [transition] : [] }))
@@ -90,7 +90,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     })
 
     yield* runWorkflow(FixtureTarget.make("workflow-recovered-target"), TaskWorkCapacity.make(1)).pipe(
-      Effect.provideService(ManagedRecoveryActivation, recovery),
+      Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provideService(
@@ -165,7 +165,7 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
       recordTaskAttemptPlan: () => Effect.succeed(TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt }))
     })
     const frontierReads = yield* Ref.make(0)
-    const recovery = ManagedRecoveryActivation.of({
+    const recovery = RunRecoveryActivation.of({
       _tag: "SyntheticFreshOnlyActivation",
       continuePlannedAttemptExecutorWork: () =>
         Effect.succeed(
@@ -194,7 +194,7 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
     })
 
     yield* runWorkflow(FixtureTarget.make("workflow-fresh-target"), TaskWorkCapacity.make(1)).pipe(
-      Effect.provideService(ManagedRecoveryActivation, recovery),
+      Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provideService(OperationIdAllocator, allocator),

@@ -138,7 +138,7 @@ work for `(run R, attempt attempt-A-3)` and
 
 ### Result
 
-Reconstruction returns a typed invalid-managed-history result naming Task A,
+Reconstruction returns a typed invalid-workflow-journal-history result naming Task A,
 both unfinished responsibility records, and the pair or pairs they claim
 before frontier derivation.
 The executor, tracker, Git, and every other outside boundary must not be

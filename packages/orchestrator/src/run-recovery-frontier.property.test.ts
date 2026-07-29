@@ -27,7 +27,7 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { reduceManagedHistory } from "./managed-history.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
   makeTaskAttemptPlanOperation,
@@ -37,7 +37,7 @@ import {
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
-it("gives every generated acknowledged-plan prefix exactly one derived recovery stage", () => {
+it("gives every generated acknowledged-plan prefix exactly one derived recovery frontier", () => {
   fc.assert(
     fc.property(safeSegment, (segment) => {
       const runId = RunId.make(`property-run-${segment}`)
@@ -56,7 +56,7 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
         plannedAttempt: attempt,
         predecessorOperationIds: []
       })
-      const reduction = reduceManagedHistory(runId, [
+      const reduction = reduceWorkflowJournalHistory(runId, [
         {
           event: TaskAttemptPlannedEvent.make({ operation, version: 4 }),
           key: attemptPlanRecordKey(attempt.attemptId),
@@ -64,10 +64,10 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
           runId
         }
       ])
-      expect(reduction._tag).toBe("ValidManagedHistory")
-      if (reduction._tag === "InvalidManagedHistory") return
-      expect(reduction.recoveryStage.entries).toHaveLength(1)
-      expect(reduction.recoveryStage.entries[0]?._tag).toBe("TaskWorktreeReconciliationNeeded")
+      expect(reduction._tag).toBe("ValidWorkflowJournalHistory")
+      if (reduction._tag === "InvalidWorkflowJournalHistory") return
+      expect(reduction.recoveryFrontier.entries).toHaveLength(1)
+      expect(reduction.recoveryFrontier.entries[0]?._tag).toBe("TaskWorktreeReconciliationNeeded")
     })
   )
 })
@@ -124,11 +124,11 @@ it("classifies every generated pre-attempt fact-to-next-intent crash prefix", ()
       const records = events
         .slice(0, prefixLength)
         .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))
-      const reduction = reduceManagedHistory(runId, records)
-      expect(reduction._tag).toBe("ValidManagedHistory")
-      if (reduction._tag === "InvalidManagedHistory") return
-      expect(reduction.recoveryStage.entries).toHaveLength(1)
-      expect(reduction.recoveryStage.entries[0]?._tag).toBe(
+      const reduction = reduceWorkflowJournalHistory(runId, records)
+      expect(reduction._tag).toBe("ValidWorkflowJournalHistory")
+      if (reduction._tag === "InvalidWorkflowJournalHistory") return
+      expect(reduction.recoveryFrontier.entries).toHaveLength(1)
+      expect(reduction.recoveryFrontier.entries[0]?._tag).toBe(
         [
           "TaskClaimAcquisitionNeeded",
           "TaskClaimAcquisitionUnresolved",

@@ -72,7 +72,7 @@ that boundary and implements terminal-result and safe-suspension release.
    Dalph must get a fresh active, terminal, interrupted, or absent report for
    `expected-A` before changing the task to `Working` or `NotUsing`.
 9. Two current capacity-holding operations for one task in the journal are
-   invalid managed history. For example, two unclosed current task-A intents
+   invalid workflow-journal history. For example, two unclosed current task-A intents
    fail reconstruction before Dalph derives a frontier.
 10. Provider evidence cannot attach to a temporary `Reserved` position because
     Dalph has not recorded an `OperationId` yet. For example, an unknown

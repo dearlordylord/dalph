@@ -41,7 +41,7 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { activateRecoveredResponsibilities } from "./managed-activation.js"
+import { activateRecoveredResponsibilities } from "./run-recovery-activation.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -320,7 +320,7 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
       )
       expect(blocked).toMatchObject({
         _tag: "StartupRecoveryBlocked",
-        issues: [{ _tag: "OtherUnfinishedManagedRunIssue", requestedRunId, unfinishedRunId }]
+        issues: [{ _tag: "OtherUnfinishedRunIssue", requestedRunId, unfinishedRunId }]
       })
     }).pipe(Effect.provide(NodeServices.layer))
   )

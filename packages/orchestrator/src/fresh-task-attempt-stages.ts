@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import type { OperationId, PlannedTaskAttempt, Task } from "./domain.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
-import type { ManagedRecoveryActivationError } from "./managed-activation.js"
+import type { RunRecoveryActivationError } from "./run-recovery-activation.js"
 import { plannedAttemptExecutorCorrelation } from "./planned-attempt-executor.js"
 import type { PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
@@ -27,7 +27,7 @@ interface FreshTaskAttemptStageOptions {
   readonly planner: PlannedTaskAttemptPlannerService
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, ManagedRecoveryActivationError>
+  ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
 }
 
 const freshWorkflowTransition = (operationId: OperationId, task: Task) =>

@@ -26,7 +26,7 @@ import {
   memoryJournalStoreLayer,
   TaskAttemptPlannedEvent
 } from "./journal-store.js"
-import { activateRecoveredResponsibilities, makeManagedRecoveryActivation } from "./managed-activation.js"
+import { activateRecoveredResponsibilities, makeRunRecoveryActivation } from "./run-recovery-activation.js"
 import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
 import {
   continuePlannedAttemptExecutorWork,
@@ -41,7 +41,7 @@ import {
   PlannedAttemptExecutorReport
 } from "./planned-attempt-executor.js"
 import { trustedPlannedAttemptRecoveryAuthorityLayer } from "./planned-attempt-recovery-authority.js"
-import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+import { reconstructRunState } from "./reconstructed-run.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition, RunnableFrontierTransition } from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
@@ -194,7 +194,7 @@ it.effect("continues an exact planned attempt through the recovered source capab
         version: workflowJournalEventVersion
       })
     )
-    const recovery = yield* makeManagedRecoveryActivation(plannedAttempt.runId)
+    const recovery = yield* makeRunRecoveryActivation(plannedAttempt.runId)
     expect(yield* recovery.continuePlannedAttemptExecutorWork(plannedAttempt)).toEqual(
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
@@ -340,7 +340,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
         ])
       )
     )
-    const recovery = yield* makeManagedRecoveryActivation(plannedAttempt.runId).pipe(
+    const recovery = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(
       Effect.provide(makeControlledFakePlannedAttemptExecutorLayer([]))
     )
     const controller = yield* makeTaskAdmissionController({
@@ -409,7 +409,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
         report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
       })
     ])
-    const before = yield* makeManagedRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
+    const before = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
     expect(before.reconstructedPlannedAttemptPositions).toEqual([
       { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     ])
@@ -431,7 +431,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
     yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1)).pipe(
       Effect.provide(suspensionLayer)
     )
-    const after = yield* makeManagedRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
+    const after = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
     expect(after.reconstructedPlannedAttemptPositions).toEqual([])
     const afterController = yield* makeTaskAdmissionController({
       capacity: TaskWorkCapacity.make(1),
@@ -544,7 +544,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
 )
 
 it("reconstructs the same planned attempt after Dalph and the fake executor crash together", () => {
-  const reconstruction = reconstructManagedRunState(plannedAttempt.runId, [
+  const reconstruction = reconstructRunState(plannedAttempt.runId, [
     {
       event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
       key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
@@ -552,8 +552,8 @@ it("reconstructs the same planned attempt after Dalph and the fake executor cras
       runId: plannedAttempt.runId
     }
   ])
-  expect(reconstruction._tag).toBe("ValidReconstructedManagedRun")
-  if (reconstruction._tag !== "ValidReconstructedManagedRun") return
+  expect(reconstruction._tag).toBe("ValidReconstructedRun")
+  if (reconstruction._tag !== "ValidReconstructedRun") return
   const responsibility = reconstruction.state.responsibility.entries[0]
   expect(responsibility).toEqual({
     _tag: "PlannedAttemptExecutorWorkResponsibility",

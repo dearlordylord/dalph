@@ -18,7 +18,7 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { reduceManagedHistory } from "./managed-history.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { makeTaskClaimAcquisitionOperation, makeTrackerGraphObservationOperation } from "./workflow-operation.js"
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
@@ -56,13 +56,13 @@ it("never creates responsibility from generated graph membership", () => {
           key: outcomeRecordKey(observation.operationId)
         }
       ] as const
-      const beforeIntent = reduceManagedHistory(
+      const beforeIntent = reduceWorkflowJournalHistory(
         runId,
         prefix.map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))
       )
-      expect(beforeIntent._tag).toBe("ValidManagedHistory")
-      if (beforeIntent._tag !== "ValidManagedHistory") return
-      expect(beforeIntent.managedRun.responsibility.entries).toEqual([])
+      expect(beforeIntent._tag).toBe("ValidWorkflowJournalHistory")
+      if (beforeIntent._tag !== "ValidWorkflowJournalHistory") return
+      expect(beforeIntent.runState.responsibility.entries).toEqual([])
 
       const afterIntentRecords = [
         ...prefix,
@@ -71,10 +71,10 @@ it("never creates responsibility from generated graph membership", () => {
           key: intentRecordKey(claim.acquisition.operationId)
         }
       ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))
-      const afterIntent = reduceManagedHistory(runId, afterIntentRecords)
-      expect(afterIntent._tag).toBe("ValidManagedHistory")
-      if (afterIntent._tag !== "ValidManagedHistory") return
-      expect(afterIntent.managedRun.responsibility.entries).toEqual([
+      const afterIntent = reduceWorkflowJournalHistory(runId, afterIntentRecords)
+      expect(afterIntent._tag).toBe("ValidWorkflowJournalHistory")
+      if (afterIntent._tag !== "ValidWorkflowJournalHistory") return
+      expect(afterIntent.runState.responsibility.entries).toEqual([
         {
           _tag: "TaskClaimResponsibility",
           acquisition: claim.acquisition,

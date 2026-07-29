@@ -26,7 +26,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReconciliationIntendedEvent
 } from "./journal-store.js"
-import { activateRecoveredResponsibilities, makeManagedRecoveryActivation } from "./managed-activation.js"
+import { activateRecoveredResponsibilities, makeRunRecoveryActivation } from "./run-recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "./planned-attempt-executor.js"
 import { trustedPlannedAttemptRecoveryAuthorityLayer } from "./planned-attempt-recovery-authority.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
@@ -69,16 +69,16 @@ it.effect("routes every recovered transition variant through its exact empty-his
   )
 })
 
-it.effect("settles a recovered generic claim through managed activation", () =>
+it.effect("settles a recovered generic claim through run recovery activation", () =>
   Effect.gen(function* () {
-    const runId = RunId.make("managed-generic-recovery")
-    const taskId = TaskId.make("managed-generic-task")
+    const runId = RunId.make("recovered-generic-recovery")
+    const taskId = TaskId.make("recovered-generic-task")
     const claim = makeTaskClaimAcquisitionOperation({
       acquisition: {
-        operationId: OperationId.make("managed-generic-claim"),
+        operationId: OperationId.make("recovered-generic-claim"),
         owner: ClaimOwner.make("dalph"),
         taskId,
-        token: ClaimToken.make("managed-generic-token")
+        token: ClaimToken.make("recovered-generic-token")
       },
       predecessorOperationIds: []
     })
@@ -190,15 +190,15 @@ it.effect("replays the exact durable claim and worktree intents", () => {
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 })
 
-it.effect("fails closed when initial or reread managed history is invalid", () =>
+it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>
   Effect.gen(function* () {
-    const runId = RunId.make("invalid-managed-recovery")
+    const runId = RunId.make("invalid-workflow-journal-history-recovery")
     const operation = makeTaskClaimAcquisitionOperation({
       acquisition: {
-        operationId: OperationId.make("invalid-managed-claim"),
+        operationId: OperationId.make("invalid-workflow-journal-history-claim"),
         owner: ClaimOwner.make("dalph"),
-        taskId: TaskId.make("invalid-managed-task"),
-        token: ClaimToken.make("invalid-managed-token")
+        taskId: TaskId.make("invalid-workflow-journal-history-task"),
+        token: ClaimToken.make("invalid-workflow-journal-history-token")
       },
       predecessorOperationIds: []
     })
@@ -215,19 +215,17 @@ it.effect("fails closed when initial or reread managed history is invalid", () =
         Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
       scan: () => Effect.succeed({ issues: [], runs: [] })
     })
-    const recovery = yield* makeManagedRecoveryActivation(runId).pipe(
-      Effect.provideService(JournalStore, changingJournal)
-    )
-    expect((yield* recovery.readFrontier.pipe(Effect.flip))._tag).toBe("InvalidManagedHistory")
+    const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provideService(JournalStore, changingJournal))
+    expect((yield* recovery.readFrontier.pipe(Effect.flip))._tag).toBe("InvalidWorkflowJournalHistory")
 
-    const initiallyInvalid = yield* makeManagedRecoveryActivation(runId).pipe(
+    const initiallyInvalid = yield* makeRunRecoveryActivation(runId).pipe(
       Effect.provideService(
         JournalStore,
         JournalStore.of({ ...changingJournal, read: () => Effect.succeed([invalidRecord]) })
       ),
       Effect.flip
     )
-    expect(initiallyInvalid._tag).toBe("InvalidManagedHistory")
+    expect(initiallyInvalid._tag).toBe("InvalidWorkflowJournalHistory")
   }).pipe(
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),

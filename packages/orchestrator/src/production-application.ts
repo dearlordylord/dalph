@@ -13,16 +13,16 @@ import {
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 import {
-  hasUnfinishedManagedRunResponsibility,
-  makeManagedRecoveryActivation,
-  ManagedRecoveryActivation
-} from "./managed-activation.js"
+  hasUnfinishedRunResponsibility,
+  makeRunRecoveryActivation,
+  RunRecoveryActivation
+} from "./run-recovery-activation.js"
 import {
   DuplicateUnfinishedTaskAttemptIssue,
-  ManagedHistoryIdentityIssue,
-  ManagedHistorySemanticIssue
-} from "./managed-history-result.js"
-import { reduceManagedHistory } from "./managed-history.js"
+  WorkflowJournalHistoryIdentityIssue,
+  WorkflowJournalHistorySemanticIssue
+} from "./workflow-journal-history-result.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 import { controlledFakePlannedAttemptExecutorLayer, PlannedAttemptExecutor } from "./planned-attempt-executor.js"
 import {
@@ -37,9 +37,9 @@ import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter, WorkflowTrace } fr
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
   JournalBoundaryDecodeIssue,
-  ManagedHistoryIdentityIssue,
-  ManagedHistorySemanticIssue,
-  Schema.TaggedStruct("OtherUnfinishedManagedRunIssue", { requestedRunId: RunId, unfinishedRunId: RunId })
+  WorkflowJournalHistoryIdentityIssue,
+  WorkflowJournalHistorySemanticIssue,
+  Schema.TaggedStruct("OtherUnfinishedRunIssue", { requestedRunId: RunId, unfinishedRunId: RunId })
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
 
@@ -101,11 +101,11 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
       const trace = yield* WorkflowTrace
       const scan = yield* journal.scan()
-      const reductions = scan.runs.map((history) => reduceManagedHistory(history.runId, history.records))
+      const reductions = scan.runs.map((history) => reduceWorkflowJournalHistory(history.runId, history.records))
       const issues = [
         ...scan.issues,
         ...reductions.flatMap((reduction) => {
-          return reduction._tag === "InvalidManagedHistory" ? reduction.issues : []
+          return reduction._tag === "InvalidWorkflowJournalHistory" ? reduction.issues : []
         })
       ]
       if (issues.length > 0) {
@@ -113,21 +113,21 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       }
       const otherUnfinishedRun = reductions.find(
         (reduction) =>
-          reduction._tag === "ValidManagedHistory" &&
+          reduction._tag === "ValidWorkflowJournalHistory" &&
           reduction.runId !== runId &&
-          hasUnfinishedManagedRunResponsibility(reduction.managedRun)
+          hasUnfinishedRunResponsibility(reduction.runState)
       )
-      if (otherUnfinishedRun?._tag === "ValidManagedHistory") {
+      if (otherUnfinishedRun?._tag === "ValidWorkflowJournalHistory") {
         return yield* new StartupRecoveryBlocked({
           issues: [
-            { _tag: "OtherUnfinishedManagedRunIssue", requestedRunId: runId, unfinishedRunId: otherUnfinishedRun.runId }
+            { _tag: "OtherUnfinishedRunIssue", requestedRunId: runId, unfinishedRunId: otherUnfinishedRun.runId }
           ]
         })
       }
-      const recovery = yield* makeManagedRecoveryActivation(runId)
+      const recovery = yield* makeRunRecoveryActivation(runId)
       return Context.empty().pipe(
         Context.add(WorkflowInterpreter, interpreter),
-        Context.add(ManagedRecoveryActivation, recovery),
+        Context.add(RunRecoveryActivation, recovery),
         Context.add(PlannedAttemptExecutor, executor),
         Context.add(JournalStore, journal),
         Context.add(PlannedAttemptRecoveryAuthority, recoveryAuthority),

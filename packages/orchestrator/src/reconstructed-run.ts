@@ -3,26 +3,26 @@ import { Option } from "effect"
 import type { RunId, TaskId } from "./domain.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import type { JournalRecord } from "./journal-store.js"
-import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
+import { workflowJournalTransitionRuleFor } from "./workflow-journal-transition.js"
 import {
   BestAvailableDurableGraphKnowledge,
   makeTaskTrackerTargetClosureObservation,
-  ReconstructedManagedRunInvariantIssue,
-  type ReconstructedManagedRunResult,
-  type ReconstructedManagedRunState,
+  ReconstructedRunInvariantIssue,
+  type ReconstructedRunResult,
+  type ReconstructedRunState,
   ReconstructedPauseState,
   ReconstructedRunPauseState,
   ReconstructedTaskPauseState,
   type ReconstructedWorkflowHistory,
   taskMembershipKey,
-  type TaskTrackerTargetClosureObservation,
   type TaskTrackerTargetClosureKnowledge,
   TaskTrackerTargetClosureKnowledgeConflict,
+  type TaskTrackerTargetClosureObservation,
   trackerTargetKey,
   WorkflowResponsibilityEntry,
   workflowResponsibilityOperationId,
   WorkflowResponsibilityState
-} from "./reconstructed-managed-run-state.js"
+} from "./reconstructed-run-state.js"
 
 const applyGraphKnowledgeRecord = (
   records: ReadonlyArray<JournalRecord>,
@@ -182,13 +182,13 @@ const graphKnowledgeObservations = (
 const validateGraphKnowledge = (
   graphKnowledge: BestAvailableDurableGraphKnowledge,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<ReconstructedManagedRunInvariantIssue> =>
+): ReadonlyArray<ReconstructedRunInvariantIssue> =>
   graphKnowledgeObservations(graphKnowledge).flatMap((observation) => {
     const record = records.at(observation.observedAt - 1)
     if (record?.event._tag === "TrackerGraphOutcomeObserved" && record.event.operationId === observation.operationId)
       return []
     return [
-      ReconstructedManagedRunInvariantIssue.cases.GraphKnowledgeHistoryMismatch.make({
+      ReconstructedRunInvariantIssue.cases.GraphKnowledgeHistoryMismatch.make({
         operationId: observation.operationId,
         position: observation.observedAt
       })
@@ -211,13 +211,13 @@ const plannedResponsibilityHasOrigin = (
 const validateResponsibilityEntry = (
   entry: WorkflowResponsibilityEntry,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<ReconstructedManagedRunInvariantIssue> => {
+): ReadonlyArray<ReconstructedRunInvariantIssue> => {
   const record = records.at(entry.beganAt - 1)
   if (entry._tag === "PlannedAttemptExecutorWorkResponsibility") {
     return plannedResponsibilityHasOrigin(entry, record)
       ? []
       : [
-          ReconstructedManagedRunInvariantIssue.cases.PlannedAttemptExecutorWorkHistoryMismatch.make({
+          ReconstructedRunInvariantIssue.cases.PlannedAttemptExecutorWorkHistoryMismatch.make({
             attemptId: entry.plannedAttempt.attemptId,
             position: entry.beganAt
           })
@@ -226,7 +226,7 @@ const validateResponsibilityEntry = (
   const operationId = workflowResponsibilityOperationId(entry)
   if (record !== undefined) {
     const descriptor = describeJournalEvent(record.event)
-    const transition = managedHistoryTransitionRuleFor(record.event._tag)
+    const transition = workflowJournalTransitionRuleFor(record.event._tag)
     if (
       descriptor._tag === "OperationEventDescriptor" &&
       descriptor.operationId === operationId &&
@@ -235,24 +235,21 @@ const validateResponsibilityEntry = (
       return []
   }
   return [
-    ReconstructedManagedRunInvariantIssue.cases.ResponsibilityHistoryMismatch.make({
-      operationId,
-      position: entry.beganAt
-    })
+    ReconstructedRunInvariantIssue.cases.ResponsibilityHistoryMismatch.make({ operationId, position: entry.beganAt })
   ]
 }
 
 const validateResponsibility = (
   responsibility: WorkflowResponsibilityState,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<ReconstructedManagedRunInvariantIssue> =>
+): ReadonlyArray<ReconstructedRunInvariantIssue> =>
   responsibility.entries.flatMap((entry) => validateResponsibilityEntry(entry, records))
 
-/** Composes the distinct reducers for records already accepted as valid managed history. */
-export const reconstructValidatedManagedRunState = (
+/** Composes the distinct reducers for records already accepted as valid workflow-journal history. */
+export const reconstructValidatedRunState = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
-): ReconstructedManagedRunState => {
+): ReconstructedRunState => {
   const graphKnowledge = reduceGraphKnowledge(records)
   const responsibility = reduceWorkflowResponsibility(records)
   return {
@@ -266,18 +263,15 @@ export const reconstructValidatedManagedRunState = (
 }
 
 /** Reconstructs arbitrary records and reports broken history-to-state invariants. */
-export const reconstructManagedRunState = (
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>
-): ReconstructedManagedRunResult => {
-  const state = reconstructValidatedManagedRunState(runId, records)
+export const reconstructRunState = (runId: RunId, records: ReadonlyArray<JournalRecord>): ReconstructedRunResult => {
+  const state = reconstructValidatedRunState(runId, records)
   const issues = [
     ...validateGraphKnowledge(state.graphKnowledge, records),
     ...validateResponsibility(state.responsibility, records)
   ]
-  if (issues.length === 0) return { _tag: "ValidReconstructedManagedRun", state }
+  if (issues.length === 0) return { _tag: "ValidReconstructedRun", state }
   return {
-    _tag: "InvalidReconstructedManagedRun",
+    _tag: "InvalidReconstructedRun",
     issues: [Option.getOrThrow(Option.fromUndefinedOr(issues[0])), ...issues.slice(1)]
   }
 }

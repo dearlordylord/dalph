@@ -11,7 +11,7 @@ import {
   workflowResponsibilityKey,
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
-} from "./reconstructed-managed-run-state.js"
+} from "./reconstructed-run-state.js"
 import type { ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"

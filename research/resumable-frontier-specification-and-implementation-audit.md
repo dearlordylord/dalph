@@ -38,15 +38,15 @@ the finding; it does not decide the later design.
 
 **Locations**
 
-- [`ManagedRunRecoveryStageEntry`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L11-L60)
+- [`RunRecoveryFrontierEntry`](../packages/orchestrator/src/run-recovery-frontier.ts#L11-L60)
   declares claim, eligibility-refresh, and attempt-plan stages.
-- [`deriveManagedRunRecoveryStage`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L182-L250)
+- [`deriveRunRecoveryFrontier`](../packages/orchestrator/src/run-recovery-frontier.ts#L182-L250)
   creates those stages.
 - [`recoverExactRunAfterCoordinatorDeath`](../packages/orchestrator/src/workflow-recovery.ts#L348-L383)
   continues only missing worktree, session, and execution operations. Every
   other nonterminal stage becomes `RecoveryProgressIssue`.
 - The focused test
-  [`does not treat an observed eligible task without a claim intent as terminal`](../packages/orchestrator/src/managed-run-recovery-stage.test.ts#L337-L445)
+  [`does not treat an observed eligible task without a claim intent as terminal`](../packages/orchestrator/src/run-recovery-frontier.test.ts#L337-L445)
   explicitly expects `TaskClaimAcquisitionNeeded` to fail before selecting an
   operation.
 
@@ -81,7 +81,7 @@ any, becomes Dalph's responsibility.
   returns success as soon as any reconciliation phase or one missing-stage
   continuation increases journal length.
 - The focused test
-  [`advances an exact planned attempt once and rejects a silent continuation`](../packages/orchestrator/src/managed-run-recovery-stage.test.ts#L948-L1121)
+  [`advances an exact planned attempt once and rejects a silent continuation`](../packages/orchestrator/src/run-recovery-frontier.test.ts#L948-L1121)
   expects success after recording worktree readiness while the immediately
   actionable session-establishment stage remains.
 
@@ -105,10 +105,10 @@ terminal state.
 
 **Locations**
 
-- [`ManagedRunRecoveryStageEntry`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L46-L60)
+- [`RunRecoveryFrontierEntry`](../packages/orchestrator/src/run-recovery-frontier.ts#L46-L60)
   has one `ImplementationConvergencePending` variant for every post-execution
   nonterminal state.
-- [`stageForAttempt`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L145-L167)
+- [`recoveryEntryForAttempt`](../packages/orchestrator/src/run-recovery-frontier.ts#L145-L167)
   selects that variant as soon as one execution outcome exists.
 - [`recoverImplementationConvergences`](../packages/orchestrator/src/implementation-convergence-recovery.ts#L19-L230)
   discovers evidence, review, handback, rework, and disposition state through
@@ -185,14 +185,14 @@ order for ordinary work, crash recovery, pause, and resume.
   records only a tracker revision and every task ID in topological order. It
   records no canonical task/dependency facts, observed region, coverage,
   absence, completeness, or replacement semantics.
-- [`deriveManagedRunRecoveryStage`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L226-L250)
+- [`deriveRunRecoveryFrontier`](../packages/orchestrator/src/run-recovery-frontier.ts#L226-L250)
   turns every observed task ID without a claim or plan into
   `TaskClaimAcquisitionNeeded`.
 - [`runWorkflow`](../packages/orchestrator/src/workflow-run.ts#L54-L89)
   takes the initially eligible snapshot as the complete candidate list and
   starts one claim path for each candidate.
 - The pre-attempt property
-  [`classifies every generated pre-attempt fact-to-next-intent crash prefix`](../packages/orchestrator/src/managed-run-recovery-stage.property.test.ts#L74-L155)
+  [`classifies every generated pre-attempt fact-to-next-intent crash prefix`](../packages/orchestrator/src/run-recovery-frontier.property.test.ts#L74-L155)
   requires graph observation to create exactly one claim-needed recovery entry.
 
 **Current assumption or gap**
@@ -266,7 +266,7 @@ reconstruction, and waiting.
   unaffected-continuation variant.
 - [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md#durability-and-reconstruction)
   currently says startup fails closed after collecting issues, without
-  distinguishing a managed-history contradiction from a branch-local authority
+  distinguishing a workflow-journal-history contradiction from a branch-local authority
   problem.
 
 **Current assumption or gap**
@@ -299,7 +299,7 @@ affected scope is a resource, branch, run, or application.
 - Recovery is embedded in
   [`productionWorkflowInterpreterLayer`](../packages/orchestrator/src/production-application.ts#L64-L205).
 - The local recovery taxonomy is
-  [`ManagedRunRecoveryStageEntry`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L11-L86).
+  [`RunRecoveryFrontierEntry`](../packages/orchestrator/src/run-recovery-frontier.ts#L11-L86).
 - The global blocker is
   [`StartupRecoveryBlocked`](../packages/orchestrator/src/production-application.ts#L42-L58).
 
@@ -352,10 +352,10 @@ scenario must become required model-based and implementation coverage.
 
 **Locations**
 
-- [`managed-run-recovery-stage.property.test.ts`](../packages/orchestrator/src/managed-run-recovery-stage.property.test.ts)
+- [`run-recovery-frontier.property.test.ts`](../packages/orchestrator/src/run-recovery-frontier.property.test.ts)
   generates one acknowledged-plan prefix and five pre-attempt prefixes, not the
   complete workflow algebra.
-- [`managed-run-recovery-stage.test.ts`](../packages/orchestrator/src/managed-run-recovery-stage.test.ts#L174-L235)
+- [`run-recovery-frontier.test.ts`](../packages/orchestrator/src/run-recovery-frontier.test.ts#L174-L235)
   classifies early gaps, then groups every later successful-execution prefix as
   `ImplementationConvergencePending`.
 - [`production-application.test.ts`](../packages/orchestrator/src/production-application.test.ts#L76-L219)
@@ -438,7 +438,7 @@ frontier model.
 
 **Locations**
 
-- [`managed-run-recovery-stage.property.test.ts`](../packages/orchestrator/src/managed-run-recovery-stage.property.test.ts)
+- [`run-recovery-frontier.property.test.ts`](../packages/orchestrator/src/run-recovery-frontier.property.test.ts)
   uses narrow generators for selected prefixes.
 - No generator constructs complete legal multi-task histories across the
   accepted future operation algebra.
@@ -466,7 +466,7 @@ audit can compare its value with required trace-prefix coverage.
    `TrackerExecutionAdmitted` terminology. The concrete durable
    `ObserveClaimedTaskEligibility` intent and typed positive/negative outcomes
    are absent from the implementation.
-2. [`docs/CONTEXT.md`](../docs/CONTEXT.md#managed-run-recovery-stage) and
+2. [`docs/CONTEXT.md`](../docs/CONTEXT.md#run-recovery-frontier) and
    [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md#durability-and-reconstruction)
    describe every “unfinished pre-attempt task” as a recovery-stage entry. They
    do not distinguish a task known from an observation from a task selected into
@@ -476,7 +476,7 @@ audit can compare its value with required trace-prefix coverage.
    as progress. It does not yet require one activation to continue through all
    immediately actionable stages.
 4. The same architecture section says startup fails closed after collecting
-   issues. It does not classify which issues invalidate managed history, isolate
+   issues. It does not classify which issues invalidate workflow-journal history, isolate
    one branch or resource, create a wait condition, or block the whole run.
 5. No canonical document defines graph-observation region, coverage,
    completeness, absence, revision, replacement, or partial multi-read
@@ -497,7 +497,7 @@ resolve, by
 ## Existing behavior that remains an input, not a conclusion
 
 - The journal stores workflow history, and
-  [`ManagedRunRecoveryStage`](../packages/orchestrator/src/managed-run-recovery-stage.ts#L79-L86)
+  [`RunRecoveryFrontier`](../packages/orchestrator/src/run-recovery-frontier.ts#L79-L86)
   remains a derived value rather than persisted authority.
 - Acknowledged planned attempts retain exact task, revision, Base SHA, branch,
   worktree, executor, session locator, and attempt identity.
@@ -516,7 +516,7 @@ These observations do not decide the later architecture classification.
 | --- | --- | --- |
 | Audit current specification and code assumptions | This inventory | [Audit current specifications and implementation assumptions](https://github.com/dearlordylord/dalph/issues/116) |
 | Decide partial-observation coverage, completeness, absence, revision, and replacement semantics | Absent; current payload is [`TrackerGraphObserved`](../packages/orchestrator/src/workflow-outcome.ts#L6-L36) | [Model authority, observation, knowledge, and responsibility](https://github.com/dearlordylord/dalph/issues/115) |
-| Verify worktree and session retry identity | Duplicate worktree/session intents are categorically rejected in [`managed-history.ts`](../packages/orchestrator/src/managed-history.ts#L674-L705); current session behavior is modeled in [`taskWorkSessionRecovery.qnt`](../specs/taskWorkSessionRecovery.qnt) | [Verify duplicate intents and retry identity](https://github.com/dearlordylord/dalph/issues/121) |
+| Verify worktree and session retry identity | Duplicate worktree/session intents are categorically rejected in [`workflow-journal-history.ts`](../packages/orchestrator/src/workflow-journal-history.ts#L674-L705); current session behavior is modeled in [`taskWorkSessionRecovery.qnt`](../specs/taskWorkSessionRecovery.qnt) | [Verify duplicate intents and retry identity](https://github.com/dearlordylord/dalph/issues/121) |
 | Record real observability and control limits at each boundary | No complete capability matrix exists | [Specify reconciliation when the world changes](https://github.com/dearlordylord/dalph/issues/120) |
 | Decide retain/refactor/replace/delete after accepted model | Deliberately not decided here | [Audit architecture against the accepted model](https://github.com/dearlordylord/dalph/issues/125) |
 

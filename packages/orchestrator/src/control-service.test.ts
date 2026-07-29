@@ -5,7 +5,7 @@ import { describe, expect } from "vitest"
 import { ControlCommandIdentityContradiction, ControlService, controlServiceLayer } from "./control-service.js"
 import { AuthenticatedOperatorIdentity, ControlCommandId, JournalDatabaseLocator, RunId, TaskId } from "./domain.js"
 import { JournalStorageUnavailable, JournalStore, memoryJournalStoreLayer } from "./journal-store.js"
-import { reduceManagedHistory } from "./managed-history.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 
 const operatorId = AuthenticatedOperatorIdentity.make("local-user")
@@ -44,12 +44,12 @@ describe("ControlService", () => {
         { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: 4 },
         { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: 4 }
       ])
-      const reduced = reduceManagedHistory(runId, records)
-      expect(reduced._tag).toBe("ValidManagedHistory")
-      if (reduced._tag === "ValidManagedHistory") {
-        expect(reduced.managedRun.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
-        expect(reduced.managedRun.responsibility.entries).toEqual([])
-        expect(reduced.managedRun.workflowHistory.records).toEqual(records)
+      const reduced = reduceWorkflowJournalHistory(runId, records)
+      expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
+      if (reduced._tag === "ValidWorkflowJournalHistory") {
+        expect(reduced.runState.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
+        expect(reduced.runState.responsibility.entries).toEqual([])
+        expect(reduced.runState.workflowHistory.records).toEqual(records)
       }
     }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
   )
@@ -121,10 +121,10 @@ describe("ControlService", () => {
       const control = yield* ControlService
       const recorded = yield* control.record(operatorId, command)
       const recordRunId = RunId.make("contradictory-record-run")
-      const reduced = reduceManagedHistory(recordRunId, [{ ...recorded, runId: recordRunId }])
+      const reduced = reduceWorkflowJournalHistory(recordRunId, [{ ...recorded, runId: recordRunId }])
 
-      expect(reduced._tag).toBe("InvalidManagedHistory")
-      if (reduced._tag === "InvalidManagedHistory") {
+      expect(reduced._tag).toBe("InvalidWorkflowJournalHistory")
+      if (reduced._tag === "InvalidWorkflowJournalHistory") {
         expect(reduced.issues).toContainEqual(
           expect.objectContaining({ detail: `control command ${command.commandId} binds run ${runId}` })
         )

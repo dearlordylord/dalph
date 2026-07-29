@@ -1,7 +1,7 @@
 import { Data } from "effect"
 import type { TaskId } from "./domain.js"
 import type { PlannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
-import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "./reconstructed-managed-run-state.js"
+import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "./reconstructed-run-state.js"
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{

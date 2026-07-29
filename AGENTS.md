@@ -65,7 +65,7 @@
 - The tracker owns task identity, lifecycle, dependencies, grouping, and
   claims. Git owns lineage, refs, commits, worktrees, and integration facts.
   The execution substrate owns session and process observations. Dalph's
-  journal owns only managed workflow history.
+  journal owns only workflow-journal history.
 - Do not duplicate authority facts or persist derived frontier, resource, or UI
   state.
 - During design and review, identify distinct domain phenomena, give them

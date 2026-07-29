@@ -107,8 +107,8 @@ export {
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
-export * from "./managed-history.js"
-export * from "./managed-run-recovery-stage.js"
+export * from "./workflow-journal-history.js"
+export * from "./run-recovery-frontier.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
 export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
 export {

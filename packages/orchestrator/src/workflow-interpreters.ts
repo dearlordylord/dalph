@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect"
-import { emptyManagedRecoveryActivationLayer } from "./managed-activation.js"
+import { emptyRunRecoveryActivationLayer } from "./run-recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "./planned-attempt-executor.js"
 import { TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
 import { TrackerGraphReader } from "./tracker-graph-reader.js"
@@ -61,5 +61,5 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterp
 
 export const dryRunWorkflowInterpreterLayer = Layer.merge(
   makeDryRunWorkflowInterpreterLayer(),
-  emptyManagedRecoveryActivationLayer.pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
+  emptyRunRecoveryActivationLayer.pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
 )

@@ -117,7 +117,7 @@ export class JournalStorageCapacityExhausted extends Schema.TaggedErrorClass<Jou
   { operation: JournalStoreOperation, detail: Schema.String }
 ) {}
 
-/** Persisted journal bytes do not satisfy Dalph's managed-history schema. */
+/** Persisted journal bytes do not satisfy Dalph's workflow-journal-history schema. */
 export class JournalDataCorruption extends Schema.TaggedErrorClass<JournalDataCorruption>()("JournalDataCorruption", {
   operation: JournalStoreOperation,
   detail: Schema.String
@@ -137,7 +137,7 @@ export type JournalStoreError =
   | JournalStorageLocked
   | JournalStorageUnavailable
 
-/** The same durable key was presented with unequal managed-history content. */
+/** The same durable key was presented with unequal workflow-journal-history content. */
 export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalStoreContradiction>()(
   "JournalStoreContradiction",
   { runId: RunId, key: JournalRecordKey, existingPosition: JournalPosition }

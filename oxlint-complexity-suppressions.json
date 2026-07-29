@@ -14,17 +14,17 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/managed-activation.ts": {
+  "packages/orchestrator/src/run-recovery-activation.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/managed-history.ts": {
+  "packages/orchestrator/src/workflow-journal-history.ts": {
     "complexity": {
       "count": 3
     }
   },
-  "packages/orchestrator/src/managed-run-recovery-stage.ts": {
+  "packages/orchestrator/src/run-recovery-frontier.ts": {
     "complexity": {
       "count": 2
     }
@@ -34,7 +34,7 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/reconstructed-managed-run.ts": {
+  "packages/orchestrator/src/reconstructed-run.ts": {
     "complexity": {
       "count": 1
     }

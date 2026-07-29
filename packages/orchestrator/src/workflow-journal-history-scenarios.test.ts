@@ -43,8 +43,8 @@ import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved
 } from "./journal-store.js"
-import { reduceManagedHistory } from "./managed-history.js"
-import { deriveManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
+import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
+import { deriveRunRecoveryFrontier } from "./run-recovery-frontier.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -64,8 +64,8 @@ import {
   WorkflowResponsibilityEntry,
   workflowResponsibilityKey,
   workflowResponsibilityOperationId
-} from "./reconstructed-managed-run-state.js"
-import { reconstructManagedRunState } from "./reconstructed-managed-run.js"
+} from "./reconstructed-run-state.js"
+import { reconstructRunState } from "./reconstructed-run.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
   causalGraphProjection,
@@ -76,7 +76,7 @@ import {
   WorkflowOperation
 } from "./workflow-operation.js"
 
-const runId = RunId.make("managed-history")
+const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
 const target = FixtureTarget.make("fixture-A")
 const initial = makeTrackerGraphObservationOperation(OperationId.make("observe-initial"), target)
@@ -222,17 +222,17 @@ const startRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[9]))
 const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[10]))
 const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[12]))
 
-it("accepts every chronological managed-history boundary prefix", () => {
+it("accepts every chronological workflow-journal-history boundary prefix", () => {
   for (let length = 0; length <= records.length; length += 1) {
-    const reduction = reduceManagedHistory(runId, records.slice(0, length))
-    expect(reduction._tag, `prefix ${length}`).toBe("ValidManagedHistory")
+    const reduction = reduceWorkflowJournalHistory(runId, records.slice(0, length))
+    expect(reduction._tag, `prefix ${length}`).toBe("ValidWorkflowJournalHistory")
   }
-  const final = reduceManagedHistory(runId, records)
-  expect(final._tag).toBe("ValidManagedHistory")
-  if (final._tag !== "ValidManagedHistory") return
-  expect(final.recoveryStage.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
-  expect(final.managedRun.appliedThrough).toBe(records.length)
-  expect(final.managedRun.graphKnowledge.targetClosures).toHaveLength(1)
+  const final = reduceWorkflowJournalHistory(runId, records)
+  expect(final._tag).toBe("ValidWorkflowJournalHistory")
+  if (final._tag !== "ValidWorkflowJournalHistory") return
+  expect(final.recoveryFrontier.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
+  expect(final.runState.appliedThrough).toBe(records.length)
+  expect(final.runState.graphKnowledge.targetClosures).toHaveLength(1)
 })
 
 it("describes every current journal identity", () => {
@@ -319,7 +319,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
     ])
   ]
   for (const history of malformed) {
-    expect(reduceManagedHistory(runId, history)._tag).toBe("InvalidManagedHistory")
+    expect(reduceWorkflowJournalHistory(runId, history)._tag).toBe("InvalidWorkflowJournalHistory")
   }
 })
 
@@ -349,12 +349,12 @@ it("reconstructs all pause commands and responsibility identities", () => {
     }))
   ])
   for (let length = 11; length <= withCommands.length; length += 1) {
-    const reconstruction = reconstructManagedRunState(runId, withCommands.slice(0, length))
-    expect(reconstruction._tag).toBe("ValidReconstructedManagedRun")
+    const reconstruction = reconstructRunState(runId, withCommands.slice(0, length))
+    expect(reconstruction._tag).toBe("ValidReconstructedRun")
   }
-  const pausedTask = reconstructManagedRunState(runId, withCommands.slice(0, 11))
-  expect(pausedTask._tag).toBe("ValidReconstructedManagedRun")
-  if (pausedTask._tag !== "ValidReconstructedManagedRun") return
+  const pausedTask = reconstructRunState(runId, withCommands.slice(0, 11))
+  expect(pausedTask._tag).toBe("ValidReconstructedRun")
+  if (pausedTask._tag !== "ValidReconstructedRun") return
   expect(reconstructedTaskIsPaused(pausedTask.state.pause, taskId)).toBe(true)
   expect(reconstructedTaskIsPaused(pausedTask.state.pause, TaskId.make("another-task"))).toBe(false)
   const responsibilities = pausedTask.state.responsibility.entries
@@ -399,8 +399,8 @@ it("rejects commands and executor correlations bound to another run", () => {
       key: plannedAttemptExecutorWorkStartedRecordKey(wrongExecutorAttempt.attemptId)
     }
   ])
-  expect(reduceManagedHistory(runId, commandRecord)._tag).toBe("InvalidManagedHistory")
-  expect(reduceManagedHistory(runId, executorRecord)._tag).toBe("InvalidManagedHistory")
+  expect(reduceWorkflowJournalHistory(runId, commandRecord)._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, executorRecord)._tag).toBe("InvalidWorkflowJournalHistory")
 })
 
 effectIt.effect("enforces graph-knowledge, responsibility, and causal-operation invariants", () =>
@@ -504,17 +504,17 @@ it("combines equal, proven-changed, and conflicting tracker memberships", () => 
       key: outcomeRecordKey(operation.operationId)
     }
   ])
-  const reconstructed = reconstructManagedRunState(runId, recordsFrom(rows))
-  expect(reconstructed._tag).toBe("ValidReconstructedManagedRun")
-  if (reconstructed._tag !== "ValidReconstructedManagedRun") return
+  const reconstructed = reconstructRunState(runId, recordsFrom(rows))
+  expect(reconstructed._tag).toBe("ValidReconstructedRun")
+  if (reconstructed._tag !== "ValidReconstructedRun") return
   expect(reconstructed.state.graphKnowledge.targetClosures).toHaveLength(2)
   expect(reconstructed.state.graphKnowledge.targetClosures[0]?._tag).toBe("TaskTrackerTargetClosureObserved")
 
-  const conflicting = reconstructManagedRunState(runId, recordsFrom(rows.slice(0, 6)))
-  expect(conflicting._tag).toBe("ValidReconstructedManagedRun")
+  const conflicting = reconstructRunState(runId, recordsFrom(rows.slice(0, 6)))
+  expect(conflicting._tag).toBe("ValidReconstructedRun")
 
   const orphanId = OperationId.make("orphan")
-  const orphanOutcome = reconstructManagedRunState(
+  const orphanOutcome = reconstructRunState(
     runId,
     recordsFrom([
       {
@@ -527,10 +527,10 @@ it("combines equal, proven-changed, and conflicting tracker memberships", () => 
       }
     ])
   )
-  expect(orphanOutcome._tag).toBe("ValidReconstructedManagedRun")
+  expect(orphanOutcome._tag).toBe("ValidReconstructedRun")
   expect(
-    deriveManagedRunRecoveryStage(
-      orphanOutcome._tag === "ValidReconstructedManagedRun" ? orphanOutcome.state.workflowHistory.records : []
+    deriveRunRecoveryFrontier(
+      orphanOutcome._tag === "ValidReconstructedRun" ? orphanOutcome.state.workflowHistory.records : []
     ).entries
   ).toEqual([])
 })
@@ -555,18 +555,18 @@ it("reports reconstructed state whose derived facts do not match their journal p
     { ...(recordsFrom([eventRows[2]])[0] as JournalRecord), position: JournalPosition.make(12) },
     { ...(recordsFrom([eventRows[9]])[0] as JournalRecord), position: JournalPosition.make(13) }
   ]
-  const reconstruction = reconstructManagedRunState(runId, malformedPositions)
-  expect(reconstruction._tag).toBe("InvalidReconstructedManagedRun")
-  if (reconstruction._tag !== "InvalidReconstructedManagedRun") return
+  const reconstruction = reconstructRunState(runId, malformedPositions)
+  expect(reconstruction._tag).toBe("InvalidReconstructedRun")
+  if (reconstruction._tag !== "InvalidReconstructedRun") return
   expect(reconstruction.issues.map(({ _tag }) => _tag)).toEqual([
     "GraphKnowledgeHistoryMismatch",
     "ResponsibilityHistoryMismatch",
     "PlannedAttemptExecutorWorkHistoryMismatch"
   ])
 
-  const wrongRecordAtPosition = reconstructManagedRunState(runId, [
+  const wrongRecordAtPosition = reconstructRunState(runId, [
     { ...Option.getOrThrow(Option.fromUndefinedOr(recordsFrom([eventRows[2]])[0])), position: JournalPosition.make(2) },
     Option.getOrThrow(Option.fromUndefinedOr(recordsFrom([eventRows[1]])[0]))
   ])
-  expect(wrongRecordAtPosition._tag).toBe("InvalidReconstructedManagedRun")
+  expect(wrongRecordAtPosition._tag).toBe("InvalidReconstructedRun")
 })

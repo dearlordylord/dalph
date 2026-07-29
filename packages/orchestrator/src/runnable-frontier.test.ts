@@ -18,7 +18,7 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import { PlannedAttemptExecutorReport, PlannedAttemptExecutorResult } from "./planned-attempt-executor.js"
-import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-managed-run-state.js"
+import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./reconstructed-run-state.js"
 import {
   deriveRunFinalityDecision,
   deriveRunnableFrontier,
@@ -320,7 +320,7 @@ it("explains every non-runnable responsibility without treating quiescence as te
   ).toEqual({ _tag: "RunMayTerminate" })
 })
 
-it("maps every managed responsibility and executor pause disposition", () => {
+it("maps every journaled responsibility and executor pause disposition", () => {
   const claimResponsibility = operationResponsibilityFor(taskA)
   const executorResponsibility = executionResponsibilityFor(taskB)
   const worktreeResponsibility = WorkflowResponsibilityEntry.cases.TaskWorktreeResponsibility.make({

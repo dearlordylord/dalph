@@ -1,6 +1,6 @@
 import type { Effect, PlatformError } from "effect"
 import type { OwnedTransitionExecution } from "./activation-coordinator.js"
-import type { ManagedRecoveryActivationError } from "./managed-activation.js"
+import type { RunRecoveryActivationError } from "./run-recovery-activation.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
 import type { PlannedTaskAttemptError } from "./task-work-planning.js"
 import type { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
@@ -13,7 +13,7 @@ type InterpreterError = {
 
 export type FreshWorkflowStageError =
   | InterpreterError
-  | ManagedRecoveryActivationError
+  | RunRecoveryActivationError
   | PlannedTaskAttemptError
   | PlatformError.PlatformError
   | TaskWorktreeExecutionModeContradiction

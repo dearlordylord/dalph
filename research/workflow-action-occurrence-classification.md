@@ -97,14 +97,14 @@ semantics outside the originating types and would drift as variants change.
 
 ## How occurrences currently reach reducers
 
-The reconstructed-managed-run reducers receive ordered `JournalRecord` values;
+The reconstructed-run reducers receive ordered `JournalRecord` values;
 each record contains one `WorkflowJournalEvent`
 ([`journal-store.ts:298-303`](../packages/orchestrator/src/journal-store.ts#L298-L303)).
 The graph, responsibility, history, and pause reducers fold those records
-([`reconstructed-managed-run.ts:128-205`](../packages/orchestrator/src/reconstructed-managed-run.ts#L128-L205)).
-The managed-history validator likewise switches on journal-event descriptors
+([`reconstructed-run.ts:128-205`](../packages/orchestrator/src/reconstructed-run.ts#L128-L205)).
+The workflow-journal-history validator likewise switches on journal-event descriptors
 and transition roles, not occurrence classification
-([`managed-history.ts:84-160`](../packages/orchestrator/src/managed-history.ts#L84-L160)).
+([`workflow-journal-history.ts:84-160`](../packages/orchestrator/src/workflow-journal-history.ts#L84-L160)).
 
 A coordinator crash does **not** enter this reducer as a journal event. The
 process dies, losing process-local state. Startup reads the retained journal,

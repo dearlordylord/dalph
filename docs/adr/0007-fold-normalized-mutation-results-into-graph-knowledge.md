@@ -11,7 +11,7 @@ graph-update events.
 
 ## Consequences
 
-The composed managed-run reducer sends that one event to both the
+The composed run reducer sends that one event to both the
 workflow-history and graph-knowledge components. The graph facts follow the same
 coverage, completeness, temporal-consistency, conflict, and replacement rules
 as facts returned by an explicit read. A mutation response that does not satisfy

@@ -1,13 +1,13 @@
-# Compose pure reducers into one reconstructed managed-run state
+# Compose pure reducers into one reconstructed run state
 
 Status: Accepted
 
 Dalph reconstructs graph knowledge, workflow history, resource responsibility,
-and pause state with distinct pure reducers composed behind one managed-run
+and pause state with distinct pure reducers composed behind one run
 reduction boundary. The reconstruction workflow reads and decodes
 journal rows once; the composed reducer processes those event values in
 canonical order, updates the component states, validates their cross-component
-invariants, and returns one validated reconstructed managed-run state.
+invariants, and returns one validated reconstructed run state.
 
 ## Consequences
 

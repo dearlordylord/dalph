@@ -6,7 +6,7 @@ import {
   taskMembershipKey,
   TaskTrackerTargetClosureObservation,
   trackerTargetKey
-} from "./reconstructed-managed-run-state.js"
+} from "./reconstructed-run-state.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
 /**

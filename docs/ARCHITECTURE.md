@@ -150,7 +150,7 @@ design and must not be inferred from the current experimental process code.
 Discovery accumulates independent physical-row, envelope, payload, identity,
 ownership, semantic-history, and reconciliation issues. A row that cannot be
 decoded does not hide another row or become an empty history. Any run with a
-boundary issue or invalid managed history remains preserved and is not resumed;
+boundary issue or invalid workflow-journal history remains preserved and is not resumed;
 ambiguous external resources likewise remain untouched for operator repair.
 Startup fails closed after collecting the available issues rather than allowing
 one unreadable authority to hide another authority's reconciliation fact.
@@ -169,7 +169,7 @@ through one pure composed reducer. Its graph-knowledge, workflow-history,
 resource-responsibility, and pause reducers neither read the journal nor invoke
 any other effect. They update distinct component states for each event, after
 which the composition validates cross-component invariants and returns one
-`ReconstructedManagedRunState`.
+`ReconstructedRunState`.
 
 One decoded journal event may update more than one component reducer without
 merging their state models. When a successful tracker mutation response both
@@ -200,7 +200,7 @@ contradiction, unreadable authority, ambiguous resource, or loss of
 responsibility isolates only the exact task, attempt, or resource region whose
 facts are needed to act there. Unaffected branches continue whenever their next
 actions require none of the isolated facts or resources. A condition stops the
-whole run only when it invalidates shared managed history or a shared capability
+whole run only when it invalidates shared workflow-journal history or a shared capability
 required for every otherwise allowed continuation.
 
 Workflow responsibility is tracked per exact subject rather than as one flag
@@ -428,7 +428,7 @@ operation or executor report can change generic capacity directly.
 
 Reconstruction validates that durable history identifies at most one
 unfinished planned-attempt executor responsibility for each task before
-deriving a frontier. Two are invalid managed history, not two controller
+deriving a frontier. Two are invalid workflow-journal history, not two controller
 positions and not an ordinary identity mismatch.
 
 Pure derivation, reducer execution, bounded journal appends, tracker and Git
@@ -476,12 +476,12 @@ attempt may continue or remain isolated.
 
 One unavailable branch blocks another only when the second branch's next action
 concretely requires its unfinished prerequisite, an integration resource it
-already holds, the whole run is paused, or shared managed history or capability
+already holds, the whole run is paused, or shared workflow-journal history or capability
 is invalid. A paused, capacity-waiting, disposed, isolated, foreign-claimed, or
 responsibility-relinquished task does not create a generic whole-run blocker.
 An empty runnable frontier proves only that no transition is currently allowed;
 run completion still requires a fresh tracker observation proving every task in
-the live target closure completed successfully and all managed work and
+the live target closure completed successfully and all Dalph-owned work and
 resources settled.
 
 ### Acceptance examples
@@ -748,7 +748,7 @@ For one planned task attempt, Dalph starts or continues executor work using the 
 
 The milestone executor is a same-process controlled fake. Coding agents, reviewers, provider sessions, handback, retry, restoration, and convergence are executor-internal policy that Dalph does not currently model. Future production executor internals require separate accepted operational scenarios; they must not add compatibility types to this generic boundary.
 
-Before recovered executor work continues, Dalph rereads the current exact tracker claim and exact Git worktree and requires a valid causal managed history. An unreadable boundary remains distinct from contradictory evidence.
+Before recovered executor work continues, Dalph rereads the current exact tracker claim and exact Git worktree and requires a valid causal workflow-journal history. An unreadable boundary remains distinct from contradictory evidence.
 
 Production startup validates every discovered run. Because this milestone exposes one requested run activation, startup fails closed when a different valid run still owns unfinished responsibility; it never silently ignores that work. Multi-run activation is future design.
 
