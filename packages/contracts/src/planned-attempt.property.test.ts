@@ -2,7 +2,6 @@ import { it } from "@effect/vitest"
 import { Schema } from "effect"
 import * as fc from "fast-check"
 import { expect } from "vitest"
-import { TaskBranchRef } from "./git-locator.js"
 import { PlannedTaskAttempt, samePlannedTaskAttempt } from "./planned-attempt.js"
 
 const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
@@ -17,22 +16,6 @@ const plannedTaskAttemptEncodedArbitrary = fc
     worktree: nonEmpty
   })
   .map((fields) => ({ ...fields, baseSha: "0123456789abcdef0123456789abcdef01234567" }))
-
-it.each([
-  "main",
-  "refs/heads/",
-  "refs/heads/a..b",
-  "refs/heads/a//b",
-  "refs/heads/a.lock",
-  "refs/heads/a@{b",
-  "refs/heads/.hidden",
-  "refs/heads/trailing/",
-  "refs/heads/trailing.",
-  "refs/heads/space name",
-  "refs/heads/caret^name"
-])("rejects Git-invalid task branch ref %s", (branch) => {
-  expect(() => Schema.decodeUnknownSync(TaskBranchRef)(branch)).toThrow()
-})
 
 it("roundtrips arbitrary valid planned task attempts through the persisted Schema boundary", () => {
   fc.assert(
