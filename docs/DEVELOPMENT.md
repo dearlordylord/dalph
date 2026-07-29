@@ -105,6 +105,12 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT but not exhaustive formal model checking.
 
+The quality harness counts stdout and stderr lines from successful stages and
+fails after a stage if their cumulative output exceeds 400 lines. A failed
+stage still reports its complete diagnostics and fails for its own exit status;
+the noise budget governs successful output only. Prefer compacting a reporter
+or removing repetitive diagnostics before increasing the checked-in budget.
+
 The native TypeScript 7 compiler is installed as `@typescript/native` and
 patched by `@effect/tsgo` during `pnpm install`. Oxlint's TypeScript-Go plugin
 performs type-aware linting without a legacy TypeScript JavaScript compiler

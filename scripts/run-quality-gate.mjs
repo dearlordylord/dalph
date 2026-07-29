@@ -1,6 +1,8 @@
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 
 const SECOND = 1_000
+const maximumSuccessfulOutputLines = 400
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
 
@@ -24,11 +26,21 @@ const gates = [
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
+let successfulOutputLines = 0
+
 for (const gate of gates) {
-  await runBoundedCommand({
+  const result = await runBoundedCommand({
     args: [pnpmEntryPoint, ...gate.args],
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
     timeoutMilliseconds: gate.timeout
   })
+  successfulOutputLines = addSuccessfulOutputLines({
+    currentOutputLines: successfulOutputLines,
+    maximumOutputLines: maximumSuccessfulOutputLines,
+    stageName: gate.name,
+    stageOutputLines: result.outputLineCount
+  })
 }
+
+console.log(`Quality gate emitted ${successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`)

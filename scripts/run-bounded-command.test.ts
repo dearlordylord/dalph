@@ -19,6 +19,18 @@ const processExists = (pid: number) => {
   }
 }
 
+test("counts complete and unterminated stdout and stderr lines", async () => {
+  const result = await runBoundedCommand({
+    args: ["-e", "process.stdout.write('first\\nsecond'); process.stderr.write('third\\n')"],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "output line fixture",
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result).toEqual({ outputLineCount: 3 })
+})
+
 test.skipIf(process.platform === "win32")(
   "kills a resistant descendant after the process-group leader exits",
   async () => {
