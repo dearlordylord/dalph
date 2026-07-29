@@ -206,6 +206,23 @@ export {
 export { runWorkflow } from "./workflow-run.js"
 export { encodeTraceItem, semanticTrace, workflowTraceOutputLayer } from "./workflow-trace-output.js"
 export {
+  AppliedControlDirection,
+  ControlDirectionSubject,
+  decodeWorkflowOccurrence,
+  InitiatedAction,
+  NonActionOccurrence,
+  originatingActionForTrackerObservation,
+  presentWorkflowOccurrence,
+  projectWorkflowOccurrences,
+  TaskTrackerFactsObserved,
+  TrackerGraphReadInitiated,
+  WorkflowActor,
+  WorkflowOccurrence,
+  WorkflowOccurrenceClassification,
+  WorkflowOccurrenceProjection,
+  workflowOccurrenceProjectionVersion
+} from "./workflow-occurrence.js"
+export {
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
   causalGraphProjection,

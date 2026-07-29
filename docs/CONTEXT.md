@@ -20,12 +20,70 @@ the retained identity of the original research record and historical harness,
 not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
+**Dalph coordinator**:
+The typed production actor that intentionally initiates Dalph workflow actions,
+such as committing one exact tracker-read intent before asking the task tracker.
+It is not a process identity, deployment, journal writer identity, or claim
+owner.
+_Avoid_: Coordinator process ID, Dalph orchestrator, claim owner
+
 **Dalph executor**:
 The Dalph component that performs the complete work for one planned task
 attempt and reports only the attempt-level running, safely suspended, or
 terminal result required by generic orchestration. The production executor's
 inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
+
+**Operator**:
+The singleton human actor that intentionally applies a Pause or Unpause
+direction through Dalph. V1 has no authentication boundary, operator identity,
+roles, or multi-operator attribution.
+_Avoid_: Authenticated operator identity, claim owner, provider user
+
+**Workflow occurrence**:
+One concrete happening relevant to a Dalph run. Constructing a command,
+workflow operation, frontier transition, or test control does not prove that a
+workflow occurrence happened.
+_Avoid_: Workflow operation, command, proposal, journal record
+
+**Initiated action**:
+A past-tense workflow occurrence intentionally initiated by a typed production
+actor. Its runtime value is classified as `InitiatedAction` and carries
+`initiatedBy`.
+_Avoid_: Requested action, constructed operation, actorless occurrence
+
+**Non-action occurrence**:
+A past-tense workflow occurrence that is not itself an action. Its runtime
+value is classified as `NonActionOccurrence` and does not copy the actor from a
+causally related initiated action.
+_Avoid_: Uninitiated action, action outcome with copied actor
+
+**Workflow event**:
+The immutable production domain value representing one past-tense workflow
+occurrence. Its concrete tagged type retains its specific name, exhaustive
+initiation classification, and only the causal or evidence relationships that
+production proves. A journal record is the durable envelope for an event, not
+the event or outside happening itself.
+_Avoid_: Journal record, command, proposed operation, physical occurrence
+
+**Tracker-graph read initiated**:
+The initiated action established when the Dalph coordinator commits one exact
+tracker-read intent and owns its continuation. The constructed
+`ReadTrackerGraph` operation alone does not establish this event.
+_Avoid_: Tracker facts observed, tracker edit, operation selected
+
+**Task-tracker facts observed**:
+The non-action occurrence established when Dalph receives exact normalized
+tracker evidence through one identified tracker-graph read action. It may
+reference that action by `OperationId`, but it neither copies the action's actor
+nor claims the read caused the tracker facts.
+_Avoid_: Tracker edit, tracker read initiated, cached graph state
+
+**Applied control direction**:
+The initiated action established when Operator's Pause or Unpause direction is
+accepted and applied to one exact run or task subject. Receiving or durably
+recording a command request is not this event.
+_Avoid_: Control command receipt, pause phase, operator identity
 
 **Planned-attempt executor work**:
 The selected executor's complete course of work for one planned task attempt.

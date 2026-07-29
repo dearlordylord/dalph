@@ -39,6 +39,15 @@ actions. V1 has one `Operator` and no authentication boundary or operator
 identity. A new actor or event variant must make every exhaustive production
 projection and generic consumer fail typechecking until handled.
 
+The schema-versioned `WorkflowOccurrenceProjection` currently exposes
+`TrackerGraphReadInitiated`, `TaskTrackerFactsObserved`, and the
+`AppliedControlDirection` contract consumed by the later control
+implementation. A tracker observation names its exact initiating read by
+`OperationId`; decoding rejects a projection when that action is absent for the
+same run. The observation itself contains no `initiatedBy`. Other journal
+intents and outcomes remain outside this generic projection until accepted
+scenarios establish their concrete event semantics.
+
 Concrete event types retain their exact domain names and their usage-shaped
 origin, causal-predecessor, authority-evidence, observation-evidence, freshness,
 coverage, and journal-position relationships. Those facts do not become a
