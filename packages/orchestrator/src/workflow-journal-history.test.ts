@@ -13,10 +13,10 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
-import { attemptPlanRecordKey, plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
+import { attemptPlanRecordKey, plannedAttemptExecutorWorkResponsibilityBeganRecordKey } from "./journal-record-key.js"
 import { type JournalRecord, TaskAttemptPlannedEvent } from "./journal-store.js"
 import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
-import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./planned-attempt-executor-journal.js"
 import { makeTaskAttemptPlanOperation } from "./workflow-operation.js"
 
 const runId = RunId.make("duplicate-attempt-run")
@@ -48,8 +48,11 @@ const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number)
       runId
     },
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
+      event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(firstPosition + 1),
       runId
     }
@@ -79,8 +82,11 @@ it("rejects a second start for the same planned attempt without merging it", () 
   const reduction = reduceWorkflowJournalHistory(runId, [
     ...records,
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
+      event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(3),
       runId
     }

@@ -191,7 +191,7 @@ it.effect("requires one exact causal planned-attempt acknowledgement", () =>
       predecessorOperationIds: []
     })
     const record = {
-      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 4 as const }),
+      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 5 as const }),
       key: attemptPlanRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(1),
       runId

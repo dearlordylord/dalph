@@ -1,15 +1,22 @@
 import { it } from "@effect/vitest"
 import {
+  AttemptId,
   AuthenticatedOperatorIdentity,
   ControlCommandId,
   FixtureTarget,
+  GitCommitSha,
   JournalPosition,
   JournalRecordKey,
   OperationId,
+  PlannedTaskAttempt,
   RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
+  TaskRevision,
   TaskWorkCapacity,
-  TrackerRevision
+  TrackerRevision,
+  WorktreeLocator
 } from "./domain.js"
 import { ControlCommand, ControlCommandRecordedEvent } from "./control-command.js"
 import {
@@ -20,9 +27,23 @@ import {
   WorkflowJournalEvent
 } from "./journal-store.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
-import { intentRecordKey, outcomeRecordKey } from "./journal-record-key.js"
+import {
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "./journal-record-key.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "./planned-attempt-executor-journal.js"
+import {
+  controlledFakePlannedAttemptExecutorLayer,
+  plannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorReport
+} from "./planned-attempt-executor.js"
 import { makeRunRecoveryActivation, RunRecoveryActivation } from "./run-recovery-activation.js"
-import { controlledFakePlannedAttemptExecutorLayer } from "./planned-attempt-executor.js"
 import { trustedPlannedAttemptRecoveryAuthorityLayer } from "./planned-attempt-recovery-authority.js"
 import { projectTrackerSnapshot } from "./task-dag.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
@@ -35,13 +56,14 @@ import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
   originatingActionForTrackerObservation,
+  plannedAttemptExecutorResponsibilityForReport,
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
   WorkflowActor,
   type WorkflowOccurrence,
   WorkflowOccurrenceProjection
 } from "./workflow-occurrence.js"
-import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 
 const runId = RunId.make("occurrence-run")
@@ -49,6 +71,16 @@ const operation = makeTrackerGraphObservationOperation(
   OperationId.make("read-target-closure"),
   FixtureTarget.make("occurrence-fixture")
 )
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("occurrence-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/occurrence-attempt"),
+  executor: TaskExecutorLocator.make("executor:controlled-fake"),
+  runId,
+  taskId: TaskId.make("occurrence-task"),
+  taskRevision: TaskRevision.make("occurrence-revision"),
+  worktree: WorktreeLocator.make("/worktrees/occurrence-attempt")
+})
 
 const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
   event,
@@ -57,73 +89,242 @@ const record = (position: number, event: JournalRecord["event"]): JournalRecord 
   runId
 })
 
-it("classifies an initiated tracker read separately from its observed result", () => {
-  const projection = projectWorkflowOccurrences([
-    record(1, trackerGraphObservationIntent(operation)),
-    record(
-      2,
-      trackerGraphOutcomeObserved(
-        operation.operationId,
-        WorkflowOutcome.cases.TrackerGraphObserved.make({
-          revision: TrackerRevision.make("tracker-revision-1"),
-          taskIds: []
-        })
+it.effect("classifies an initiated tracker read separately from its observed result", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, trackerGraphObservationIntent(operation)),
+      record(
+        2,
+        trackerGraphOutcomeObserved(
+          operation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("tracker-revision-1"),
+            taskIds: []
+          })
+        )
       )
-    )
-  ])
+    ])
 
-  expect(projection.occurrences).toMatchObject([
-    {
+    expect(projection.occurrences).toMatchObject([
+      {
+        _tag: "TrackerGraphReadInitiated",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        recordedAt: 1
+      },
+      {
+        _tag: "TaskTrackerFactsObserved",
+        evidence: {
+          completeness: "Complete",
+          consistency: "PotentiallyMixedTime",
+          freshness: "FreshAtReadBoundary",
+          observedAt: 2,
+          target: "occurrence-fixture"
+        },
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    ])
+    const observed = projection.occurrences.at(1)
+    if (observed === undefined) throw new Error("expected the tracker observation occurrence")
+    expect("initiatedBy" in observed).toBe(false)
+  })
+)
+
+it.effect("classifies Dalph beginning executor-work responsibility separately from executor reports", () =>
+  Effect.gen(function* () {
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    const firstOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    const secondOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+    const projection = yield* projectWorkflowOccurrences([
+      {
+        event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: firstOrdinal,
+          report: running,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, firstOrdinal),
+        position: JournalPosition.make(2),
+        runId
+      },
+      {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: secondOrdinal,
+          report: terminal,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, secondOrdinal),
+        position: JournalPosition.make(3),
+        runId
+      }
+    ])
+
+    expect(projection.occurrences).toMatchObject([
+      {
+        _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt,
+        recordedAt: 1
+      },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        occurrenceClassification: "NonActionOccurrence",
+        report: running,
+        recordedAt: 2
+      },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        occurrenceClassification: "NonActionOccurrence",
+        report: terminal,
+        recordedAt: 3
+      }
+    ])
+    const reports = projection.occurrences.filter(
+      (occurrence) => occurrence._tag === "PlannedAttemptExecutorWorkReported"
+    )
+    expect(reports.every((report) => !("initiatedBy" in report))).toBe(true)
+    expect(
+      reports.map(
+        (report) =>
+          Option.getOrThrow(plannedAttemptExecutorResponsibilityForReport(projection, report)).plannedAttempt.attemptId
+      )
+    ).toEqual([plannedAttempt.attemptId, plannedAttempt.attemptId])
+  })
+)
+
+it.effect("rejects an executor report without its responsibility-began occurrence", () =>
+  Effect.gen(function* () {
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    const failure = yield* projectWorkflowOccurrences([
+      {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkReportedRecordKey(
+          plannedAttempt.attemptId,
+          PlannedAttemptExecutorReportOrdinal.make(1)
+        ),
+        position: JournalPosition.make(1),
+        runId
+      }
+    ]).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({
+      _tag: "ExecutorReportWithoutResponsibilityBegan",
+      attemptId: plannedAttempt.attemptId,
+      position: 1,
+      runId
+    })
+  })
+)
+
+it.effect("rejects an executor report whose exact responsibility is absent, later, or ambiguous", () =>
+  Effect.gen(function* () {
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    const projection = yield* projectWorkflowOccurrences([
+      {
+        event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkReportedRecordKey(
+          plannedAttempt.attemptId,
+          PlannedAttemptExecutorReportOrdinal.make(1)
+        ),
+        position: JournalPosition.make(2),
+        runId
+      }
+    ])
+    const responsibility = projection.occurrences.find(
+      (occurrence) => occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+    )
+    const report = projection.occurrences.find((occurrence) => occurrence._tag === "PlannedAttemptExecutorWorkReported")
+    if (
+      responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+      report?._tag !== "PlannedAttemptExecutorWorkReported"
+    ) {
+      throw new Error("expected executor responsibility and report occurrences")
+    }
+
+    const laterDurableResponsibility = { ...responsibility, recordedAt: JournalPosition.make(report.recordedAt + 1) }
+    const invalidOccurrenceOrders = [
+      [report],
+      [report, responsibility],
+      [responsibility, responsibility, report],
+      [laterDurableResponsibility, report]
+    ]
+    for (const occurrences of invalidOccurrenceOrders) {
+      const failure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+        occurrences,
+        version: projection.version
+      }).pipe(Effect.flip)
+      expect(failure._tag).toBe("SchemaError")
+    }
+
+    expect(
+      (yield* decodeWorkflowOccurrence({ ...responsibility, runId: RunId.make("wrong-responsibility-run") }).pipe(
+        Effect.flip
+      ))._tag
+    ).toBe("SchemaError")
+    expect(
+      (yield* decodeWorkflowOccurrence({ ...report, runId: RunId.make("wrong-report-run") }).pipe(Effect.flip))._tag
+    ).toBe("SchemaError")
+  })
+)
+
+it.effect("follows a tracker observation to its exact initiating action without copying the actor", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, trackerGraphObservationIntent(operation)),
+      record(
+        2,
+        trackerGraphOutcomeObserved(
+          operation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("tracker-revision-2"),
+            taskIds: []
+          })
+        )
+      )
+    ])
+    const observation = projection.occurrences.find((occurrence) => occurrence._tag === "TaskTrackerFactsObserved")
+    if (observation?._tag !== "TaskTrackerFactsObserved") {
+      throw new Error("expected a tracker observation occurrence")
+    }
+
+    const action = originatingActionForTrackerObservation(projection, observation)
+
+    expect(Option.getOrThrow(action)).toMatchObject({
       _tag: "TrackerGraphReadInitiated",
       initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      recordedAt: 1
-    },
-    {
-      _tag: "TaskTrackerFactsObserved",
-      evidence: {
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
-        freshness: "FreshAtReadBoundary",
-        observedAt: 2,
-        target: "occurrence-fixture"
-      },
-      occurrenceClassification: "NonActionOccurrence"
-    }
-  ])
-  const observed = projection.occurrences.at(1)
-  if (observed === undefined) throw new Error("expected the tracker observation occurrence")
-  expect("initiatedBy" in observed).toBe(false)
-})
-
-it("follows a tracker observation to its exact initiating action without copying the actor", () => {
-  const projection = projectWorkflowOccurrences([
-    record(1, trackerGraphObservationIntent(operation)),
-    record(
-      2,
-      trackerGraphOutcomeObserved(
-        operation.operationId,
-        WorkflowOutcome.cases.TrackerGraphObserved.make({
-          revision: TrackerRevision.make("tracker-revision-2"),
-          taskIds: []
-        })
-      )
-    )
-  ])
-  const observation = projection.occurrences.find((occurrence) => occurrence._tag === "TaskTrackerFactsObserved")
-  if (observation?._tag !== "TaskTrackerFactsObserved") {
-    throw new Error("expected a tracker observation occurrence")
-  }
-
-  const action = originatingActionForTrackerObservation(projection, observation)
-
-  expect(Option.getOrThrow(action)).toMatchObject({
-    _tag: "TrackerGraphReadInitiated",
-    initiatedBy: { _tag: "DalphCoordinator" },
-    operation: { operationId: observation.originatingActionOperationId }
+      operation: { operationId: observation.originatingActionOperationId }
+    })
+    expect("initiatedBy" in observation).toBe(false)
   })
-  expect("initiatedBy" in observation).toBe(false)
-})
+)
 
 it.effect("does not turn a constructed or proposed tracker read into a past-tense event", () =>
   Effect.gen(function* () {
@@ -132,44 +333,100 @@ it.effect("does not turn a constructed or proposed tracker read into a past-tens
   })
 )
 
-it("does not infer a tracker-edit action from changed observed facts", () => {
-  const laterOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("reread-target-closure"),
-    FixtureTarget.make("occurrence-fixture"),
-    [operation.operationId]
-  )
-  const projection = projectWorkflowOccurrences([
-    record(1, trackerGraphObservationIntent(operation)),
-    record(
-      2,
-      trackerGraphOutcomeObserved(
-        operation.operationId,
-        WorkflowOutcome.cases.TrackerGraphObserved.make({
-          revision: TrackerRevision.make("before-external-edit"),
-          taskIds: []
-        })
+it.effect("rejects a tracker outcome without an earlier same-run read intent", () =>
+  Effect.gen(function* () {
+    const failure = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        trackerGraphOutcomeObserved(
+          operation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("unmatched-outcome"),
+            taskIds: []
+          })
+        )
       )
-    ),
-    record(3, trackerGraphObservationIntent(laterOperation)),
-    record(
-      4,
-      trackerGraphOutcomeObserved(
-        laterOperation.operationId,
-        WorkflowOutcome.cases.TrackerGraphObserved.make({
-          revision: TrackerRevision.make("after-external-edit"),
-          taskIds: [TaskId.make("newly-observed-task")]
-        })
-      )
-    )
-  ])
+    ]).pipe(Effect.flip)
 
-  expect(
-    projection.occurrences.filter(({ occurrenceClassification }) => occurrenceClassification === "InitiatedAction")
-  ).toHaveLength(2)
-  expect(projection.occurrences.filter(({ _tag }) => _tag === "TaskTrackerFactsObserved")).toHaveLength(2)
-  const occurrenceTags: ReadonlyArray<string> = projection.occurrences.map(({ _tag }) => _tag)
-  expect(occurrenceTags).not.toContain("TrackerFactsEdited")
-})
+    expect(failure).toMatchObject({
+      _tag: "TrackerOutcomeWithoutReadIntent",
+      operationId: operation.operationId,
+      position: 1,
+      runId
+    })
+  })
+)
+
+it.effect("projects a large journal without rescanning each retained prefix", () =>
+  Effect.gen(function* () {
+    const pairCount = 10_000
+    const records = Array.from({ length: pairCount }, (_, index) => {
+      const pairOperation = makeTrackerGraphObservationOperation(
+        OperationId.make(`large-journal-read-${index}`),
+        FixtureTarget.make("large-journal-fixture")
+      )
+      const intentPosition = index * 2 + 1
+      return [
+        record(intentPosition, trackerGraphObservationIntent(pairOperation)),
+        record(
+          intentPosition + 1,
+          trackerGraphOutcomeObserved(
+            pairOperation.operationId,
+            WorkflowOutcome.cases.TrackerGraphObserved.make({
+              revision: TrackerRevision.make(`large-journal-revision-${index}`),
+              taskIds: []
+            })
+          )
+        )
+      ]
+    }).flat()
+
+    const projection = yield* projectWorkflowOccurrences(records)
+
+    expect(projection.occurrences).toHaveLength(pairCount * 2)
+  })
+)
+
+it.effect("does not infer a tracker-edit action from changed observed facts", () =>
+  Effect.gen(function* () {
+    const laterOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("reread-target-closure"),
+      FixtureTarget.make("occurrence-fixture"),
+      [operation.operationId]
+    )
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, trackerGraphObservationIntent(operation)),
+      record(
+        2,
+        trackerGraphOutcomeObserved(
+          operation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("before-external-edit"),
+            taskIds: []
+          })
+        )
+      ),
+      record(3, trackerGraphObservationIntent(laterOperation)),
+      record(
+        4,
+        trackerGraphOutcomeObserved(
+          laterOperation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("after-external-edit"),
+            taskIds: [TaskId.make("newly-observed-task")]
+          })
+        )
+      )
+    ])
+
+    expect(
+      projection.occurrences.filter(({ occurrenceClassification }) => occurrenceClassification === "InitiatedAction")
+    ).toHaveLength(2)
+    expect(projection.occurrences.filter(({ _tag }) => _tag === "TaskTrackerFactsObserved")).toHaveLength(2)
+    const occurrenceTags: ReadonlyArray<string> = projection.occurrences.map(({ _tag }) => _tag)
+    expect(occurrenceTags).not.toContain("TrackerFactsEdited")
+  })
+)
 
 it("classifies an applied operator direction as an initiated action", () => {
   const occurrence = AppliedControlDirection.make({
@@ -209,7 +466,7 @@ it.effect("rejects operator identity and command receipt as occurrence classific
       }),
       version: workflowJournalEventVersion
     })
-    expect(projectWorkflowOccurrences([record(1, receiptEvent)]).occurrences).toEqual([])
+    expect((yield* projectWorkflowOccurrences([record(1, receiptEvent)])).occurrences).toEqual([])
   })
 )
 
@@ -244,10 +501,10 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
     )
 
     for (const prefix of retainedPrefixes) {
-      const trackerRead = yield* Deferred.make<void>()
+      const trackerReads = yield* Ref.make(0)
       const interpreter = WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("startup authority reread must not reach task claiming"),
-        readTrackerGraph: () => Deferred.succeed(trackerRead, undefined).pipe(Effect.as(snapshot)),
+        readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
         reconcileTaskWorktree: () => Effect.die("startup authority reread must not reach Git"),
         recordTaskAttemptPlan: () => Effect.die("startup authority reread must not reach attempt planning")
       })
@@ -283,20 +540,13 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("no eligible startup task") })
         )
       )
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const fiber = yield* Effect.forkScoped(
-            runWorkflow(FixtureTarget.make("occurrence-fixture"), TaskWorkCapacity.make(1)).pipe(
-              Effect.provide(workflowLayer)
-            )
-          )
-          yield* Deferred.await(trackerRead)
-          yield* Fiber.interrupt(fiber)
-        })
+      yield* runWorkflow(FixtureTarget.make("occurrence-fixture"), TaskWorkCapacity.make(1)).pipe(
+        Effect.provide(workflowLayer)
       )
+      expect(yield* Ref.get(trackerReads)).toBe(1)
     }
 
-    const projection = projectWorkflowOccurrences([retainedIntent])
+    const projection = yield* projectWorkflowOccurrences([retainedIntent])
     expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual(["TrackerGraphReadInitiated"])
     expect(projection.occurrences.map(({ _tag }) => _tag)).not.toContain("CoordinatorCrashed")
   })
@@ -313,37 +563,39 @@ it.effect("rejects a synthetic coordinator-crash row from the workflow journal u
   })
 )
 
-it("generic occurrence consumer renders every runtime classification without event-name mapping", () => {
-  const projection = projectWorkflowOccurrences([
-    record(1, trackerGraphObservationIntent(operation)),
-    record(
-      2,
-      trackerGraphOutcomeObserved(
-        operation.operationId,
-        WorkflowOutcome.cases.TrackerGraphObserved.make({
-          revision: TrackerRevision.make("generic-consumer-revision"),
-          taskIds: []
-        })
+it.effect("generic occurrence consumer renders every runtime classification without event-name mapping", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, trackerGraphObservationIntent(operation)),
+      record(
+        2,
+        trackerGraphOutcomeObserved(
+          operation.operationId,
+          WorkflowOutcome.cases.TrackerGraphObserved.make({
+            revision: TrackerRevision.make("generic-consumer-revision"),
+            taskIds: []
+          })
+        )
       )
-    )
-  ])
-  const appliedDirection = AppliedControlDirection.make({
-    direction: "Unpause",
-    initiatedBy: WorkflowActor.cases.Operator.make({}),
-    occurrenceClassification: "InitiatedAction",
-    subject: { _tag: "Run", runId }
-  })
+    ])
+    const appliedDirection = AppliedControlDirection.make({
+      direction: "Unpause",
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      subject: { _tag: "Run", runId }
+    })
 
-  expect([...projection.occurrences, appliedDirection].map(presentWorkflowOccurrence)).toEqual([
-    { actor: "DalphCoordinator", classification: "InitiatedAction" },
-    { classification: "NonActionOccurrence" },
-    { actor: "Operator", classification: "InitiatedAction" }
-  ])
-})
+    expect([...projection.occurrences, appliedDirection].map(presentWorkflowOccurrence)).toEqual([
+      { actor: "DalphCoordinator", classification: "InitiatedAction" },
+      { classification: "NonActionOccurrence" },
+      { actor: "Operator", classification: "InitiatedAction" }
+    ])
+  })
+)
 
 it.effect("schema round-trip tests preserve classification and typed relationships", () =>
   Effect.gen(function* () {
-    const projection = projectWorkflowOccurrences([
+    const projection = yield* projectWorkflowOccurrences([
       record(1, trackerGraphObservationIntent(operation)),
       record(
         2,
@@ -373,7 +625,7 @@ it.effect("schema round-trip tests preserve classification and typed relationshi
 
 it.effect("rejects an observation whose exact initiating action is absent, later, or ambiguous", () =>
   Effect.gen(function* () {
-    const valid = projectWorkflowOccurrences([
+    const valid = yield* projectWorkflowOccurrences([
       record(1, trackerGraphObservationIntent(operation)),
       record(
         2,
@@ -396,12 +648,17 @@ it.effect("rejects an observation whose exact initiating action is absent, later
       ...observation,
       evidence: { ...observation.evidence, target: FixtureTarget.make("different-target") }
     }
+    const mismatchedOperation = {
+      ...observation,
+      originatingActionOperationId: OperationId.make("different-operation")
+    }
     const invalidOccurrenceOrders = [
       [observation],
       [observation, action],
       [action, action, observation],
       [laterDurableAction, observation],
-      [action, mismatchedEvidence]
+      [action, mismatchedEvidence],
+      [action, mismatchedOperation]
     ]
     for (const occurrences of invalidOccurrenceOrders) {
       const failure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
@@ -424,20 +681,28 @@ it.effect("rejects an observation whose exact initiating action is absent, later
       ),
       runId: RunId.make("different-run")
     }
-    expect(
-      projectWorkflowOccurrences([record(1, trackerGraphObservationIntent(operation)), otherRunOutcome]).occurrences
-    ).toHaveLength(1)
+    const crossRunFailure = yield* projectWorkflowOccurrences([
+      record(1, trackerGraphObservationIntent(operation)),
+      otherRunOutcome
+    ]).pipe(Effect.flip)
+    expect(crossRunFailure).toMatchObject({
+      _tag: "TrackerOutcomeWithoutReadIntent",
+      operationId: operation.operationId,
+      runId: otherRunOutcome.runId
+    })
   })
 )
 
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
     AppliedControlDirection: true,
+    PlannedAttemptExecutorWorkReported: true,
+    PlannedAttemptExecutorWorkResponsibilityBegan: true,
     TaskTrackerFactsObserved: true,
     TrackerGraphReadInitiated: true
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(3)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(5)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

@@ -12,38 +12,52 @@ inside a later production executor.
 ### Starting situation
 
 Alice is monitoring run R, but she does not directly trigger this automatic
-start. The fake tracker reports Task A eligible and claimed by Dalph. Dalph has
+work. The fake tracker reports Task A eligible and claimed by Dalph. Dalph has
 planned `(run R, attempt attempt-A-3)`. Fake Git reports its exact planned
-worktree at the recorded Base SHA. No executor work has started.
+worktree at the recorded Base SHA. Dalph has not begun executor-work
+responsibility for the attempt, and no executor report exists.
 
 ### Trigger and ordered actions
 
-Dalph admits Task A within the configured capacity and records that it is
-starting executor work for run R, attempt `attempt-A-3`. It passes that exact
-planned attempt to the controlled fake executor.
+Dalph admits Task A within the configured capacity and records that its
+executor-work responsibility began for run R, attempt `attempt-A-3`. This
+initiated action belongs to `DalphCoordinator`; it does not claim that the
+executor accepted or started work. Dalph then passes that exact planned attempt
+to the controlled fake executor.
 
-The fake executor first reports the attempt running. Dalph records that report
-for the same pair. The fake later returns one terminal result for its complete
-work on the attempt, and Dalph records that result before selecting later
-integration work. Generic Dalph never sees an executor-internal operation or
-another executor identity.
+The fake executor first reports the attempt running. Dalph records that
+non-action occurrence for the same pair. The report proves the returned
+condition, not an executor-internal initiating action. The fake later returns
+one terminal result for its complete work on the attempt, and Dalph records
+that separate non-action occurrence before selecting later integration work.
+Generic Dalph never sees an executor-internal operation or another executor
+identity.
 
 ### Visible and forbidden result
 
-Alice sees Task A's executor work start and finish. The result may authorize
-the later integration workflow, but it does not prove tracker completion.
+Alice sees Dalph assume responsibility, then sees the executor's running and
+terminal conditions. The result may authorize the later integration workflow,
+but the responsibility-began action alone does not prove executor activity and
+the terminal result does not prove tracker completion.
 
-Dalph must not allocate a separate outer invocation identity, expose a reviewer or
-coding-agent step, or treat executor success as a completed tracker task.
+Dalph must not allocate a separate outer invocation identity, expose a reviewer
+or coding-agent step, attribute an internal action to `DalphExecutor`, or treat
+executor success as a completed tracker task.
 
-No crash occurs on this path. If the shared process dies before the terminal
-result is journaled, the shared-restart scenario below applies; no external
+If Dalph stops before recording that responsibility began, no initiated action
+or executor call exists. If the shared process dies after that row but before a
+report is journaled, the shared-restart scenario below applies; no external
 executor response survives to retry.
 
 ### Acceptance-test mapping
 
 - `drives one planned attempt through the generic executor boundary` proves
   start, running, and terminal projections using `RunId` plus `AttemptId`.
+- `classifies Dalph beginning executor-work responsibility separately from
+  executor reports` proves the coordinator action and non-action reports
+  remain distinct runtime values without a `DalphExecutor` actor.
+- `rejects an executor report without its responsibility-began occurrence`
+  proves the occurrence boundary never fabricates the missing action.
 - `replays the planned-attempt model through the executor boundary` proves
   generated Quint actions and states conform to the TypeScript executor
   service.
@@ -66,8 +80,9 @@ position remains
 occupied while the fake executor reports suspension still in progress.
 
 When the fake executor reports that exact pair safely suspended, Dalph records
-the result and makes the position available. After Alice unpauses A, Dalph
-later reacquires a position and resumes the same pair.
+that non-action occurrence and makes the position available. The report proves
+the safe condition, not an executor-internal action. After Alice unpauses A,
+Dalph later reacquires a position and resumes the same pair.
 
 ### Visible and forbidden result
 

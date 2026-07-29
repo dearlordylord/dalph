@@ -67,7 +67,7 @@ it("never creates responsibility from generated graph membership", () => {
       const afterIntentRecords = [
         ...prefix,
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 4 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 5 }),
           key: intentRecordKey(claim.acquisition.operationId)
         }
       ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))

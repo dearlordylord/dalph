@@ -76,11 +76,12 @@ const recoveryEntryForAttempt = (
     })
   }
 
-  const started = records.some(
+  const responsibilityBegan = records.some(
     ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkStarted" && sameAttempt(event.plannedAttempt, plannedAttempt)
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      sameAttempt(event.plannedAttempt, plannedAttempt)
   )
-  if (!started) {
+  if (!responsibilityBegan) {
     return RunRecoveryFrontierEntry.cases.PlannedAttemptExecutorWorkNeeded.make({ planOperation })
   }
   const latestReport = records.findLast(

@@ -5,7 +5,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkStartedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "./journal-record-key.js"
 import type { WorkflowJournalEvent } from "./journal-store.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "./planned-attempt-executor-journal.js"
@@ -100,10 +100,10 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         expectedKey: controlCommandRecordKey(event.command.commandId),
         runId: event.command.runId
       }
-    case "PlannedAttemptExecutorWorkStarted":
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
       return plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
-        plannedAttemptExecutorWorkStartedRecordKey(event.plannedAttempt.attemptId),
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(event.plannedAttempt.attemptId),
         event.plannedAttempt,
         undefined
       )

@@ -4,6 +4,7 @@ import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  JournalDatabaseLocator,
   JournalPosition,
   OperationId,
   PlannedTaskAttempt,
@@ -16,14 +17,15 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
-import { attemptPlanRecordKey, plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
+import { attemptPlanRecordKey, plannedAttemptExecutorWorkResponsibilityBeganRecordKey } from "./journal-record-key.js"
 import { JournalRecord, JournalStore, TaskAttemptPlannedEvent } from "./journal-store.js"
 import { activateRecoveredResponsibilities } from "./run-recovery-activation.js"
-import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./planned-attempt-executor-journal.js"
 import { PlannedAttemptExecutor } from "./planned-attempt-executor.js"
 import { PlannedAttemptRecoveryAuthority } from "./planned-attempt-recovery-authority.js"
 import { makeTaskAttemptPlanOperation } from "./workflow-operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
+import { sqliteJournalStoreLayer } from "./sqlite-journal-store.js"
 
 const runId = RunId.make("duplicate-attempt-production-recovery")
 const taskId = TaskId.make("A")
@@ -54,11 +56,11 @@ const planAndStart = (attempt: PlannedTaskAttempt, firstPosition: number): Reado
       runId
     },
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({
+      event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
         plannedAttempt: attempt,
         version: workflowJournalEventVersion
       }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(attempt.attemptId),
+      key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
       position: JournalPosition.make(firstPosition + 1),
       runId
     }
@@ -72,38 +74,39 @@ const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(second
 const failIfCalled = (boundary: string) =>
   Effect.die(`${boundary} must not be called for invalid workflow-journal history`)
 
-const boundaryLayer = Layer.mergeAll(
-  Layer.succeed(
-    JournalStore,
-    JournalStore.of({
-      append: () => failIfCalled("journal append"),
-      read: () => Effect.succeed(invalidRecords),
-      scan: () => failIfCalled("journal scan")
-    })
-  ),
-  Layer.succeed(
-    WorkflowInterpreter,
-    WorkflowInterpreter.of({
-      acquireTaskClaim: () => failIfCalled("task tracker claim"),
-      readTrackerGraph: () => failIfCalled("task tracker read"),
-      reconcileTaskWorktree: () => failIfCalled("Git worktree"),
-      recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording")
-    })
-  ),
-  Layer.succeed(
-    PlannedAttemptExecutor,
-    PlannedAttemptExecutor.of({
-      project: () => failIfCalled("executor projection"),
-      requestSuspension: () => failIfCalled("executor suspension"),
-      startOrContinue: () => failIfCalled("executor start or continuation")
-    })
-  ),
-  Layer.succeed(
-    PlannedAttemptRecoveryAuthority,
-    PlannedAttemptRecoveryAuthority.of({ verify: () => failIfCalled("tracker or Git recovery verification") })
-  ),
-  Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))
-)
+const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
+  Layer.mergeAll(
+    Layer.succeed(
+      JournalStore,
+      JournalStore.of({
+        append: () => failIfCalled("journal append"),
+        read: () => Effect.succeed(records),
+        scan: () => failIfCalled("journal scan")
+      })
+    ),
+    Layer.succeed(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: () => failIfCalled("task tracker claim"),
+        readTrackerGraph: () => failIfCalled("task tracker read"),
+        reconcileTaskWorktree: () => failIfCalled("Git worktree"),
+        recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording")
+      })
+    ),
+    Layer.succeed(
+      PlannedAttemptExecutor,
+      PlannedAttemptExecutor.of({
+        project: () => failIfCalled("executor projection"),
+        requestSuspension: () => failIfCalled("executor suspension"),
+        startOrContinue: () => failIfCalled("executor start or continuation")
+      })
+    ),
+    Layer.succeed(
+      PlannedAttemptRecoveryAuthority,
+      PlannedAttemptRecoveryAuthority.of({ verify: () => failIfCalled("tracker or Git recovery verification") })
+    ),
+    Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))
+  )
 
 it.effect(
   "rejects duplicate unfinished planned-attempt executor work before frontier derivation or an executor call",
@@ -113,7 +116,19 @@ it.effect(
         expect(yield* Schema.decodeUnknownEffect(JournalRecord)(record)).toEqual(record)
       }
 
-      const failure = yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(Effect.flip)
+      const roundTrippedRecords = yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        for (const record of invalidRecords) {
+          yield* journal.append(record.runId, record.key, record.event)
+        }
+        return yield* journal.read(runId)
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
+      expect(roundTrippedRecords).toEqual(invalidRecords)
+
+      const failure = yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(
+        Effect.provide(boundaryLayer(roundTrippedRecords)),
+        Effect.flip
+      )
 
       expect(failure).toMatchObject({
         _tag: "InvalidWorkflowJournalHistory",
@@ -129,5 +144,5 @@ it.effect(
         records: invalidRecords,
         runId
       })
-    }).pipe(Effect.provide(boundaryLayer))
+    })
 )

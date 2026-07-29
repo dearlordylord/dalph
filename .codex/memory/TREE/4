@@ -1,0 +1,1 @@
+Master alone publishes advisory OptMem; shared-master writes serialize, other worktrees propose. M1 keys coarse same-process work by RunId/AttemptId, holds capacity until terminal/safe suspension; coordinator begins responsibility, reports are non-actions, no executor actor.            

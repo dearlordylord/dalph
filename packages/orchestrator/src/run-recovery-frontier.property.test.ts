@@ -58,7 +58,7 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
       })
       const reduction = reduceWorkflowJournalHistory(runId, [
         {
-          event: TaskAttemptPlannedEvent.make({ operation, version: 4 }),
+          event: TaskAttemptPlannedEvent.make({ operation, version: 5 }),
           key: attemptPlanRecordKey(attempt.attemptId),
           position: JournalPosition.make(1),
           runId
@@ -104,11 +104,11 @@ it("classifies every generated pre-attempt fact-to-next-intent crash prefix", ()
           key: outcomeRecordKey(initial.operationId)
         },
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 4 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 5 }),
           key: intentRecordKey(claim.acquisition.operationId)
         },
         {
-          event: TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(claim.acquisition), version: 4 }),
+          event: TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(claim.acquisition), version: 5 }),
           key: outcomeRecordKey(claim.acquisition.operationId)
         },
         { event: trackerGraphObservationIntent(admission), key: intentRecordKey(admission.operationId) },

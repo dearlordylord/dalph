@@ -96,6 +96,18 @@ evidence, handback, retry, or restoration stages.
 _Avoid_: Executor outer invocation, review stage, worker process, workflow
 operation
 
+**Planned-attempt executor-work responsibility began**:
+The initiated action established when Dalph records its intent and assumes
+responsibility for one exact planned attempt before asking the executor to work.
+It does not prove that the executor accepted or started work.
+_Avoid_: Executor work started, executor accepted work
+
+**Planned-attempt executor-work report**:
+The non-action occurrence established when Dalph receives `Running`,
+`SafelySuspended`, or `Terminal` for one exact planned attempt. It proves the
+reported condition, not an executor-internal action or actor.
+_Avoid_: Executor action, executor decision, completed tracker task
+
 **Planned-attempt executor-work correlation**:
 The exact `RunId` and `AttemptId` of the planned task attempt that Dalph uses
 across executor start, continuation, safe suspension, and terminal outcome. An

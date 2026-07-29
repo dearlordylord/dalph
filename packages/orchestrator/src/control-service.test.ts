@@ -39,10 +39,10 @@ describe("ControlService", () => {
 
       const records = yield* journal.read(runId)
       expect(records.map(({ event }) => event)).toEqual([
-        { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: 4 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: 4 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: 4 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: 4 }
+        { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: 5 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: 5 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: 5 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: 5 }
       ])
       const reduced = reduceWorkflowJournalHistory(runId, records)
       expect(reduced._tag).toBe("ValidWorkflowJournalHistory")

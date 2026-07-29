@@ -31,7 +31,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkStartedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "./journal-record-key.js"
 import {
   type JournalRecord,
@@ -48,7 +48,7 @@ import { deriveRunRecoveryFrontier } from "./run-recovery-frontier.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkStartedEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./planned-attempt-executor-journal.js"
 import {
   plannedAttemptExecutorCorrelation,
@@ -170,8 +170,11 @@ const eventRows = [
     key: outcomeRecordKey(worktree.operationId)
   },
   {
-    event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
-    key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId)
+    event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId)
   },
   {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
@@ -392,11 +395,11 @@ it("rejects commands and executor correlations bound to another run", () => {
   const wrongExecutorAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: otherRun })
   const executorRecord = recordsFrom([
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({
+      event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
         plannedAttempt: wrongExecutorAttempt,
         version: workflowJournalEventVersion
       }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(wrongExecutorAttempt.attemptId)
+      key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(wrongExecutorAttempt.attemptId)
     }
   ])
   expect(reduceWorkflowJournalHistory(runId, commandRecord)._tag).toBe("InvalidWorkflowJournalHistory")

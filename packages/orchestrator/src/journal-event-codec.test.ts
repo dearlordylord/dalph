@@ -21,10 +21,10 @@ it.effect("rejects malformed payloads, unsupported versions, and invalid event s
   Effect.gen(function* () {
     const kind = JournalEventKind.make("TrackerGraphObservationIntentRecorded")
     const cases = [
-      { kind, payloadJson: "{", version: JournalEventVersion.make(4) },
-      { kind, payloadJson: "[]", version: JournalEventVersion.make(4) },
-      { kind, payloadJson: "{}", version: JournalEventVersion.make(3) },
-      { kind, payloadJson: "{}", version: JournalEventVersion.make(4) }
+      { kind, payloadJson: "{", version: JournalEventVersion.make(5) },
+      { kind, payloadJson: "[]", version: JournalEventVersion.make(5) },
+      { kind, payloadJson: "{}", version: JournalEventVersion.make(4) },
+      { kind, payloadJson: "{}", version: JournalEventVersion.make(5) }
     ]
     for (const encoded of cases) {
       const issue = yield* decodeJournalEvent(encoded).pipe(Effect.flip)

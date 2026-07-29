@@ -1,1 +1,2 @@
 Codex built-in Memories are disabled; checked-in OptMem is advisory. Parallel root sessions may write only in master's shared primary worktree, where OptMem locks appends; other worktrees propose entries.                                                                                   
+Milestone 1 correlates coarse same-process executor work by planned-attempt RunId and AttemptId and holds capacity until terminal or safe suspension; responsibility-began is coordinator-initiated, while executor reports are non-actions with no DalphExecutor actor.                       

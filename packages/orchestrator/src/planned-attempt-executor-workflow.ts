@@ -3,13 +3,13 @@ import type { PlannedTaskAttempt } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import {
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkStartedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "./journal-record-key.js"
 import { JournalStore } from "./journal-store.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkStartedEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./planned-attempt-executor-journal.js"
 import {
   PlannedAttemptExecutor,
@@ -35,15 +35,16 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const records = yield* journal.read(plannedAttempt.runId)
-  const started = records.some(
+  const responsibilityBegan = records.some(
     ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkStarted" && event.plannedAttempt.attemptId === plannedAttempt.attemptId
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
   )
-  if (!started) {
+  if (!responsibilityBegan) {
     yield* journal.append(
       plannedAttempt.runId,
-      plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
   }
 

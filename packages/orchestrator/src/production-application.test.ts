@@ -29,7 +29,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkStartedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "./journal-record-key.js"
 import {
   JournalStore,
@@ -45,7 +45,7 @@ import { activateRecoveredResponsibilities } from "./run-recovery-activation.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkStartedEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./planned-attempt-executor-journal.js"
 import {
   PlannedAttemptExecutor,
@@ -178,8 +178,11 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         )
         yield* journal.append(
           runId,
-          plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
-          PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+          plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
         )
         yield* journal.append(
           runId,

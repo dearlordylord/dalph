@@ -42,7 +42,7 @@ const semanticIssue = (
 
 interface FoldIndexes {
   readonly executorReportOrdinals: Map<AttemptId, number>
-  readonly executorStarts: Map<
+  readonly executorResponsibilitiesBegan: Map<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
@@ -55,7 +55,7 @@ interface FoldIndexes {
 
 const emptyIndexes = (): FoldIndexes => ({
   executorReportOrdinals: new Map(),
-  executorStarts: new Map(),
+  executorResponsibilitiesBegan: new Map(),
   plans: new Map(),
   seenEventKindsByOperation: new Map(),
   seenKeys: new Set(),
@@ -200,7 +200,7 @@ const validateExecutorEvent = (
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   const event = record.event
-  if (event._tag === "PlannedAttemptExecutorWorkStarted") {
+  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     const attemptId = event.plannedAttempt.attemptId
     const plan = indexes.plans.get(attemptId)
     if (plan === undefined || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)) {
@@ -211,31 +211,34 @@ const validateExecutorEvent = (
         `executor work for attempt ${attemptId} has no prior matching planned task attempt`
       )
     }
-    const priorStart = indexes.executorStarts.get(attemptId)
-    if (priorStart !== undefined) {
+    const priorResponsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+    if (priorResponsibility !== undefined) {
       issues.push(
         duplicateUnfinishedTaskAttemptIssue(
           runId,
-          priorStart.plannedAttempt,
-          priorStart.position,
+          priorResponsibility.plannedAttempt,
+          priorResponsibility.position,
           event.plannedAttempt,
           record.position
         )
       )
     } else {
-      indexes.executorStarts.set(attemptId, { plannedAttempt: event.plannedAttempt, position: record.position })
+      indexes.executorResponsibilitiesBegan.set(attemptId, {
+        plannedAttempt: event.plannedAttempt,
+        position: record.position
+      })
     }
     return
   }
   if (event._tag !== "PlannedAttemptExecutorWorkReported") return
   const attemptId = event.report.correlation.attemptId
-  const start = indexes.executorStarts.get(attemptId)
-  if (start === undefined || event.report.correlation.runId !== start.plannedAttempt.runId) {
+  const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+  if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
     semanticIssue(
       issues,
       runId,
       record.position,
-      `executor report for attempt ${attemptId} has no prior matching executor-work start`
+      `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
     )
   }
   const expectedOrdinal = (indexes.executorReportOrdinals.get(attemptId) ?? 0) + 1
@@ -270,12 +273,12 @@ const validateOneUnfinishedAttemptPerTask = (
     TaskId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >()
-  for (const [attemptId, start] of indexes.executorStarts) {
+  for (const [attemptId, responsibility] of indexes.executorResponsibilitiesBegan) {
     if (indexes.terminalExecutorAttempts.has(attemptId)) continue
-    const taskId = start.plannedAttempt.taskId
+    const taskId = responsibility.plannedAttempt.taskId
     const prior = unfinishedByTask.get(taskId)
     if (prior === undefined) {
-      unfinishedByTask.set(taskId, { plannedAttempt: start.plannedAttempt, position: start.position })
+      unfinishedByTask.set(taskId, { plannedAttempt: responsibility.plannedAttempt, position: responsibility.position })
       continue
     }
     issues.push(
@@ -283,8 +286,8 @@ const validateOneUnfinishedAttemptPerTask = (
         runId,
         prior.plannedAttempt,
         prior.position,
-        start.plannedAttempt,
-        start.position
+        responsibility.plannedAttempt,
+        responsibility.position
       )
     )
   }
@@ -320,7 +323,7 @@ export const reduceWorkflowJournalHistory = (
       )
     }
     if (!unique) {
-      if (record.event._tag === "PlannedAttemptExecutorWorkStarted") {
+      if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
         validateExecutorEvent(record, runId, indexes, issues)
       }
       return

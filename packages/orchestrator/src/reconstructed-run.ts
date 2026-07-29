@@ -118,7 +118,7 @@ const taskBoundaryResponsibility = (record: JournalRecord): WorkflowResponsibili
 }
 
 const responsibilityForRecord = (record: JournalRecord): WorkflowResponsibilityEntry | undefined => {
-  if (record.event._tag === "PlannedAttemptExecutorWorkStarted") {
+  if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     return WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
       beganAt: record.position,
       plannedAttempt: record.event.plannedAttempt
@@ -199,7 +199,7 @@ const plannedResponsibilityHasOrigin = (
   entry: Extract<WorkflowResponsibilityEntry, { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }>,
   record: JournalRecord | undefined
 ): boolean => {
-  if (record?.event._tag === "PlannedAttemptExecutorWorkStarted") {
+  if (record?.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     return (
       record.event.plannedAttempt.runId === entry.plannedAttempt.runId &&
       record.event.plannedAttempt.attemptId === entry.plannedAttempt.attemptId

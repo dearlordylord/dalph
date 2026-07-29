@@ -35,7 +35,7 @@ import {
   controlCommandRecordKey,
   intentRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkStartedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "./journal-record-key.js"
 import {
   attemptPlanRecordKey,
@@ -53,7 +53,7 @@ import {
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkStartedEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./planned-attempt-executor-journal.js"
 import { plannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
 import {
@@ -190,8 +190,8 @@ const recordCausalHistory = Effect.gen(function* () {
   )
   yield* journal.append(
     runId,
-    plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
   const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(

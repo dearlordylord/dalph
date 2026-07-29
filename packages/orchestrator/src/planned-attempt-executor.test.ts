@@ -19,7 +19,7 @@ import {
   WorktreeLocator
 } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
-import { plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
+import { plannedAttemptExecutorWorkResponsibilityBeganRecordKey } from "./journal-record-key.js"
 import {
   attemptPlanRecordKey,
   JournalStore,
@@ -27,7 +27,7 @@ import {
   TaskAttemptPlannedEvent
 } from "./journal-store.js"
 import { activateRecoveredResponsibilities, makeRunRecoveryActivation } from "./run-recovery-activation.js"
-import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./planned-attempt-executor-journal.js"
 import {
   continuePlannedAttemptExecutorWork,
   requestPlannedAttemptExecutorSuspension
@@ -264,13 +264,13 @@ it.effect("recreates the fake executor and continues the same attempt after shar
 
     const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
-      "PlannedAttemptExecutorWorkStarted",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorWorkReported",
       "PlannedAttemptExecutorWorkReported"
     ])
     expect(
       records.flatMap(({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkStarted"
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           ? [event.plannedAttempt.attemptId]
           : event._tag === "PlannedAttemptExecutorWorkReported"
             ? [event.report.correlation.attemptId]
@@ -520,7 +520,9 @@ it.effect("resumes the same planned attempt after unpause", () =>
       )
     )
     const records = yield* journal.read(plannedAttempt.runId)
-    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkStarted")).toHaveLength(1)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")).toHaveLength(
+      1
+    )
     expect(
       records.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report.correlation] : []
@@ -546,8 +548,11 @@ it.effect("resumes the same planned attempt after unpause", () =>
 it("reconstructs the same planned attempt after Dalph and the fake executor crash together", () => {
   const reconstruction = reconstructRunState(plannedAttempt.runId, [
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
+      event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(1),
       runId: plannedAttempt.runId
     }
@@ -587,15 +592,15 @@ it.effect("generic activation continues reconstructed work through the controlle
     )
     yield* journal.append(
       plannedAttempt.runId,
-      plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
 
     yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1))
 
     expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
       "TaskAttemptPlanned",
-      "PlannedAttemptExecutorWorkStarted",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorWorkReported"
     ])
   }).pipe(

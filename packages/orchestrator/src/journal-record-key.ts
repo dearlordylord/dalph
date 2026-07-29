@@ -14,8 +14,8 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)
 
-export const plannedAttemptExecutorWorkStartedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
-  JournalRecordKey.make(`attempt:${attemptId}:executor-work-started`)
+export const plannedAttemptExecutorWorkResponsibilityBeganRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:executor-work-responsibility-began`)
 
 export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,

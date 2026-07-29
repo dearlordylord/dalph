@@ -1,6 +1,9 @@
-import { Option, Schema } from "effect"
-import { JournalPosition, OperationId, RunId, TaskId } from "./domain.js"
+/* eslint-disable functional/immutable-data -- Projection indexes and accumulation are private scratch. */
+import { Effect, Option, Schema } from "effect"
+import { AttemptId, JournalPosition, OperationId, PlannedTaskAttempt, RunId, TaskId } from "./domain.js"
 import type { JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import { PlannedAttemptExecutorReportOrdinal } from "./planned-attempt-executor-journal.js"
+import { PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
 import {
   makeTaskTrackerTargetClosureObservation,
   taskMembershipKey,
@@ -62,6 +65,47 @@ export const TaskTrackerFactsObserved = Schema.TaggedStruct("TaskTrackerFactsObs
 )
 export type TaskTrackerFactsObserved = typeof TaskTrackerFactsObserved.Type
 
+/**
+ * Dalph recorded its intent and assumed responsibility for the exact planned
+ * attempt before calling the executor. This does not prove executor activity.
+ */
+export const PlannedAttemptExecutorWorkResponsibilityBegan = Schema.TaggedStruct(
+  "PlannedAttemptExecutorWorkResponsibilityBegan",
+  {
+    ...initiatedActionFields,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    plannedAttempt: PlannedTaskAttempt,
+    recordedAt: JournalPosition,
+    runId: RunId
+  }
+).check(
+  Schema.makeFilter((occurrence) =>
+    occurrence.runId === occurrence.plannedAttempt.runId
+      ? undefined
+      : "executor-work responsibility must belong to its planned attempt run"
+  )
+)
+export type PlannedAttemptExecutorWorkResponsibilityBegan = typeof PlannedAttemptExecutorWorkResponsibilityBegan.Type
+
+/**
+ * Dalph received one executor condition for the exact attempt. The report
+ * proves no executor-internal initiating action or actor.
+ */
+export const PlannedAttemptExecutorWorkReported = Schema.TaggedStruct("PlannedAttemptExecutorWorkReported", {
+  ...nonActionOccurrenceFields,
+  ordinal: PlannedAttemptExecutorReportOrdinal,
+  recordedAt: JournalPosition,
+  report: PlannedAttemptExecutorReport,
+  runId: RunId
+}).check(
+  Schema.makeFilter((occurrence) =>
+    occurrence.runId === occurrence.report.correlation.runId
+      ? undefined
+      : "executor-work report must belong to its correlated run"
+  )
+)
+export type PlannedAttemptExecutorWorkReported = typeof PlannedAttemptExecutorWorkReported.Type
+
 export const ControlDirectionSubject = Schema.TaggedUnion({
   Run: { runId: RunId },
   Task: { runId: RunId, taskId: TaskId }
@@ -82,6 +126,8 @@ export type AppliedControlDirection = typeof AppliedControlDirection.Type
 
 export const WorkflowOccurrence = Schema.Union([
   AppliedControlDirection,
+  PlannedAttemptExecutorWorkReported,
+  PlannedAttemptExecutorWorkResponsibilityBegan,
   TrackerGraphReadInitiated,
   TaskTrackerFactsObserved
 ])
@@ -109,7 +155,9 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 1 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 2 as const // eslint-disable-line no-magic-numbers
+
+const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
 const isOriginatingActionFor =
   (observation: TaskTrackerFactsObserved) =>
@@ -122,18 +170,86 @@ const isOriginatingActionFor =
     taskMembershipKey(occurrence.operation.readShape.explicitlyCoveredTaskIds) ===
       taskMembershipKey(observation.evidence.explicitlyCoveredTaskIds)
 
-const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
-  for (const [index, occurrence] of projection.occurrences.entries()) {
-    if (occurrence._tag !== "TaskTrackerFactsObserved") continue
-    const matchingActionIndexes = projection.occurrences.flatMap((candidate, candidateIndex) =>
-      isOriginatingActionFor(occurrence)(candidate) ? [candidateIndex] : []
-    )
-    const [matchingActionIndex] = matchingActionIndexes
-    if (matchingActionIndexes.length !== 1 || matchingActionIndex === undefined || matchingActionIndex >= index) {
-      return {
+const isExecutorResponsibilityFor =
+  (report: PlannedAttemptExecutorWorkReported) =>
+  (occurrence: WorkflowOccurrence): occurrence is PlannedAttemptExecutorWorkResponsibilityBegan =>
+    occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+    occurrence.runId === report.runId &&
+    occurrence.plannedAttempt.attemptId === report.report.correlation.attemptId &&
+    occurrence.recordedAt < report.recordedAt
+
+const ambiguousRelationship = Symbol("ambiguous workflow-occurrence relationship")
+type IndexedRelationship<A> = A | typeof ambiguousRelationship
+
+const rememberUniqueRelationship = <A>(
+  relationships: Map<string, IndexedRelationship<A>>,
+  key: string,
+  occurrence: A
+): void => {
+  relationships.set(key, relationships.has(key) ? ambiguousRelationship : occurrence)
+}
+
+const invalidTrackerRelationship = (
+  trackerActions: ReadonlyMap<string, IndexedRelationship<TrackerGraphReadInitiated>>,
+  occurrence: TaskTrackerFactsObserved,
+  index: number
+) => {
+  const action = trackerActions.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId))
+  return action !== undefined && action !== ambiguousRelationship && isOriginatingActionFor(occurrence)(action)
+    ? undefined
+    : {
         issue: `tracker observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
-        path: ["occurrences", index, "originatingActionOperationId"]
+        path: ["occurrences", index]
       }
+}
+
+const invalidExecutorRelationship = (
+  executorResponsibilities: ReadonlyMap<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>,
+  occurrence: PlannedAttemptExecutorWorkReported,
+  index: number
+) => {
+  const responsibility = executorResponsibilities.get(
+    relationshipKey(occurrence.runId, occurrence.report.correlation.attemptId)
+  )
+  return responsibility !== undefined &&
+    responsibility !== ambiguousRelationship &&
+    isExecutorResponsibilityFor(occurrence)(responsibility)
+    ? undefined
+    : {
+        issue: `executor report must have one exact earlier responsibility-began action ${occurrence.report.correlation.attemptId}`,
+        path: ["occurrences", index]
+      }
+}
+
+const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
+  const trackerActions = new Map<string, IndexedRelationship<TrackerGraphReadInitiated>>()
+  const executorResponsibilities = new Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>()
+
+  for (const [index, occurrence] of projection.occurrences.entries()) {
+    if (occurrence._tag === "TrackerGraphReadInitiated") {
+      rememberUniqueRelationship(
+        trackerActions,
+        relationshipKey(occurrence.runId, occurrence.operation.operationId),
+        occurrence
+      )
+      continue
+    }
+    if (occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      rememberUniqueRelationship(
+        executorResponsibilities,
+        relationshipKey(occurrence.runId, occurrence.plannedAttempt.attemptId),
+        occurrence
+      )
+      continue
+    }
+    if (occurrence._tag === "TaskTrackerFactsObserved") {
+      const invalid = invalidTrackerRelationship(trackerActions, occurrence, index)
+      if (invalid !== undefined) return invalid
+      continue
+    }
+    if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
+      const invalid = invalidExecutorRelationship(executorResponsibilities, occurrence, index)
+      if (invalid !== undefined) return invalid
     }
   }
   return undefined
@@ -148,14 +264,18 @@ export type WorkflowOccurrenceProjection = typeof WorkflowOccurrenceProjection.T
 
 type ProjectedJournalEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "TrackerGraphObservationIntentRecorded" | "TrackerGraphOutcomeObserved" }
+  {
+    readonly _tag:
+      | "PlannedAttemptExecutorWorkReported"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+      | "TrackerGraphObservationIntentRecorded"
+      | "TrackerGraphOutcomeObserved"
+  }
 >
 type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
 
 const nonProjectedJournalEventKinds = {
   ControlCommandRecorded: true,
-  PlannedAttemptExecutorWorkReported: true,
-  PlannedAttemptExecutorWorkStarted: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
@@ -168,50 +288,106 @@ const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOc
   return []
 }
 
-const projectRecord = (
-  records: ReadonlyArray<JournalRecord>,
-  record: JournalRecord,
-  index: number
-): ReadonlyArray<WorkflowOccurrence> => {
-  const event = record.event
-  if (event._tag === "TrackerGraphObservationIntentRecorded") {
-    return [
-      TrackerGraphReadInitiated.make({
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        operation: event.operation,
-        recordedAt: record.position,
-        runId: record.runId
-      })
-    ]
-  }
-  if (event._tag === "TrackerGraphOutcomeObserved") {
-    const intent = records
-      .slice(0, index)
-      .findLast(
-        ({ event: candidate, runId }) =>
-          runId === record.runId &&
-          candidate._tag === "TrackerGraphObservationIntentRecorded" &&
-          candidate.operation.operationId === event.operationId
-      )?.event
-    if (intent?._tag !== "TrackerGraphObservationIntentRecorded") return []
-    return [
-      TaskTrackerFactsObserved.make({
-        evidence: makeTaskTrackerTargetClosureObservation(intent.operation, event.outcome, record.position),
-        occurrenceClassification: "NonActionOccurrence",
-        originatingActionOperationId: event.operationId,
-        runId: record.runId
-      })
-    ]
-  }
-  return noOccurrence(event)
-}
+/** A tracker result cannot prove which same-run read action observed it. */
+export class TrackerOutcomeWithoutReadIntent extends Schema.TaggedErrorClass<TrackerOutcomeWithoutReadIntent>()(
+  "TrackerOutcomeWithoutReadIntent",
+  { operationId: OperationId, position: JournalPosition, runId: RunId }
+) {}
 
-export const projectWorkflowOccurrences = (records: ReadonlyArray<JournalRecord>): WorkflowOccurrenceProjection =>
-  WorkflowOccurrenceProjection.make({
-    occurrences: records.flatMap((record, index) => projectRecord(records, record, index)),
+/** An executor report cannot prove which Dalph responsibility preceded it. */
+export class ExecutorReportWithoutResponsibilityBegan extends Schema.TaggedErrorClass<ExecutorReportWithoutResponsibilityBegan>()(
+  "ExecutorReportWithoutResponsibilityBegan",
+  { attemptId: AttemptId, position: JournalPosition, runId: RunId }
+) {}
+
+/**
+ * Projects immutable journal records in one pass. Missing relationships fail
+ * before any partial semantic projection becomes visible.
+ */
+export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
+  records: ReadonlyArray<JournalRecord>
+) {
+  const occurrences: Array<WorkflowOccurrence> = []
+  const trackerReadIntents = new Map<
+    string,
+    Extract<WorkflowJournalEvent, { readonly _tag: "TrackerGraphObservationIntentRecorded" }>
+  >()
+  const executorResponsibilities = new Set<string>()
+
+  for (const record of records) {
+    const event = record.event
+    if (event._tag === "TrackerGraphObservationIntentRecorded") {
+      trackerReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+      occurrences.push(
+        TrackerGraphReadInitiated.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          operation: event.operation,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "TrackerGraphOutcomeObserved") {
+      const intent = trackerReadIntents.get(relationshipKey(record.runId, event.operationId))
+      if (intent === undefined) {
+        return yield* new TrackerOutcomeWithoutReadIntent({
+          operationId: event.operationId,
+          position: record.position,
+          runId: record.runId
+        })
+      }
+      occurrences.push(
+        TaskTrackerFactsObserved.make({
+          evidence: makeTaskTrackerTargetClosureObservation(intent.operation, event.outcome, record.position),
+          occurrenceClassification: "NonActionOccurrence",
+          originatingActionOperationId: event.operationId,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      executorResponsibilities.add(relationshipKey(record.runId, event.plannedAttempt.attemptId))
+      occurrences.push(
+        PlannedAttemptExecutorWorkResponsibilityBegan.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          plannedAttempt: event.plannedAttempt,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "PlannedAttemptExecutorWorkReported") {
+      if (!executorResponsibilities.has(relationshipKey(record.runId, event.report.correlation.attemptId))) {
+        return yield* new ExecutorReportWithoutResponsibilityBegan({
+          attemptId: event.report.correlation.attemptId,
+          position: record.position,
+          runId: record.runId
+        })
+      }
+      occurrences.push(
+        PlannedAttemptExecutorWorkReported.make({
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: event.ordinal,
+          recordedAt: record.position,
+          report: event.report,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    void noOccurrence(event)
+  }
+
+  return yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+    occurrences,
     version: workflowOccurrenceProjectionVersion
   })
+})
 
 /** Follows only the exact operation relationship carried by the observation. */
 export const originatingActionForTrackerObservation = (
@@ -219,3 +395,10 @@ export const originatingActionForTrackerObservation = (
   observation: TaskTrackerFactsObserved
 ): Option.Option<TrackerGraphReadInitiated> =>
   Option.fromUndefinedOr(projection.occurrences.find(isOriginatingActionFor(observation)))
+
+/** Follows one report to the exact Dalph responsibility that preceded it. */
+export const plannedAttemptExecutorResponsibilityForReport = (
+  projection: WorkflowOccurrenceProjection,
+  report: PlannedAttemptExecutorWorkReported
+): Option.Option<PlannedAttemptExecutorWorkResponsibilityBegan> =>
+  Option.fromUndefinedOr(projection.occurrences.find(isExecutorResponsibilityFor(report)))
