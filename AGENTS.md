@@ -102,6 +102,10 @@
   as Dalph implementation gates.
 - Follow `docs/DEVELOPMENT.md` and `docs/CODE_REVIEW.md`. Run
   `pnpm check:all` before implementation handoff.
+- Run `pnpm check:quint` once after the final relevant changes and before
+  integration. During development, run it only when changing a Quint model,
+  its executable conformance adapter, or behavior governed by that model;
+  `pnpm check:all` intentionally does not repeat exhaustive model checking.
 - Every implementation ticket must preserve its declared acceptance scenarios
   and blocking edges.
 - After significant changes, repeat domain/spec, architecture/connascence, and

@@ -1,4 +1,3 @@
-import { quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const SECOND = 1_000
@@ -20,10 +19,7 @@ const gates = [
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   ...(withoutQuint
     ? []
-    : [
-      { args: ["check:quint"], name: "Quint recovery models", timeout: quintGateSafetyTimeoutMilliseconds },
-      { args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }
-    ]),
+    : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),
   { args: ["test:coverage"], name: "tests and coverage", timeout: 5 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 2 * 60 * SECOND }
 ]

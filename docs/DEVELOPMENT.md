@@ -93,12 +93,16 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
 - `pnpm test:coverage` enforces the configured line, function, branch, and statement coverage bar.
+- `pnpm test:mbt` runs the Quint-connected executable conformance suites.
+- `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
+  checks. Run it once after the final relevant changes and before integration;
+  during development, use it when changing a Quint model, its conformance
+  adapter, or behavior governed by that model.
 - `pnpm check:secrets` scans Git history with gitleaks.
 - `pnpm check:ci` runs the hosted CI gate. During the single-executor v1
-  proof-of-concept phase it excludes the Quint recovery models, which remain
-  available through `pnpm check:quint` and `pnpm check:all`.
-- `pnpm check:all` runs the complete bounded local gate, including the Quint
-  recovery models.
+  proof-of-concept phase it excludes Quint-connected MBT.
+- `pnpm check:all` runs the bounded local implementation gate, including
+  Quint-connected MBT but not exhaustive formal model checking.
 
 Duplication is a production-code gate. Tests are excluded because scenario and
 adapter contract setup intentionally repeats shapes across independent cases;
