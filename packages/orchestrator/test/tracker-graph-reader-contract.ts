@@ -1,7 +1,8 @@
 import { expect, it } from "@effect/vitest"
 import { Effect, type Layer } from "effect"
-import type { TrackerTarget, TrackerTask } from "../src/domain.js"
-import { TrackerGraphReader } from "../src/tracker-graph-reader.js"
+import { type TrackerTarget } from "../src/authorities/task-tracker/target.js"
+import { type TrackerTask } from "../src/authorities/task-tracker/task.js"
+import { TrackerGraphReader } from "../src/authorities/task-tracker/graph-reader.js"
 
 interface ContractScenario {
   readonly complete: {

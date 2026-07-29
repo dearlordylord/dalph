@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config"
+import { fileURLToPath } from "node:url"
 import { coveragePolicy } from "./scripts/coverage-policy.mjs"
 
 const coverageThresholds = Object.fromEntries(
@@ -6,6 +7,8 @@ const coverageThresholds = Object.fromEntries(
 )
 
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
+const ordinaryTestTimeoutMilliseconds = 10_000
+const coverageTestTimeoutMilliseconds = 20_000
 const ordinaryTestIncludes = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
@@ -14,6 +17,14 @@ const ordinaryTestIncludes = [
 ]
 
 export default defineConfig(({ mode }) => ({
+  resolve: {
+    alias: {
+      "@dalph/contracts": fileURLToPath(new URL("./packages/contracts/src/index.ts", import.meta.url)),
+      "@dalph/dalph": fileURLToPath(new URL("./packages/dalph/src/index.ts", import.meta.url)),
+      "@dalph/executor": fileURLToPath(new URL("./packages/executor/src/index.ts", import.meta.url)),
+      "@dalph/orchestrator": fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url))
+    }
+  },
   test: {
     coverage: {
       exclude: [
@@ -28,9 +39,13 @@ export default defineConfig(({ mode }) => ({
       thresholds: coverageThresholds
     },
     environment: "node",
-    exclude: mode === "coverage" ? [mbtTestPattern] : [],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      ...(mode === "coverage" ? [mbtTestPattern] : [])
+    ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: 4,
-    testTimeout: 10_000
+    testTimeout: mode === "coverage" ? coverageTestTimeoutMilliseconds : ordinaryTestTimeoutMilliseconds
   }
 }))

@@ -1,12 +1,13 @@
 import { Option } from "effect"
-import { TaskLifecycle, type TaskId, type TrackerRevision } from "../src/domain.js"
+import { type TaskId } from "@dalph/contracts"
+import { TaskLifecycle, type TrackerRevision } from "../src/authorities/task-tracker/task.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent,
   type TaskTrackerFactsObservedEvent
-} from "../src/task-tracker-facts.js"
-import { projectTrackerSnapshot } from "../src/task-dag.js"
-import type { WorkflowOperation } from "../src/workflow-operation.js"
+} from "../src/workflow/task-tracker-facts/observation.js"
+import { projectTrackerSnapshot } from "../src/authorities/task-tracker/graph.js"
+import type { WorkflowOperation } from "../src/workflow/registry/operation.js"
 
 /** Builds complete canonical facts for flat history fixtures. */
 export const taskTrackerGraphFactsObserved = (

@@ -124,9 +124,15 @@
       }
     },
     {
+      "files": ["vitest.config.ts"],
+      "rules": {
+        "import/no-nodejs-modules": "off"
+      }
+    },
+    {
       "files": [
         "packages/orchestrator/src/cli.test.ts",
-        "packages/orchestrator/src/planned-attempt-executor-source-boundary.test.ts"
+        "packages/dalph/test/conformance/planned-attempt-executor-source-boundary.test.ts"
       ],
       "rules": {
         "import/no-nodejs-modules": "off"

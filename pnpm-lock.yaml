@@ -8,6 +8,15 @@ importers:
 
   .:
     devDependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@dalph/dalph':
+        specifier: workspace:*
+        version: link:packages/dalph
+      '@dalph/executor':
+        specifier: workspace:*
+        version: link:packages/executor
       '@dalph/orchestrator':
         specifier: workspace:*
         version: link:packages/orchestrator
@@ -66,8 +75,44 @@ importers:
         specifier: 4.1.12
         version: 4.1.12
 
+  packages/contracts:
+    dependencies:
+      effect:
+        specifier: 4.0.0-beta.99
+        version: 4.0.0-beta.99
+
+  packages/dalph:
+    dependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@dalph/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@dalph/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@effect/platform-node':
+        specifier: 4.0.0-beta.99
+        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
+      effect:
+        specifier: 4.0.0-beta.99
+        version: 4.0.0-beta.99
+
+  packages/executor:
+    dependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      effect:
+        specifier: 4.0.0-beta.99
+        version: 4.0.0-beta.99
+
   packages/orchestrator:
     dependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@effect/platform-node':
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)

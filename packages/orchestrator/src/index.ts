@@ -1,7 +1,10 @@
-export { ActivationCause, type ActivationCoordinator, ActivationCoordinatorClosed } from "./activation-coordinator.js"
-export { CliUsageError, runCli, runCliFromStdio } from "./cli.js"
-export { ControlCommand, ControlCommandRecordedEvent, ControlCommandRequest } from "./control-command.js"
-export { ControlCommandIdentityContradiction, ControlService, controlServiceLayer } from "./control-service.js"
+export {
+  ActivationCause,
+  type ActivationCoordinator,
+  ActivationCoordinatorClosed
+} from "./coordination/activation/coordinator.js"
+export { ControlCommand, ControlCommandRecordedEvent, ControlCommandRequest } from "./control/command.js"
+export { ControlCommandIdentityContradiction, ControlService, controlServiceLayer } from "./control/service.js"
 export {
   ControlledCoordinatorLock,
   controlledCoordinatorLockLayer,
@@ -11,48 +14,45 @@ export {
   CoordinatorLockUnavailable,
   CoordinatorOwnership,
   CoordinatorOwnershipLost
-} from "./coordinator-lock.js"
+} from "./authorities/coordinator-ownership/ownership.js"
 export {
-  AttemptId,
-  AuthenticatedOperatorIdentity,
-  ClaimOwner,
-  ClaimToken,
-  ControlCommandId,
-  FixtureTarget,
-  GitCommitSha,
-  GitCommonDirectoryLocator,
-  GitCommonDirectoryTarget,
+  isDependencySatisfied,
+  isTaskOpen,
+  TaskLifecycle,
+  TrackerRevision,
+  TrackerSnapshot,
+  TrackerTask
+} from "./authorities/task-tracker/task.js"
+export { AuthenticatedOperatorIdentity, ControlCommandId } from "./control/identity.js"
+export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
+export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"
+export {
   GithubIssueNumber,
   GithubIssueTarget,
   GithubRepositoryName,
-  GithubRepositoryOwner,
-  isDependencySatisfied,
-  isTaskOpen,
+  GithubRepositoryOwner
+} from "./authorities/task-tracker/github/target.js"
+export { TrackerTarget } from "./authorities/task-tracker/target.js"
+export { OperationId } from "./workflow/identity.js"
+export { JournalEventKind, JournalEventVersion } from "./workflow/kernel/event.js"
+export {
   JournalDatabaseLocator,
-  JournalEventKind,
-  JournalEventVersion,
   JournalPosition,
   JournalRecordKey,
-  JournalSchemaVersion,
-  OperationId,
-  PlannedTaskAttempt,
-  RunId,
+  JournalSchemaVersion
+} from "./workflow-journal/identity.js"
+export { defaultTaskWorkCapacity, TaskWorkCapacity } from "./coordination/admission/capacity.js"
+export {
   SelectedTransitionFingerprint,
-  SelectedTransitionIdentity,
-  TaskBranchRef,
-  TaskExecutorLocator,
-  TaskId,
-  TaskLifecycle,
-  TaskRevision,
-  TaskWorkCapacity,
-  TrackerRevision,
-  TrackerSnapshot,
-  TrackerTarget,
-  TrackerTask,
-  WorktreeLocator
-} from "./domain.js"
-export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
-export { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
+  SelectedTransitionIdentity
+} from "./coordination/activation/selected-transition.js"
+export { GitCommonDirectoryLocator, GitCommonDirectoryTarget } from "./authorities/coordinator-ownership/ownership.js"
+export {
+  GitCommand,
+  GitCommandInvocationFailure,
+  GitCommandResult,
+  nodeGitCommandLayer
+} from "./authorities/git/command.js"
 export {
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,
@@ -69,7 +69,7 @@ export {
   TestGitWorktree,
   UntrackedWorktreePath,
   WorktreeBaseMismatch
-} from "./git-worktree.js"
+} from "./authorities/git/worktree.js"
 export {
   GithubGraphqlClient,
   GithubGraphqlRequest,
@@ -77,11 +77,16 @@ export {
   GithubLabelName,
   GithubLabelNodeId,
   GithubRepositoryNodeId
-} from "./github-graphql-client.js"
-export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader.js"
-export { githubTrackerMutationLayer, githubTrackerMutationNodeLayer } from "./github-tracker-mutation.js"
-export * from "./journal-event-codec.js"
-export * from "./journal-recovery-model.js"
+} from "./authorities/task-tracker/github/graphql-client.js"
+export { githubTrackerGraphReaderNodeLayer } from "./authorities/task-tracker/github/graph-reader.js"
+export {
+  githubTrackerMutationLayer,
+  githubTrackerMutationNodeLayer
+} from "./authorities/task-tracker/github/claim-mutation.js"
+export * from "./workflow-journal/event-codec.js"
+export * from "./workflow/kernel/event.js"
+export * from "./workflow-journal/record-key.js"
+export * from "./workflow-journal/recovery-model.js"
 export {
   JournalDataCorruption,
   JournalSchemaIncompatible,
@@ -91,7 +96,10 @@ export {
   JournalStorageUnavailable,
   JournalStore,
   JournalStoreContradiction,
-  memoryJournalStoreLayer,
+  type JournalStoreError,
+  type JournalRecord
+} from "./workflow-journal/store.js"
+export {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -99,45 +107,35 @@ export {
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent,
   WorkflowJournalEvent
-} from "./journal-store.js"
+} from "./workflow/registry/event.js"
+export { memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
+export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"
 export {
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
-} from "./live-task-work-start.js"
-export * from "./workflow-journal-history.js"
-export * from "./run-recovery-frontier.js"
-export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
-export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
+} from "./authorities/coordinator-ownership/live-task-work-start.js"
+export * from "./coordination/reconstruction/history.js"
+export * from "./coordination/reconstruction/history-result.js"
+export * from "./coordination/frontier/recovery-frontier.js"
+export * from "./coordination/run/recovery-activation.js"
+export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
+export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
   continuePlannedAttemptExecutorWork,
   PlannedAttemptExecutorCorrelationMismatch,
   requestPlannedAttemptExecutorSuspension
-} from "./planned-attempt-executor-workflow.js"
-export {
-  ControlledFakeExecutorMismatch,
-  ControlledFakeExecutorStep,
-  controlledFakePlannedAttemptExecutorLayer,
-  makeControlledFakePlannedAttemptExecutorLayer,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelation,
-  PlannedAttemptExecutorReport,
-  PlannedAttemptExecutorResult,
-  type PlannedAttemptExecutorService
-} from "./planned-attempt-executor.js"
-export {
-  productionWorkflowInterpreterLayer,
-  StartupRecoveryBlocked,
-  StartupRecoveryIssue
-} from "./production-application.js"
-export * from "./runnable-frontier.js"
+} from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
+export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
+export * from "./coordination/run/recovery-authority.js"
+export * from "./coordination/frontier/frontier.js"
+export * from "./coordination/admission/controller.js"
 export {
   journalDatabaseLocatorConfig,
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
-} from "./sqlite-journal-store.js"
+} from "./workflow-journal/adapters/sqlite-store.js"
 export {
   TaskAttemptPlanAcknowledged,
   TaskAttemptPlanHistoryContradiction,
@@ -145,13 +143,17 @@ export {
   TaskAttemptPlanRecordingResult,
   TaskAttemptPlanRecordingSimulated,
   TaskAttemptPlanRunContradiction
-} from "./task-attempt-plan-recording.js"
+} from "./workflow/protocols/task-attempt-planning/record.js"
+export * from "./workflow/protocols/task-attempt-planning/journal-evidence.js"
 export {
   deterministicTaskClaimAcquisitionPlannerLayer,
   TaskClaimAcquisitionPlanner,
   taskClaimAcquisitionPlannerConfigLayer
-} from "./task-claim-planning.js"
-export { runTaskClaimAcquisitionProtocol, TaskClaimAcquisitionDidNotConverge } from "./task-claim-protocol.js"
+} from "./workflow/protocols/task-claim-acquisition/plan.js"
+export {
+  runTaskClaimAcquisitionProtocol,
+  TaskClaimAcquisitionDidNotConverge
+} from "./workflow/protocols/task-claim-acquisition/protocol.js"
 export {
   GraphProjectionError,
   ProjectionIssue,
@@ -160,10 +162,12 @@ export {
   TaskDagSnapshot,
   TaskDagWire,
   taskRevisionFor
-} from "./task-dag.js"
-export * from "./task-tracker-facts.js"
-export * from "./task-tracker-knowledge.js"
-export * from "./task-tracker-target.js"
+} from "./authorities/task-tracker/graph.js"
+export * from "./workflow/task-tracker-facts/observation.js"
+export { makeTaskWorkSpecification, TaskWorkSpecification } from "./authorities/task-tracker/task-work-specification.js"
+export { makeTaskTrackerFactsObservedFromRead } from "./workflow/protocols/task-tracker-read/protocol.js"
+export * from "./coordination/reconstruction/graph-knowledge.js"
+export * from "./authorities/task-tracker/target.js"
 export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -171,8 +175,8 @@ export {
   OperationIdAllocator,
   PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
-} from "./task-work-planning.js"
-export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
+} from "./workflow/protocols/task-attempt-planning/plan.js"
+export { TraceOutput, TraceOutputError } from "./presentation/trace-output.js"
 export {
   FixtureReader,
   fixtureReaderFileLayer,
@@ -185,7 +189,7 @@ export {
   trackerGraphReaderLayer,
   trackerGraphReaderTestLayer,
   TrackerReadError
-} from "./tracker-graph-reader.js"
+} from "./authorities/task-tracker/graph-reader.js"
 export {
   ActiveTaskClaim,
   controlledTrackerMutationLayer,
@@ -199,14 +203,18 @@ export {
   TaskClaimRequestFailure,
   TrackerMutation,
   UnclaimedTask
-} from "./tracker-mutation.js"
+} from "./authorities/task-tracker/claim-mutation.js"
 export {
   deterministicTestWorkflowInterpreterLayer,
-  dryRunWorkflowInterpreterLayer,
-  makeDryRunWorkflowInterpreterLayer
-} from "./workflow-interpreters.js"
-export { runWorkflow } from "./workflow-run.js"
-export { encodeTraceItem, semanticTrace, workflowTraceOutputLayer } from "./workflow-trace-output.js"
+  makeDryRunWorkflowInterpreterLayer,
+  makeLiveWorkflowInterpreterLayer
+} from "./workflow/interpretation/layers.js"
+export { runWorkflow } from "./coordination/run/run.js"
+export {
+  StartupRecoveryBlocked,
+  StartupRecoveryIssue,
+  startupRecoveryLayer
+} from "./coordination/run/startup-recovery.js"
 export {
   AppliedControlDirection,
   ControlDirectionSubject,
@@ -228,8 +236,9 @@ export {
   WorkflowOccurrenceClassification,
   WorkflowOccurrenceProjection,
   workflowOccurrenceProjectionVersion
-} from "./workflow-occurrence.js"
+} from "./workflow/registry/occurrence-projection.js"
 export {
+  acquireTaskClaimThrough,
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
   causalGraphProjection,
@@ -253,4 +262,4 @@ export {
   WorkflowOperation,
   workflowOperationId,
   WorkflowTrace
-} from "./workflow.js"
+} from "./workflow/interpretation/interpreter.js"

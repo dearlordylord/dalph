@@ -1,50 +1,50 @@
 {
-  "packages/orchestrator/src/domain.ts": {
+  "packages/contracts/src/git-locator.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/github-tracker-graph-reader.ts": {
+  "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts": {
     "complexity": {
       "count": 3
     }
   },
-  "packages/orchestrator/src/journal-event-descriptor.ts": {
+  "packages/orchestrator/src/workflow/registry/event-descriptor.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/run-recovery-activation.ts": {
+  "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/workflow-journal-history.ts": {
+  "packages/orchestrator/src/coordination/reconstruction/history.ts": {
     "complexity": {
       "count": 3
     }
   },
-  "packages/orchestrator/src/run-recovery-frontier.ts": {
+  "packages/orchestrator/src/coordination/frontier/recovery-frontier.ts": {
     "complexity": {
       "count": 2
     }
   },
-  "packages/orchestrator/src/node-git-worktree.ts": {
+  "packages/orchestrator/src/authorities/git/node-worktree.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/reconstructed-run.ts": {
+  "packages/orchestrator/src/coordination/reconstruction/reduce.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/runnable-transition-recovery.ts": {
+  "packages/orchestrator/src/coordination/frontier/recovery.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/task-dag.ts": {
+  "packages/orchestrator/src/authorities/task-tracker/graph.ts": {
     "complexity": {
       "count": 2
     }

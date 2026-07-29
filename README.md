@@ -11,7 +11,7 @@ only its managed execution history and typed orchestration decisions.
 
 ## Status
 
-Production implementation is underway in `packages/orchestrator`. The current
+Production implementation is split across the packages described below. The current
 vertical slice reads a controlled tracker fixture, validates and projects its
 task DAG, derives a bounded runnable frontier, and executes that frontier
 through a read-only dry-run interpreter. Dry-run completion timing is
@@ -27,7 +27,10 @@ work, integrate accepted results, or establish a terminal run disposition.
 ## Repository map
 
 - `docs/` — stable Dalph context and architecture.
-- `packages/orchestrator/` — the production Effect V4 package and dry-run CLI.
+- `packages/contracts/` — exact contracts shared by orchestration and executor implementations.
+- `packages/orchestrator/` — generic Effect V4 workflow coordination and authority adapters.
+- `packages/executor/` — concrete planned-attempt executor adapters.
+- `packages/dalph/` — the CLI, application composition, and concrete presentation.
 - `research/` — completed Wayfinder decisions and market/tool evaluations.
 - `prototypes/control-plane/` — disposable Effect V4 seam evidence.
 - `prototypes/execution-trace/` — disposable multi-actor trace presentation.
@@ -43,7 +46,7 @@ supported. Node 24.15.0 with pnpm 10.29.0 or newer is recommended.
 ```sh
 pnpm install
 pnpm build
-node packages/orchestrator/dist/bin/dalph.js \
+node packages/dalph/dist/bin/dalph.js \
   run packages/orchestrator/fixtures/diamond.json --dry
 ```
 
