@@ -7,8 +7,12 @@ issue #163 for the maintained cassette library delivered by issue #165.
 
 An authored cassette contains metadata, structured starting facts, and one
 ordered story. Running the cassette is the trigger, so the story contains no
-runner command. The cassette schema contains no task-work capacity field;
-the maintained cassette runner always supplies one position.
+runner command. Task-work capacity is not a top-level cassette field. It is a
+typed part of the chronological story because the available capacity may
+change while the same run is active. The initial story item reuses the
+production `InitialControlPolicy`, which may later include settings besides
+capacity. A later live change reuses the production
+`SetTaskExecutionCapacity` command and its ordinary durability rules.
 
 Story items remain distinct typed groups even when their lyrics read as one
 case. Production surfaces own the domain schemas for their real actions,
@@ -24,15 +28,31 @@ owners is a fast programming defect with diagnostics naming the tag and
 registrations. A production interaction consumes only the current item and
 never searches later items for a convenient match.
 
+The interpreter invokes the same production coordinator activation program as
+the executable and supplies controlled implementations of its ordinary
+production boundary services. Dalph—not the interpreter or authored
+cassette—creates workflow identities. Cassette code does not invoke reducers,
+append journal rows, or mutate reconstructed state behind that production
+program.
+
+Tracker story items describe only the authoritative responses Dalph observes.
+They do not require or invent an outside edit or actor that caused a response
+to change. Richer causal lyrics may be added by a later accepted scenario.
+
 One required cassette-only outcome-assertion group ends the story. Its expected
 and forbidden assertions are checked against the complete observed production
 meaning after the coordination loop returns. Schema decoding rejects a missing,
 duplicate, or non-terminal assertion group. No accepted #165 case needs an
 intermediate assertion; a later scenario may change that contract explicitly.
 
+The named, manually authored cassette catalog is a maintained checked-in
+artifact consumed by acceptance tests, documentation tooling, and Reducer Lab.
+Model-based generation may add valid cassettes later, but is not part of issue
+#165.
+
 ## A maintainer runs an authored singleton-task cassette
 
-A Dalph maintainer has an authored cassette for run `cassette-singleton`. Its
+A Dalph maintainer has an authored cassette named `cassette-singleton`. Its
 starting tracker facts contain one open task A with readable title and body,
 no prerequisite or grouping edges, and an empty structured task-claim list.
 Its structured Git starting fact says the planned worktree is absent because
@@ -42,9 +62,11 @@ in-memory Dalph journal is empty.
 
 The maintainer asks the cassette runner to run the scenario. The cassette has
 structured starting facts and one ordered story. Calling the runner starts the
-scenario; the cassette contains no synthetic `RunCoordinator` command and no
-capacity setting. Authored cassette execution always permits one task-work
-position. The story contains typed expected Dalph actions, controlled outside
+scenario; the cassette contains no synthetic `RunCoordinator` command. The
+story supplies a production `InitialControlPolicy` whose task-execution
+capacity is one for this singleton case. Other cassettes may initialize another
+capacity and may later contain a production `SetTaskExecutionCapacity` command.
+The story also contains typed expected Dalph actions, controlled outside
 results, cassette lifecycle facts, and one final cassette-only outcome-
 assertion group.
 
@@ -64,6 +86,10 @@ reads and records A's exact task-work specification, records the immutable
 attempt, reconciles the controlled worktree, and asks the executor to do the
 complete attempt work. The executor first reports Running and then Terminal
 Completed.
+
+The issue #165 cassette stops after that terminal coarse executor report. The
+later tracker completion, integration, and whole-graph convergence protocols
+belong to later milestones and are not silently simulated by this cassette.
 
 The authored cassette declares typed outcome assertions, not production
 events. It says that Dalph must observe the exact normalized tracker revision,
@@ -202,11 +228,15 @@ For each corresponding prefix, Dalph folds the source journal and folds the
 recorded cassette as history. It compares reconstructed domain state and runs
 the same pure frontier selector on both states. It separately compares the
 complete domain workflow history and logical applied-through occurrence count.
-Generated identities use one consistent renaming when they differ. In the
-illegal-early-start negative, the final operational state converges while the
-retained occurrence history and an earlier selector decision expose the
-illegal ordering. A later occurrence cannot hide that mismatch merely because
-the final operational states agree.
+`operationalStateEquivalent` names the first comparison;
+`workflowHistoryEquivalent` names the second. Generated identities and
+locators use typed, per-entry renamers and one consistent accepted renaming;
+authoritative tracker and Git identities are never renamed. In the illegal-
+early-start negative, both `ExecutorWorkResponsibilityBegan` and the first
+Running report appear before the worktree-ready proof. The final operational
+state converges while the retained occurrence history and an earlier selector
+decision expose the illegal ordering. A later occurrence cannot hide that
+mismatch merely because the final operational states agree.
 
 No outside provider call, crash, or retry occurs during this pure projection
 and fold. Repeating projection of the same valid history produces the same
@@ -222,48 +252,9 @@ Acceptance tests:
 - `renders recorded operator commands from their structured entry`
 - `rejects an illegal early start even when the final semantic state agrees`
 
-## An authored outside occurrence is never observed
-
-An authored cassette contains a tracker edit made by another person after the
-last tracker result Dalph receives. No later logical tracker read observes that
-edit. The production loop runs only from the provider results it actually
-receives and records only those observations.
-
-Projecting the run journal produces no recorded entry for the unobserved edit.
-There is no retry because Dalph made no request whose result was lost. The
-maintainer can still read the unobserved edit in the authored cassette, while
-the recorded cassette truthfully contains less outside-world information.
-
-Dalph must not infer the edit from changed final fake state, invent a tracker
-actor occurrence, or copy all authored outside occurrences into recorded
-history.
-
-Acceptance test:
-
-- `does not invent an authored outside occurrence that Dalph never observes`
-
-## Generated valid cassettes shrink to a readable failing checkpoint
-
-The property generator constructs a small acyclic task graph directly, with
-complete read coverage, readable task-work specifications, a run command,
-coarse executor reports for each planned attempt, and expected decision
-checkpoints. It never starts from arbitrary JSON or filters invalid graphs
-afterward.
-
-Each generated authored cassette is decoded and run through the production
-loop into a journal accepted by workflow-journal-history validation. The
-journal is projected and checked prefix by prefix. Fast-check shrinks the
-graph, reports, and checkpoint list together, so any counterexample remains a
-valid domain-readable cassette and retains the first failing semantic
-checkpoint.
-
-No real provider retry or process crash applies because generated runs use
-bounded in-memory providers. A generated controlled mismatch is a test failure,
-not a reason to discard the sample.
-
-Acceptance test:
-
-- `generated valid authored cassettes produce valid journals and checkpoint-equivalent recordings`
+Model-based generation of valid cassettes remains compatible with this format,
+but is deferred. Issue #165 establishes and tests a manually authored cassette
+catalog; it does not introduce a property generator for authored cassettes.
 
 ## Changed and unchanged observations are measured before compression work
 
@@ -272,9 +263,11 @@ first is a complete changed observation and the next two are comparable
 unchanged reconfirmations. Dalph encodes the journal records and recorded
 cassette with their maintained schemas and measures their UTF-8 byte sizes.
 
-This is a pure measurement; no person-visible runtime behavior, outside
-boundary, crash recovery, or retry changes. The report records both sizes and
-does not propose graph deltas or compression as part of issue #165.
+This is a pure baseline measurement, not a representative production benchmark;
+no person-visible runtime behavior, outside boundary, crash recovery, or retry
+changes. The report records both sizes and does not generalize to other graph
+shapes, storage overhead, graph deltas, or a compression decision as part of
+issue #165.
 
 Acceptance test:
 

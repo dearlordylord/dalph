@@ -174,6 +174,17 @@ One durable Dalph coordination instance for one task-tracker target. It begins
 when Dalph records a fresh `RunId` and ends with one run termination record.
 _Avoid_: Process, task, historical harness run
 
+**Dalph-generated workflow identity or locator**:
+An identity or resource locator that Dalph creates for its own workflow, such
+as a run, operation, attempt, control command, planned branch, or planned
+worktree. Recorded-cassette equivalence may consistently alpha-rename these
+values through exhaustive typed renamers for each recorded entry. It must never
+rename authority-owned task identities, tracker revisions, task revisions, or
+Git commit SHAs, because equality of those values is part of the observed
+domain meaning.
+_Avoid_: Renaming fields by property name, generated tracker identity,
+interchangeable Git SHA
+
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
 It contains only facts Dalph recorded about its workflow; Git history,
