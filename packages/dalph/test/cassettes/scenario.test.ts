@@ -366,6 +366,41 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
     }).pipe(Effect.flip)
     expect(wrongSpecification._tag).toBe("SchemaError")
 
+    const duplicateStartingSpecification = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      startingFacts: {
+        ...singletonCassette.startingFacts,
+        taskWorkSpecifications: [
+          singletonCassette.startingFacts.taskWorkSpecifications[0],
+          singletonCassette.startingFacts.taskWorkSpecifications[0]
+        ]
+      }
+    }).pipe(Effect.flip)
+    expect(duplicateStartingSpecification._tag).toBe("SchemaError")
+
+    const specificationB = {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement task B.",
+      taskId: "B",
+      title: "Implement B"
+    }
+    const startingSpecificationB = {
+      body: specificationB.body,
+      taskId: specificationB.taskId,
+      title: specificationB.title
+    }
+    const returnedOutOfRequestedOrder = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      outsideOccurrences: singletonCassette.outsideOccurrences.flatMap((occurrence) =>
+        occurrence._tag === "TaskWorkSpecificationReadReturned" ? [specificationB, occurrence] : [occurrence]
+      ),
+      startingFacts: {
+        ...singletonCassette.startingFacts,
+        taskWorkSpecifications: [...singletonCassette.startingFacts.taskWorkSpecifications, startingSpecificationB]
+      }
+    }).pipe(Effect.flip)
+    expect(returnedOutOfRequestedOrder._tag).toBe("TrackerGraphReader.AdapterReadError")
+
     const decisionMismatch = yield* runAuthoredScenarioCassette({ ...singletonCassette, expectedDecisions: [] }).pipe(
       Effect.flip
     )

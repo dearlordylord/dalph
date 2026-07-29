@@ -132,7 +132,7 @@ export type AuthoredVisibleBehavior = typeof AuthoredVisibleBehavior.Type
 const authoredScenarioCassetteVersion = 1 as const
 
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
-  actorCommands: Schema.Array(AuthoredCassetteCommand).check(Schema.isLengthBetween(1, 1)),
+  actorCommands: Schema.Tuple([AuthoredCassetteCommand]),
   expectedDecisions: Schema.Array(AuthoredCassetteDecision),
   expectedVisibleBehavior: AuthoredVisibleBehaviorExpectation,
   name: Schema.NonEmptyString,
@@ -162,16 +162,15 @@ const startingSpecificationTaskIdsAreUnique = Schema.makeFilter(
 
 const firstReturnedSpecificationsMatchStartingFacts = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
-    const firstReturns = cassette.outsideOccurrences.filter(
-      (occurrence, index, occurrences) =>
-        occurrence._tag === "TaskWorkSpecificationReadReturned" &&
-        occurrences.findIndex(
-          (candidate) =>
-            candidate._tag === "TaskWorkSpecificationReadReturned" && candidate.taskId === occurrence.taskId
-        ) === index
+    const firstReturns = cassette.outsideOccurrences.flatMap((occurrence, index, occurrences) =>
+      occurrence._tag === "TaskWorkSpecificationReadReturned" &&
+      occurrences.findIndex(
+        (candidate) => candidate._tag === "TaskWorkSpecificationReadReturned" && candidate.taskId === occurrence.taskId
+      ) === index
+        ? [occurrence]
+        : []
     )
     const mismatch = firstReturns.find((occurrence) => {
-      if (occurrence._tag !== "TaskWorkSpecificationReadReturned") return false
       const startingSpecification = cassette.startingFacts.taskWorkSpecifications.find(
         ({ taskId }) => taskId === occurrence.taskId
       )
@@ -329,7 +328,6 @@ export interface AuthoredScenarioCassetteRun {
 export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthored")(function* (input: unknown) {
   const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
   const command = cassette.actorCommands[0]
-  if (command === undefined) return yield* Effect.die("decoded cassette must contain one run command")
 
   const traceItems = yield* Ref.make<ReadonlyArray<TraceItem>>([])
   const trace = WorkflowTrace.of({
@@ -400,7 +398,7 @@ const lyricForOutsideOccurrence = (occurrence: AuthoredOutsideOccurrence): strin
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>
   [
     `Scenario: ${cassette.name}.`,
-    `The maintainer starts run ${cassette.actorCommands[0]?.runId ?? "without a decoded command"}.`,
+    `The maintainer starts run ${cassette.actorCommands[0].runId}.`,
     `The expected journal result is ${cassette.expectedVisibleBehavior.journalHistory}.`,
     ...cassette.expectedVisibleBehavior.forbiddenJournalOccurrenceTags.map(
       (tag) => `The journal must not contain ${tag}.`

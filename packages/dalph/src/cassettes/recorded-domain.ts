@@ -97,17 +97,15 @@ const identityRenamingMap = (renamings: ReadonlyArray<{ readonly from: string; r
 
 type IdentityRenamingMaps = ReadonlyMap<string, ReadonlyMap<string, string>>
 
-const renamedString = (value: string, field: string | undefined, maps: IdentityRenamingMaps): string =>
-  field === undefined ? value : (maps.get(field)?.get(value) ?? value)
+const renamedString = (value: string, field: string, maps: IdentityRenamingMaps): string =>
+  maps.get(field)?.get(value) ?? value
 
-const renameEncodedIdentity = (value: unknown, field: string | undefined, maps: IdentityRenamingMaps): unknown => {
+const renameEncodedIdentity = (value: unknown, field: string, maps: IdentityRenamingMaps): unknown => {
   if (typeof value === "string") return renamedString(value, field, maps)
   if (Array.isArray(value)) return value.map((item) => renameEncodedIdentity(item, field, maps))
   if (value === null || typeof value !== "object") return value
   return Object.fromEntries(
-    Reflect.ownKeys(value).flatMap((key) =>
-      typeof key === "string" ? [[key, renameEncodedIdentity(Reflect.get(value, key), key, maps)] as const] : []
-    )
+    Object.entries(value).map(([key, nested]) => [key, renameEncodedIdentity(nested, key, maps)] as const)
   )
 }
 
@@ -129,7 +127,7 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
     ["worktree", identityRenamingMap(renaming.worktreeLocators)]
   ])
   const encoded = yield* Schema.encodeUnknownEffect(RecordedCassette)(cassette)
-  return yield* Schema.decodeUnknownEffect(RecordedCassette)(renameEncodedIdentity(encoded, undefined, maps))
+  return yield* Schema.decodeUnknownEffect(RecordedCassette)(renameEncodedIdentity(encoded, "", maps))
 })
 
 export const invertCassetteIdentityRenaming = (renaming: CassetteIdentityRenaming): CassetteIdentityRenaming =>
