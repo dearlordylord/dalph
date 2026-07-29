@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest"
 import { Effect, Layer, Match } from "effect"
-import { trackerGraphReaderContract } from "../../../../test/tracker-graph-reader-contract.js"
+import { trackerGraphReaderContract } from "../../../../test/contracts/tracker-graph-reader-contract.js"
 import { FixtureTarget } from "../fixture/target.js"
 import { TaskLifecycle } from "../task.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"

@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { trackerGraphReaderContract } from "../../../test/tracker-graph-reader-contract.js"
+import { trackerGraphReaderContract } from "../../../test/contracts/tracker-graph-reader-contract.js"
 import { TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "./fixture/target.js"
 import { TaskLifecycle } from "./task.js"

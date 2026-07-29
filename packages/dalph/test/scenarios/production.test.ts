@@ -58,7 +58,7 @@ import {
 import { ConfigProvider, Effect, FileSystem, Layer } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
-import { productionWorkflowInterpreterLayer } from "./production.js"
+import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 
 it.effect("installs the running-then-terminal coarse fake in the production-shaped composition", () =>
   Effect.scoped(

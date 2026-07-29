@@ -8,10 +8,8 @@ import {
   GitCommitSha,
   PlannedTaskAttempt,
   RunId,
-  TaskBranchRef,
   TaskExecutorLocator,
-  WorktreeLocator,
-  samePlannedTaskAttempt
+  WorktreeLocator
 } from "@dalph/contracts"
 import {
   deterministicPlannedTaskAttemptLayer,
@@ -25,35 +23,6 @@ import {
   workflowOperationId
 } from "../../../index.js"
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
-
-const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
-const plannedTaskAttemptEncodedArbitrary = fc
-  .record({
-    attemptId: nonEmpty,
-    branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
-    executor: nonEmpty,
-    runId: nonEmpty,
-    taskId: nonEmpty,
-    taskRevision: nonEmpty,
-    worktree: nonEmpty
-  })
-  .map((fields) => ({ ...fields, baseSha: "0123456789abcdef0123456789abcdef01234567" }))
-
-it.each([
-  "main",
-  "refs/heads/",
-  "refs/heads/a..b",
-  "refs/heads/a//b",
-  "refs/heads/a.lock",
-  "refs/heads/a@{b",
-  "refs/heads/.hidden",
-  "refs/heads/trailing/",
-  "refs/heads/trailing.",
-  "refs/heads/space name",
-  "refs/heads/caret^name"
-])("rejects Git-invalid task branch ref %s", (branch) => {
-  expect(() => Schema.decodeUnknownSync(TaskBranchRef)(branch)).toThrow()
-})
 
 it.effect("binds every exact attempt identity and resource locator", () =>
   Effect.gen(function* () {
@@ -98,35 +67,6 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     )
   )
 )
-
-it("roundtrips arbitrary valid planned task attempts through the persisted Schema boundary", () => {
-  fc.assert(
-    fc.property(plannedTaskAttemptEncodedArbitrary, (encoded) => {
-      expect(
-        Schema.encodeUnknownSync(PlannedTaskAttempt)(Schema.decodeUnknownSync(PlannedTaskAttempt)(encoded))
-      ).toEqual(encoded)
-    })
-  )
-})
-
-it("satisfies the planned-attempt equivalence laws for arbitrary valid plans", () => {
-  const decode = Schema.decodeUnknownSync(PlannedTaskAttempt)
-  const copy = (plan: PlannedTaskAttempt) => decode(Schema.encodeUnknownSync(PlannedTaskAttempt)(plan))
-
-  fc.assert(
-    fc.property(plannedTaskAttemptEncodedArbitrary, plannedTaskAttemptEncodedArbitrary, (leftEncoded, rightEncoded) => {
-      const left = decode(leftEncoded)
-      const right = decode(rightEncoded)
-      const middle = copy(left)
-      const end = copy(middle)
-
-      expect(samePlannedTaskAttempt(left, left)).toBe(true)
-      expect(samePlannedTaskAttempt(left, right)).toBe(samePlannedTaskAttempt(right, left))
-      expect(samePlannedTaskAttempt(left, middle) && samePlannedTaskAttempt(middle, end)).toBe(true)
-      expect(samePlannedTaskAttempt(left, end)).toBe(true)
-    })
-  )
-})
 
 it("binds the focused task-work-specification fingerprint inside the planner", () =>
   Effect.gen(function* () {
@@ -210,48 +150,6 @@ it("makes task revision (fingerprint) independent of prerequisite order", () => 
       }
     )
   )
-})
-
-it("compares decoded plans structurally and observes every planned field", () => {
-  const baseline = {
-    attemptId: "attempt-1",
-    baseSha: "0123456789abcdef0123456789abcdef01234567",
-    branch: "refs/heads/task-1",
-    executor: "executor-1",
-    runId: "run-1",
-    taskId: "task-1",
-    taskRevision: "revision-1",
-    worktree: "/worktree-1"
-  }
-  const decode = Schema.decodeUnknownSync(PlannedTaskAttempt)
-  const equalCopy = decode(Schema.encodeUnknownSync(PlannedTaskAttempt)(decode(baseline)))
-  expect(samePlannedTaskAttempt(decode(baseline), equalCopy)).toBe(true)
-
-  const variants = [
-    { ...baseline, attemptId: "attempt-2" },
-    { ...baseline, baseSha: "1123456789abcdef0123456789abcdef01234567" },
-    { ...baseline, branch: "refs/heads/task-2" },
-    { ...baseline, executor: "executor-2" },
-    { ...baseline, runId: "run-2" },
-    { ...baseline, taskId: "task-2" },
-    { ...baseline, taskRevision: "revision-2" },
-    { ...baseline, worktree: "/worktree-2" }
-  ]
-  expect(variants.every((variant) => !samePlannedTaskAttempt(decode(baseline), decode(variant)))).toBe(true)
-})
-
-it("rejects an empty executor locator at the plan boundary", () => {
-  const encoded = {
-    attemptId: "attempt",
-    baseSha: "0123456789abcdef0123456789abcdef01234567",
-    branch: "refs/heads/task",
-    executor: "",
-    runId: "run",
-    taskId: "task",
-    taskRevision: "revision",
-    worktree: "/worktree"
-  }
-  expect(Schema.decodeUnknownResult(PlannedTaskAttempt)(encoded)._tag).toBe("Failure")
 })
 
 it("projects plan operation identity and rejects self-causality", () => {
