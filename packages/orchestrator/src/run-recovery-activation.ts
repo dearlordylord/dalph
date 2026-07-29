@@ -168,6 +168,29 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
   )
 )
 
+/**
+ * Fresh-run composition that records coarse executor responsibility and
+ * reports while exposing no recovered transitions.
+ */
+export const journaledFreshRunRecoveryActivationLayer = Layer.effect(
+  RunRecoveryActivation,
+  Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const journal = yield* JournalStore
+    return RunRecoveryActivation.of({
+      _tag: "SyntheticFreshOnlyActivation",
+      continuePlannedAttemptExecutorWork: (plannedAttempt) =>
+        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.provideService(JournalStore, journal)
+        ),
+      readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+      reconstructedPlannedAttemptPositions: [],
+      waitForNextExecutorWake: Effect.void
+    })
+  })
+)
+
 export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
   runId: RunId
 ) {

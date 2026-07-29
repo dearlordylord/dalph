@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => ({
     environment: "node",
     exclude: mode === "coverage" ? [mbtTestPattern] : [],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: 4,
+    maxWorkers: 2,
     testTimeout: 10_000
   }
 }))
