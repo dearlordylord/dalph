@@ -21,7 +21,7 @@ The accepted milestone boundary is now:
   the fake-provider milestone.
 
 The accepted chronological scenarios are in
-`docs/scenarios/review-loop-executor-source-boundary.md`. The remainder of this
+`docs/scenarios/planned-attempt-executor-boundary.md`. The remainder of this
 file is retained only as provenance for the superseded decision.
 
 Previous status: accepted Wayfinder reconciliation of issue #133 under issue #126,
@@ -123,7 +123,7 @@ therefore remains fail-closed.
 | A stage-name-free test executor drives generic orchestration | The same generic frontier/admission/activation path works without review-loop vocabulary or production multi-executor machinery. | `generic orchestration uses a stage-name-free executor bundle`; production composition test; emitted API/source scan. |
 
 The detailed chronological scenarios are in
-[`docs/scenarios/review-loop-executor-source-boundary.md`](../docs/scenarios/review-loop-executor-source-boundary.md).
+[`docs/scenarios/planned-attempt-executor-boundary.md`](../docs/scenarios/planned-attempt-executor-boundary.md).
 
 ## Deferred work
 

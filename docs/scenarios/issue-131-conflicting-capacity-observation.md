@@ -13,8 +13,9 @@ Alice is monitoring run R, but she does not directly trigger this automatic
 behavior. The running Dalph coordinator has two task-work positions. The fake
 tracker reports Tasks A and B eligible.
 Dalph has planned `(run R, attempt attempt-A-3)` for Task A and recorded that
-it is starting executor work for that exact pair. Task A therefore occupies
-one position. Task B may use the other position.
+its executor-work responsibility began for that exact pair. This does not claim
+that the executor accepted or started work. Task A therefore occupies one
+position. Task B may use the other position.
 
 The fake-executor milestone does not model a coding agent, reviewer, handback,
 retry, or restoration step inside the executor.
@@ -46,7 +47,7 @@ below applies; no external executor request survives to retry.
 
 ### Acceptance-test mapping
 
-- `frees Task A's position when its planned-attempt executor work completes`
+- `frees the exact task-work position after a terminal report`
   proves A stops using task-work capacity.
 - The diamond cassette in #167 proves that executor completion alone does not
   release tracker dependants.
@@ -87,19 +88,21 @@ independent executor response to retry.
 
 ### Acceptance-test mapping
 
-- `keeps Task A's position while suspension is still in progress` proves the
-  position remains occupied before the suspension result.
-- `frees Task A's position after safe suspension and resumes the same attempt`
-  proves release and later reacquisition.
+- `releases capacity only after the planned attempt is safely suspended`
+  proves the position remains occupied before the suspension result and becomes
+  available afterward.
+- `resumes the same planned attempt after unpause` proves later reacquisition
+  uses the same attempt.
 
 ## Dalph and the fake executor crash together
 
 ### Starting situation
 
 Alice is monitoring run R, but she does not cause the crash. Dalph has recorded
-`(run R, attempt attempt-A-3)` and the intent to start its executor work. Its
-process-local controller shows Task A using one position. The controlled fake
-executor runs in the same process.
+`(run R, attempt attempt-A-3)` and that its executor-work responsibility began.
+This does not prove that the executor accepted or started work. Its process-local
+controller shows Task A using one position. The controlled fake executor runs
+in the same process.
 
 ### Trigger and ordered actions
 
