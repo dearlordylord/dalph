@@ -1,9 +1,9 @@
 # Proposed source-code module structure
 
-Status: Accepted for implementation in compiling structural slices
+Status: Implemented and verified in compiling structural slices
 
-Implementation base: local `master` at
-`de51cd58bcc7c3291f1fd3e96a378d2a573c1e4f`
+Implementation base: successive local `master` integration through
+`3df566f3a31117b3470435f88d49e9458d0ddeef`
 
 This proposal changes no Dalph runtime behavior. It reorganizes production
 source and tests so that the filesystem reflects the behavior and authority
@@ -85,12 +85,13 @@ implemented.
 | Frontier, admission, activation, and finality | [#118 Specify bounded frontier derivation, scheduling, and capacity](https://github.com/dearlordylord/dalph/issues/118), [#151 Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151), [#132 Activate fresh and recovered work through one loop](https://github.com/dearlordylord/dalph/issues/132) (closed) | [#131 Derive the runnable frontier and bounded admission](https://github.com/dearlordylord/dalph/issues/131), [#54 Resize task admission non-preemptively](https://github.com/dearlordylord/dalph/issues/54), [#152 Decide explicit preemptive task-work capacity contraction](https://github.com/dearlordylord/dalph/issues/152), [#102 Terminate one globally settled live run](https://github.com/dearlordylord/dalph/issues/102) |
 | Planned-attempt executor work | [#158 Expose one planned-attempt executor boundary and controlled fake](https://github.com/dearlordylord/dalph/issues/158), [#160 Make workflow-event initiation runtime-exhaustive](https://github.com/dearlordylord/dalph/issues/160), [#161 Test duplicate unfinished planned-attempt executor work through recovery](https://github.com/dearlordylord/dalph/issues/161), [#162 Define planned-attempt executor work and task-position release](https://github.com/dearlordylord/dalph/issues/162) (closed) | [#168 Reconcile the experimental review-loop executor after the fake-provider milestone](https://github.com/dearlordylord/dalph/issues/168), [#127 Research configurable per-task resolution pipelines](https://github.com/dearlordylord/dalph/issues/127) |
 | Operator control | [#155 Decide durable evidence for applied pause and unpause directions](https://github.com/dearlordylord/dalph/issues/155) (closed decision) | [#166 Apply durable Pause and Unpause directions](https://github.com/dearlordylord/dalph/issues/166), [#134 Pause or unpause a whole run](https://github.com/dearlordylord/dalph/issues/134), [#135 Pause a task and its grouping descendants](https://github.com/dearlordylord/dalph/issues/135), [#156 Reject stale task pause and unpause requests visibly](https://github.com/dearlordylord/dalph/issues/156) |
-| Cassettes and conformance | [#123 Define model-based and crash/pause cut-point test coverage](https://github.com/dearlordylord/dalph/issues/123) (closed) | [#163 Specify production-shaped fake-provider behavior and executable cassettes](https://github.com/dearlordylord/dalph/issues/163), [#165 Run and round-trip domain-readable cassettes](https://github.com/dearlordylord/dalph/issues/165), [#167 Complete fake-provider behavior through executable cassettes](https://github.com/dearlordylord/dalph/issues/167), [#159 Stabilize model-based coverage timing in hosted CI](https://github.com/dearlordylord/dalph/issues/159) |
+| Cassettes and conformance | [#123 Define model-based and crash/pause cut-point test coverage](https://github.com/dearlordylord/dalph/issues/123) (closed); the accepted #165 scenarios and their implementation are present on local `master` | [#163 Specify production-shaped fake-provider behavior and executable cassettes](https://github.com/dearlordylord/dalph/issues/163), [#167 Complete fake-provider behavior through executable cassettes](https://github.com/dearlordylord/dalph/issues/167), [#159 Stabilize model-based coverage timing in hosted CI](https://github.com/dearlordylord/dalph/issues/159) |
 | CLI and presentation | [#100 Preserve truthful causal concurrent trace order](https://github.com/dearlordylord/dalph/issues/100) (closed) | [#103 Expose GitHub tracker targets through the dry-run CLI](https://github.com/dearlordylord/dalph/issues/103), [#33 Ship the multi-actor semantic trace view](https://github.com/dearlordylord/dalph/issues/33), [#80 Ship the trace reader and task or causal cursor view](https://github.com/dearlordylord/dalph/issues/80) |
 
-Issue state in this table was reread from GitHub on 2026-07-29 after merging
-local `master`; #164 and #158 are closed while #163, #165, #166, and #167
-remain open. An accepted
+Issue state in this table was reread from GitHub on 2026-07-29 before the final
+local-master integrations. This proposal therefore records repository facts
+about #165 without asserting that the tracker issue itself has since been
+closed. An accepted
 issue or scenario wins if an older repository note still describes a
 superseded design. In particular, closed #155 has decided the applied-direction
 semantics even though ADR-0008 still says “Reconsidering.”
@@ -145,9 +146,10 @@ packages/
         workflow-trace.ts
       cassettes/
         authored.ts
+        measurement.ts
+        recorded-domain.ts
         recorded.ts
-        projection.ts
-        runner.ts
+        index.ts
       index.ts
     test/
       scenarios/
@@ -156,6 +158,8 @@ packages/
       conformance/
         planned-attempt-executor.mbt.test.ts
       cassettes/
+        scenario.test.ts
+        scenario.property.test.ts
 ```
 
 ```text
@@ -293,9 +297,10 @@ packages/orchestrator/
 
 Production tests remain colocated with the module whose interface they
 exercise. Only cross-module scenario, contract, conformance, and reusable test
-support belong under package-level `test/`. `cassettes/` is an issue-owned
-near-term target for #163, #165, and #167, not a claim that those open issues are
-already implemented. Likewise, `control-direction-application/` is the #166
+support belong under package-level `test/`. The #165 cassette slice is
+implemented under `@dalph/dalph`, with its cross-package scenario and property
+tests under `packages/dalph/test/cassettes/`; #163 and #167 retain ownership of
+the broader fake-provider behavior. Likewise, `control-direction-application/` is the #166
 target; the behavior-neutral reorganization keeps today's control behavior
 together under `control/` until that issue implements the replacement.
 `claimed-task-eligibility-observation/` is ADR-0002's target placement; the
@@ -555,15 +560,17 @@ names, actors, or authority.
 
 ### `cassettes`
 
-Issues #163, #165, and #167 own the near-term domain-readable cassette seam.
+Issues #163, #165, and #167 own the domain-readable cassette seam.
 Authored cassettes drive the production coordination loop through fake
 authority interfaces; they never inject reducer state or journal events.
 Recorded cassettes are projected from journaled occurrence meanings and folded
 as history; they never run as an outside-world script. This is a first-class
 executable scenario module under `@dalph/dalph`, where it can compose the
 orchestrator and concrete fake executor without reversing either dependency.
-It is not presentation and not disposable test support. Until those issues
-land, the directory is a target placement only.
+It is not presentation and not disposable test support. #165 now supplies the
+authored runner, recorded-domain projection and renaming, byte measurement,
+lyrics, prefix-by-prefix equivalence checks, and generated-cassette property.
+#163 and #167 still own behavior beyond that accepted slice.
 
 ## Specific disposition of current production files
 
@@ -573,6 +580,11 @@ a split when it currently contains several semantic owners.
 | Current file | Proposed disposition |
 | --- | --- |
 | `activation-coordinator.ts` | Move to `coordination/activation/coordinator.ts`. |
+| `packages/dalph/src/cassettes/authored.ts` | Keep the authored Schema, production-loop runner, decision capture, boundary failures, and readable lyrics together at the composition root, where the controlled executor and generic orchestrator may both be installed. |
+| `packages/dalph/src/cassettes/measurement.ts` | Keep maintained journal-versus-recorded-cassette encoding measurements beside the cassette schemas they measure. |
+| `packages/dalph/src/cassettes/recorded-domain.ts` | Keep the domain occurrence entry union and identity-renaming Schema independent of physical journal storage fields. |
+| `packages/dalph/src/cassettes/recorded.ts` | Keep journal projection, history folding, checkpoint comparison, renaming, and recorded lyrics together as the recorded-cassette protocol. |
+| `packages/dalph/src/cassettes/index.ts` | Retain as the public cassette surface exported by `@dalph/dalph`; it contains no behavior. |
 | `cli.ts` | Move to `packages/dalph/src/application/cli.ts`. |
 | `control-command.ts` | Move behavior-neutral to `control/command.ts` with its current receipt contract intact. #166 later moves retained request decoding to `workflow/protocols/control-direction-application/request.ts`, replaces receipt events, and deletes rejected identities under its own scenarios. |
 | `control-service.ts` | Move behavior-neutral to `control/service.ts`. #166 later replaces its receipt behavior with applied-direction behavior; this structural migration must not do so. |
@@ -850,8 +862,9 @@ before narrowing the root barrel. Remove only exports proven internal or
 explicitly superseded by #143, plus temporary compatibility exports and empty
 files.
 
-The #163/#165/#167 cassette module is a separate behavior-owning delivery
-slice, not part of these mechanical moves.
+The #165 cassette module arrived as a separate behavior-owning delivery slice
+on local `master` and was integrated at the composition-root placement selected
+above. #163 and #167 remain the broader behavior owners.
 
 ## Verification and scenario-to-test mapping
 
@@ -882,14 +895,21 @@ moving, not weakening, their existing tests:
 | #164 fresh read finds unchanged facts | Record later freshness compactly only when it references an earlier matching full observation in the same run | `a fresh unchanged read records later freshness compactly and restart reuses the earlier full facts`; `reconfirms unchanged generated graphs compactly while preserving reconstructable facts` |
 | #164 focused instructions and completion acknowledgement | Plan only from journaled exact title/body facts; a completion acknowledgement alone does not release dependants | `replays a focused read from its canonical journal observation without calling the provider again`; `records exact normalized title and body only through the focused attempt read`; `classifies every generated pre-attempt fact-to-next-intent crash prefix` |
 | #162 planned-attempt executor work | Correlate by `RunId` plus `AttemptId`; release capacity only after terminal or safe suspension | `drives one planned attempt through the generic executor boundary`; `releases capacity only after the planned attempt is safely suspended`; `replays the planned-attempt model through the executor boundary` |
+| #165 authored singleton cassette | Supply tracker, claim, worktree, and executor facts through the production interfaces; compare declared decisions and visible results without injecting journal events or reducer state | `runs an authored cassette through the production loop and matches its declared decisions`; `rejects an executor entry for a different planned attempt`; `fails typed authored boundaries and declared behavior mismatches` |
+| #165 recorded cassette projection | Project exactly one domain occurrence per journal record and compare history, reconstructed state, and frontier decisions after every prefix | `round-trips every journaled occurrence and preserves state and decisions after every prefix`; `renders recorded operator commands from their structured entry`; `rejects an illegal early start even when the final semantic state agrees` |
+| #165 observed-history boundary | Keep authored outside facts that Dalph never observed out of the recorded cassette | `does not invent an authored outside occurrence that Dalph never observes` |
+| #165 generated cassettes | Generate valid small graphs and preserve journal validity plus checkpoint equivalence while shrinking | `generated valid authored cassettes produce valid journals and checkpoint-equivalent recordings` |
+| #165 encoding measurement | Report maintained encoded sizes for complete changed observations and compact unchanged reconfirmations without changing compression behavior | `reports encoded journal and cassette sizes for changed and unchanged graph observations` |
 | #118/#131 frontier and admission | Preserve responsibility order and exact zero-or-one task-work positions | `gives a resumed responsibility the next released position before fresh work`; `rejects binding, cancellation, and release for positions it does not own` |
 | #151/#132 activation | One owner per transition with rollback-safe admission handoff and rederivation after results | `coalesces concurrent triggers into one owner for one exact transition`; `rolls back the exact partial handoff when a controlled boundary interrupts`; `records a result, releases its exact position, and rederives the next transition` |
 | [`planned-attempt-executor-boundary.md`: startup discovers work owned by another run](../docs/scenarios/planned-attempt-executor-boundary.md) | Block another unfinished run but retain completed history | `blocks startup instead of ignoring another run's unfinished responsibility`; `does not block startup for another run's completed responsibility` |
 
-Open #166, #163, #165, and #167 do not inherit passing acceptance from this
-structural proposal. Their issue-owned scenarios must add
-applied-control-direction and cassette tests respectively; directory placement
-is not implementation evidence.
+Open #166, #163, and #167 do not inherit passing acceptance from this
+structural proposal. Their issue-owned scenarios must add applied-control-
+direction and broader fake-provider tests respectively; directory placement is
+not implementation evidence. The #165 rows above are implementation evidence
+because their accepted scenarios, production cassette modules, and named tests
+are all present.
 
 The passing #131-related tests above are preservation evidence for the
 structural move, not a claim that open issue #131 is complete.
@@ -901,15 +921,16 @@ and before integration, as required by `AGENTS.md`; during development it is
 needed only when a slice changes a Quint model, its executable conformance
 adapter, or behavior governed by that model.
 
-## Implementation structure delta after local master `de51cd58b`
+## Implementation structure delta after local master integration
 
 The pre-implementation sweep classified the four-package DAG, behavior
 neutrality, journal-first tracker authorization, exact durable encodings, and
 one-way implementation-package dependencies as hard constraints. The detailed
 tree is a selected target. Individual file placements are provisional where
-verified code mixes owners. Directories reserved for #145, #166, #163, #165,
-#167, and unimplemented ADR-0002 behavior are open-issue placeholders rather
-than permission to add behavior.
+verified code mixes owners. Directories reserved for #145, #166, #163, #167,
+and unimplemented ADR-0002 behavior are open-issue placeholders rather than
+permission to add behavior. #165 is no longer a placeholder: its accepted
+slice lives in `packages/dalph/src/cassettes/`.
 
 ### Durable tracker target
 
@@ -946,12 +967,15 @@ provisional name with accepted semantics. Focused validation: executor contract
 round trip, wrong-kind/wrong-correlation fake requests, service-tag identity,
 and emitted declaration checks.
 
-### #164 modules and current-file count
+### #164, #165, and current-file count
 
-The local-master source set contains 71 production files, not 67. The five
-new files now have dispositions above, and the deleted `workflow-outcome.ts`
-has a historical disposition. Completion audits therefore account for all 71
-current production files and must not recreate the deleted shallow outcome.
+The first implementation base contained 71 production files rather than the
+67 in the research snapshot. After the structural split and the five-file
+#165 cassette slice, the final four-package source set contains 97 production
+TypeScript files. The five cassette files now have explicit dispositions
+above, and deleted `workflow-outcome.ts` retains a historical disposition.
+Completion audits therefore account for all 97 current production files and
+must not recreate the deleted shallow outcome.
 
 ### Effect and emitted-package invariants
 
@@ -982,14 +1006,40 @@ compatibility exports. The in-memory journal adapter is likewise separate from
 the journal interface and event registry.
 
 Verified implementation evidence also narrowed some provisional file splits.
-Closed Schema registries remain cohesive runtime values under
-`workflow/registry` and `workflow-journal/store.ts`; extracting protocol leaves
-while preserving those exact values would add pass-through modules without
-improving the interface tested by codec and occurrence exhaustiveness tests.
-Chronological protocols, reconstruction, authority adapters, and journal
+Closed operation and event registries remain cohesive runtime values under
+`workflow/registry`; `workflow-journal/store.ts` consumes the event registry
+without owning its domain meanings. Extracting still finer protocol leaves
+while preserving the exact existing values would add pass-through modules
+without improving the interface tested by codec and occurrence exhaustiveness
+tests. Chronological protocols, reconstruction, authority adapters, and journal
 storage are nevertheless in distinct owner directories. This is the selected
 behavior-neutral disposition; later behavior-owning issues may deepen a
 protocol when they add a second real adapter or a new event leaf.
+
+### Review adjudication
+
+The final domain, architecture, and migration-safety sweeps found the package
+DAG, cassette placement, durable encodings, Effect tag identity, emitted
+declarations, and runtime import paths sound. Two architecture suggestions
+were deliberately not folded into this structural change:
+
+- The raw Git and tracker mutation Effect error channels still include
+  `CoordinatorOwnershipError` even though guarded wrappers also check
+  ownership. Splitting new raw and guarded service tags would change public
+  Effect service and typed-error contracts at a behavior-bearing authority
+  boundary. No accepted scenario authorizes that semantic migration, so this
+  proposal preserves the existing tags and channels for a focused future
+  behavior ticket.
+- `workflow/interpretation/interpreter.ts` remains a broad compatibility
+  aggregation around one existing service tag and its public trace contract.
+  Fully splitting that surface would change exports, service requirements, and
+  trace/event contracts rather than merely moving files. It now lives under
+  its semantic owner; a later focused refactor can split it when accepted
+  scenarios define the replacement contracts.
+
+These are recorded deferrals, not claims that the suggested end states are
+undesirable. The migration's behavior-neutral constraint is the concrete
+reason they are outside this implementation.
 
 Validation for this disposition is the named scenario suite above plus clean
 four-package builds, public emitted declarations, the source/import package
