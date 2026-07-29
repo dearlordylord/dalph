@@ -15,7 +15,9 @@ import {
 import {
   GitWorktree,
   gitWorktreeTestLayer,
+  PlannedBranchReady,
   PlannedWorktreeAbsent,
+  PlannedWorktreeReady,
   runGitWorktreeReconciliation
 } from "./git-worktree.js"
 import { JournalStore, memoryJournalStoreLayer, type JournalRecord } from "./journal-store.js"
@@ -36,7 +38,7 @@ import {
   TrackerAdapterReadFailureReason,
   TrackerGraphReader
 } from "./tracker-graph-reader.js"
-import { controlledTrackerMutationLayer } from "./tracker-mutation.js"
+import { ActiveTaskClaim, controlledTrackerMutationLayerFrom } from "./tracker-mutation.js"
 import type { TraceItem } from "./workflow.js"
 import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 import { makeLiveWorkflowInterpreterLayer } from "./workflow-interpreters.js"
@@ -145,8 +147,12 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   outsideOccurrences: Schema.Array(AuthoredOutsideOccurrence),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
   startingFacts: Schema.Struct({
+    executorWork: Schema.Literal("NoPriorReport"),
+    journal: Schema.Literal("Empty"),
+    taskClaims: Schema.Array(ActiveTaskClaim),
     taskWorkSpecifications: Schema.Array(AuthoredTaskWorkSpecification),
-    trackerGraph: AuthoredTrackerGraph
+    trackerGraph: AuthoredTrackerGraph,
+    worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   })
 })
 
@@ -164,6 +170,13 @@ const startingSpecificationTaskIdsAreUnique = Schema.makeFilter(
     cassette.startingFacts.taskWorkSpecifications.length
       ? undefined
       : "authored starting task-work specifications must name each task at most once"
+)
+
+const startingClaimTaskIdsAreUnique = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  new Set(cassette.startingFacts.taskClaims.map(({ taskId }) => taskId)).size ===
+  cassette.startingFacts.taskClaims.length
+    ? undefined
+    : "authored starting task claims must name each task at most once"
 )
 
 const isTaskWorkSpecificationReturn = (
@@ -196,6 +209,7 @@ const firstReturnedSpecificationsMatchStartingFacts = Schema.makeFilter(
 
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(startingGraphMatchesFirstReturn)
   .check(startingSpecificationTaskIdsAreUnique)
+  .check(startingClaimTaskIdsAreUnique)
   .check(firstReturnedSpecificationsMatchStartingFacts)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type
 
@@ -347,9 +361,9 @@ export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthor
   const journalLayer = memoryJournalStoreLayer
   const trackerLayer = controlledTrackerGraphReaderLayer(cassette.outsideOccurrences)
   const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
-    Layer.provide(Layer.merge(trackerLayer, controlledTrackerMutationLayer))
+    Layer.provide(Layer.merge(trackerLayer, controlledTrackerMutationLayerFrom(cassette.startingFacts.taskClaims)))
   )
-  const gitWorktreeLayer = gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))
+  const gitWorktreeLayer = gitWorktreeTestLayer(cassette.startingFacts.worktreeObservation)
   const authoritativeInterpreterLayer = Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function* () {
@@ -423,6 +437,9 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
   [
     `Scenario: ${cassette.name}.`,
     `The maintainer starts run ${cassette.actorCommands[0]?.runId ?? "without a decoded command"}.`,
+    `The task tracker starts with ${cassette.startingFacts.taskClaims.length} active claims.`,
+    `Git starts with ${cassette.startingFacts.worktreeObservation._tag}.`,
+    `Executor work starts with ${cassette.startingFacts.executorWork}, and the journal starts ${cassette.startingFacts.journal}.`,
     `The expected journal result is ${cassette.expectedVisibleBehavior.journalHistory}.`,
     ...cassette.expectedVisibleBehavior.forbiddenJournalOccurrenceTags.map(
       (tag) => `The journal must not contain ${tag}.`

@@ -7,10 +7,11 @@ issue #163 for the maintained cassette library delivered by issue #165.
 
 A Dalph maintainer has an authored cassette for run `cassette-singleton`. Its
 starting tracker facts contain one open task A with readable title and body,
-no prerequisite or grouping edges, and no existing claim. Git has no real ref
-or worktree because this milestone uses the controlled worktree boundary. The
-same-process fake executor has no prior report, and the in-memory Dalph journal
-is empty.
+no prerequisite or grouping edges, and an empty structured task-claim list.
+Its structured Git starting fact says the planned worktree is absent because
+this milestone uses the controlled worktree boundary. Its executor starting
+fact says there is no prior report, and its journal starting fact says the
+in-memory Dalph journal is empty.
 
 The maintainer asks the cassette runner to run the scenario. The cassette
 runner decodes the structured cassette, supplies its tracker facts through the

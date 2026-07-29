@@ -77,8 +77,12 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
     outsideOccurrences: [...graphReturns, ...specificationReturns, ...executorReports],
     schemaVersion: 1,
     startingFacts: {
+      executorWork: "NoPriorReport",
+      journal: "Empty",
+      taskClaims: [],
       taskWorkSpecifications: specificationReturns.map(({ body, taskId, title }) => ({ body, taskId, title })),
-      trackerGraph: graph
+      trackerGraph: graph,
+      worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
     }
   }
 }

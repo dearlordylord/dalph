@@ -82,10 +82,14 @@ const singletonCassette = {
   ],
   schemaVersion: 1,
   startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
     taskWorkSpecifications: [
       { body: "Implement the accepted singleton behavior.", taskId: "A", title: "Implement singleton" }
     ],
-    trackerGraph: graph
+    trackerGraph: graph,
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
   }
 }
 
@@ -154,6 +158,7 @@ const representativeCassette = {
     }
   ],
   startingFacts: {
+    ...singletonCassette.startingFacts,
     taskWorkSpecifications: [
       {
         body: "Implement the active task in the representative graph.",
@@ -189,6 +194,7 @@ it.effect("accepts generated identities only through one consistent renaming", (
     const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
       attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
       claimTokens: [{ from: "cassette-claim:A:cassette:cassette-singleton:operation:2", to: "renamed-claim-token-A" }],
+      controlCommandIds: [{ from: "rename-command", to: "renamed-command" }],
       operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
         from: `cassette:cassette-singleton:operation:${ordinal}`,
         to: `renamed-operation:${ordinal}`
@@ -211,6 +217,23 @@ it.effect("accepts generated identities only through one consistent renaming", (
           decisionsEquivalent && stateEquivalent && workflowHistoryEquivalent
       )
     ).toBe(true)
+    const command = ControlCommand.cases.RequestRunPause.make({
+      commandId: ControlCommandId.make("rename-command"),
+      operatorId: AuthenticatedOperatorIdentity.make("rename-operator"),
+      runId: recorded.runId
+    })
+    const renamedWithCommand = yield* renameRecordedCassette(
+      RecordedCassette.make({
+        ...recorded,
+        entries: [{ _tag: "ControlCommandRecorded", command }, ...recorded.entries]
+      }),
+      renaming
+    )
+    const renamedCommand = renamedWithCommand.entries[0]
+    expect(renamedCommand?._tag).toBe("ControlCommandRecorded")
+    if (renamedCommand?._tag === "ControlCommandRecorded") {
+      expect(renamedCommand.command.commandId).toBe("renamed-command")
+    }
     const inconsistent = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
       ...renaming,
       operationIds: [
@@ -338,6 +361,25 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
       }
     }).pipe(Effect.flip)
     expect(duplicateStartingSpecification._tag).toBe("SchemaError")
+
+    const existingClaim = {
+      _tag: "ActiveTaskClaim",
+      operationId: "existing-claim-operation",
+      owner: "another-owner",
+      taskId: "A",
+      token: "existing-claim-token"
+    }
+    const duplicateStartingClaim = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      startingFacts: { ...singletonCassette.startingFacts, taskClaims: [existingClaim, existingClaim] }
+    }).pipe(Effect.flip)
+    expect(duplicateStartingClaim._tag).toBe("SchemaError")
+
+    const claimConflict = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      startingFacts: { ...singletonCassette.startingFacts, taskClaims: [existingClaim] }
+    }).pipe(Effect.flip)
+    expect(claimConflict._tag).toBe("TrackerMutation.TaskClaimConflict")
 
     const onlyOneGraphReturn = {
       ...singletonCassette,
