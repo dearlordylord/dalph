@@ -59,6 +59,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
+// Provisional while cassettes have no users; remove versioning before the first supported format.
 export const recordedCassetteVersion = 1 as const
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

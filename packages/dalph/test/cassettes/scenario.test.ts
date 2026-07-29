@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
+import { TaskId } from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
   ControlCommand,
@@ -8,6 +9,7 @@ import {
   ControlCommandRecordedEvent,
   describeJournalEvent,
   JournalPosition,
+  makeTaskWorkSpecification,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -31,12 +33,71 @@ const graph = {
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 const correlation = { attemptId: "attempt:A:0", runId: "cassette-singleton" }
+const singletonBaseSha = "1111111111111111111111111111111111111111"
+const singletonBranch = "refs/heads/dalph/attempt-A-0"
+const singletonWorktree = "/dalph/cassettes/attempt-A-0"
+const singletonSpecification = {
+  body: "Implement the accepted singleton behavior.",
+  taskId: "A",
+  title: "Implement singleton"
+}
+const singletonTaskRevision = makeTaskWorkSpecification({
+  ...singletonSpecification,
+  taskId: TaskId.make(singletonSpecification.taskId)
+}).fingerprint
+const singletonExpectedOutcomes = [
+  { _tag: "DalphObservesTaskTrackerGraph", graph, observationCount: 3, target: "cassette-target" },
+  { _tag: "DalphClaimsTask", owner: "cassette-owner", taskId: "A" },
+  {
+    _tag: "DalphRecordsTaskAttemptPlan",
+    attemptId: correlation.attemptId,
+    baseSha: singletonBaseSha,
+    branch: singletonBranch,
+    executor: "executor:controlled-fake",
+    runId: correlation.runId,
+    taskId: "A",
+    taskRevision: singletonTaskRevision,
+    worktree: singletonWorktree
+  },
+  {
+    _tag: "GitShowsWorktreeReadyForAttempt",
+    attemptId: correlation.attemptId,
+    proof: {
+      _tag: "PlannedWorktreeReady",
+      baseSha: singletonBaseSha,
+      branch: singletonBranch,
+      headSha: singletonBaseSha,
+      worktree: singletonWorktree
+    },
+    taskId: "A"
+  },
+  {
+    _tag: "DalphRecordsExecutorReportsForAttempt",
+    attemptId: correlation.attemptId,
+    reports: [
+      { _tag: "Running", correlation },
+      { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
+    ]
+  },
+  { _tag: "DalphReconstructsValidWorkflowJournalHistory" }
+]
+const singletonForbiddenOutcomes = [
+  { _tag: "DalphMustNotRecordControlCommand" },
+  { _tag: "DalphMustNotClaimAnyOtherTask", allowedTaskIds: ["A"] },
+  { _tag: "DalphMustNotRecordAnyOtherTaskAttemptPlan", allowedAttemptIds: [correlation.attemptId] },
+  { _tag: "DalphMustNotReconcileAnyOtherAttemptWorktree", allowedAttemptIds: [correlation.attemptId] },
+  {
+    _tag: "DalphMustNotAssumeExecutorWorkResponsibilityForAnyOtherAttempt",
+    allowedAttemptIds: [correlation.attemptId]
+  },
+  { _tag: "DalphMustNotRecordExecutorReportsForAnyOtherAttempt", allowedAttemptIds: [correlation.attemptId] }
+]
 const singletonCassette = {
   _tag: "AuthoredScenarioCassette",
   actorCommands: [
     {
       _tag: "RunCoordinator",
-      baseSha: "1111111111111111111111111111111111111111",
+      baseSha: singletonBaseSha,
       capacity: 1,
       claimOwner: "cassette-owner",
       claimTokenPrefix: "cassette-claim",
@@ -55,25 +116,14 @@ const singletonCassette = {
     { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
   ],
-  expectedVisibleBehavior: {
-    forbiddenJournalOccurrenceTags: ["ControlCommandRecorded"],
-    journalHistory: "ValidWorkflowJournalHistory",
-    plannedAttemptExecutorReports: [
-      { _tag: "Running", correlation },
-      { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
-    ]
-  },
+  expectedOutcomes: singletonExpectedOutcomes,
+  forbiddenOutcomes: singletonForbiddenOutcomes,
   name: "one open task completes its executor work",
   outsideOccurrences: [
     { _tag: "TrackerGraphReadReturned", graph },
     { _tag: "TrackerGraphReadReturned", graph },
     { _tag: "TrackerGraphReadReturned", graph },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the accepted singleton behavior.",
-      taskId: "A",
-      title: "Implement singleton"
-    },
+    { _tag: "TaskWorkSpecificationReadReturned", ...singletonSpecification },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", correlation },
@@ -90,9 +140,7 @@ const singletonCassette = {
     executorWork: "NoPriorReport",
     journal: "Empty",
     taskClaims: [],
-    taskWorkSpecifications: [
-      { body: "Implement the accepted singleton behavior.", taskId: "A", title: "Implement singleton" }
-    ],
+    taskWorkSpecifications: [singletonSpecification],
     trackerGraph: graph,
     worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
   }
@@ -117,6 +165,15 @@ const representativeCorrelation = {
   attemptId: `attempt:${representativeActiveTaskId}:0`,
   runId: "cassette-representative-graph"
 }
+const representativeSpecification = {
+  body: "Implement the active task in the representative graph.",
+  taskId: representativeActiveTaskId,
+  title: "Implement representative active task"
+}
+const representativeTaskRevision = makeTaskWorkSpecification({
+  ...representativeSpecification,
+  taskId: TaskId.make(representativeSpecification.taskId)
+}).fingerprint
 const representativeCassette = {
   ...singletonCassette,
   actorCommands: [
@@ -133,24 +190,65 @@ const representativeCassette = {
     }
     return { ...decision, attemptId: representativeCorrelation.attemptId, taskId: representativeActiveTaskId }
   }),
-  expectedVisibleBehavior: {
-    ...singletonCassette.expectedVisibleBehavior,
-    plannedAttemptExecutorReports: [
-      { _tag: "Running", correlation: representativeCorrelation },
-      { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } }
-    ]
-  },
+  expectedOutcomes: singletonCassette.expectedOutcomes.map((outcome) => {
+    const attemptId = representativeCorrelation.attemptId
+    const resourceSegment = `attempt-${representativeActiveTaskId}-0`
+    const branch = `refs/heads/dalph/${resourceSegment}`
+    const worktree = `/dalph/cassettes/${resourceSegment}`
+    switch (outcome._tag) {
+      case "DalphObservesTaskTrackerGraph":
+        return { ...outcome, graph: representativeGraph, target: "representative-cassette-target" }
+      case "DalphClaimsTask":
+        return { ...outcome, taskId: representativeActiveTaskId }
+      case "DalphRecordsTaskAttemptPlan":
+        return {
+          ...outcome,
+          attemptId,
+          branch,
+          runId: representativeCorrelation.runId,
+          taskId: representativeActiveTaskId,
+          taskRevision: representativeTaskRevision,
+          worktree
+        }
+      case "GitShowsWorktreeReadyForAttempt":
+        return {
+          ...outcome,
+          attemptId,
+          proof: { ...outcome.proof, branch, worktree },
+          taskId: representativeActiveTaskId
+        }
+      case "DalphRecordsExecutorReportsForAttempt":
+        return {
+          ...outcome,
+          attemptId,
+          reports: [
+            { _tag: "Running", correlation: representativeCorrelation },
+            { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } }
+          ]
+        }
+      case "DalphReconstructsValidWorkflowJournalHistory":
+        return outcome
+    }
+  }),
+  forbiddenOutcomes: singletonCassette.forbiddenOutcomes.map((outcome) => {
+    switch (outcome._tag) {
+      case "DalphMustNotRecordControlCommand":
+        return outcome
+      case "DalphMustNotClaimAnyOtherTask":
+        return { ...outcome, allowedTaskIds: [representativeActiveTaskId] }
+      case "DalphMustNotRecordAnyOtherTaskAttemptPlan":
+      case "DalphMustNotReconcileAnyOtherAttemptWorktree":
+      case "DalphMustNotAssumeExecutorWorkResponsibilityForAnyOtherAttempt":
+      case "DalphMustNotRecordExecutorReportsForAnyOtherAttempt":
+        return { ...outcome, allowedAttemptIds: [representativeCorrelation.attemptId] }
+    }
+  }),
   name: "one open task in a representative repeatedly refreshed graph",
   outsideOccurrences: [
     { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
     { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
     { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the active task in the representative graph.",
-      taskId: representativeActiveTaskId,
-      title: "Implement representative active task"
-    },
+    { _tag: "TaskWorkSpecificationReadReturned", ...representativeSpecification },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", correlation: representativeCorrelation },
@@ -164,13 +262,7 @@ const representativeCassette = {
   ],
   startingFacts: {
     ...singletonCassette.startingFacts,
-    taskWorkSpecifications: [
-      {
-        body: "Implement the active task in the representative graph.",
-        taskId: representativeActiveTaskId,
-        title: "Implement representative active task"
-      }
-    ],
+    taskWorkSpecifications: [representativeSpecification],
     trackerGraph: representativeGraph
   }
 }
@@ -181,14 +273,75 @@ it.effect("runs an authored cassette through the production loop and matches its
 
     expect(result.decisions).toEqual(result.cassette.expectedDecisions)
     expect(result.history._tag).toBe("ValidWorkflowJournalHistory")
-    expect(result.visibleBehavior.plannedAttemptExecutorReports).toEqual(
-      result.cassette.expectedVisibleBehavior.plannedAttemptExecutorReports
+    expect(result.verifiedExpectedOutcomes).toEqual(result.cassette.expectedOutcomes)
+    expect(result.verifiedForbiddenOutcomes).toEqual(result.cassette.forbiddenOutcomes)
+    expect(renderAuthoredCassetteLyrics(result.cassette)).toContain(
+      "Dalph must not record an operator control command."
     )
     expect(renderAuthoredCassetteLyrics(result.cassette)).toContain(
-      "The journal must not contain ControlCommandRecorded."
+      "Dalph is expected to decide to acquire the claim for task A."
     )
     expect(result.records.map(({ event }) => event._tag)).toContain("PlannedAttemptExecutorWorkResponsibilityBegan")
     expect(result.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
+  })
+)
+
+it.effect("requires Dalph handling rather than provider input to satisfy outcome assertions", () =>
+  Effect.gen(function* () {
+    const unobservedGraph = {
+      revision: "provider-return-never-read",
+      tasks: [{ id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+    }
+    const failure = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      expectedOutcomes: [
+        ...singletonCassette.expectedOutcomes,
+        {
+          _tag: "DalphObservesTaskTrackerGraph",
+          graph: unobservedGraph,
+          observationCount: 1,
+          target: "cassette-target"
+        }
+      ],
+      outsideOccurrences: [
+        ...singletonCassette.outsideOccurrences,
+        { _tag: "TrackerGraphReadReturned", graph: unobservedGraph }
+      ]
+    }).pipe(Effect.flip)
+
+    expect(failure._tag).toBe("AuthoredCassetteOutcomeAssertionMismatch")
+    if (failure._tag === "AuthoredCassetteOutcomeAssertionMismatch") {
+      expect(failure.unsatisfiedExpectedOutcomes).toEqual([
+        {
+          _tag: "DalphObservesTaskTrackerGraph",
+          graph: unobservedGraph,
+          observationCount: 1,
+          target: "cassette-target"
+        }
+      ])
+    }
+  })
+)
+
+it.effect("matches every normalized tracker graph fact in an outcome assertion", () =>
+  Effect.gen(function* () {
+    const changedGraph = {
+      ...graph,
+      tasks: graph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" } }))
+    }
+    const failure = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      expectedOutcomes: singletonCassette.expectedOutcomes.map((outcome) =>
+        outcome._tag === "DalphObservesTaskTrackerGraph" ? { ...outcome, graph: changedGraph } : outcome
+      )
+    }).pipe(Effect.flip)
+
+    expect(failure._tag).toBe("AuthoredCassetteOutcomeAssertionMismatch")
+    if (failure._tag === "AuthoredCassetteOutcomeAssertionMismatch") {
+      expect(failure.unsatisfiedExpectedOutcomes).toMatchObject([
+        { _tag: "DalphObservesTaskTrackerGraph", graph: changedGraph }
+      ])
+    }
   })
 )
 
@@ -344,7 +497,7 @@ it.effect("rejects an executor entry for a different planned attempt", () =>
   })
 )
 
-it.effect("fails typed authored boundaries and declared behavior mismatches", () =>
+it.effect("fails typed authored boundaries and outcome assertion mismatches", () =>
   Effect.gen(function* () {
     const inconsistentStartingFacts = yield* runAuthoredScenarioCassette({
       ...singletonCassette,
@@ -438,11 +591,20 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
     )
     expect(decisionMismatch._tag).toBe("AuthoredCassetteDecisionMismatch")
 
-    const visibleBehaviorMismatch = yield* runAuthoredScenarioCassette({
+    const outcomeMismatch = yield* runAuthoredScenarioCassette({
       ...singletonCassette,
-      expectedVisibleBehavior: { ...singletonCassette.expectedVisibleBehavior, plannedAttemptExecutorReports: [] }
+      expectedOutcomes: singletonCassette.expectedOutcomes.map((outcome) =>
+        outcome._tag === "DalphRecordsTaskAttemptPlan"
+          ? { ...outcome, taskRevision: "different-task-revision" }
+          : outcome
+      )
     }).pipe(Effect.flip)
-    expect(visibleBehaviorMismatch._tag).toBe("AuthoredCassetteVisibleBehaviorMismatch")
+    expect(outcomeMismatch._tag).toBe("AuthoredCassetteOutcomeAssertionMismatch")
+    if (outcomeMismatch._tag === "AuthoredCassetteOutcomeAssertionMismatch") {
+      expect(outcomeMismatch.unsatisfiedExpectedOutcomes).toMatchObject([
+        { _tag: "DalphRecordsTaskAttemptPlan", taskRevision: "different-task-revision" }
+      ])
+    }
 
     const suspendStep = yield* runAuthoredScenarioCassette({
       ...singletonCassette,

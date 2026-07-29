@@ -1,6 +1,8 @@
 import { Effect } from "effect"
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
+import { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification } from "@dalph/orchestrator"
 import {
   projectRecordedCassette,
   runAuthoredScenarioCassette,
@@ -22,15 +24,23 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
     }))
   }
   const runId = `generated-cassette-${suffix}`
+  const baseSha = "2222222222222222222222222222222222222222"
+  const target = `generated-target-${suffix}`
+  const resourceSegment = `attempt-${encodeURIComponent(activeTaskId)}-0`
+  const branch = `refs/heads/dalph/${resourceSegment}`
+  const worktree = `/dalph/generated-cassettes/${resourceSegment}`
   const graphReturns = Array.from({ length: 3 }, () => ({ _tag: "TrackerGraphReadReturned", graph }))
-  const specificationReturns = [
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: `Implement generated task ${activeTaskId}.`,
-      taskId: activeTaskId,
-      title: `Generated task ${activeTaskId}`
-    }
-  ]
+  const specification = {
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: `Implement generated task ${activeTaskId}.`,
+    taskId: activeTaskId,
+    title: `Generated task ${activeTaskId}`
+  }
+  const specificationReturns = [specification]
+  const taskRevision = makeTaskWorkSpecification({
+    ...specification,
+    taskId: TaskId.make(specification.taskId)
+  }).fingerprint
   const correlation = { attemptId: `attempt:${activeTaskId}:0`, runId }
   const executorReports = [
     {
@@ -49,30 +59,63 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
     actorCommands: [
       {
         _tag: "RunCoordinator",
-        baseSha: "2222222222222222222222222222222222222222",
+        baseSha,
         capacity: 1,
         claimOwner: "generated-owner",
         claimTokenPrefix: "generated-claim",
         executor: "executor:controlled-fake",
         runId,
-        target: `generated-target-${suffix}`,
+        target,
         worktreeRoot: "/dalph/generated-cassettes"
       }
     ],
     expectedDecisions: [
-      { _tag: "ReadTrackerGraph", target: `generated-target-${suffix}` },
-      { _tag: "ReadTrackerGraph", target: `generated-target-${suffix}` },
+      { _tag: "ReadTrackerGraph", target },
+      { _tag: "ReadTrackerGraph", target },
       { _tag: "AcquireTaskClaim", taskId: activeTaskId },
-      { _tag: "ReadTrackerGraph", target: `generated-target-${suffix}` },
+      { _tag: "ReadTrackerGraph", target },
       { _tag: "ReadTaskWorkSpecification", taskId: activeTaskId },
       { _tag: "RecordTaskAttemptPlan", attemptId: `attempt:${activeTaskId}:0`, taskId: activeTaskId },
       { _tag: "ReconcileTaskWorktree", attemptId: `attempt:${activeTaskId}:0`, taskId: activeTaskId }
     ],
-    expectedVisibleBehavior: {
-      forbiddenJournalOccurrenceTags: ["ControlCommandRecorded"],
-      journalHistory: "ValidWorkflowJournalHistory",
-      plannedAttemptExecutorReports: executorReports.map(({ report }) => report)
-    },
+    expectedOutcomes: [
+      { _tag: "DalphObservesTaskTrackerGraph", graph, observationCount: 3, target },
+      { _tag: "DalphClaimsTask", owner: "generated-owner", taskId: activeTaskId },
+      {
+        _tag: "DalphRecordsTaskAttemptPlan",
+        attemptId: correlation.attemptId,
+        baseSha,
+        branch,
+        executor: "executor:controlled-fake",
+        runId,
+        taskId: activeTaskId,
+        taskRevision,
+        worktree
+      },
+      {
+        _tag: "GitShowsWorktreeReadyForAttempt",
+        attemptId: correlation.attemptId,
+        proof: { _tag: "PlannedWorktreeReady", baseSha, branch, headSha: baseSha, worktree },
+        taskId: activeTaskId
+      },
+      {
+        _tag: "DalphRecordsExecutorReportsForAttempt",
+        attemptId: correlation.attemptId,
+        reports: executorReports.map(({ report }) => report)
+      },
+      { _tag: "DalphReconstructsValidWorkflowJournalHistory" }
+    ],
+    forbiddenOutcomes: [
+      { _tag: "DalphMustNotRecordControlCommand" },
+      { _tag: "DalphMustNotClaimAnyOtherTask", allowedTaskIds: [activeTaskId] },
+      { _tag: "DalphMustNotRecordAnyOtherTaskAttemptPlan", allowedAttemptIds: [correlation.attemptId] },
+      { _tag: "DalphMustNotReconcileAnyOtherAttemptWorktree", allowedAttemptIds: [correlation.attemptId] },
+      {
+        _tag: "DalphMustNotAssumeExecutorWorkResponsibilityForAnyOtherAttempt",
+        allowedAttemptIds: [correlation.attemptId]
+      },
+      { _tag: "DalphMustNotRecordExecutorReportsForAnyOtherAttempt", allowedAttemptIds: [correlation.attemptId] }
+    ],
     name: `generated flat graph ${suffix}`,
     outsideOccurrences: [...graphReturns, ...specificationReturns, ...executorReports],
     schemaVersion: 1,

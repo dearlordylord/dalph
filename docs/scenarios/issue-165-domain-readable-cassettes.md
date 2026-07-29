@@ -25,11 +25,26 @@ boundary, records and creates A's controlled claim, rereads A after the claim,
 reads and records A's exact task-work specification, records the immutable
 attempt, reconciles the controlled worktree, and asks the executor to do the
 complete attempt work. The executor first reports Running and then Terminal
-Completed. The runner compares the domain decisions declared by the cassette
-with the decisions emitted while the production loop runs. It also compares
-the declared valid-history result and exact coarse executor reports with the
-visible production result, and verifies that none of the cassette's forbidden
-journal occurrence kinds appeared.
+Completed.
+
+The authored cassette declares typed outcome assertions, not production
+events. It says that Dalph must observe the exact normalized tracker revision,
+task identities, lifecycles, prerequisites, and parent groupings; claim A for
+the declared owner; durably record the exact immutable attempt; receive the
+exact ready-worktree proof from Git; record the Running and Terminal Completed
+executor reports; and reconstruct a valid workflow-journal history. Separate
+typed forbidden-outcome assertions say that Dalph must not record an operator
+control command, claim another task, durably record another attempt plan,
+reconcile another attempt's worktree, assume executor-work responsibility for
+another attempt, or record executor reports for another attempt.
+
+The runner compares the domain decisions declared by the cassette with the
+decisions emitted while the production loop runs. It then evaluates each
+expected and forbidden outcome assertion against the trace and journal
+produced by that run. A provider result is only controlled outside input; it
+does not satisfy an assertion unless Dalph emits or journals the corresponding
+handling. The runner does not compare raw journal-event tag lists and does not
+construct a second universal event stream for assertions.
 
 There is no real GitHub, Git, SQLite, process, or operating-system boundary in
 this scenario, so network loss, an external process crash, and provider retry
@@ -37,16 +52,19 @@ do not apply. A mismatch at a controlled provider is a typed cassette failure;
 rerunning creates a new in-memory provider composition and journal from the
 same decoded input.
 
-The maintainer sees readable lyrics, the matching decision checkpoints, and a
-valid journal. Dalph must not start an unplanned attempt, invent executor
-review or retry stages, accept a different attempt identity, or let cassette
-code bypass the production loop.
+The maintainer sees readable lyrics that distinguish starting facts, provider
+results, expected decisions, expected outcomes, and forbidden outcomes, plus
+the matching decision checkpoints and a valid journal. Dalph must not start an
+unplanned attempt, invent executor review or retry stages, accept a different
+attempt identity, or let cassette code bypass the production loop.
 
 Acceptance tests:
 
 - `runs an authored cassette through the production loop and matches its declared decisions`
+- `requires Dalph handling rather than provider input to satisfy outcome assertions`
+- `matches every normalized tracker graph fact in an outcome assertion`
 - `rejects an executor entry for a different planned attempt`
-- `fails typed authored boundaries and declared behavior mismatches`
+- `fails typed authored boundaries and outcome assertion mismatches`
 
 ## A journal is projected and folded occurrence by occurrence
 
