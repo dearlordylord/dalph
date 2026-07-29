@@ -35,7 +35,7 @@ it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
     yield* dryRunCliApplication.pipe(Effect.provide(stdioLayer))
 
     expect(dryApplicationEnvironmentIsNarrow).toBe(true)
-    expect(yield* Ref.get(chunks)).toHaveLength(10)
+    expect(yield* Ref.get(chunks)).toHaveLength(11)
   })
 )
 

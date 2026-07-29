@@ -344,7 +344,15 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
       return graph.snapshot
     })
 
-    return TrackerGraphReader.of({ read })
+    const readTaskWorkSpecification = Effect.fn("GithubTrackerGraphReader.readTaskWorkSpecification")(function* () {
+      return yield* adapterError(
+        "GithubTrackerGraphReader.selectAdapter",
+        TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({}),
+        "focused GitHub task-work specification qualification is owned outside the provider-neutral milestone"
+      )
+    })
+
+    return TrackerGraphReader.of({ read, readTaskWorkSpecification })
   })
 )
 

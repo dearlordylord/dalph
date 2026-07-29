@@ -1,0 +1,13 @@
+{
+  "revision": "invalid-task-work-specification",
+  "tasks": [
+    {
+      "id": "missing-authored-content",
+      "lifecycle": {
+        "_tag": "Open"
+      },
+      "parentTaskId": null,
+      "prerequisiteIds": []
+    }
+  ]
+}

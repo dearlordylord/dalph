@@ -73,3 +73,35 @@ it.effect("fixture tracker reader rejects a GitHub target", () =>
     expect(error._tag).toBe("TrackerGraphReader.AdapterReadError")
   }).pipe(Effect.provide(trackerGraphReaderFileLayer))
 )
+
+it.effect("fixture tracker reader returns only the focused authored specification", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const specification = yield* reader.readTaskWorkSpecification(fixture("singleton"), TaskId.make("task-only"))
+    expect(specification).toMatchObject({ body: "", taskId: "task-only", title: "task-only" })
+  }).pipe(Effect.provide(trackerGraphReaderFileLayer))
+)
+
+it.effect("focused fixture reads reject unsupported targets, malformed specifications, and absent tasks", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const githubTarget = GithubIssueTarget.make({
+      issueNumber: GithubIssueNumber.make(42),
+      owner: GithubRepositoryOwner.make("octo"),
+      repository: GithubRepositoryName.make("dalph")
+    })
+    const unsupported = yield* reader
+      .readTaskWorkSpecification(githubTarget, TaskId.make("task-only"))
+      .pipe(Effect.flip)
+    const malformed = yield* reader
+      .readTaskWorkSpecification(fixture("invalid-task-work-specification"), TaskId.make("missing-authored-content"))
+      .pipe(Effect.flip)
+    const absent = yield* reader
+      .readTaskWorkSpecification(fixture("singleton"), TaskId.make("absent"))
+      .pipe(Effect.flip)
+
+    expect(unsupported._tag).toBe("TrackerGraphReader.AdapterReadError")
+    expect(malformed._tag).toBe("TrackerGraphReader.TrackerReadError")
+    expect(absent._tag).toBe("TrackerGraphReader.AdapterReadError")
+  }).pipe(Effect.provide(trackerGraphReaderFileLayer))
+)

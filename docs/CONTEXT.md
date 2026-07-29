@@ -249,38 +249,43 @@ The provider-independent boundary value a task-tracker adapter assembles with
 explicit coverage, completeness, temporal-consistency, and freshness evidence.
 Its normalized shape does not claim that every fact is fully current or came
 from one instant.
-_Avoid_: Current task graph, TaskGraphFactsUpdated event, provider response dump
+_Avoid_: Current task graph, provider response dump
 
-**Task-tracker target-closure membership observation**:
-The normalized result saying one successful task-tracker read completely
-covered membership in one task-tracker target closure and returned the named
-task identities. It carries the read boundary's freshness evidence, the
-provider-independent content fingerprint, and potentially mixed-time
-consistency. It does not claim lifecycle, dependency, grouping, or claim facts.
-An absent identity is proven only when the named read shape explicitly covered
-that identity; journal order does not make incompatible membership observations
-comparable.
-_Avoid_: Current target closure, complete task graph, atomic tracker snapshot
+**Task-tracker fact family**:
+One named kind of normalized tracker fact with one coverage and freshness
+meaning. A V1 complete graph observation contains exactly these five kinds:
+task identities, task lifecycles, task prerequisites, parent groupings, and
+target membership. “Family” does not mean a task grouping, compatibility
+generation, provider response, or cache partition.
+_Avoid_: Family without naming the facts, provider field group, response page
 
-**Task-graph facts updated**:
-The immutable workflow-journal event recording provider-independent task and
-edge facts returned by either a tracker read or a tracker mutation. The
-graph-knowledge reducer applies both origins through the same coverage,
-completeness, consistency, and replacement rules.
-_Avoid_: Provider response dump, current task graph, read-only observation event
+**Complete task-tracker facts observation**:
+The normalized result of one logical complete target-closure read. It contains
+exactly one complete family for task identities, lifecycles, prerequisites,
+parent grouping, and target membership. Every family names its subjects,
+content identity, potentially mixed-time consistency, and the same read
+operation as its freshness boundary. It excludes authored title and body,
+claim records, provider pages, cursors, and raw responses.
+_Avoid_: Membership-only observation, current task graph, atomic tracker snapshot
+
+**Unchanged task-tracker facts reconfirmation**:
+A compact later observation proving that a comparable complete read normalized
+to unchanged content. It records current coverage and freshness for every
+graph fact family and refers to an earlier full observation for the payload.
+_Avoid_: Duplicate full payload, current tracker authority, no-op
+
+**Task-tracker facts observed**:
+The single immutable workflow-journal event family for complete graph reads,
+unchanged graph reconfirmations, and focused task-work specification reads.
+Only a completed logical provider read produces it; mutation acknowledgements
+cannot stand in for an observation.
+_Avoid_: Provider response dump, mutation acknowledgement, parallel graph event
 
 **Best available durable graph knowledge**:
-The reducer's reconstruction of usable journaled task and edge facts, proven
-absences, and unresolved conflicts for each observed graph area. It may lag
-current tracker facts and changes only by folding later journal events.
+The reducer's reconstruction of usable task and edge facts from
+`TaskTrackerFactsObserved` history. It may lag current tracker facts and changes
+only by folding a later full observation or unchanged reconfirmation.
 _Avoid_: Current task graph, persisted frontier, tracker authority
-
-**Task-graph knowledge conflict**:
-Two successful `TaskGraphFactsUpdated` events report incompatible facts for one
-subject without comparable provider evidence proving which fact is newer. The
-conflict makes only that fact or dependent graph region unavailable pending a
-focused reread.
-_Avoid_: Invalid workflow-journal history, whole-run blocker, last-journal-event wins
 
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
@@ -413,10 +418,11 @@ does not repair, move, reset, clean, or delete the resource.
 _Avoid_: Git error, worktree cleanup candidate, recoverable mismatch
 
 **Task revision fingerprint**:
-The opaque fingerprint of one normalized task's exact tracker-observed content
-bound to a planned task attempt. It compares observed content; it is not a
+The opaque fingerprint of one task-work specification's exact normalized
+tracker-authored title and body, bound to a planned task attempt. It excludes
+lifecycle, dependency, grouping, membership, and claim facts. It is not a
 version counter, release version, edit sequence, or historical revision chain.
-It is distinct from the fingerprint of the complete task-graph snapshot.
+It is distinct from the fingerprint of the complete task-graph observation.
 _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
 

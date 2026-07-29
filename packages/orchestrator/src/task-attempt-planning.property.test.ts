@@ -22,6 +22,7 @@ import {
   WorktreeLocator
 } from "./index.js"
 import { samePlannedTaskAttempt } from "./planned-task-attempt.js"
+import { makeTaskWorkSpecification } from "./task-tracker-facts.js"
 
 const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
 const plannedTaskAttemptEncodedArbitrary = fc
@@ -60,11 +61,16 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     })
     const task = snapshot.eligibleTasks()[0]
     if (task === undefined) return expect.fail("expected one eligible task")
-    const taskRevision = taskRevisionFor(task)
+    const specification = makeTaskWorkSpecification({
+      body: "Implement the planned task",
+      taskId: task.id,
+      title: "Planned task"
+    })
+    const taskRevision = specification.fingerprint
 
     const planner = yield* PlannedTaskAttemptPlanner
-    const plan = yield* planner.plan(task)
-    const retryPlan = yield* planner.plan(task)
+    const plan = yield* planner.plan(specification)
+    const retryPlan = yield* planner.plan(specification)
 
     expect(plan).toEqual({
       attemptId: AttemptId.make("attempt:task-44:0"),
@@ -120,7 +126,7 @@ it("satisfies the planned-attempt equivalence laws for arbitrary valid plans", (
   )
 })
 
-it("derives the task revision (fingerprint) inside the planner", () =>
+it("binds the focused task-work-specification fingerprint inside the planner", () =>
   Effect.gen(function* () {
     const task = Schema.decodeUnknownSync(TrackerTask)({
       id: "task-44",
@@ -128,9 +134,10 @@ it("derives the task revision (fingerprint) inside the planner", () =>
       parentTaskId: null,
       prerequisiteIds: ["task-41", "task-43"]
     })
+    const specification = makeTaskWorkSpecification({ body: "Exact body", taskId: task.id, title: "Exact title" })
     const planner = yield* PlannedTaskAttemptPlanner
 
-    expect((yield* planner.plan(task)).taskRevision).toBe(taskRevisionFor(task))
+    expect((yield* planner.plan(specification)).taskRevision).toBe(specification.fingerprint)
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({

@@ -1,14 +1,15 @@
 import { Schema } from "effect"
+import { CompleteTaskTrackerFactsObserved } from "./task-tracker-facts.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-import { WorkflowOutcome } from "./workflow-outcome.js"
 
 /** Records selection of one immutable workflow operation. */
 export const OperationSelected = Schema.TaggedStruct("OperationSelected", { operation: WorkflowOperation })
 
-export const TrackerGraphOutcomeObserved = Schema.TaggedStruct("TrackerGraphOutcomeObserved", {
+/** Exposes the same normalized complete graph facts used by the journal. */
+export const TaskTrackerFactsObservedTrace = Schema.TaggedStruct("TaskTrackerFactsObserved", {
   operation: WorkflowOperation.cases.ReadTrackerGraph,
-  outcome: WorkflowOutcome.cases.TrackerGraphObserved
+  observation: CompleteTaskTrackerFactsObserved
 })
 
 /** Records immutable claim intent before any task-tracker state-changing request. */

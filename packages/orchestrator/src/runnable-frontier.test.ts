@@ -263,7 +263,7 @@ it("explains every non-runnable responsibility without treating quiescence as te
           operationId: "execute-task-A",
           prerequisiteTaskIds: [taskB],
           taskId: taskA,
-          wakeCondition: "TaskGraphFactsUpdated"
+          wakeCondition: "TaskTrackerFactsObserved"
         }
       ]
     }),

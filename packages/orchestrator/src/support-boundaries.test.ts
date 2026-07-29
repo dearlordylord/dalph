@@ -19,6 +19,7 @@ import * as PublicApi from "./index.js"
 import { JournalBoundaryDecodeIssue } from "./journal-recovery-model.js"
 import { coordinatorOwnedGitWorktreeLayer, coordinatorOwnedTrackerMutationLayer } from "./live-task-work-start.js"
 import { projectTrackerSnapshot } from "./task-dag.js"
+import { makeTaskWorkSpecification } from "./task-tracker-facts.js"
 import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -51,6 +52,11 @@ const firstSnapshot = snapshotOf(
   })
 )
 const emptySnapshot = snapshotOf(projectTrackerSnapshot({ revision: "support-v2", tasks: [] }))
+const supportSpecification = makeTaskWorkSpecification({
+  body: "Support boundary task body",
+  taskId: PublicApi.TaskId.make("support-task"),
+  title: "Support boundary task"
+})
 
 it("loads the current public surface without compatibility exports", () => {
   expect(PublicApi.PlannedAttemptExecutor).toBeDefined()
@@ -70,8 +76,8 @@ it.effect("allocates deterministic operation and planned-attempt identities", ()
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
     const planner = yield* PlannedTaskAttemptPlanner
-    const first = yield* planner.plan(task)
-    const second = yield* planner.plan(task)
+    const first = yield* planner.plan(supportSpecification)
+    const second = yield* planner.plan(supportSpecification)
     expect(first.attemptId).toBe("attempt:support-task:0")
     expect(second.attemptId).toBe("attempt:support-task:1")
     expect(first.worktree).toContain("attempt-support-task-0")
@@ -106,7 +112,7 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
     const planner = yield* PlannedTaskAttemptPlanner
-    const plannedAttempt = yield* planner.plan(task)
+    const plannedAttempt = yield* planner.plan(supportSpecification)
     const graph = makeTrackerGraphObservationOperation(
       PublicApi.OperationId.make("support-read"),
       FixtureTarget.make("support-fixture")
@@ -163,7 +169,7 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
     const planner = yield* PlannedTaskAttemptPlanner
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
-    const plannedAttempt = yield* planner.plan(task)
+    const plannedAttempt = yield* planner.plan(supportSpecification)
     const tracker = yield* TrackerMutation
     const acquisition = {
       operationId: PublicApi.OperationId.make("owned-claim"),

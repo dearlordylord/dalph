@@ -3,6 +3,8 @@
   "tasks": [
     {
       "id": "task-only",
+      "title": "task-only",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": []

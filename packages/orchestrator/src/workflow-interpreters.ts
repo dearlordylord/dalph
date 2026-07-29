@@ -24,6 +24,11 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
       ) {
         return yield* reader.read(operation.target)
       })
+      const readTaskWorkSpecification = Effect.fn(`WorkflowInterpreter.${operationPrefix}.readTaskWorkSpecification`)(
+        function* (operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type) {
+          return yield* reader.readTaskWorkSpecification(operation.target, operation.taskId)
+        }
+      )
       const acquireTaskClaim = Effect.fn(`WorkflowInterpreter.${operationPrefix}.acquireTaskClaim`)(function* (
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
         onIntentRecorded: Effect.Effect<void> = Effect.void
@@ -34,6 +39,7 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTrackerGraph,
+        readTaskWorkSpecification,
         reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
         recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })
@@ -53,6 +59,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterp
         acquireTaskClaim: (operation, onIntentRecorded: Effect.Effect<void> = Effect.void) =>
           onIntentRecorded.pipe(Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))),
         readTrackerGraph: (operation) => reader.read(operation.target),
+        readTaskWorkSpecification: (operation) => reader.readTaskWorkSpecification(operation.target, operation.taskId),
         reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
         recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })

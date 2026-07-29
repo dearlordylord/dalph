@@ -10,9 +10,9 @@ import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
-/** A complete target-closure membership read that explicitly names absence-sensitive subjects. */
+/** A complete target-closure graph read that explicitly names decision-sensitive subjects. */
 const TaskGraphReadShape = Schema.TaggedUnion({
-  TargetClosureMembership: { explicitlyCoveredTaskIds: Schema.Array(TaskIdSchema).check(Schema.isUnique()) }
+  CompleteTargetClosure: { explicitlyCoveredTaskIds: Schema.Array(TaskIdSchema).check(Schema.isUnique()) }
 })
 
 const ReadTrackerGraphOperation = Schema.TaggedStruct("ReadTrackerGraph", {
@@ -33,6 +33,14 @@ const withoutSelfPredecessor = <
   operation.predecessorOperationIds.includes(operation.operationId)
     ? { issue: "an operation cannot causally precede itself", path: ["predecessorOperationIds"] }
     : undefined
+
+/** Reads one task's exact normalized authored instructions for a planned attempt. */
+const ReadTaskWorkSpecificationOperation = Schema.TaggedStruct("ReadTaskWorkSpecification", {
+  operationId: OperationId,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  target: TrackerTargetSchema,
+  taskId: TaskIdSchema
+}).check(Schema.makeFilter(withoutSelfPredecessor))
 
 const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
   acquisition: TaskClaimAcquisition,
@@ -65,6 +73,7 @@ const ReconcileTaskWorktreeOperation = Schema.TaggedStruct("ReconcileTaskWorktre
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
+    ReadTaskWorkSpecificationOperation,
     AcquireTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
     ReconcileTaskWorktreeOperation
@@ -74,7 +83,8 @@ export const WorkflowOperation = Object.assign(
       AcquireTaskClaim: AcquireTaskClaimOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
-      ReadTrackerGraph: ReadTrackerGraphOperation
+      ReadTrackerGraph: ReadTrackerGraphOperation,
+      ReadTaskWorkSpecification: ReadTaskWorkSpecificationOperation
     }
   }
 )
@@ -116,10 +126,23 @@ export const makeTrackerGraphObservationOperation = (
   WorkflowOperation.cases.ReadTrackerGraph.make({
     operationId,
     predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
-    readShape: TaskGraphReadShape.cases.TargetClosureMembership.make({
+    readShape: TaskGraphReadShape.cases.CompleteTargetClosure.make({
       explicitlyCoveredTaskIds: [...new Set(explicitlyCoveredTaskIds)].sort()
     }),
     target
+  })
+
+export const makeTaskWorkSpecificationObservationOperation = (
+  operationId: typeof OperationId.Type,
+  target: TrackerTarget,
+  taskId: TaskId,
+  predecessorOperationIds: ReadonlyArray<typeof OperationId.Type> = []
+): typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type =>
+  WorkflowOperation.cases.ReadTaskWorkSpecification.make({
+    operationId,
+    predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
+    target,
+    taskId
   })
 
 export const makeTaskClaimAcquisitionOperation = (fields: {

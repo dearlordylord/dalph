@@ -1,3 +1,4 @@
+import { taskTrackerGraphFactsObserved } from "../test/task-tracker-facts.js"
 import { Option } from "effect"
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
@@ -15,8 +16,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   TaskClaimAcquisitionIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { makeTaskClaimAcquisitionOperation, makeTrackerGraphObservationOperation } from "./workflow-operation.js"
@@ -46,10 +46,9 @@ it("never creates responsibility from generated graph membership", () => {
         predecessorOperationIds: [observation.operationId]
       })
       const prefix = [
-        { event: trackerGraphObservationIntent(observation), key: intentRecordKey(observation.operationId) },
+        { event: taskTrackerReadIntent(observation), key: intentRecordKey(observation.operationId) },
         {
-          event: trackerGraphOutcomeObserved(observation.operationId, {
-            _tag: "TrackerGraphObserved" as const,
+          event: taskTrackerGraphFactsObserved(observation, {
             revision: TrackerRevision.make(`revision-${firstSegment}`),
             taskIds
           }),
@@ -67,7 +66,7 @@ it("never creates responsibility from generated graph membership", () => {
       const afterIntentRecords = [
         ...prefix,
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 5 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 6 }),
           key: intentRecordKey(claim.acquisition.operationId)
         }
       ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))

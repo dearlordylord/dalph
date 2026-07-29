@@ -1,7 +1,9 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { PlannedTaskAttempt, TaskId } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
+import { reconstructedTaskGraphFor } from "./task-tracker-knowledge.js"
+import { taskTrackerTargetKey } from "./task-tracker-target.js"
 import { WorkflowOperation } from "./workflow-operation.js"
 
 /**
@@ -19,9 +21,17 @@ export const RunRecoveryFrontierEntry = Schema.TaggedUnion({
     claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
     operation: WorkflowOperation.cases.ReadTrackerGraph
   },
-  TaskAttemptPlanNeeded: {
+  TaskWorkSpecificationReadNeeded: {
     claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
     observationOperation: WorkflowOperation.cases.ReadTrackerGraph
+  },
+  TaskWorkSpecificationReadUnresolved: {
+    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
+    operation: WorkflowOperation.cases.ReadTaskWorkSpecification
+  },
+  TaskAttemptPlanNeeded: {
+    claimOperation: WorkflowOperation.cases.AcquireTaskClaim,
+    observationOperation: WorkflowOperation.cases.ReadTaskWorkSpecification
   },
   TaskWorktreeReconciliationNeeded: {
     authority: Schema.Literal("Git"),
@@ -33,12 +43,15 @@ export const RunRecoveryFrontierEntry = Schema.TaggedUnion({
   Terminal: { plannedAttempt: PlannedTaskAttempt }
 })
 export type RunRecoveryFrontierEntry = typeof RunRecoveryFrontierEntry.Type
+type TaskClaimAcquisitionNeeded = Extract<RunRecoveryFrontierEntry, { readonly _tag: "TaskClaimAcquisitionNeeded" }>
 
 export const NonterminalRecoveryFrontierTag = Schema.Literals([
   "TaskClaimAcquisitionNeeded",
   "TaskClaimAcquisitionUnresolved",
   "TaskEligibilityRefreshNeeded",
   "TaskEligibilityRefreshUnresolved",
+  "TaskWorkSpecificationReadNeeded",
+  "TaskWorkSpecificationReadUnresolved",
   "TaskAttemptPlanNeeded",
   "TaskWorktreeReconciliationNeeded",
   "TaskWorktreeReconciliationUnresolved",
@@ -54,6 +67,70 @@ export const RunRecoveryFrontier = Schema.Struct({ entries: Schema.Array(RunReco
 export type RunRecoveryFrontier = typeof RunRecoveryFrontier.Type
 
 const sameAttempt = plannedTaskAttemptEquivalence
+
+const reconstructedGraphThrough = (
+  records: ReadonlyArray<JournalRecord>,
+  recordIndex: number,
+  target: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>["operation"]["target"]
+) =>
+  reconstructedTaskGraphFor(
+    {
+      taskTrackerFacts: records
+        .slice(0, recordIndex + 1)
+        .flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
+    },
+    target
+  )
+
+const graphReadIntentFor = (records: ReadonlyArray<JournalRecord>, operationId: string) => {
+  const intent = records.find(
+    ({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.operationId === operationId
+  )?.event
+  return intent?._tag === "TaskTrackerReadIntentRecorded" && intent.operation._tag === "ReadTrackerGraph"
+    ? intent.operation
+    : undefined
+}
+
+const hasLaterGraphForTarget = (
+  records: ReadonlyArray<JournalRecord>,
+  recordIndex: number,
+  targetKey: string
+): boolean =>
+  records
+    .slice(recordIndex + 1)
+    .some(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+        taskTrackerTargetKey(event.observation.target) === targetKey
+    )
+
+const unclaimedEntriesForRecord = (
+  records: ReadonlyArray<JournalRecord>,
+  claimedTaskIds: ReadonlySet<typeof TaskId.Type>,
+  plannedTaskIds: ReadonlySet<typeof TaskId.Type>,
+  record: JournalRecord,
+  recordIndex: number
+): ReadonlyArray<TaskClaimAcquisitionNeeded> => {
+  const event = record.event
+  if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag === "FocusedTaskWorkSpecificationFacts")
+    return []
+  const observationOperation = graphReadIntentFor(records, event.operationId)
+  if (observationOperation === undefined) return []
+  if (hasLaterGraphForTarget(records, recordIndex, taskTrackerTargetKey(event.observation.target))) return []
+  const reconstructed = reconstructedGraphThrough(records, recordIndex, observationOperation.target)
+  if (Option.isNone(reconstructed)) return []
+  return reconstructed.value
+    .eligibleTasks()
+    .flatMap(({ id: taskId }) =>
+      claimedTaskIds.has(taskId) || plannedTaskIds.has(taskId)
+        ? []
+        : [RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionNeeded.make({ observationOperation, taskId })]
+    )
+}
 
 const recoveryEntryForAttempt = (
   records: ReadonlyArray<JournalRecord>,
@@ -95,6 +172,43 @@ const recoveryEntryForAttempt = (
     : RunRecoveryFrontierEntry.cases.PlannedAttemptExecutorWorkUnresolved.make({ planOperation })
 }
 
+const taskPreparationEntry = (
+  records: ReadonlyArray<JournalRecord>,
+  claimOperation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
+  admissionOperation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+): RunRecoveryFrontierEntry => {
+  const taskId = claimOperation.acquisition.taskId
+  const specificationRead = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTaskWorkSpecification" &&
+      event.operation.taskId === taskId &&
+      event.operation.predecessorOperationIds.includes(admissionOperation.operationId)
+  )?.event
+  if (
+    specificationRead?._tag !== "TaskTrackerReadIntentRecorded" ||
+    specificationRead.operation._tag !== "ReadTaskWorkSpecification"
+  ) {
+    return RunRecoveryFrontierEntry.cases.TaskWorkSpecificationReadNeeded.make({
+      claimOperation,
+      observationOperation: admissionOperation
+    })
+  }
+  const observed = records.some(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" && event.operationId === specificationRead.operation.operationId
+  )
+  return observed
+    ? RunRecoveryFrontierEntry.cases.TaskAttemptPlanNeeded.make({
+        claimOperation,
+        observationOperation: specificationRead.operation
+      })
+    : RunRecoveryFrontierEntry.cases.TaskWorkSpecificationReadUnresolved.make({
+        claimOperation,
+        operation: specificationRead.operation
+      })
+}
+
 /** Reduces immutable workflow-journal history into one total run-level recovery frontier. */
 export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>): RunRecoveryFrontier => {
   const plannedStages = records.flatMap(({ event }) =>
@@ -116,16 +230,19 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
     }
     const admission = records.findLast(
       ({ event: candidate }) =>
-        candidate._tag === "TrackerGraphObservationIntentRecorded" &&
+        candidate._tag === "TaskTrackerReadIntentRecorded" &&
+        candidate.operation._tag === "ReadTrackerGraph" &&
         candidate.operation.predecessorOperationIds.includes(event.operation.acquisition.operationId)
     )?.event
-    if (admission?._tag !== "TrackerGraphObservationIntentRecorded") {
+    if (admission?._tag !== "TaskTrackerReadIntentRecorded" || admission.operation._tag !== "ReadTrackerGraph") {
       const priorObservation = records.findLast(
         ({ event: candidate }) =>
-          candidate._tag === "TrackerGraphObservationIntentRecorded" &&
+          candidate._tag === "TaskTrackerReadIntentRecorded" &&
+          candidate.operation._tag === "ReadTrackerGraph" &&
           event.operation.predecessorOperationIds.includes(candidate.operation.operationId)
       )?.event
-      return priorObservation?._tag === "TrackerGraphObservationIntentRecorded"
+      return priorObservation?._tag === "TaskTrackerReadIntentRecorded" &&
+        priorObservation.operation._tag === "ReadTrackerGraph"
         ? [
             RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshNeeded.make({
               claimOperation: event.operation,
@@ -134,17 +251,17 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
           ]
         : []
     }
-    const observed = records.some(
+    const observedIndex = records.findLastIndex(
       ({ event: candidate }) =>
-        candidate._tag === "TrackerGraphOutcomeObserved" && candidate.operationId === admission.operation.operationId
+        candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === admission.operation.operationId
     )
-    return observed
-      ? [
-          RunRecoveryFrontierEntry.cases.TaskAttemptPlanNeeded.make({
-            claimOperation: event.operation,
-            observationOperation: admission.operation
-          })
-        ]
+    const reconstructed =
+      observedIndex < 0 ? Option.none() : reconstructedGraphThrough(records, observedIndex, admission.operation.target)
+    const admitted = Option.exists(reconstructed, (snapshot) =>
+      snapshot.eligibleTasks().some(({ id }) => id === event.operation.acquisition.taskId)
+    )
+    return admitted
+      ? [taskPreparationEntry(records, event.operation, admission.operation)]
       : [
           RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshUnresolved.make({
             claimOperation: event.operation,
@@ -158,25 +275,9 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
     )
   )
   const unclaimedTasks = records
-    .flatMap(({ event }) => {
-      if (event._tag !== "TrackerGraphOutcomeObserved") return []
-      const observation = records.find(
-        ({ event: candidate }) =>
-          candidate._tag === "TrackerGraphObservationIntentRecorded" &&
-          candidate.operation.operationId === event.operationId
-      )?.event
-      if (observation?._tag !== "TrackerGraphObservationIntentRecorded") return []
-      return event.outcome.taskIds.flatMap((taskId) =>
-        claimedTaskIds.has(taskId) || plannedTaskIds.has(taskId)
-          ? []
-          : [
-              RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionNeeded.make({
-                observationOperation: observation.operation,
-                taskId
-              })
-            ]
-      )
-    })
+    .flatMap((record, recordIndex) =>
+      unclaimedEntriesForRecord(records, claimedTaskIds, plannedTaskIds, record, recordIndex)
+    )
     .filter(
       (entry, index, entries) => entries.findLastIndex((candidate) => candidate.taskId === entry.taskId) === index
     )

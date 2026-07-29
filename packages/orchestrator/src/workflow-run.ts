@@ -20,18 +20,19 @@ import {
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
 import { taskRevisionFor } from "./task-dag.js"
+import { makeCompleteTaskTrackerFactsObserved, type TaskWorkSpecification } from "./task-tracker-facts.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import type { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
   makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
-  makeTrackerGraphObservedOutcome,
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   type TraceItem,
   TrackerExecutionAdmitted,
-  TrackerGraphOutcomeObserved,
+  TaskTrackerFactsObservedTrace,
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow.js"
@@ -57,7 +58,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
   yield* trace.emit(OperationSelected.make({ operation: graphOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(graphOperation)
   yield* trace.emit(
-    TrackerGraphOutcomeObserved.make({ operation: graphOperation, outcome: makeTrackerGraphObservedOutcome(snapshot) })
+    TaskTrackerFactsObservedTrace.make({
+      operation: graphOperation,
+      observation: makeCompleteTaskTrackerFactsObserved(graphOperation, snapshot)
+    })
   )
 
   const traceEmission = yield* Semaphore.make(1)
@@ -76,15 +80,36 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
 
   const makeAttemptStage = (
     task: Task,
+    specification: TaskWorkSpecification,
     activeClaim: ActiveTaskClaim | undefined,
     predecessorOperationId: OperationId
   ) =>
     makeFreshTaskAttemptStage(
       { allocator, continuePlannedAttemptExecutorWork: continuePlannedExecutorWork, emit, interpreter, planner },
       task,
+      specification,
       activeClaim,
       predecessorOperationId
     )
+
+  const makeTaskWorkSpecificationStage = Effect.fn("Workflow.makeTaskWorkSpecificationStage")(function* (
+    task: Task,
+    activeClaim: ActiveTaskClaim | undefined,
+    predecessorOperationId: OperationId
+  ): Effect.fn.Return<WorkflowStage> {
+    const operation = makeTaskWorkSpecificationObservationOperation(yield* allocator.allocate(), target, task.id, [
+      predecessorOperationId
+    ])
+    return {
+      transition: continued(operation.operationId, task),
+      run: () =>
+        Effect.gen(function* () {
+          yield* emit(OperationSelected.make({ operation }))
+          const specification = yield* interpreter.readTaskWorkSpecification(operation)
+          return yield* makeAttemptStage(task, specification, activeClaim, operation.operationId)
+        })
+    }
+  })
 
   const makeAdmissionObservationStage = Effect.fn("Workflow.makeAdmissionObservationStage")(function* (
     task: Task,
@@ -104,12 +129,15 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
           yield* emit(OperationSelected.make({ operation }))
           const admissionSnapshot = yield* interpreter.readTrackerGraph(operation)
           yield* emit(
-            TrackerGraphOutcomeObserved.make({ operation, outcome: makeTrackerGraphObservedOutcome(admissionSnapshot) })
+            TaskTrackerFactsObservedTrace.make({
+              operation,
+              observation: makeCompleteTaskTrackerFactsObserved(operation, admissionSnapshot)
+            })
           )
           const admittedTask = admissionSnapshot.eligibleTasks().find((candidate) => candidate.id === task.id)
           if (admittedTask === undefined) return
           yield* emit(TrackerExecutionAdmitted.make({ claimOperation, observationOperation: operation }))
-          return yield* makeAttemptStage(admittedTask, claim, operation.operationId)
+          return yield* makeTaskWorkSpecificationStage(admittedTask, claim, operation.operationId)
         })
     }
   })
@@ -140,7 +168,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
             yield* emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
             return yield* makeAdmissionObservationStage(task, result.claim, operation)
           }
-          return yield* makeAttemptStage(task, undefined, operation.acquisition.operationId)
+          return yield* makeTaskWorkSpecificationStage(task, undefined, operation.acquisition.operationId)
         })
     }
   })
@@ -156,7 +184,10 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
           yield* emit(OperationSelected.make({ operation }))
           const currentSnapshot = yield* interpreter.readTrackerGraph(operation)
           yield* emit(
-            TrackerGraphOutcomeObserved.make({ operation, outcome: makeTrackerGraphObservedOutcome(currentSnapshot) })
+            TaskTrackerFactsObservedTrace.make({
+              operation,
+              observation: makeCompleteTaskTrackerFactsObserved(operation, currentSnapshot)
+            })
           )
           const currentTask = currentSnapshot.eligibleTasks().find((candidate) => candidate.id === task.id)
           return currentTask === undefined ? undefined : yield* makeClaimStage(currentTask, operation.operationId)

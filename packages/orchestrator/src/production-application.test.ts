@@ -1,3 +1,4 @@
+import { taskTrackerGraphFactsObserved } from "../test/task-tracker-facts.js"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { ConfigProvider, Effect, FileSystem, Layer } from "effect"
@@ -38,8 +39,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import { activateRecoveredResponsibilities } from "./run-recovery-activation.js"
 import {
@@ -138,16 +138,11 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
             version: workflowJournalEventVersion
           })
         )
-        yield* journal.append(
-          runId,
-          intentRecordKey(observation.operationId),
-          trackerGraphObservationIntent(observation)
-        )
+        yield* journal.append(runId, intentRecordKey(observation.operationId), taskTrackerReadIntent(observation))
         yield* journal.append(
           runId,
           outcomeRecordKey(observation.operationId),
-          trackerGraphOutcomeObserved(observation.operationId, {
-            _tag: "TrackerGraphObserved",
+          taskTrackerGraphFactsObserved(observation, {
             revision: TrackerRevision.make("production-observation"),
             taskIds: [plannedAttempt.taskId]
           })
@@ -207,7 +202,15 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         trackerLayer
       ).pipe(
-        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.die("unused"),
+              readTaskWorkSpecification: () => Effect.die("unused")
+            })
+          )
+        ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       yield* Effect.gen(function* () {
@@ -236,6 +239,10 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const invalidRunId = RunId.make("invalid-preserved-run")
       const missingIntent = OperationId.make("missing-observation-intent")
+      const missingIntentOperation = makeTrackerGraphObservationOperation(
+        missingIntent,
+        FixtureTarget.make("missing-observation-target")
+      )
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const validObservation = makeTrackerGraphObservationOperation(
@@ -245,13 +252,12 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
         yield* journal.append(
           RunId.make("valid-preserved-run"),
           intentRecordKey(validObservation.operationId),
-          trackerGraphObservationIntent(validObservation)
+          taskTrackerReadIntent(validObservation)
         )
         yield* journal.append(
           invalidRunId,
           outcomeRecordKey(missingIntent),
-          trackerGraphOutcomeObserved(missingIntent, {
-            _tag: "TrackerGraphObserved",
+          taskTrackerGraphFactsObserved(missingIntentOperation, {
             revision: TrackerRevision.make("invalid-revision"),
             taskIds: []
           })
@@ -263,7 +269,15 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.die("unused"),
+              readTaskWorkSpecification: () => Effect.die("unused")
+            })
+          )
+        ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       const blocked = yield* PlannedAttemptExecutor.pipe(
@@ -313,7 +327,15 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.die("unused"),
+              readTaskWorkSpecification: () => Effect.die("unused")
+            })
+          )
+        ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       const blocked = yield* PlannedAttemptExecutor.pipe(
@@ -368,7 +390,15 @@ it.effect("does not block startup for another run's completed responsibility", (
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.die("unused"),
+              readTaskWorkSpecification: () => Effect.die("unused")
+            })
+          )
+        ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       expect(

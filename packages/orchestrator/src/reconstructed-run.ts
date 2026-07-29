@@ -6,7 +6,6 @@ import type { JournalRecord } from "./journal-store.js"
 import { workflowJournalTransitionRuleFor } from "./workflow-journal-transition.js"
 import {
   BestAvailableDurableGraphKnowledge,
-  makeTaskTrackerTargetClosureObservation,
   ReconstructedRunInvariantIssue,
   type ReconstructedRunResult,
   type ReconstructedRunState,
@@ -14,88 +13,18 @@ import {
   ReconstructedRunPauseState,
   ReconstructedTaskPauseState,
   type ReconstructedWorkflowHistory,
-  taskMembershipKey,
-  type TaskTrackerTargetClosureKnowledge,
-  TaskTrackerTargetClosureKnowledgeConflict,
-  type TaskTrackerTargetClosureObservation,
-  trackerTargetKey,
   WorkflowResponsibilityEntry,
   workflowResponsibilityOperationId,
   WorkflowResponsibilityState
 } from "./reconstructed-run-state.js"
 
-const applyGraphKnowledgeRecord = (
-  records: ReadonlyArray<JournalRecord>,
-  targetClosures: Map<string, TaskTrackerTargetClosureKnowledge>,
-  record: JournalRecord
-): void => {
-  if (record.event._tag !== "TrackerGraphOutcomeObserved") return
-  const graphOutcome = record.event
-  const intent = records.find(
-    ({ event }) =>
-      event._tag === "TrackerGraphObservationIntentRecorded" && event.operation.operationId === graphOutcome.operationId
-  )?.event
-  if (intent?._tag !== "TrackerGraphObservationIntentRecorded") return
-
-  const targetKey = trackerTargetKey(intent.operation.target)
-  const priorKnowledge = targetClosures.get(targetKey)
-  const observation = makeTaskTrackerTargetClosureObservation(intent.operation, graphOutcome.outcome, record.position)
-  targetClosures.set(targetKey, combineTargetClosureKnowledge(priorKnowledge, observation))
-}
-
-const sameMembership = (
-  left: TaskTrackerTargetClosureObservation,
-  right: TaskTrackerTargetClosureObservation
-): boolean => taskMembershipKey(left.taskIds) === taskMembershipKey(right.taskIds)
-
-const changedMembershipIsProven = (
-  prior: TaskTrackerTargetClosureObservation,
-  observation: TaskTrackerTargetClosureObservation
-): boolean => {
-  const removedTaskIds = prior.taskIds.filter((taskId) => !observation.taskIds.includes(taskId))
-  const addedTaskIds = observation.taskIds.filter((taskId) => !prior.taskIds.includes(taskId))
-  return (
-    [...removedTaskIds, ...addedTaskIds].every((taskId) => observation.explicitlyCoveredTaskIds.includes(taskId)) &&
-    removedTaskIds.every((taskId) => observation.provenAbsentTaskIds.includes(taskId))
-  )
-}
-
-const combineTargetClosureKnowledge = (
-  prior: TaskTrackerTargetClosureKnowledge | undefined,
-  observation: TaskTrackerTargetClosureObservation
-): TaskTrackerTargetClosureKnowledge => {
-  if (
-    prior === undefined ||
-    (prior._tag === "TaskTrackerTargetClosureObserved" &&
-      (sameMembership(prior, observation) || changedMembershipIsProven(prior, observation)))
-  )
-    return observation
-  if (prior._tag === "TaskTrackerTargetClosureKnowledgeConflict") {
-    if (
-      prior.observations.every(
-        (priorObservation) =>
-          sameMembership(priorObservation, observation) || changedMembershipIsProven(priorObservation, observation)
-      )
-    )
-      return observation
-    return TaskTrackerTargetClosureKnowledgeConflict.make({
-      observations: [...prior.observations, observation],
-      target: observation.target
-    })
-  }
-  return TaskTrackerTargetClosureKnowledgeConflict.make({
-    observations: [prior, observation],
-    target: observation.target
-  })
-}
-
 /** Pure graph-knowledge reducer. */
 const reduceGraphKnowledge = (records: ReadonlyArray<JournalRecord>): BestAvailableDurableGraphKnowledge => {
-  const targetClosures = new Map<string, TaskTrackerTargetClosureKnowledge>()
-  for (const record of records) {
-    applyGraphKnowledgeRecord(records, targetClosures, record)
-  }
-  return BestAvailableDurableGraphKnowledge.make({ targetClosures: [...targetClosures.values()] })
+  return BestAvailableDurableGraphKnowledge.make({
+    taskTrackerFacts: records.flatMap(({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+    )
+  })
 }
 
 const taskBoundaryResponsibility = (record: JournalRecord): WorkflowResponsibilityEntry | undefined => {
@@ -139,6 +68,18 @@ const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): Wo
 /** Pure workflow-history reducer; it retains every exact decoded record. */
 const reduceWorkflowHistory = (records: ReadonlyArray<JournalRecord>): ReconstructedWorkflowHistory => ({ records })
 
+const validateGraphKnowledge = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<ReconstructedRunInvariantIssue> =>
+  records.flatMap((record, index) =>
+    record.event._tag === "TaskTrackerFactsObserved" && record.position !== index + 1
+      ? [
+          ReconstructedRunInvariantIssue.cases.GraphKnowledgeHistoryMismatch.make({
+            operationId: record.event.operationId,
+            position: record.position
+          })
+        ]
+      : []
+  )
+
 /** Applies each recorded operator direction in journal order. */
 const reducePauseState = (records: ReadonlyArray<JournalRecord>): ReconstructedPauseState => {
   let runPaused = false
@@ -171,29 +112,6 @@ const reducePauseState = (records: ReadonlyArray<JournalRecord>): ReconstructedP
         : ReconstructedTaskPauseState.cases.TaskPauses.make({ taskIds })
   })
 }
-
-const graphKnowledgeObservations = (
-  knowledge: BestAvailableDurableGraphKnowledge
-): ReadonlyArray<TaskTrackerTargetClosureObservation> =>
-  knowledge.targetClosures.flatMap((entry) =>
-    entry._tag === "TaskTrackerTargetClosureObserved" ? [entry] : entry.observations
-  )
-
-const validateGraphKnowledge = (
-  graphKnowledge: BestAvailableDurableGraphKnowledge,
-  records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<ReconstructedRunInvariantIssue> =>
-  graphKnowledgeObservations(graphKnowledge).flatMap((observation) => {
-    const record = records.at(observation.observedAt - 1)
-    if (record?.event._tag === "TrackerGraphOutcomeObserved" && record.event.operationId === observation.operationId)
-      return []
-    return [
-      ReconstructedRunInvariantIssue.cases.GraphKnowledgeHistoryMismatch.make({
-        operationId: observation.operationId,
-        position: observation.observedAt
-      })
-    ]
-  })
 
 const plannedResponsibilityHasOrigin = (
   entry: Extract<WorkflowResponsibilityEntry, { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }>,
@@ -265,10 +183,7 @@ export const reconstructValidatedRunState = (
 /** Reconstructs arbitrary records and reports broken history-to-state invariants. */
 export const reconstructRunState = (runId: RunId, records: ReadonlyArray<JournalRecord>): ReconstructedRunResult => {
   const state = reconstructValidatedRunState(runId, records)
-  const issues = [
-    ...validateGraphKnowledge(state.graphKnowledge, records),
-    ...validateResponsibility(state.responsibility, records)
-  ]
+  const issues = [...validateGraphKnowledge(records), ...validateResponsibility(state.responsibility, records)]
   if (issues.length === 0) return { _tag: "ValidReconstructedRun", state }
   return {
     _tag: "InvalidReconstructedRun",

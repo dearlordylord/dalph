@@ -8,6 +8,8 @@ import { type GraphProjectionError, type TaskDagSnapshot } from "./task-dag.js"
 import * as TaskWorktree from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { FixtureReadError, TrackerAdapterReadError, TrackerReadError } from "./tracker-graph-reader.js"
+import type { TaskWorkSpecification } from "./task-tracker-facts.js"
+import type { TaskTrackerKnowledgeUnavailable } from "./task-tracker-knowledge.js"
 import {
   ActiveTaskClaim,
   type TaskClaimConflict,
@@ -23,6 +25,7 @@ export {
   causalGraphProjection,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   workflowOperationId
@@ -37,7 +40,6 @@ export {
   TaskWorktreeReconciliationSimulatedTrace
 } from "./task-worktree-reconciliation.js"
 export * from "./tracker-workflow-trace.js"
-export { makeTrackerGraphObservedOutcome, WorkflowOutcome } from "./workflow-outcome.js"
 
 type TaskAttemptPlanRecordingError =
   | JournalStoreContradiction
@@ -68,6 +70,18 @@ export interface WorkflowInterpreterService {
     | GraphProjectionError
     | JournalStoreContradiction
     | JournalStoreError
+    | TaskTrackerKnowledgeUnavailable
+    | TrackerAdapterReadError
+    | TrackerReadError
+  >
+  readonly readTaskWorkSpecification: (
+    operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+  ) => Effect.Effect<
+    TaskWorkSpecification,
+    | FixtureReadError
+    | JournalStoreContradiction
+    | JournalStoreError
+    | TaskTrackerKnowledgeUnavailable
     | TrackerAdapterReadError
     | TrackerReadError
   >
@@ -109,7 +123,7 @@ type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 /** Generic traces stop at the complete-attempt executor boundary. */
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
-  TrackerTrace.TrackerGraphOutcomeObserved,
+  TrackerTrace.TaskTrackerFactsObservedTrace,
   TrackerTrace.TaskClaimAcquisitionIntended,
   TrackerTrace.TaskClaimAcquiredTrace,
   TaskAttemptPlan.TaskAttemptPlanAcknowledged,

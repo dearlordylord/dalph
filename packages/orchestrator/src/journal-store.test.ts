@@ -19,7 +19,7 @@ import {
   OperationId,
   RunId,
   sqliteJournalStoreLayer,
-  trackerGraphObservationIntent,
+  taskTrackerReadIntent,
   WorkflowOperation
 } from "./index.js"
 import { classifyJournalStorageFailure } from "./sqlite-journal-store.js"
@@ -48,11 +48,11 @@ const withSqliteClient = <A, E, R>(
   )
 
 const intent = (operationId: string, taskId: string) =>
-  trackerGraphObservationIntent(
+  taskTrackerReadIntent(
     WorkflowOperation.cases.ReadTrackerGraph.make({
       operationId: OperationId.make(operationId),
       predecessorOperationIds: [],
-      readShape: { _tag: "TargetClosureMembership", explicitlyCoveredTaskIds: [] },
+      readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [] },
       target: FixtureTarget.make(taskId)
     })
   )

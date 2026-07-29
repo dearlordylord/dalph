@@ -1,116 +1,15 @@
 import { Schema } from "effect"
-import {
-  AttemptId,
-  JournalPosition,
-  OperationId,
-  PlannedTaskAttempt,
-  TaskId,
-  TrackerRevision,
-  TrackerTarget
-} from "./domain.js"
+import { AttemptId, JournalPosition, OperationId, PlannedTaskAttempt, TaskId } from "./domain.js"
 import type { RunId } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "./planned-attempt-executor.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-import type { WorkflowOutcome } from "./workflow-outcome.js"
-
-/** Coverage currently retained by the normalized target-closure membership event. */
-const TaskGraphFactFamily = Schema.Literals(["TargetMembership"])
-type TaskGraphFactFamily = typeof TaskGraphFactFamily.Type
-
-export const completeTargetClosureFactFamilies = ["TargetMembership"] as const satisfies readonly [TaskGraphFactFamily]
-export const trackerTargetKey = (target: typeof TrackerTarget.Type): string =>
-  JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
-export const taskMembershipKey = (taskIds: ReadonlyArray<TaskId>): string => JSON.stringify([...taskIds].sort())
-
-/**
- * One complete observation of a task-tracker target closure's membership.
- * Journal order cannot resolve an incompatible potentially mixed-time read.
- */
-export const TaskTrackerTargetClosureObservation = Schema.TaggedStruct("TaskTrackerTargetClosureObserved", {
-  completeness: Schema.Literal("Complete"),
-  consistency: Schema.Literal("PotentiallyMixedTime"),
-  explicitlyCoveredTaskIds: Schema.Array(TaskId).check(Schema.isUnique()),
-  factFamilies: Schema.Tuple([TaskGraphFactFamily]),
-  freshness: Schema.Literal("FreshAtReadBoundary"),
-  observedAt: JournalPosition,
-  operationId: OperationId,
-  provenAbsentTaskIds: Schema.Array(TaskId).check(Schema.isUnique()),
-  revision: TrackerRevision,
-  target: TrackerTarget,
-  taskIds: Schema.Array(TaskId).check(Schema.isUnique())
-}).check(
-  Schema.makeFilter((observation) =>
-    observation.provenAbsentTaskIds.some((taskId) => observation.taskIds.includes(taskId))
-      ? "one task cannot be both observed and proven absent"
-      : observation.provenAbsentTaskIds.some((taskId) => !observation.explicitlyCoveredTaskIds.includes(taskId))
-        ? "every proven-absent task must be explicitly covered"
-        : observation.explicitlyCoveredTaskIds.some(
-              (taskId) => !observation.taskIds.includes(taskId) && !observation.provenAbsentTaskIds.includes(taskId)
-            )
-          ? "every explicitly covered task must be observed or proven absent"
-          : undefined
-  )
-)
-export type TaskTrackerTargetClosureObservation = typeof TaskTrackerTargetClosureObservation.Type
-
-/** Normalizes one exact accepted tracker read and its durable outcome evidence. */
-export const makeTaskTrackerTargetClosureObservation = (
-  operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
-  outcome: typeof WorkflowOutcome.cases.TrackerGraphObserved.Type,
-  observedAt: JournalPosition
-): TaskTrackerTargetClosureObservation => {
-  const taskIds = [...new Set(outcome.taskIds)].sort()
-  const explicitlyCoveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds]
-  return TaskTrackerTargetClosureObservation.make({
-    completeness: "Complete",
-    consistency: "PotentiallyMixedTime",
-    explicitlyCoveredTaskIds,
-    factFamilies: [...completeTargetClosureFactFamilies],
-    freshness: "FreshAtReadBoundary",
-    observedAt,
-    operationId: operation.operationId,
-    provenAbsentTaskIds: explicitlyCoveredTaskIds.filter((taskId) => !taskIds.includes(taskId)),
-    revision: outcome.revision,
-    target: operation.target,
-    taskIds
-  })
-}
-
-const minimumConflictObservations = 2
-
-/** Incomparable membership facts that isolate only their target closure. */
-export const TaskTrackerTargetClosureKnowledgeConflict = Schema.TaggedStruct(
-  "TaskTrackerTargetClosureKnowledgeConflict",
-  {
-    observations: Schema.Array(TaskTrackerTargetClosureObservation).check(
-      Schema.isMinLength(minimumConflictObservations)
-    ),
-    target: TrackerTarget
-  }
-).check(
-  Schema.makeFilter((conflict) => {
-    const targetKey = trackerTargetKey(conflict.target)
-    if (conflict.observations.some((observation) => trackerTargetKey(observation.target) !== targetKey)) {
-      return "every conflicting observation must cover the conflict target"
-    }
-    return new Set(conflict.observations.map((observation) => taskMembershipKey(observation.taskIds))).size <
-      minimumConflictObservations
-      ? "a conflict requires at least two different target memberships"
-      : undefined
-  })
-)
-
-export const TaskTrackerTargetClosureKnowledge = Schema.Union([
-  TaskTrackerTargetClosureObservation,
-  TaskTrackerTargetClosureKnowledgeConflict
-])
-export type TaskTrackerTargetClosureKnowledge = typeof TaskTrackerTargetClosureKnowledge.Type
+import { TaskTrackerFactsObservation } from "./task-tracker-facts.js"
 
 /** Best available journaled graph knowledge, never current tracker authority. */
 export const BestAvailableDurableGraphKnowledge = Schema.Struct({
-  targetClosures: Schema.Array(TaskTrackerTargetClosureKnowledge)
+  taskTrackerFacts: Schema.Array(TaskTrackerFactsObservation)
 })
 export type BestAvailableDurableGraphKnowledge = typeof BestAvailableDurableGraphKnowledge.Type
 

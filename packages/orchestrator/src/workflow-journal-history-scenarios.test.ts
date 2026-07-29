@@ -1,3 +1,4 @@
+import { taskTrackerGraphFactsObserved } from "../test/task-tracker-facts.js"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option, Schema } from "effect"
 import { expect, it } from "vitest"
@@ -40,8 +41,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { deriveRunRecoveryFrontier } from "./run-recovery-frontier.js"
@@ -57,10 +57,6 @@ import {
 } from "./planned-attempt-executor.js"
 import {
   reconstructedTaskIsPaused,
-  taskMembershipKey,
-  TaskTrackerTargetClosureKnowledgeConflict,
-  TaskTrackerTargetClosureObservation,
-  trackerTargetKey,
   WorkflowResponsibilityEntry,
   workflowResponsibilityKey,
   workflowResponsibilityOperationId
@@ -124,13 +120,9 @@ const proof = PlannedWorktreeReady.make({
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
 
 const eventRows = [
-  { event: trackerGraphObservationIntent(initial), key: intentRecordKey(initial.operationId) },
+  { event: taskTrackerReadIntent(initial), key: intentRecordKey(initial.operationId) },
   {
-    event: trackerGraphOutcomeObserved(initial.operationId, {
-      _tag: "TrackerGraphObserved" as const,
-      revision: TrackerRevision.make("tracker-1"),
-      taskIds: [taskId]
-    }),
+    event: taskTrackerGraphFactsObserved(initial, { revision: TrackerRevision.make("tracker-1"), taskIds: [taskId] }),
     key: outcomeRecordKey(initial.operationId)
   },
   {
@@ -144,13 +136,9 @@ const eventRows = [
     }),
     key: outcomeRecordKey(claim.acquisition.operationId)
   },
-  { event: trackerGraphObservationIntent(admission), key: intentRecordKey(admission.operationId) },
+  { event: taskTrackerReadIntent(admission), key: intentRecordKey(admission.operationId) },
   {
-    event: trackerGraphOutcomeObserved(admission.operationId, {
-      _tag: "TrackerGraphObserved" as const,
-      revision: TrackerRevision.make("tracker-2"),
-      taskIds: [taskId]
-    }),
+    event: taskTrackerGraphFactsObserved(admission, { revision: TrackerRevision.make("tracker-2"), taskIds: [taskId] }),
     key: outcomeRecordKey(admission.operationId)
   },
   {
@@ -235,7 +223,7 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   if (final._tag !== "ValidWorkflowJournalHistory") return
   expect(final.recoveryFrontier.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
   expect(final.runState.appliedThrough).toBe(records.length)
-  expect(final.runState.graphKnowledge.targetClosures).toHaveLength(1)
+  expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
 })
 
 it("describes every current journal identity", () => {
@@ -375,8 +363,6 @@ it("reconstructs all pause commands and responsibility identities", () => {
     return
   expect(workflowResponsibilityOperationId(claimResponsibility)).toBe(claim.acquisition.operationId)
   expect(workflowResponsibilityOperationId(worktreeResponsibility)).toBe(worktree.operationId)
-  expect(taskMembershipKey([taskId])).toBe(JSON.stringify([taskId]))
-  expect(trackerTargetKey(target)).toContain("fixture-A")
 })
 
 it("rejects commands and executor correlations bound to another run", () => {
@@ -406,55 +392,8 @@ it("rejects commands and executor correlations bound to another run", () => {
   expect(reduceWorkflowJournalHistory(runId, executorRecord)._tag).toBe("InvalidWorkflowJournalHistory")
 })
 
-effectIt.effect("enforces graph-knowledge, responsibility, and causal-operation invariants", () =>
+effectIt.effect("enforces responsibility and causal-operation invariants", () =>
   Effect.gen(function* () {
-    const observation = TaskTrackerTargetClosureObservation.make({
-      completeness: "Complete",
-      consistency: "PotentiallyMixedTime",
-      explicitlyCoveredTaskIds: [taskId],
-      factFamilies: ["TargetMembership"],
-      freshness: "FreshAtReadBoundary",
-      observedAt: JournalPosition.make(1),
-      operationId: initial.operationId,
-      provenAbsentTaskIds: [],
-      revision: TrackerRevision.make("schema-revision"),
-      target,
-      taskIds: [taskId]
-    })
-    yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureObservation)(observation)
-    for (const invalid of [
-      { ...observation, provenAbsentTaskIds: [taskId] },
-      { ...observation, explicitlyCoveredTaskIds: [], provenAbsentTaskIds: [TaskId.make("absent")] },
-      { ...observation, explicitlyCoveredTaskIds: [TaskId.make("unknown")] }
-    ]) {
-      expect(
-        yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureObservation)(invalid).pipe(Effect.result)
-      ).toMatchObject({ _tag: "Failure" })
-    }
-
-    const changed = TaskTrackerTargetClosureObservation.make({
-      ...observation,
-      observedAt: JournalPosition.make(2),
-      operationId: admission.operationId,
-      provenAbsentTaskIds: [taskId],
-      taskIds: []
-    })
-    yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureKnowledgeConflict)(
-      TaskTrackerTargetClosureKnowledgeConflict.make({ observations: [observation, changed], target })
-    )
-    for (const conflict of [
-      { _tag: "TaskTrackerTargetClosureKnowledgeConflict", observations: [observation, observation], target },
-      {
-        _tag: "TaskTrackerTargetClosureKnowledgeConflict",
-        observations: [observation, { ...changed, target: FixtureTarget.make("other-target") }],
-        target
-      }
-    ]) {
-      expect(
-        yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureKnowledgeConflict)(conflict).pipe(Effect.result)
-      ).toMatchObject({ _tag: "Failure" })
-    }
-
     yield* Schema.decodeUnknownEffect(WorkflowResponsibilityEntry)({
       _tag: "PlannedAttemptExecutorWorkResponsibility",
       beganAt: 1,
@@ -482,7 +421,7 @@ effectIt.effect("enforces graph-knowledge, responsibility, and causal-operation 
   })
 )
 
-it("combines equal, proven-changed, and conflicting tracker memberships", () => {
+it("retains each canonical tracker-facts observation in journal order", () => {
   const taskB = TaskId.make("task-B")
   const taskC = TaskId.make("task-C")
   const observations = [
@@ -495,12 +434,11 @@ it("combines equal, proven-changed, and conflicting tracker memberships", () => 
       FixtureTarget.make("other-target")
     )
   ]
-  const memberships = [[taskId], [taskB], [taskC], [taskId], [taskC]]
+  const memberships = [[taskId], [taskB], [taskC], [taskId, taskB, taskC], [taskC]]
   const rows = observations.flatMap((operation, index) => [
-    { event: trackerGraphObservationIntent(operation), key: intentRecordKey(operation.operationId) },
+    { event: taskTrackerReadIntent(operation), key: intentRecordKey(operation.operationId) },
     {
-      event: trackerGraphOutcomeObserved(operation.operationId, {
-        _tag: "TrackerGraphObserved" as const,
+      event: taskTrackerGraphFactsObserved(operation, {
         revision: TrackerRevision.make(`membership-${index}`),
         taskIds: Option.getOrThrow(Option.fromUndefinedOr(memberships[index]))
       }),
@@ -510,19 +448,18 @@ it("combines equal, proven-changed, and conflicting tracker memberships", () => 
   const reconstructed = reconstructRunState(runId, recordsFrom(rows))
   expect(reconstructed._tag).toBe("ValidReconstructedRun")
   if (reconstructed._tag !== "ValidReconstructedRun") return
-  expect(reconstructed.state.graphKnowledge.targetClosures).toHaveLength(2)
-  expect(reconstructed.state.graphKnowledge.targetClosures[0]?._tag).toBe("TaskTrackerTargetClosureObserved")
+  expect(reconstructed.state.graphKnowledge.taskTrackerFacts).toHaveLength(5)
 
   const conflicting = reconstructRunState(runId, recordsFrom(rows.slice(0, 6)))
   expect(conflicting._tag).toBe("ValidReconstructedRun")
 
   const orphanId = OperationId.make("orphan")
+  const orphanOperation = makeTrackerGraphObservationOperation(orphanId, target)
   const orphanOutcome = reconstructRunState(
     runId,
     recordsFrom([
       {
-        event: trackerGraphOutcomeObserved(orphanId, {
-          _tag: "TrackerGraphObserved",
+        event: taskTrackerGraphFactsObserved(orphanOperation, {
           revision: TrackerRevision.make("orphan"),
           taskIds: []
         }),

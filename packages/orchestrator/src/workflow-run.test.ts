@@ -26,6 +26,7 @@ import { TaskClaimAcquisitionPlanner } from "./task-claim-planning.js"
 import { projectTrackerSnapshot, taskRevisionFor } from "./task-dag.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "./task-work-planning.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
+import { makeTaskWorkSpecification } from "./task-tracker-facts.js"
 import { discardFreshStagesOwnedByRecovery, runWorkflow } from "./workflow-run.js"
 import {
   AuthoritativeTaskClaimAcquired,
@@ -85,6 +86,10 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused"),
       readTrackerGraph: () => Effect.succeed(snapshot),
+      readTaskWorkSpecification: (operation) =>
+        Effect.succeed(
+          makeTaskWorkSpecification({ body: "Workflow task body", taskId: operation.taskId, title: "Workflow task" })
+        ),
       reconcileTaskWorktree: () => Effect.die("unused"),
       recordTaskAttemptPlan: () => Effect.die("unused")
     })
@@ -150,6 +155,10 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
       readTrackerGraph: (operation) =>
         Effect.succeed(operation.operationId === "fresh-operation-1" ? emptySnapshot : snapshot),
+      readTaskWorkSpecification: (operation) =>
+        Effect.succeed(
+          makeTaskWorkSpecification({ body: "Workflow task body", taskId: operation.taskId, title: "Workflow task" })
+        ),
       reconcileTaskWorktree: () =>
         Effect.succeed(
           AuthoritativeTaskWorktreeReady.make({

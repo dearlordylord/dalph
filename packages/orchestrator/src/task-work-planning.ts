@@ -1,7 +1,7 @@
 import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
-import type { GitCommitSha, RunId, Task, TaskExecutorLocator } from "./domain.js"
+import type { GitCommitSha, RunId, TaskExecutorLocator } from "./domain.js"
 import { AttemptId, OperationId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "./domain.js"
-import { taskRevisionFor } from "./task-dag.js"
+import type { TaskWorkSpecification } from "./task-tracker-facts.js"
 
 export interface OperationIdAllocatorService {
   readonly allocate: () => Effect.Effect<OperationId>
@@ -44,7 +44,7 @@ export class PlannedTaskAttemptError extends Schema.TaggedErrorClass<PlannedTask
 ) {}
 
 export interface PlannedTaskAttemptPlannerService {
-  readonly plan: (task: Task) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
+  readonly plan: (specification: TaskWorkSpecification) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 
 /** Selects one exact Base SHA and worktree/branch locator set for a task attempt. */
@@ -66,18 +66,18 @@ export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlann
     Effect.gen(function* () {
       const nextAttemptOrdinal = yield* Ref.make(0)
       return PlannedTaskAttemptPlanner.of({
-        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (task) {
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (specification) {
           const ordinal = yield* Ref.getAndUpdate(nextAttemptOrdinal, (current) => current + 1)
-          const attemptId = AttemptId.make(`attempt:${task.id}:${ordinal}`)
-          const resourceSegment = `attempt-${encodeURIComponent(task.id)}-${ordinal}`
+          const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
+          const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
           return PlannedTaskAttempt.make({
             attemptId,
             baseSha: options.baseSha,
             branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
             executor: options.executor,
             runId: options.runId,
-            taskId: task.id,
-            taskRevision: taskRevisionFor(task),
+            taskId: specification.taskId,
+            taskRevision: specification.fingerprint,
             worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
           })
         })

@@ -1,3 +1,4 @@
+import { taskTrackerGraphFactsObserved } from "../test/task-tracker-facts.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { expect } from "vitest"
@@ -47,8 +48,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -134,12 +134,11 @@ const recordCausalHistory = Effect.gen(function* () {
     [acquisition.operationId],
     [plannedAttempt.taskId]
   )
-  yield* journal.append(runId, intentRecordKey(observation.operationId), trackerGraphObservationIntent(observation))
+  yield* journal.append(runId, intentRecordKey(observation.operationId), taskTrackerReadIntent(observation))
   yield* journal.append(
     runId,
     outcomeRecordKey(observation.operationId),
-    trackerGraphOutcomeObserved(observation.operationId, {
-      _tag: "TrackerGraphObserved",
+    taskTrackerGraphFactsObserved(observation, {
       revision: TrackerRevision.make("authority-observation"),
       taskIds: [plannedAttempt.taskId]
     })

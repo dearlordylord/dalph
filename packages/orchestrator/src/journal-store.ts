@@ -6,19 +6,17 @@ import { workflowJournalEventVersion } from "./journal-event-version.js"
 import type { JournalScan } from "./journal-recovery-model.js"
 import { PlannedAttemptExecutorJournalEvent } from "./planned-attempt-executor-journal.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
+import { TaskTrackerFactsObservedEvent } from "./task-tracker-facts.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
-import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow-outcome.js"
 
-/** Records selection of a read-only tracker-graph observation in workflow history. */
-const TrackerGraphObservationIntentRecorded = Schema.TaggedStruct("TrackerGraphObservationIntentRecorded", {
-  operation: WorkflowOperationSchema.cases.ReadTrackerGraph,
-  version: Schema.Literal(workflowJournalEventVersion)
-})
+const TaskTrackerReadOperation = Schema.Union([
+  WorkflowOperationSchema.cases.ReadTrackerGraph,
+  WorkflowOperationSchema.cases.ReadTaskWorkSpecification
+])
 
-/** Records one tracker-graph observation without replacing tracker authority. */
-const TrackerGraphOutcomeObservedEvent = Schema.TaggedStruct("TrackerGraphOutcomeObserved", {
-  operationId: OperationId,
-  outcome: WorkflowOutcomeSchema.cases.TrackerGraphObserved,
+/** Records selection of one exact read through the logical task-tracker boundary. */
+const TaskTrackerReadIntentRecorded = Schema.TaggedStruct("TaskTrackerReadIntentRecorded", {
+  operation: TaskTrackerReadOperation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
@@ -55,8 +53,8 @@ export const TaskWorktreeReadyEvent = Schema.TaggedStruct("TaskWorktreeReady", {
 
 export const WorkflowJournalEvent = Schema.Union([
   ControlCommandRecordedEvent,
-  TrackerGraphObservationIntentRecorded,
-  TrackerGraphOutcomeObservedEvent,
+  TaskTrackerReadIntentRecorded,
+  TaskTrackerFactsObservedEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
   TaskAttemptPlannedEvent,
@@ -66,16 +64,10 @@ export const WorkflowJournalEvent = Schema.Union([
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
-export const trackerGraphObservationIntent = (
-  operation: typeof WorkflowOperationSchema.cases.ReadTrackerGraph.Type
-): typeof TrackerGraphObservationIntentRecorded.Type =>
-  TrackerGraphObservationIntentRecorded.make({ operation, version: workflowJournalEventVersion })
-
-export const trackerGraphOutcomeObserved = (
-  operationId: OperationId,
-  outcome: typeof WorkflowOutcomeSchema.cases.TrackerGraphObserved.Type
-): typeof TrackerGraphOutcomeObservedEvent.Type =>
-  TrackerGraphOutcomeObservedEvent.make({ operationId, outcome, version: workflowJournalEventVersion })
+export const taskTrackerReadIntent = (
+  operation: typeof TaskTrackerReadOperation.Type
+): typeof TaskTrackerReadIntentRecorded.Type =>
+  TaskTrackerReadIntentRecorded.make({ operation, version: workflowJournalEventVersion })
 
 /** One schema-decodable durable envelope around a workflow event. */
 export const JournalRecord = Schema.Struct({

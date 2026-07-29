@@ -21,6 +21,12 @@ import {
 import { deriveRunRecoveryFrontier } from "./run-recovery-frontier.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import { reconstructValidatedRunState } from "./reconstructed-run.js"
+import {
+  invalidTaskTrackerReconfirmationReference,
+  makeTaskTrackerReconfirmationIndex,
+  type TaskTrackerReconfirmationIndex
+} from "./task-tracker-reconfirmation.js"
+import { taskTrackerObservationMatchesRead } from "./task-tracker-observation-match.js"
 
 const identityIssue = (
   issues: Array<WorkflowJournalHistoryIssue>,
@@ -51,6 +57,7 @@ interface FoldIndexes {
   readonly seenKeys: Set<JournalRecordKey>
   readonly seenOperationIds: Set<OperationId>
   readonly terminalExecutorAttempts: Set<AttemptId>
+  readonly trackerReconfirmations: TaskTrackerReconfirmationIndex
 }
 
 const emptyIndexes = (): FoldIndexes => ({
@@ -60,7 +67,8 @@ const emptyIndexes = (): FoldIndexes => ({
   seenEventKindsByOperation: new Map(),
   seenKeys: new Set(),
   seenOperationIds: new Set(),
-  terminalExecutorAttempts: new Set()
+  terminalExecutorAttempts: new Set(),
+  trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
 })
 
 const validateRecordEnvelope = (
@@ -190,6 +198,50 @@ const validateClaim = (
     acquired.token !== intended.token
   ) {
     identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
+  }
+}
+
+const findTrackerReadIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  observedEvent: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
+  observedAt: JournalPosition
+) =>
+  records.find(
+    ({ event, position }) =>
+      position < observedAt &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation.operationId === observedEvent.operationId
+  )?.event
+
+const validateReconfirmationReference = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const detail = invalidTaskTrackerReconfirmationReference(record, runId, indexes.trackerReconfirmations)
+  if (detail !== undefined) semanticIssue(issues, runId, record.position, detail)
+}
+
+const validateTrackerObservation = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (record.event._tag !== "TaskTrackerFactsObserved") return
+  const observedEvent = record.event
+  const intent = findTrackerReadIntent(records, observedEvent, record.position)
+  if (
+    intent?._tag === "TaskTrackerReadIntentRecorded" &&
+    !taskTrackerObservationMatchesRead(observedEvent.observation, intent.operation)
+  ) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `task-tracker facts contradict initiating read ${observedEvent.operationId}`
+    )
   }
 }
 
@@ -331,6 +383,8 @@ export const reduceWorkflowJournalHistory = (
     validateOperationEvent(record, runId, indexes, issues)
     validatePlan(record, runId, indexes, issues)
     validateClaim(record, runId, records, issues)
+    validateTrackerObservation(record, runId, records, issues)
+    validateReconfirmationReference(record, runId, indexes, issues)
     validateExecutorEvent(record, runId, indexes, issues)
   })
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)

@@ -97,8 +97,7 @@ export {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved,
+  taskTrackerReadIntent,
   WorkflowJournalEvent
 } from "./journal-store.js"
 export {
@@ -162,6 +161,9 @@ export {
   TaskDagWire,
   taskRevisionFor
 } from "./task-dag.js"
+export * from "./task-tracker-facts.js"
+export * from "./task-tracker-knowledge.js"
+export * from "./task-tracker-target.js"
 export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -220,7 +222,7 @@ export {
   projectWorkflowOccurrences,
   TaskTrackerFactsObserved,
   TrackerOutcomeWithoutReadIntent,
-  TrackerGraphReadInitiated,
+  TaskTrackerReadInitiated,
   WorkflowActor,
   WorkflowOccurrence,
   WorkflowOccurrenceClassification,
@@ -246,10 +248,9 @@ export {
   TaskWorktreeReconciliationSimulatedTrace,
   TraceItem,
   TrackerExecutionAdmitted,
-  TrackerGraphOutcomeObserved,
+  TaskTrackerFactsObservedTrace,
   WorkflowInterpreter,
   WorkflowOperation,
   workflowOperationId,
-  WorkflowOutcome,
   WorkflowTrace
 } from "./workflow.js"

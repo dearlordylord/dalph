@@ -29,7 +29,6 @@ const genericOrchestrationFiles = [
   "task-admission-controller.ts",
   "workflow-interpreters.ts",
   "workflow-operation.ts",
-  "workflow-outcome.ts",
   "workflow-run.ts",
   "workflow.ts"
 ] as const

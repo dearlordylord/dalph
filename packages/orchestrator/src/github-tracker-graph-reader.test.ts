@@ -531,3 +531,11 @@ trackerGraphReaderContract({
   ],
   name: "GitHub tracker reader"
 })
+
+it.effect("defers focused GitHub task-work qualification to the provider ticket", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const error = yield* reader.readTaskWorkSpecification(target, root).pipe(Effect.flip)
+    expect(error).toMatchObject({ _tag: "TrackerGraphReader.AdapterReadError", reason: { _tag: "UnsupportedTarget" } })
+  }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(clientLayer))
+)

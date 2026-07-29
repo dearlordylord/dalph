@@ -114,19 +114,19 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         undefined,
         event.ordinal
       )
-    case "TrackerGraphObservationIntentRecorded":
+    case "TaskTrackerReadIntentRecorded":
       return operationEvent({
         expectedKey: intentRecordKey(event.operation.operationId),
         operationId: event.operation.operationId,
         requiredOperationIds: event.operation.predecessorOperationIds
       })
-    case "TrackerGraphOutcomeObserved":
+    case "TaskTrackerFactsObserved":
       return operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKinds: ["TrackerGraphObservationIntentRecorded"]
+        requiredPredecessorKinds: ["TaskTrackerReadIntentRecorded"]
       })
     case "TaskClaimAcquisitionIntended":
       return operationEvent({

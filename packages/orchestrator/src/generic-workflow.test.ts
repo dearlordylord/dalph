@@ -76,6 +76,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       acquireTaskClaim: (operation) =>
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
       readTrackerGraph: () => Effect.die("unused"),
+      readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: () =>
         Effect.succeed(
           AuthoritativeTaskWorktreeReady.make({
@@ -141,6 +142,7 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
     WorkflowInterpreter.of({
       acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
       readTrackerGraph: () => Effect.succeed(snapshot),
+      readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
       recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
     })
@@ -173,8 +175,8 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
 
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
-      "TrackerGraphObservationIntentRecorded",
-      "TrackerGraphOutcomeObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "TaskClaimAcquisitionIntended",
       "TaskAttemptPlanned",
       "TaskWorktreeReconciliationIntended"
@@ -191,7 +193,7 @@ it.effect("requires one exact causal planned-attempt acknowledgement", () =>
       predecessorOperationIds: []
     })
     const record = {
-      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 5 as const }),
+      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 6 as const }),
       key: attemptPlanRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(1),
       runId

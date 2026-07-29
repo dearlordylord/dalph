@@ -61,11 +61,12 @@ it.effect("runs the dry CLI through the planned-attempt workflow", () =>
 
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
       "OperationSelected",
-      "TrackerGraphOutcomeObserved",
+      "TaskTrackerFactsObserved",
       "OperationSelected",
-      "TrackerGraphOutcomeObserved",
+      "TaskTrackerFactsObserved",
       "OperationSelected",
       "TaskClaimAcquisitionIntended",
+      "OperationSelected",
       "OperationSelected",
       "TaskAttemptPlanRecordingSimulated",
       "OperationSelected",

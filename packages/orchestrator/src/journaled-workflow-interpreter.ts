@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import type { RunId } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import {
@@ -11,12 +11,31 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import { requireAcknowledgedPlan } from "./task-attempt-plan-journal-evidence.js"
 import { TaskAttemptPlanRecordAcknowledged, TaskAttemptPlanRunContradiction } from "./task-attempt-plan-recording.js"
-import { makeTrackerGraphObservedOutcome, type WorkflowOperation, WorkflowInterpreter } from "./workflow.js"
+import {
+  makeTaskTrackerFactsObservedFromRead,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "./task-tracker-facts.js"
+import {
+  reconstructedTaskGraphFromEvents,
+  reconstructedTaskWorkSpecificationFor,
+  TaskTrackerKnowledgeUnavailable
+} from "./task-tracker-knowledge.js"
+import { type WorkflowOperation, WorkflowInterpreter } from "./workflow.js"
+
+const requireTaskTrackerKnowledge = <A>(
+  knowledge: Option.Option<A>,
+  operationId: (typeof WorkflowOperation.cases.ReadTrackerGraph.Type)["operationId"],
+  kind: "TaskGraph" | "TaskWorkSpecification"
+): Effect.Effect<A, TaskTrackerKnowledgeUnavailable> =>
+  Option.match(knowledge, {
+    onNone: () => Effect.fail(new TaskTrackerKnowledgeUnavailable({ knowledge: kind, operationId })),
+    onSome: Effect.succeed
+  })
 
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
@@ -33,14 +52,36 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
       ) {
         const key = intentRecordKey(operation.operationId)
-        yield* journal.append(runId, key, trackerGraphObservationIntent(operation))
+        yield* journal.append(runId, key, taskTrackerReadIntent(operation))
+        const records = yield* journal.read(runId)
+        const existingObservationIndex = records.findIndex(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+        )
+        if (existingObservationIndex >= 0) {
+          return yield* requireTaskTrackerKnowledge(
+            reconstructedTaskGraphFromEvents(
+              records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
+              operation.target
+            ),
+            operation.operationId,
+            "TaskGraph"
+          )
+        }
         const snapshot = yield* interpreter.readTrackerGraph(operation)
         yield* journal.append(
           runId,
           outcomeRecordKey(operation.operationId),
-          trackerGraphOutcomeObserved(operation.operationId, makeTrackerGraphObservedOutcome(snapshot))
+          makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
         )
-        return snapshot
+        const recorded = yield* journal.read(runId)
+        return yield* requireTaskTrackerKnowledge(
+          reconstructedTaskGraphFromEvents(
+            recorded.map(({ event }) => event),
+            operation.target
+          ),
+          operation.operationId,
+          "TaskGraph"
+        )
       })
 
       const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* (
@@ -66,6 +107,52 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           )
         }
         return result
+      })
+
+      const readTaskWorkSpecification = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorkSpecification")(function* (
+        operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+      ) {
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        const existingRecords = yield* journal.read(runId)
+        const existingObservationIndex = existingRecords.findIndex(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+        )
+        if (existingObservationIndex >= 0) {
+          return yield* requireTaskTrackerKnowledge(
+            reconstructedTaskWorkSpecificationFor(
+              {
+                taskTrackerFacts: existingRecords
+                  .slice(0, existingObservationIndex + 1)
+                  .flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
+              },
+              operation.taskId
+            ),
+            operation.operationId,
+            "TaskWorkSpecification"
+          )
+        }
+        const specification = yield* interpreter.readTaskWorkSpecification(operation)
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
+          )
+        )
+        const records = yield* journal.read(runId)
+        return yield* requireTaskTrackerKnowledge(
+          reconstructedTaskWorkSpecificationFor(
+            {
+              taskTrackerFacts: records.flatMap(({ event }) =>
+                event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+              )
+            },
+            operation.taskId
+          ),
+          operation.operationId,
+          "TaskWorkSpecification"
+        )
       })
 
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
@@ -126,6 +213,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTrackerGraph,
+        readTaskWorkSpecification,
         reconcileTaskWorktree,
         recordTaskAttemptPlan
       })

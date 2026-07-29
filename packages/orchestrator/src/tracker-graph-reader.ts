@@ -1,7 +1,9 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
-import { FixtureTarget, type TrackerTarget } from "./domain.js"
+import { FixtureTarget, TaskId, type TrackerTarget } from "./domain.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./task-dag.js"
+import type { TaskWorkSpecification } from "./task-tracker-facts.js"
+import { makeTaskWorkSpecification } from "./task-tracker-facts.js"
 
 const TrackerReadOperation = Schema.Literals(["TrackerGraphReader.parse", "TrackerGraphReader.decode"])
 
@@ -54,6 +56,10 @@ interface TrackerGraphReaderService {
     TaskDagSnapshot,
     FixtureReadError | GraphProjectionError | TrackerAdapterReadError | TrackerReadError
   >
+  readonly readTaskWorkSpecification: (
+    target: TrackerTarget,
+    taskId: TaskId
+  ) => Effect.Effect<TaskWorkSpecification, FixtureReadError | TrackerAdapterReadError | TrackerReadError>
 }
 
 export class TrackerGraphReader extends Context.Service<TrackerGraphReader, TrackerGraphReaderService>()(
@@ -63,24 +69,45 @@ export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Trac
 interface TestTrackerGraphReaderService extends TrackerGraphReaderService {
   readonly requestedTargets: () => Effect.Effect<ReadonlyArray<TrackerTarget>>
   readonly setSnapshot: (snapshot: TaskDagSnapshot) => Effect.Effect<void>
+  readonly setTaskWorkSpecification: (specification: TaskWorkSpecification) => Effect.Effect<void>
 }
 
 export class TestTrackerGraphReader extends Context.Service<TestTrackerGraphReader, TestTrackerGraphReaderService>()(
   "@dalph/TrackerGraphReader/Test"
 ) {}
 
-export const trackerGraphReaderTestLayer = (initialSnapshot: TaskDagSnapshot) =>
+export const trackerGraphReaderTestLayer = (
+  initialSnapshot: TaskDagSnapshot,
+  initialTaskWorkSpecifications: ReadonlyArray<TaskWorkSpecification> = []
+) =>
   Layer.effectContext(
     Effect.gen(function* () {
       const snapshot = yield* Ref.make(initialSnapshot)
       const targets = yield* Ref.make<ReadonlyArray<TrackerTarget>>([])
+      const taskWorkSpecifications = yield* Ref.make(
+        new Map(initialTaskWorkSpecifications.map((specification) => [specification.taskId, specification]))
+      )
       const service = TestTrackerGraphReader.of({
         read: Effect.fn("TrackerGraphReader.Test.read")(function* (target) {
           yield* Ref.update(targets, (current) => [...current, target])
           return yield* Ref.get(snapshot)
         }),
         requestedTargets: () => Ref.get(targets),
-        setSnapshot: (next) => Ref.set(snapshot, next)
+        readTaskWorkSpecification: Effect.fn("TrackerGraphReader.Test.readTaskWorkSpecification")(
+          function* (target, taskId) {
+            yield* Ref.update(targets, (current) => [...current, target])
+            const specification = (yield* Ref.get(taskWorkSpecifications)).get(taskId)
+            if (specification !== undefined) return specification
+            return yield* new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+              detail: `no controlled task-work specification for ${taskId}`,
+              reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+            })
+          }
+        ),
+        setSnapshot: (next) => Ref.set(snapshot, next),
+        setTaskWorkSpecification: (specification) =>
+          Ref.update(taskWorkSpecifications, (current) => new Map([...current, [specification.taskId, specification]]))
       })
       return Context.empty().pipe(
         Context.add(TrackerGraphReader, service),
@@ -119,6 +146,10 @@ const parseJson = Effect.fn("TrackerGraphReader.parseJson")(function* (contents:
   })
 })
 
+const FixtureTaskWorkSpecifications = Schema.Struct({
+  tasks: Schema.Array(Schema.Struct({ body: Schema.String, id: TaskId, title: Schema.NonEmptyString }))
+})
+
 export const trackerGraphReaderLayer = Layer.effect(
   TrackerGraphReader,
   Effect.gen(function* () {
@@ -143,7 +174,36 @@ export const trackerGraphReaderLayer = Layer.effect(
       return yield* new GraphProjectionError({ issues: projection.issues })
     })
 
-    return TrackerGraphReader.of({ read })
+    const readTaskWorkSpecification = Effect.fn("TrackerGraphReader.readTaskWorkSpecification")(function* (
+      target: TrackerTarget,
+      taskId: TaskId
+    ) {
+      if (typeof target !== "string") {
+        return yield* new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: `fixture reader cannot read ${target._tag}`,
+          reason: TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({})
+        })
+      }
+      const contents = yield* fixtureReader.read(target)
+      const input = yield* parseJson(contents)
+      const decoded = yield* Schema.decodeUnknownEffect(FixtureTaskWorkSpecifications)(input).pipe(
+        Effect.mapError(
+          (cause) => new TrackerReadError({ operation: "TrackerGraphReader.decode", detail: String(cause) })
+        )
+      )
+      const task = decoded.tasks.find(({ id }) => id === taskId)
+      if (task === undefined) {
+        return yield* new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: `fixture does not contain task-work specification for ${taskId}`,
+          reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+        })
+      }
+      return makeTaskWorkSpecification({ body: task.body, taskId: task.id, title: task.title })
+    })
+
+    return TrackerGraphReader.of({ read, readTaskWorkSpecification })
   })
 )
 

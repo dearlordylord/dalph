@@ -60,6 +60,7 @@ it.effect("routes every recovered transition variant through its exact empty-his
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
         recordTaskAttemptPlan: unused
       })
@@ -105,6 +106,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
             })
           ),
       readTrackerGraph: unused,
+      readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,
       recordTaskAttemptPlan: unused
     })
@@ -164,6 +166,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
           Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })
         ),
       readTrackerGraph: unused,
+      readTaskWorkSpecification: unused,
       reconcileTaskWorktree: (operation) =>
         Ref.update(calls, (current) => [...current, `worktree:${operation.operationId}`]).pipe(
           Effect.as({ _tag: "TaskWorktreeReconciliationSimulated", operation })
@@ -234,6 +237,7 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
         recordTaskAttemptPlan: unused
       })

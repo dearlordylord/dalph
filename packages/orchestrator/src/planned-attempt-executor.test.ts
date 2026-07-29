@@ -214,6 +214,7 @@ it.effect("continues an exact planned attempt through the recovered source capab
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
         recordTaskAttemptPlan: () => Effect.die("unused")
       })
@@ -360,6 +361,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
         recordTaskAttemptPlan: () => Effect.die("unused")
       })
@@ -447,6 +449,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
         recordTaskAttemptPlan: () => Effect.die("unused")
       })
@@ -535,6 +538,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
         recordTaskAttemptPlan: () => Effect.die("unused")
       })
@@ -617,6 +621,7 @@ it.effect("generic activation continues reconstructed work through the controlle
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
         recordTaskAttemptPlan: () => Effect.die("unused")
       })

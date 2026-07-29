@@ -11,8 +11,8 @@ const transitionRuleByEventKind: Partial<Record<JournalEventTag, WorkflowJournal
   TaskClaimAcquisitionIntended: { _tag: "Intent" },
   TaskWorktreeReady: { _tag: "Outcome", requiredIntent: "TaskWorktreeReconciliationIntended" },
   TaskWorktreeReconciliationIntended: { _tag: "Intent" },
-  TrackerGraphObservationIntentRecorded: { _tag: "Intent" },
-  TrackerGraphOutcomeObserved: { _tag: "Outcome", requiredIntent: "TrackerGraphObservationIntentRecorded" }
+  TaskTrackerReadIntentRecorded: { _tag: "Intent" },
+  TaskTrackerFactsObserved: { _tag: "Outcome", requiredIntent: "TaskTrackerReadIntentRecorded" }
 }
 
 export const workflowJournalTransitionRuleFor = (

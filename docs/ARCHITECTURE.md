@@ -174,13 +174,13 @@ which the composition validates cross-component invariants and returns one
 `ReconstructedRunState`.
 
 One decoded journal event may update more than one component reducer without
-merging their state models. When a successful tracker mutation response both
-completes its workflow operation and supplies normalized task-graph facts, one
-`TaskGraphFactsUpdated` event updates workflow history and graph knowledge
-atomically. Its tagged origin preserves whether those facts came from an
-explicit read or mutation result. The graph-knowledge reducer applies them
-through the same coverage, completeness, temporal-consistency, and replacement
-algebra.
+merging their state models. One completed logical tracker read appends one
+`TaskTrackerFactsObserved` event. A complete graph read records identities,
+lifecycles, prerequisites, grouping, and membership with per-family subjects,
+coverage, completeness, consistency, freshness, and content identity. A later
+comparable unchanged read records the same current evidence compactly and
+refers to the earlier full payload. Mutation acknowledgements update workflow
+history only; they never become graph observations.
 
 The live process may retain that derived state together with its last applied
 `JournalPosition` and incrementally apply later decoded events. This is only a
@@ -382,13 +382,12 @@ never prove that a blocker is absent. They make only transitions that depend on
 those facts unavailable; unrelated transitions derived from usable knowledge
 continue.
 
-Successful normalized facts from either a tracker read or a tracker mutation
-result update graph knowledge through `TaskGraphFactsUpdated`. The same pure
-frontier derivation runs after either origin. Completing task `A` therefore does
-not imperatively enqueue dependents `B` and `C`, advance their execution stages,
-or persist a downstream queue. It updates the relevant graph facts, after which
-the derivation decides whether the previously unstarted downstream region now
-contains runnable transitions.
+Successful normalized facts from a completed tracker read update graph
+knowledge through `TaskTrackerFactsObserved`. Completing task `A` therefore
+does not imperatively enqueue dependents `B` and `C`, advance their execution
+stages, or persist a downstream queue. A mutation response alone cannot release
+them. A later journaled read must observe `A`'s completed lifecycle; only then
+does frontier derivation decide whether the downstream region is runnable.
 
 The scheduler chooses a process-local admission set from the runnable frontier.
 It first admits ready transitions for tasks where Dalph already has workflow
@@ -542,11 +541,12 @@ grouping itself never controls eligibility.
 
 The task-tracker adapter returns either one complete normalized task graph or a
 typed failure. GitHub may still change between the API requests used to assemble
-that graph. The GitHub adapter must finish every bounded page, decode every task
-in the task-tracker target closure, and reject detectable missing or
-contradictory records before exposing a `TaskDagSnapshot`. Its `TrackerRevision`
-identifies the canonical content actually read; it does not claim that GitHub
-assigned one revision to the multi-request read.
+that graph. The adapter must finish every bounded page, decode every task in the
+target closure, and reject detectable missing or contradictory records before
+exposing scheduling knowledge. Dalph first appends the canonical observation
+and then reconstructs selector input from the journal; raw provider records
+never feed selectors. Its `TrackerRevision` identifies the canonical content
+actually read and does not claim one provider transaction revision.
 
 GitHub's current Issue GraphQL fields expose current issue values and paginated
 `subIssues`/`blockedBy` connections without an as-of-time argument. GitHub keeps
@@ -603,14 +603,16 @@ result for A's blockers returns an empty list, reduction removes that edge.
 Results that did not cover A's blockers neither preserve the edge as current
 nor remove it; they simply add no new blocker knowledge.
 
-An explicit read is not the only source of updated graph facts. A tracker
-mutation result may produce `TaskGraphFactsUpdated` when its adapter contract
-returns a normalized result with the same declared coverage and evidence
-required from a named read shape. That single event also records the mutation
-operation's successful outcome; Dalph does not append a duplicate
-request-acknowledgement event. If the mutation response lacks sufficient graph
-facts, its ordinary typed acknowledgement updates workflow history only and a
-later read supplies graph knowledge.
+A tracker mutation result is not a graph-fact source. Its typed acknowledgement
+can complete the mutation workflow but cannot authorize dependency release,
+eligibility, or attempt planning. A later logical tracker read supplies a new
+`TaskTrackerFactsObserved` event before those decisions can change.
+
+Immediately before attempt planning, Dalph performs a focused task-work
+specification read. That observation contains the exact normalized title and
+body and their fingerprint, while excluding lifecycle and graph relations.
+Complete graph observations conversely exclude title and body. The planned
+attempt's `TaskRevision` is this authored-content fingerprint.
 
 Freshness evidence applies at the narrowest fact family the provider can
 support. GitHub exposes `Issue.updatedAt`, which can help compare two observed

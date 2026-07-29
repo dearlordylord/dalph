@@ -1,3 +1,4 @@
+import { taskTrackerGraphFactsObserved } from "../test/task-tracker-facts.js"
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
 import {
@@ -24,14 +25,19 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
-  trackerGraphObservationIntent,
-  trackerGraphOutcomeObserved
+  taskTrackerReadIntent
 } from "./journal-store.js"
 import { reduceWorkflowJournalHistory } from "./workflow-journal-history.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  makeTaskWorkSpecification,
+  taskTrackerFactsObservedEvent
+} from "./task-tracker-facts.js"
+import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "./workflow-operation.js"
 
@@ -58,7 +64,7 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
       })
       const reduction = reduceWorkflowJournalHistory(runId, [
         {
-          event: TaskAttemptPlannedEvent.make({ operation, version: 5 }),
+          event: TaskAttemptPlannedEvent.make({ operation, version: 6 }),
           key: attemptPlanRecordKey(attempt.attemptId),
           position: JournalPosition.make(1),
           runId
@@ -74,7 +80,7 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
 
 it("classifies every generated pre-attempt fact-to-next-intent crash prefix", () => {
   fc.assert(
-    fc.property(safeSegment, fc.integer({ min: 2, max: 6 }), (segment, prefixLength) => {
+    fc.property(safeSegment, fc.integer({ min: 2, max: 8 }), (segment, prefixLength) => {
       const runId = RunId.make(`pre-attempt-property-${segment}`)
       const taskId = TaskId.make(`task-${segment}`)
       const initial = makeTrackerGraphObservationOperation(
@@ -93,32 +99,45 @@ it("classifies every generated pre-attempt fact-to-next-intent crash prefix", ()
       const admission = makeTrackerGraphObservationOperation(OperationId.make(`admission-${segment}`), initial.target, [
         claim.acquisition.operationId
       ])
+      const specificationRead = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make(`specification-${segment}`),
+        initial.target,
+        taskId,
+        [admission.operationId]
+      )
+      const specification = makeTaskWorkSpecification({ body: `Body ${segment}`, taskId, title: `Title ${segment}` })
       const events = [
-        { event: trackerGraphObservationIntent(initial), key: intentRecordKey(initial.operationId) },
+        { event: taskTrackerReadIntent(initial), key: intentRecordKey(initial.operationId) },
         {
-          event: trackerGraphOutcomeObserved(initial.operationId, {
-            _tag: "TrackerGraphObserved" as const,
+          event: taskTrackerGraphFactsObserved(initial, {
             revision: TrackerRevision.make(`initial-${segment}`),
             taskIds: [taskId]
           }),
           key: outcomeRecordKey(initial.operationId)
         },
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 5 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 6 }),
           key: intentRecordKey(claim.acquisition.operationId)
         },
         {
-          event: TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(claim.acquisition), version: 5 }),
+          event: TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(claim.acquisition), version: 6 }),
           key: outcomeRecordKey(claim.acquisition.operationId)
         },
-        { event: trackerGraphObservationIntent(admission), key: intentRecordKey(admission.operationId) },
+        { event: taskTrackerReadIntent(admission), key: intentRecordKey(admission.operationId) },
         {
-          event: trackerGraphOutcomeObserved(admission.operationId, {
-            _tag: "TrackerGraphObserved" as const,
+          event: taskTrackerGraphFactsObserved(admission, {
             revision: TrackerRevision.make(`admission-${segment}`),
             taskIds: [taskId]
           }),
           key: outcomeRecordKey(admission.operationId)
+        },
+        { event: taskTrackerReadIntent(specificationRead), key: intentRecordKey(specificationRead.operationId) },
+        {
+          event: taskTrackerFactsObservedEvent(
+            specificationRead.operationId,
+            makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+          ),
+          key: outcomeRecordKey(specificationRead.operationId)
         }
       ] as const
       const records = events
@@ -134,6 +153,8 @@ it("classifies every generated pre-attempt fact-to-next-intent crash prefix", ()
           "TaskClaimAcquisitionUnresolved",
           "TaskEligibilityRefreshNeeded",
           "TaskEligibilityRefreshUnresolved",
+          "TaskWorkSpecificationReadNeeded",
+          "TaskWorkSpecificationReadUnresolved",
           "TaskAttemptPlanNeeded"
         ][prefixLength - 2]
       )

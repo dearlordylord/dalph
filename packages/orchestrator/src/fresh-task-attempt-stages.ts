@@ -9,6 +9,7 @@ import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "
 import type { OperationIdAllocatorService, PlannedTaskAttemptPlannerService } from "./task-work-planning.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { ActiveTaskClaim } from "./tracker-mutation.js"
+import type { TaskWorkSpecification } from "./task-tracker-facts.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskWorktreeReconciliationOperation,
@@ -61,10 +62,11 @@ const makeExecutorStage = (
 export const makeFreshTaskAttemptStage = Effect.fn("Workflow.makeFreshTaskAttemptStage")(function* (
   options: FreshTaskAttemptStageOptions,
   task: Task,
+  specification: TaskWorkSpecification,
   _activeClaim: ActiveTaskClaim | undefined,
   predecessorOperationId: OperationId
 ): Effect.fn.Return<FreshWorkflowStage, Effect.Error<ReturnType<PlannedTaskAttemptPlannerService["plan"]>>> {
-  const plannedAttempt = yield* options.planner.plan(task)
+  const plannedAttempt = yield* options.planner.plan(specification)
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: yield* options.allocator.allocate(),
     plannedAttempt,

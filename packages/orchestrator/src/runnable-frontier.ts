@@ -46,7 +46,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly operationId: OperationId
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
     readonly taskId: TaskId
-    readonly wakeCondition: "TaskGraphFactsUpdated"
+    readonly wakeCondition: "TaskTrackerFactsObserved"
   }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
@@ -210,7 +210,7 @@ const operationDecisionFor = (
           operationId: workflowResponsibilityOperationId(facts.responsibility),
           prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
           taskId: workflowResponsibilityTaskId(facts.responsibility),
-          wakeCondition: "TaskGraphFactsUpdated"
+          wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
       FinalOutcome: ({ outcome }) => ({
