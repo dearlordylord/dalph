@@ -18,43 +18,38 @@ export class TaskClaimAcquisitionPlanner extends Context.Service<
 
 export const taskClaimAcquisitionPlannerConfigLayer = Layer.effect(
   TaskClaimAcquisitionPlanner,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto
     const owner = yield* Config.schema(ClaimOwner, "DALPH_CLAIM_OWNER")
-    const plan = Effect.fn("TaskClaimAcquisitionPlanner.Fresh.plan")(
-      function*(operationId: OperationId, taskId: TaskId) {
-        return TaskClaimAcquisition.make({
-          operationId,
-          owner,
-          taskId,
-          token: ClaimToken.make(yield* crypto.randomUUIDv7)
-        })
-      }
-    )
+    const plan = Effect.fn("TaskClaimAcquisitionPlanner.Fresh.plan")(function* (
+      operationId: OperationId,
+      taskId: TaskId
+    ) {
+      return TaskClaimAcquisition.make({
+        operationId,
+        owner,
+        taskId,
+        token: ClaimToken.make(yield* crypto.randomUUIDv7)
+      })
+    })
     return TaskClaimAcquisitionPlanner.of({ plan })
   })
 )
 
-export const deterministicTaskClaimAcquisitionPlannerLayer = (
-  options: {
-    readonly owner: ClaimOwner
-    readonly tokenPrefix: string
-  }
-) =>
+export const deterministicTaskClaimAcquisitionPlannerLayer = (options: {
+  readonly owner: ClaimOwner
+  readonly tokenPrefix: string
+}) =>
   Layer.succeed(
     TaskClaimAcquisitionPlanner,
     TaskClaimAcquisitionPlanner.of({
-      plan: Effect.fn("TaskClaimAcquisitionPlanner.Deterministic.plan")(
-        function*(operationId, taskId) {
-          return TaskClaimAcquisition.make({
-            operationId,
-            owner: options.owner,
-            taskId,
-            token: ClaimToken.make(
-              `${options.tokenPrefix}:${taskId}:${operationId}`
-            )
-          })
-        }
-      )
+      plan: Effect.fn("TaskClaimAcquisitionPlanner.Deterministic.plan")(function* (operationId, taskId) {
+        return TaskClaimAcquisition.make({
+          operationId,
+          owner: options.owner,
+          taskId,
+          token: ClaimToken.make(`${options.tokenPrefix}:${taskId}:${operationId}`)
+        })
+      })
     })
   )

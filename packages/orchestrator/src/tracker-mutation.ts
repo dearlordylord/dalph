@@ -25,67 +25,43 @@ export const ActiveTaskClaim = Schema.TaggedStruct("ActiveTaskClaim", {
 export type ActiveTaskClaim = typeof ActiveTaskClaim.Type
 
 /** Proves that the task tracker currently records no claim for one task. */
-export const UnclaimedTask = Schema.TaggedStruct("UnclaimedTask", {
-  taskId: TaskId
-})
+export const UnclaimedTask = Schema.TaggedStruct("UnclaimedTask", { taskId: TaskId })
 export type UnclaimedTask = typeof UnclaimedTask.Type
 
 /** One authoritative task-claim observation read from the task tracker. */
-export const TaskClaimObservation = Schema.Union([
-  ActiveTaskClaim,
-  UnclaimedTask
-])
+export const TaskClaimObservation = Schema.Union([ActiveTaskClaim, UnclaimedTask])
 export type TaskClaimObservation = typeof TaskClaimObservation.Type
 
 /** Atomic acquisition found a different exact tracker-owned claim. */
 export class TaskClaimConflict extends Schema.TaggedErrorClass<TaskClaimConflict>()(
   "TrackerMutation.TaskClaimConflict",
-  {
-    attempted: TaskClaimAcquisition,
-    observed: ActiveTaskClaim
-  }
+  { attempted: TaskClaimAcquisition, observed: ActiveTaskClaim }
 ) {}
 
 /** Release did not name the exact current owner/token claim capability. */
 export class TaskClaimOwnershipConflict extends Schema.TaggedErrorClass<TaskClaimOwnershipConflict>()(
   "TrackerMutation.TaskClaimOwnershipConflict",
-  {
-    attempted: ActiveTaskClaim,
-    observed: TaskClaimObservation
-  }
+  { attempted: ActiveTaskClaim, observed: TaskClaimObservation }
 ) {}
 
-const TaskClaimRequestOutcome = Schema.Literals([
-  "DefinitelyNotApplied",
-  "Unknown"
-])
+const TaskClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "Unknown"])
 
 /** A task-tracker request failed with an explicit external-outcome classification. */
 export class TaskClaimRequestFailure extends Schema.TaggedErrorClass<TaskClaimRequestFailure>()(
   "TrackerMutation.TaskClaimRequestFailure",
-  {
-    acquisition: TaskClaimAcquisition,
-    detail: Schema.String,
-    outcome: TaskClaimRequestOutcome
-  }
+  { acquisition: TaskClaimAcquisition, detail: Schema.String, outcome: TaskClaimRequestOutcome }
 ) {}
 
 /** The task tracker could not provide a fresh authoritative claim observation. */
 export class TaskClaimReadFailure extends Schema.TaggedErrorClass<TaskClaimReadFailure>()(
   "TrackerMutation.TaskClaimReadFailure",
-  {
-    detail: Schema.String,
-    taskId: TaskId
-  }
+  { detail: Schema.String, taskId: TaskId }
 ) {}
 
 /** A release request returned without proving whether the exact claim was deleted. */
 export class TaskClaimReleaseFailure extends Schema.TaggedErrorClass<TaskClaimReleaseFailure>()(
   "TrackerMutation.TaskClaimReleaseFailure",
-  {
-    claim: ActiveTaskClaim,
-    detail: Schema.String
-  }
+  { claim: ActiveTaskClaim, detail: Schema.String }
 ) {}
 
 export interface TrackerMutationService {
@@ -93,58 +69,42 @@ export interface TrackerMutationService {
     acquisition: TaskClaimAcquisition
   ) => Effect.Effect<
     ActiveTaskClaim,
-    | CoordinatorOwnershipError
-    | TaskClaimConflict
-    | TaskClaimReadFailure
-    | TaskClaimRequestFailure
+    CoordinatorOwnershipError | TaskClaimConflict | TaskClaimReadFailure | TaskClaimRequestFailure
   >
-  readonly readTaskClaim: (
-    taskId: TaskId
-  ) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
+  readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
   readonly releaseTaskClaim: (
     claim: ActiveTaskClaim
   ) => Effect.Effect<
     void,
-    | CoordinatorOwnershipError
-    | TaskClaimOwnershipConflict
-    | TaskClaimReadFailure
-    | TaskClaimReleaseFailure
+    CoordinatorOwnershipError | TaskClaimOwnershipConflict | TaskClaimReadFailure | TaskClaimReleaseFailure
   >
 }
 
 /** Changes and rereads task claims through the configured task tracker. */
-export class TrackerMutation extends Context.Service<
-  TrackerMutation,
-  TrackerMutationService
->()("@dalph/TrackerMutation") {}
+export class TrackerMutation extends Context.Service<TrackerMutation, TrackerMutationService>()(
+  "@dalph/TrackerMutation"
+) {}
 
 const claimFrom = (acquisition: TaskClaimAcquisition): ActiveTaskClaim => ActiveTaskClaim.make(acquisition)
 
-export const isExactTaskClaim = (
-  left: ActiveTaskClaim,
-  right: ActiveTaskClaim
-): boolean =>
-  left.operationId === right.operationId
-  && left.owner === right.owner
-  && left.taskId === right.taskId
-  && left.token === right.token
+export const isExactTaskClaim = (left: ActiveTaskClaim, right: ActiveTaskClaim): boolean =>
+  left.operationId === right.operationId &&
+  left.owner === right.owner &&
+  left.taskId === right.taskId &&
+  left.token === right.token
 
 /** In-memory atomic adapter used by shared contracts and deterministic tests. */
 export const controlledTrackerMutationLayer = Layer.effect(
   TrackerMutation,
-  Effect.gen(function*() {
-    const claims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(
-      new Map()
-    )
-    const readTaskClaim = Effect.fn("TrackerMutation.Controlled.readTaskClaim")(
-      function*(taskId: TaskId) {
-        const current = yield* Ref.get(claims)
-        return current.get(taskId) ?? UnclaimedTask.make({ taskId })
-      }
-    )
-    const acquireTaskClaim = Effect.fn(
-      "TrackerMutation.Controlled.acquireTaskClaim"
-    )(function*(acquisition: TaskClaimAcquisition) {
+  Effect.gen(function* () {
+    const claims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(new Map())
+    const readTaskClaim = Effect.fn("TrackerMutation.Controlled.readTaskClaim")(function* (taskId: TaskId) {
+      const current = yield* Ref.get(claims)
+      return current.get(taskId) ?? UnclaimedTask.make({ taskId })
+    })
+    const acquireTaskClaim = Effect.fn("TrackerMutation.Controlled.acquireTaskClaim")(function* (
+      acquisition: TaskClaimAcquisition
+    ) {
       const attempted = claimFrom(acquisition)
       const result = yield* Ref.modify(claims, (current) => {
         const observed = current.get(acquisition.taskId)
@@ -155,27 +115,21 @@ export const controlledTrackerMutationLayer = Layer.effect(
         }
         return [
           isExactTaskClaim(observed, attempted)
-            ? { _tag: "Acquired", claim: observed } as const
-            : { _tag: "Conflict", claim: observed } as const,
+            ? ({ _tag: "Acquired", claim: observed } as const)
+            : ({ _tag: "Conflict", claim: observed } as const),
           current
         ]
       })
       return result._tag === "Acquired"
         ? result.claim
-        : yield* new TaskClaimConflict({
-          attempted: acquisition,
-          observed: result.claim
-        })
+        : yield* new TaskClaimConflict({ attempted: acquisition, observed: result.claim })
     })
-    const releaseTaskClaim = Effect.fn(
-      "TrackerMutation.Controlled.releaseTaskClaim"
-    )(function*(attempted: ActiveTaskClaim) {
+    const releaseTaskClaim = Effect.fn("TrackerMutation.Controlled.releaseTaskClaim")(function* (
+      attempted: ActiveTaskClaim
+    ) {
       type ReleaseResult =
         | { readonly _tag: "Released" }
-        | {
-          readonly _tag: "Conflict"
-          readonly observed: TaskClaimObservation
-        }
+        | { readonly _tag: "Conflict"; readonly observed: TaskClaimObservation }
       const result: ReleaseResult = yield* Ref.modify(
         claims,
         (current): readonly [ReleaseResult, ReadonlyMap<TaskId, ActiveTaskClaim>] => {
@@ -185,26 +139,13 @@ export const controlledTrackerMutationLayer = Layer.effect(
             next.delete(attempted.taskId)
             return [{ _tag: "Released" }, next]
           }
-          return [
-            {
-              _tag: "Conflict",
-              observed: observed ?? UnclaimedTask.make({ taskId: attempted.taskId })
-            },
-            current
-          ]
+          return [{ _tag: "Conflict", observed: observed ?? UnclaimedTask.make({ taskId: attempted.taskId }) }, current]
         }
       )
       if (result._tag === "Conflict") {
-        return yield* new TaskClaimOwnershipConflict({
-          attempted,
-          observed: result.observed
-        })
+        return yield* new TaskClaimOwnershipConflict({ attempted, observed: result.observed })
       }
     })
-    return TrackerMutation.of({
-      acquireTaskClaim,
-      readTaskClaim,
-      releaseTaskClaim
-    })
+    return TrackerMutation.of({ acquireTaskClaim, readTaskClaim, releaseTaskClaim })
   })
 )

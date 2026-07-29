@@ -27,52 +27,29 @@ interface FreshTaskAttemptStageOptions {
   readonly planner: PlannedTaskAttemptPlannerService
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<
-    PlannedAttemptExecutorReport,
-    ManagedRecoveryActivationError
-  >
+  ) => Effect.Effect<PlannedAttemptExecutorReport, ManagedRecoveryActivationError>
 }
 
-const freshWorkflowTransition = (
-  operationId: OperationId,
-  task: Task
-) =>
-  RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-    operationId,
-    taskId: task.id
-  })
+const freshWorkflowTransition = (operationId: OperationId, task: Task) =>
+  RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId, taskId: task.id })
 
 const makeExecutorStage = (
   plannedAttempt: PlannedTaskAttempt,
   resumed: boolean,
-  services: Pick<
-    FreshTaskAttemptStageOptions,
-    "continuePlannedAttemptExecutorWork"
-  >
+  services: Pick<FreshTaskAttemptStageOptions, "continuePlannedAttemptExecutorWork">
 ): FreshWorkflowStage => {
   const transition = resumed
-    ? RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-      plannedAttempt
-    })
-    : RunnableFrontierTransition.StartPlannedAttemptExecutorWork({
-      plannedAttempt
-    })
+    ? RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+    : RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt })
   return {
     transition,
     run: (execution) =>
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
         yield* execution.bindPlannedAttemptExecutorPosition(correlation)
-        const report = yield* services.continuePlannedAttemptExecutorWork(
-          plannedAttempt
-        )
-        if (
-          report._tag === "SafelySuspended"
-          || report._tag === "Terminal"
-        ) {
-          yield* execution.releasePlannedAttemptExecutorWorkPosition(
-            correlation
-          )
+        const report = yield* services.continuePlannedAttemptExecutorWork(plannedAttempt)
+        if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
+          yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
           return undefined
         }
         return makeExecutorStage(plannedAttempt, true, services)
@@ -81,17 +58,12 @@ const makeExecutorStage = (
 }
 
 /** Plans the attempt, proves its worktree ready, then hands the whole attempt to the executor. */
-export const makeFreshTaskAttemptStage = Effect.fn(
-  "Workflow.makeFreshTaskAttemptStage"
-)(function*(
+export const makeFreshTaskAttemptStage = Effect.fn("Workflow.makeFreshTaskAttemptStage")(function* (
   options: FreshTaskAttemptStageOptions,
   task: Task,
   _activeClaim: ActiveTaskClaim | undefined,
   predecessorOperationId: OperationId
-): Effect.fn.Return<
-  FreshWorkflowStage,
-  Effect.Error<ReturnType<PlannedTaskAttemptPlannerService["plan"]>>
-> {
+): Effect.fn.Return<FreshWorkflowStage, Effect.Error<ReturnType<PlannedTaskAttemptPlannerService["plan"]>>> {
   const plannedAttempt = yield* options.planner.plan(task)
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: yield* options.allocator.allocate(),
@@ -101,18 +73,13 @@ export const makeFreshTaskAttemptStage = Effect.fn(
   return {
     transition: freshWorkflowTransition(planOperation.operationId, task),
     run: () =>
-      Effect.gen(function*() {
-        yield* options.emit(OperationSelected.make({
-          operation: planOperation
-        }))
-        const planResult = yield* options.interpreter
-          .recordTaskAttemptPlan(planOperation)
+      Effect.gen(function* () {
+        yield* options.emit(OperationSelected.make({ operation: planOperation }))
+        const planResult = yield* options.interpreter.recordTaskAttemptPlan(planOperation)
         yield* options.emit(
           planResult._tag === "TaskAttemptPlanRecordAcknowledged"
             ? TaskAttemptPlanAcknowledged.make({ operation: planOperation })
-            : TaskAttemptPlanRecordingSimulated.make({
-              operation: planOperation
-            })
+            : TaskAttemptPlanRecordingSimulated.make({ operation: planOperation })
         )
 
         const worktreeOperation = makeTaskWorktreeReconciliationOperation({
@@ -121,26 +88,15 @@ export const makeFreshTaskAttemptStage = Effect.fn(
           predecessorOperationIds: [planOperation.operationId]
         })
         return {
-          transition: freshWorkflowTransition(
-            worktreeOperation.operationId,
-            task
-          ),
+          transition: freshWorkflowTransition(worktreeOperation.operationId, task),
           run: () =>
-            Effect.gen(function*() {
-              yield* options.emit(OperationSelected.make({
-                operation: worktreeOperation
-              }))
-              const worktreeResult = yield* options.interpreter
-                .reconcileTaskWorktree(worktreeOperation)
+            Effect.gen(function* () {
+              yield* options.emit(OperationSelected.make({ operation: worktreeOperation }))
+              const worktreeResult = yield* options.interpreter.reconcileTaskWorktree(worktreeOperation)
               yield* options.emit(
                 worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
-                  ? TaskWorktreeReadyTrace.make({
-                    operation: worktreeOperation,
-                    proof: worktreeResult.proof
-                  })
-                  : TaskWorktreeReconciliationSimulatedTrace.make({
-                    operation: worktreeOperation
-                  })
+                  ? TaskWorktreeReadyTrace.make({ operation: worktreeOperation, proof: worktreeResult.proof })
+                  : TaskWorktreeReconciliationSimulatedTrace.make({ operation: worktreeOperation })
               )
               return makeExecutorStage(plannedAttempt, false, options)
             })

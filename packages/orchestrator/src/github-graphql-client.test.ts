@@ -25,11 +25,7 @@ import {
 const EncodedRequestBody = Schema.Struct({ body: Schema.String })
 const ResolveRequestBody = Schema.Struct({
   query: Schema.String,
-  variables: Schema.Struct({
-    issueNumber: Schema.Int,
-    owner: Schema.String,
-    repository: Schema.String
-  })
+  variables: Schema.Struct({ issueNumber: Schema.Int, owner: Schema.String, repository: Schema.String })
 })
 
 const target = GithubIssueTarget.make({
@@ -39,7 +35,7 @@ const target = GithubIssueTarget.make({
 })
 
 it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const observed = yield* Ref.make<
       ReadonlyArray<{
         readonly authorization: string | undefined
@@ -51,62 +47,58 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
       }>
     >([])
     const httpClient = HttpClient.make((request) =>
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         const encodedBody = Schema.decodeUnknownSync(EncodedRequestBody)(request.body.toJSON())
-        yield* Ref.update(observed, (requests) => [...requests, {
-          authorization: Option.getOrUndefined(Headers.get(request.headers, "authorization")),
-          body: encodedBody.body,
-          globalIdVersion: Option.getOrUndefined(
-            Headers.get(request.headers, "x-github-next-global-id")
-          ),
-          method: request.method,
-          url: request.url,
-          userAgent: Option.getOrUndefined(Headers.get(request.headers, "user-agent"))
-        }])
+        yield* Ref.update(observed, (requests) => [
+          ...requests,
+          {
+            authorization: Option.getOrUndefined(Headers.get(request.headers, "authorization")),
+            body: encodedBody.body,
+            globalIdVersion: Option.getOrUndefined(Headers.get(request.headers, "x-github-next-global-id")),
+            method: request.method,
+            url: request.url,
+            userAgent: Option.getOrUndefined(Headers.get(request.headers, "user-agent"))
+          }
+        ])
         return HttpClientResponse.fromWeb(
           request,
-          new Response(
-            JSON.stringify({ data: { repository: { id: "repo", issue: { id: "issue" } } } }),
-            { status: 200 }
-          )
+          new Response(JSON.stringify({ data: { repository: { id: "repo", issue: { id: "issue" } } } }), {
+            status: 200
+          })
         )
       })
     )
-    const clientLayer = githubGraphqlClientLayer({
-      token: Redacted.make("secret-token")
-    }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)))
-    yield* Effect.gen(function*() {
+    const clientLayer = githubGraphqlClientLayer({ token: Redacted.make("secret-token") }).pipe(
+      Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient))
+    )
+    yield* Effect.gen(function* () {
       const client = yield* GithubGraphqlClient
-      return yield* Effect.forEach([
-        GithubGraphqlRequest.cases.ResolveIssue.make({
-          target
-        }),
-        GithubGraphqlRequest.cases.ReadIssue.make({
-          issueNodeId: GithubIssueNodeId.make("issue")
-        }),
-        GithubGraphqlRequest.cases.ReadSubIssues.make({
-          cursor: null,
-          issueNodeId: GithubIssueNodeId.make("issue")
-        }),
-        GithubGraphqlRequest.cases.ReadBlockedBy.make({
-          cursor: GithubCursor.make("cursor"),
-          issueNodeId: GithubIssueNodeId.make("issue")
-        }),
-        GithubGraphqlRequest.cases.FindClaimLabel.make({
-          labelName: GithubLabelName.make("dalph-claim-task"),
-          repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
-        }),
-        GithubGraphqlRequest.cases.CreateClaimLabel.make({
-          description: "claim-description",
-          labelName: GithubLabelName.make("dalph-claim-task"),
-          operationId: OperationId.make("claim-operation"),
-          repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
-        }),
-        GithubGraphqlRequest.cases.DeleteClaimLabel.make({
-          labelNodeId: GithubLabelNodeId.make("claim-label-node"),
-          operationId: OperationId.make("release-operation")
-        })
-      ], (request) => client.execute(request))
+      return yield* Effect.forEach(
+        [
+          GithubGraphqlRequest.cases.ResolveIssue.make({ target }),
+          GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
+          GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor: null, issueNodeId: GithubIssueNodeId.make("issue") }),
+          GithubGraphqlRequest.cases.ReadBlockedBy.make({
+            cursor: GithubCursor.make("cursor"),
+            issueNodeId: GithubIssueNodeId.make("issue")
+          }),
+          GithubGraphqlRequest.cases.FindClaimLabel.make({
+            labelName: GithubLabelName.make("dalph-claim-task"),
+            repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
+          }),
+          GithubGraphqlRequest.cases.CreateClaimLabel.make({
+            description: "claim-description",
+            labelName: GithubLabelName.make("dalph-claim-task"),
+            operationId: OperationId.make("claim-operation"),
+            repositoryNodeId: GithubRepositoryNodeId.make("repository-node")
+          }),
+          GithubGraphqlRequest.cases.DeleteClaimLabel.make({
+            labelNodeId: GithubLabelNodeId.make("claim-label-node"),
+            operationId: OperationId.make("release-operation")
+          })
+        ],
+        (request) => client.execute(request)
+      )
     }).pipe(Effect.provide(clientLayer))
 
     const requests = yield* Ref.get(observed)
@@ -120,21 +112,20 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     expect(request.url).toBe("https://api.github.com/graphql")
     expect(request.userAgent).toBe("dalph-orchestrator")
     const payload = Schema.decodeUnknownSync(ResolveRequestBody)(JSON.parse(request.body))
-    expect(payload.variables).toEqual({
-      issueNumber: 42,
-      owner: "octo",
-      repository: "dalph"
-    })
+    expect(payload.variables).toEqual({ issueNumber: 42, owner: "octo", repository: "dalph" })
     expect(payload.query).toContain("repository(owner: $owner, name: $repository)")
-    expect(requests.map(({ body }) => body)).toEqual(expect.arrayContaining([
-      expect.stringContaining("query ReadIssue"),
-      expect.stringContaining("query ReadSubIssues"),
-      expect.stringContaining("query ReadBlockedBy"),
-      expect.stringContaining("query FindClaimLabel"),
-      expect.stringContaining("mutation CreateClaimLabel"),
-      expect.stringContaining("mutation DeleteClaimLabel")
-    ]))
-  }))
+    expect(requests.map(({ body }) => body)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("query ReadIssue"),
+        expect.stringContaining("query ReadSubIssues"),
+        expect.stringContaining("query ReadBlockedBy"),
+        expect.stringContaining("query FindClaimLabel"),
+        expect.stringContaining("mutation CreateClaimLabel"),
+        expect.stringContaining("mutation DeleteClaimLabel")
+      ])
+    )
+  })
+)
 
 const executeResolve = (
   response: Response,
@@ -144,47 +135,35 @@ const executeResolve = (
   const layer = layerFactory({ token: Redacted.make("token") }).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient))
   )
-  return Effect.gen(function*() {
+  return Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
-    return yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({
-      target
-    }))
+    return yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target }))
   }).pipe(Effect.provide(layer))
 }
 
 it.effect("classifies HTTP and JSON failures", () =>
-  Effect.gen(function*() {
-    const failures = yield* Effect.forEach([
-      new Response("server error", { status: 500 }),
-      new Response("not-json", { status: 200 })
-    ], (response) => executeResolve(response).pipe(Effect.flip, Effect.orDie))
+  Effect.gen(function* () {
+    const failures = yield* Effect.forEach(
+      [new Response("server error", { status: 500 }), new Response("not-json", { status: 200 })],
+      (response) => executeResolve(response).pipe(Effect.flip, Effect.orDie)
+    )
 
     expect(failures).toHaveLength(2)
     for (const failure of failures) {
       expect(failure._tag).toBe("GithubGraphqlClient.RequestError")
       expect(failure.operation).toBe("ResolveIssue")
     }
-  }))
+  })
+)
 
 it.effect("loads the GitHub token through injected Effect configuration", () => {
   const httpClient = HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        new Response("{}", {
-          status: 200
-        })
-      )
-    )
+    Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}", { status: 200 })))
   )
-  const layer = githubGraphqlClientConfigLayer.pipe(
-    Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient))
-  )
-  return Effect.gen(function*() {
+  const layer = githubGraphqlClientConfigLayer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)))
+  return Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
-    const response = yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({
-      target
-    }))
+    const response = yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target }))
     expect(response.body).toEqual({})
   }).pipe(
     Effect.provide(layer),

@@ -24,9 +24,8 @@ import { makeTaskClaimAcquisitionOperation, makeTrackerGraphObservationOperation
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
 it("never creates responsibility from generated graph membership", () => {
-  fc.assert(fc.property(
-    fc.uniqueArray(safeSegment, { minLength: 1, maxLength: 20 }),
-    (segments) => {
+  fc.assert(
+    fc.property(fc.uniqueArray(safeSegment, { minLength: 1, maxLength: 20 }), (segments) => {
       const firstSegment = Option.getOrThrow(Option.fromUndefinedOr(segments[0]))
 
       const runId = RunId.make(`reconstructed-property-${firstSegment}`)
@@ -47,10 +46,7 @@ it("never creates responsibility from generated graph membership", () => {
         predecessorOperationIds: [observation.operationId]
       })
       const prefix = [
-        {
-          event: trackerGraphObservationIntent(observation),
-          key: intentRecordKey(observation.operationId)
-        },
+        { event: trackerGraphObservationIntent(observation), key: intentRecordKey(observation.operationId) },
         {
           event: trackerGraphOutcomeObserved(observation.operationId, {
             _tag: "TrackerGraphObserved" as const,
@@ -62,11 +58,7 @@ it("never creates responsibility from generated graph membership", () => {
       ] as const
       const beforeIntent = reduceManagedHistory(
         runId,
-        prefix.map((record, index) => ({
-          ...record,
-          position: JournalPosition.make(index + 1),
-          runId
-        }))
+        prefix.map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))
       )
       expect(beforeIntent._tag).toBe("ValidManagedHistory")
       if (beforeIntent._tag !== "ValidManagedHistory") return
@@ -75,17 +67,10 @@ it("never creates responsibility from generated graph membership", () => {
       const afterIntentRecords = [
         ...prefix,
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({
-            operation: claim,
-            version: 4
-          }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 4 }),
           key: intentRecordKey(claim.acquisition.operationId)
         }
-      ].map((record, index) => ({
-        ...record,
-        position: JournalPosition.make(index + 1),
-        runId
-      }))
+      ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))
       const afterIntent = reduceManagedHistory(runId, afterIntentRecords)
       expect(afterIntent._tag).toBe("ValidManagedHistory")
       if (afterIntent._tag !== "ValidManagedHistory") return
@@ -97,6 +82,6 @@ it("never creates responsibility from generated graph membership", () => {
           taskId: responsibleTaskId
         }
       ])
-    }
-  ))
+    })
+  )
 })

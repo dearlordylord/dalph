@@ -51,30 +51,18 @@ it("active docs, models, and gates contain no displaced executor artifacts", () 
   const roots = ["docs", "scripts", "specs"] as const
   for (const root of roots) {
     const directory = `${repositoryDirectory}/${root}`
-    for (
-      const file of readdirSync(directory, {
-        recursive: true,
-        withFileTypes: true
-      })
-    ) {
+    for (const file of readdirSync(directory, { recursive: true, withFileTypes: true })) {
       if (!file.isFile()) continue
       const path = `${file.parentPath}/${file.name}`
-      expect(path).not.toMatch(
-        /frontierRecovery|taskWorkSessionRecovery|check-frontier-recovery-model/
-      )
-      expect(readFileSync(path, "utf8"), path).not.toMatch(
-        displacedExecutorVocabulary
-      )
-      expect(readFileSync(path, "utf8"), path).not.toMatch(
-        displacedActivePolicyVocabulary
-      )
+      expect(path).not.toMatch(/frontierRecovery|taskWorkSessionRecovery|check-frontier-recovery-model/)
+      expect(readFileSync(path, "utf8"), path).not.toMatch(displacedExecutorVocabulary)
+      expect(readFileSync(path, "utf8"), path).not.toMatch(displacedActivePolicyVocabulary)
     }
   }
 })
 
 it("public emitted types expose no displaced executor contract", () => {
-  const emittedTypeFiles = readdirSync(`${packageDirectory}/dist/src`)
-    .filter((file) => file.endsWith(".d.ts"))
+  const emittedTypeFiles = readdirSync(`${packageDirectory}/dist/src`).filter((file) => file.endsWith(".d.ts"))
   for (const file of emittedTypeFiles) {
     expect(
       readFileSync(`${packageDirectory}/dist/src/${file}`, "utf8"),

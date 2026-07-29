@@ -41,42 +41,28 @@ import {
 import { semanticTrace } from "./workflow-trace-output.js"
 import { WorkflowInterpreter } from "./workflow.js"
 
-const snapshotOf = (
-  result: ReturnType<typeof projectTrackerSnapshot>
-) =>
-  Option.getOrThrow(Option.fromUndefinedOr(
-    result._tag === "Valid" ? result.snapshot : undefined
-  ))
+const snapshotOf = (result: ReturnType<typeof projectTrackerSnapshot>) =>
+  Option.getOrThrow(Option.fromUndefinedOr(result._tag === "Valid" ? result.snapshot : undefined))
 
-const firstSnapshot = snapshotOf(projectTrackerSnapshot({
-  revision: "support-v1",
-  tasks: [{
-    id: "support-task",
-    lifecycle: { _tag: "Open" },
-    parentTaskId: null,
-    prerequisiteIds: []
-  }]
-}))
-const emptySnapshot = snapshotOf(projectTrackerSnapshot({
-  revision: "support-v2",
-  tasks: []
-}))
+const firstSnapshot = snapshotOf(
+  projectTrackerSnapshot({
+    revision: "support-v1",
+    tasks: [{ id: "support-task", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+)
+const emptySnapshot = snapshotOf(projectTrackerSnapshot({ revision: "support-v2", tasks: [] }))
 
 it("loads the current public surface without compatibility exports", () => {
   expect(PublicApi.PlannedAttemptExecutor).toBeDefined()
   expect(PublicApi.ManagedRunRecoveryStage).toBeDefined()
   expect(dryRunWorkflowInterpreterLayer).toBeDefined()
-  expect(
-    new JournalBoundaryDecodeIssue({
-      detail: "bad row",
-      rowOrdinal: 1,
-      runId: null
-    })._tag
-  ).toBe("JournalBoundaryDecodeIssue")
+  expect(new JournalBoundaryDecodeIssue({ detail: "bad row", rowOrdinal: 1, runId: null })._tag).toBe(
+    "JournalBoundaryDecodeIssue"
+  )
 })
 
 it.effect("allocates deterministic operation and planned-attempt identities", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const allocator = yield* OperationIdAllocator
     expect(yield* allocator.allocate()).toBe("support:0")
     expect(yield* allocator.allocate()).toBe("support:1")
@@ -99,10 +85,11 @@ it.effect("allocates deterministic operation and planned-attempt identities", ()
         worktreeRoot: WorktreeLocator.make("/worktrees/support")
       })
     )
-  ))
+  )
+)
 
 it.effect("records tracker test reads and replaces the authoritative snapshot", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const reader = yield* TrackerGraphReader
     const controller = yield* TestTrackerGraphReader
     const target = FixtureTarget.make("support-fixture")
@@ -111,14 +98,11 @@ it.effect("records tracker test reads and replaces the authoritative snapshot", 
     yield* controller.setSnapshot(emptySnapshot)
     expect((yield* controller.read(target)).eligibleTasks()).toEqual([])
     expect(yield* controller.requestedTargets()).toEqual([target, target])
-  }).pipe(
-    Effect.provide(
-      trackerGraphReaderTestLayer(firstSnapshot)
-    )
-  ))
+  }).pipe(Effect.provide(trackerGraphReaderTestLayer(firstSnapshot)))
+)
 
 it.effect("interprets live-claim and dry-run generic operations", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
     const planner = yield* PlannedTaskAttemptPlanner
@@ -149,26 +133,16 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
 
     const live = yield* WorkflowInterpreter
     expect((yield* live.readTrackerGraph(graph)).eligibleTasks()).toHaveLength(1)
-    expect((yield* live.acquireTaskClaim(claim))._tag).toBe(
-      "AuthoritativeTaskClaimAcquired"
-    )
-    expect((yield* live.recordTaskAttemptPlan(plan))._tag).toBe(
-      "TaskAttemptPlanRecordingSimulated"
-    )
-    expect((yield* live.reconcileTaskWorktree(worktree))._tag).toBe(
-      "TaskWorktreeReconciliationSimulated"
-    )
+    expect((yield* live.acquireTaskClaim(claim))._tag).toBe("AuthoritativeTaskClaimAcquired")
+    expect((yield* live.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordingSimulated")
+    expect((yield* live.reconcileTaskWorktree(worktree))._tag).toBe("TaskWorktreeReconciliationSimulated")
 
     const dry = yield* WorkflowInterpreter.pipe(
       Effect.provide(
-        makeDryRunWorkflowInterpreterLayer().pipe(
-          Layer.provide(trackerGraphReaderTestLayer(firstSnapshot))
-        )
+        makeDryRunWorkflowInterpreterLayer().pipe(Layer.provide(trackerGraphReaderTestLayer(firstSnapshot)))
       )
     )
-    expect((yield* dry.acquireTaskClaim(claim))._tag).toBe(
-      "TaskClaimAcquisitionSimulated"
-    )
+    expect((yield* dry.acquireTaskClaim(claim))._tag).toBe("TaskClaimAcquisitionSimulated")
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({
@@ -179,14 +153,13 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
       })
     ),
     Effect.provide(
-      deterministicTestWorkflowInterpreterLayer.pipe(
-        Layer.provide(trackerGraphReaderTestLayer(firstSnapshot))
-      )
+      deterministicTestWorkflowInterpreterLayer.pipe(Layer.provide(trackerGraphReaderTestLayer(firstSnapshot)))
     )
-  ))
+  )
+)
 
 it.effect("guards generic tracker and Git mutations with coordinator ownership", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const planner = yield* PlannedTaskAttemptPlanner
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
@@ -199,20 +172,14 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
       token: ClaimToken.make("owned-token")
     }
     const claim = yield* tracker.acquireTaskClaim(acquisition)
-    expect((yield* tracker.readTaskClaim(task.id))._tag).toBe(
-      "ActiveTaskClaim"
-    )
+    expect((yield* tracker.readTaskClaim(task.id))._tag).toBe("ActiveTaskClaim")
     yield* tracker.releaseTaskClaim(claim)
     expect((yield* tracker.readTaskClaim(task.id))._tag).toBe("UnclaimedTask")
 
     const git = yield* GitWorktree
-    expect((yield* git.readPlannedWorktree(plannedAttempt))._tag).toBe(
-      "PlannedWorktreeAbsent"
-    )
+    expect((yield* git.readPlannedWorktree(plannedAttempt))._tag).toBe("PlannedWorktreeAbsent")
     yield* git.createPlannedWorktree(plannedAttempt)
-    expect((yield* git.readPlannedWorktree(plannedAttempt))._tag).toBe(
-      "PlannedWorktreeReady"
-    )
+    expect((yield* git.readPlannedWorktree(plannedAttempt))._tag).toBe("PlannedWorktreeReady")
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({
@@ -224,53 +191,34 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
     ),
     Effect.provide(
       Layer.merge(
-        coordinatorOwnedTrackerMutationLayer(
-          controlledTrackerMutationLayer
-        ),
-        coordinatorOwnedGitWorktreeLayer(
-          gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))
-        )
+        coordinatorOwnedTrackerMutationLayer(controlledTrackerMutationLayer),
+        coordinatorOwnedGitWorktreeLayer(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
       ).pipe(
         Layer.provide(
-          Layer.succeed(
-            CoordinatorOwnership,
-            CoordinatorOwnership.of({
-              runMutation: (mutation) => mutation
-            })
-          )
+          Layer.succeed(CoordinatorOwnership, CoordinatorOwnership.of({ runMutation: (mutation) => mutation }))
         )
       )
     )
-  ))
+  )
+)
 
 it.effect("allocates a fresh operation identity and normalizes an empty trace", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const id = yield* (yield* OperationIdAllocator).allocate()
     expect(id.length).toBeGreaterThan(0)
     expect(semanticTrace([])).toEqual([])
-  }).pipe(
-    Effect.provide(freshOperationIdAllocatorLayer),
-    Effect.provide(NodeCrypto.layer)
-  ))
+  }).pipe(Effect.provide(freshOperationIdAllocatorLayer), Effect.provide(NodeCrypto.layer))
+)
 
 it.effect("runs text and byte Git commands inside an exact worktree", () =>
   Effect.scoped(
-    Effect.gen(function*() {
-      const directory = yield* (yield* FileSystem.FileSystem)
-        .makeTempDirectoryScoped({ prefix: "dalph-git-command-" })
+    Effect.gen(function* () {
+      const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix: "dalph-git-command-" })
       const git = yield* GitCommand
-      expect(
-        (yield* git.runInWorktree(directory, ["--version"])).exitCode
-      ).toBe(0)
-      expect(
-        (yield* git.runBytesInWorktree(
-          directory,
-          ["--version"],
-          { DALPH_TEST_ENVIRONMENT: "1" }
-        )).exitCode
-      ).toBe(0)
-    }).pipe(
-      Effect.provide(nodeGitCommandLayer),
-      Effect.provide(NodeServices.layer)
-    )
-  ))
+      expect((yield* git.runInWorktree(directory, ["--version"])).exitCode).toBe(0)
+      expect((yield* git.runBytesInWorktree(directory, ["--version"], { DALPH_TEST_ENVIRONMENT: "1" })).exitCode).toBe(
+        0
+      )
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)

@@ -12,11 +12,7 @@ const processExists = (pid: number) => {
     process.kill(pid, 0)
     return true
   } catch (error) {
-    if (
-      error instanceof Error
-      && "code" in error
-      && error.code === "ESRCH"
-    ) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
       return false
     }
     throw error
@@ -54,12 +50,7 @@ test.skipIf(process.platform === "win32")(
       ).rejects.toThrow("resistant descendant fixture exceeded 0.1 seconds")
 
       const descendantPid = Number(await readFile(pidFile, "utf8"))
-      await expect
-        .poll(() => processExists(descendantPid), {
-          interval: 20,
-          timeout: 2000
-        })
-        .toBe(false)
+      await expect.poll(() => processExists(descendantPid), { interval: 20, timeout: 2000 }).toBe(false)
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

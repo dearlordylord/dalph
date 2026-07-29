@@ -16,7 +16,7 @@ import {
 } from "./journal-store.js"
 import { requireAcknowledgedPlan } from "./task-attempt-plan-journal-evidence.js"
 import { TaskAttemptPlanRecordAcknowledged, TaskAttemptPlanRunContradiction } from "./task-attempt-plan-recording.js"
-import { makeTrackerGraphObservedOutcome, WorkflowInterpreter } from "./workflow.js"
+import { makeTrackerGraphObservedOutcome, type WorkflowOperation, WorkflowInterpreter } from "./workflow.js"
 
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
@@ -25,65 +25,52 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
 ) =>
   Layer.effect(
     WorkflowInterpreter,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
       const journal = yield* JournalStore
 
-      const readTrackerGraph = Effect.fn(
-        "WorkflowInterpreter.Journaled.readTrackerGraph"
-      )(function*(operation) {
+      const readTrackerGraph = Effect.fn("WorkflowInterpreter.Journaled.readTrackerGraph")(function* (
+        operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+      ) {
         const key = intentRecordKey(operation.operationId)
-        yield* journal.append(
-          runId,
-          key,
-          trackerGraphObservationIntent(operation)
-        )
+        yield* journal.append(runId, key, trackerGraphObservationIntent(operation))
         const snapshot = yield* interpreter.readTrackerGraph(operation)
         yield* journal.append(
           runId,
           outcomeRecordKey(operation.operationId),
-          trackerGraphOutcomeObserved(
-            operation.operationId,
-            makeTrackerGraphObservedOutcome(snapshot)
-          )
+          trackerGraphOutcomeObserved(operation.operationId, makeTrackerGraphObservedOutcome(snapshot))
         )
         return snapshot
       })
 
-      const acquireTaskClaim = Effect.fn(
-        "WorkflowInterpreter.Journaled.acquireTaskClaim"
-      )(function*(
-        operation,
+      const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* (
+        operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
         onIntentRecorded: Effect.Effect<void> = Effect.void
       ) {
-        yield* Effect.uninterruptible(Effect.gen(function*() {
-          yield* journal.append(
-            runId,
-            intentRecordKey(operation.acquisition.operationId),
-            TaskClaimAcquisitionIntendedEvent.make({
-              operation,
-              version: workflowJournalEventVersion
-            })
-          )
-          yield* onIntentRecorded
-        }))
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* journal.append(
+              runId,
+              intentRecordKey(operation.acquisition.operationId),
+              TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+            )
+            yield* onIntentRecorded
+          })
+        )
         const result = yield* interpreter.acquireTaskClaim(operation)
         if (result._tag === "AuthoritativeTaskClaimAcquired") {
           yield* journal.append(
             runId,
             outcomeRecordKey(operation.acquisition.operationId),
-            TaskClaimAcquiredEvent.make({
-              claim: result.claim,
-              version: workflowJournalEventVersion
-            })
+            TaskClaimAcquiredEvent.make({ claim: result.claim, version: workflowJournalEventVersion })
           )
         }
         return result
       })
 
-      const recordTaskAttemptPlan = Effect.fn(
-        "WorkflowInterpreter.Journaled.recordTaskAttemptPlan"
-      )(function*(operation) {
+      const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
+        operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
+      ) {
         if (operation.plannedAttempt.runId !== runId) {
           return yield* new TaskAttemptPlanRunContradiction({
             journalRunId: runId,
@@ -94,19 +81,14 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         yield* journal.append(
           runId,
           attemptPlanRecordKey(operation.plannedAttempt.attemptId),
-          TaskAttemptPlannedEvent.make({
-            operation,
-            version: workflowJournalEventVersion
-          })
+          TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
         )
-        return TaskAttemptPlanRecordAcknowledged.make({
-          plannedAttempt: operation.plannedAttempt
-        })
+        return TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt: operation.plannedAttempt })
       })
 
-      const reconcileTaskWorktree = Effect.fn(
-        "WorkflowInterpreter.Journaled.reconcileTaskWorktree"
-      )(function*(operation) {
+      const reconcileTaskWorktree = Effect.fn("WorkflowInterpreter.Journaled.reconcileTaskWorktree")(function* (
+        operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type
+      ) {
         if (operation.plannedAttempt.runId !== runId) {
           return yield* new TaskAttemptPlanRunContradiction({
             journalRunId: runId,
@@ -124,10 +106,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         yield* journal.append(
           runId,
           intentRecordKey(operation.operationId),
-          TaskWorktreeReconciliationIntendedEvent.make({
-            operation,
-            version: workflowJournalEventVersion
-          })
+          TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion })
         )
         const result = yield* interpreter.reconcileTaskWorktree(operation)
         if (result._tag === "AuthoritativeTaskWorktreeReady") {

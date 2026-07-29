@@ -8,33 +8,28 @@ export interface OperationIdAllocatorService {
 }
 
 /** Allocates identities only when a genuinely new workflow operation is selected. */
-export class OperationIdAllocator extends Context.Service<
-  OperationIdAllocator,
-  OperationIdAllocatorService
->()("@dalph/OperationIdAllocator") {}
+export class OperationIdAllocator extends Context.Service<OperationIdAllocator, OperationIdAllocatorService>()(
+  "@dalph/OperationIdAllocator"
+) {}
 
 export const freshOperationIdAllocatorLayer = Layer.effect(
   OperationIdAllocator,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto
     return OperationIdAllocator.of({
-      allocate: Effect.fn("OperationIdAllocator.Fresh.allocate")(function*() {
+      allocate: Effect.fn("OperationIdAllocator.Fresh.allocate")(function* () {
         return OperationId.make(yield* crypto.randomUUIDv7.pipe(Effect.orDie))
       })
     })
   })
 )
 
-export const deterministicOperationIdAllocatorLayer = (
-  prefix: string
-) =>
+export const deterministicOperationIdAllocatorLayer = (prefix: string) =>
   Layer.effect(
     OperationIdAllocator,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const next = yield* Ref.make(0)
-      const allocate = Effect.fn(
-        "OperationIdAllocator.Deterministic.allocate"
-      )(function*() {
+      const allocate = Effect.fn("OperationIdAllocator.Deterministic.allocate")(function* () {
         const ordinal = yield* Ref.getAndUpdate(next, (value) => value + 1)
         return OperationId.make(`${prefix}:${ordinal}`)
       })
@@ -65,15 +60,13 @@ interface DeterministicPlannedTaskAttemptOptions {
   readonly worktreeRoot: WorktreeLocator
 }
 
-export const deterministicPlannedTaskAttemptLayer = (
-  options: DeterministicPlannedTaskAttemptOptions
-) =>
+export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlannedTaskAttemptOptions) =>
   Layer.effect(
     PlannedTaskAttemptPlanner,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const nextAttemptOrdinal = yield* Ref.make(0)
       return PlannedTaskAttemptPlanner.of({
-        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function*(task) {
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (task) {
           const ordinal = yield* Ref.getAndUpdate(nextAttemptOrdinal, (current) => current + 1)
           const attemptId = AttemptId.make(`attempt:${task.id}:${ordinal}`)
           const resourceSegment = `attempt-${encodeURIComponent(task.id)}-${ordinal}`

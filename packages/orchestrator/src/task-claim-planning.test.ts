@@ -5,7 +5,7 @@ import { expect } from "vitest"
 import { OperationId, TaskClaimAcquisitionPlanner, taskClaimAcquisitionPlannerConfigLayer, TaskId } from "./index.js"
 
 it.effect("plans a fresh claim token for the configured owner", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const planner = yield* TaskClaimAcquisitionPlanner
     const operationId = OperationId.make("claim-planning-operation")
     const taskId = TaskId.make("claim-planning-task")
@@ -17,20 +17,16 @@ it.effect("plans a fresh claim token for the configured owner", () =>
   }).pipe(
     Effect.provide(taskClaimAcquisitionPlannerConfigLayer),
     Effect.provide(NodeCrypto.layer),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({
-      DALPH_CLAIM_OWNER: "configured-owner"
-    })))
-  ))
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_CLAIM_OWNER: "configured-owner" })))
+  )
+)
 
 it.effect("rejects an empty configured claim owner at the schema boundary", () =>
-  Effect.gen(function*() {
-    const failure = yield* Layer.build(taskClaimAcquisitionPlannerConfigLayer).pipe(
-      Effect.flip
-    )
+  Effect.gen(function* () {
+    const failure = yield* Layer.build(taskClaimAcquisitionPlannerConfigLayer).pipe(Effect.flip)
     expect(String(failure)).toContain("DALPH_CLAIM_OWNER")
   }).pipe(
     Effect.provide(NodeCrypto.layer),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({
-      DALPH_CLAIM_OWNER: ""
-    })))
-  ))
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_CLAIM_OWNER: "" })))
+  )
+)

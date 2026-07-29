@@ -7,11 +7,7 @@ export { samePlannedTaskAttempt } from "./planned-task-attempt.js"
 /** The planned task attempt belongs to a different durable workflow run. */
 export class TaskAttemptPlanRunContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanRunContradiction>()(
   "TaskAttemptPlanRunContradiction",
-  {
-    journalRunId: RunId,
-    operationId: OperationId,
-    plannedAttemptRunId: RunId
-  }
+  { journalRunId: RunId, operationId: OperationId, plannedAttemptRunId: RunId }
 ) {}
 
 /** Journal history cannot prove the exact plan required by executor work. */
@@ -20,32 +16,24 @@ export class TaskAttemptPlanHistoryContradiction extends Schema.TaggedErrorClass
   {
     attemptId: AttemptId,
     operationId: OperationId,
-    reason: Schema.Literals([
-      "CausalPredecessorMissing",
-      "Missing",
-      "MultiplePlans",
-      "PlanMismatch"
-    ])
+    reason: Schema.Literals(["CausalPredecessorMissing", "Missing", "MultiplePlans", "PlanMismatch"])
   }
 ) {}
 
 /** A durable journal append acknowledged one exact planned task attempt. */
-export const TaskAttemptPlanRecordAcknowledged = Schema.TaggedStruct(
-  "TaskAttemptPlanRecordAcknowledged",
-  { plannedAttempt: PlannedTaskAttempt }
-)
+export const TaskAttemptPlanRecordAcknowledged = Schema.TaggedStruct("TaskAttemptPlanRecordAcknowledged", {
+  plannedAttempt: PlannedTaskAttempt
+})
 
 /** Dry-run selected the plan operation without recording or mutating resources. */
-export const TaskAttemptPlanRecordingSimulated = Schema.TaggedStruct(
-  "TaskAttemptPlanRecordingSimulated",
-  { operation: WorkflowOperation.cases.RecordTaskAttemptPlan }
-)
+export const TaskAttemptPlanRecordingSimulated = Schema.TaggedStruct("TaskAttemptPlanRecordingSimulated", {
+  operation: WorkflowOperation.cases.RecordTaskAttemptPlan
+})
 
 /** Records acknowledgement that one immutable planned task attempt is durable. */
-export const TaskAttemptPlanAcknowledged = Schema.TaggedStruct(
-  "TaskAttemptPlanAcknowledged",
-  { operation: WorkflowOperation.cases.RecordTaskAttemptPlan }
-)
+export const TaskAttemptPlanAcknowledged = Schema.TaggedStruct("TaskAttemptPlanAcknowledged", {
+  operation: WorkflowOperation.cases.RecordTaskAttemptPlan
+})
 
 export const TaskAttemptPlanRecordingResult = Schema.Union([
   TaskAttemptPlanRecordAcknowledged,

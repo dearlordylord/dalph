@@ -35,30 +35,18 @@ type GithubTrackerGraphReadRequest = Exclude<
   { readonly _tag: "CreateClaimLabel" | "DeleteClaimLabel" | "FindClaimLabel" }
 >
 
-const adapterError = (
-  operation: GithubTrackerReadOperation,
-  reason: TrackerAdapterReadFailureReason,
-  detail: string
-) =>
-  new TrackerAdapterReadError({
-    context: TrackerAdapterReadContext.cases.Github.make({ operation }),
-    detail,
-    reason
-  })
+const adapterError = (operation: GithubTrackerReadOperation, reason: TrackerAdapterReadFailureReason, detail: string) =>
+  new TrackerAdapterReadError({ context: TrackerAdapterReadContext.cases.Github.make({ operation }), detail, reason })
 
 const decodeResponse = <S extends Schema.Constraint>(
   schema: S,
   operation: GithubTrackerReadOperation,
   response: GithubGraphqlResponse
 ) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const header = yield* Schema.decodeUnknownEffect(GraphqlErrorsEnvelope)(response.body).pipe(
       Effect.mapError((cause) =>
-        adapterError(
-          operation,
-          TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}),
-          String(cause)
-        )
+        adapterError(operation, TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}), String(cause))
       )
     )
     if (header.errors !== undefined && header.errors.length > 0) {
@@ -70,34 +58,16 @@ const decodeResponse = <S extends Schema.Constraint>(
     }
     return yield* Schema.decodeUnknownEffect(schema)(response.body).pipe(
       Effect.mapError((cause) =>
-        adapterError(
-          operation,
-          TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}),
-          String(cause)
-        )
+        adapterError(operation, TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}), String(cause))
       )
     )
   })
 
-const incomplete = (
-  operation: GithubTrackerReadOperation,
-  detail: string
-) =>
-  adapterError(
-    operation,
-    TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({}),
-    detail
-  )
+const incomplete = (operation: GithubTrackerReadOperation, detail: string) =>
+  adapterError(operation, TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({}), detail)
 
-const resourceLimitExceeded = (
-  operation: GithubTrackerReadOperation,
-  detail: string
-) =>
-  adapterError(
-    operation,
-    TrackerAdapterReadFailureReason.cases.ResourceLimitExceeded.make({}),
-    detail
-  )
+const resourceLimitExceeded = (operation: GithubTrackerReadOperation, detail: string) =>
+  adapterError(operation, TrackerAdapterReadFailureReason.cases.ResourceLimitExceeded.make({}), detail)
 
 const lifecycleFrom = (
   state: "CLOSED" | "OPEN",
@@ -112,26 +82,26 @@ const lifecycleFrom = (
   if (state === "CLOSED" && (stateReason === "DUPLICATE" || stateReason === "NOT_PLANNED")) {
     return Effect.succeed(TaskLifecycle.cases.TerminalWithoutSuccess.make({}))
   }
-  return Effect.fail(incomplete(
-    "GithubTrackerGraphReader.readIssue",
-    `unsupported GitHub issue lifecycle ${state}/${stateReason ?? "null"}`
-  ))
+  return Effect.fail(
+    incomplete(
+      "GithubTrackerGraphReader.readIssue",
+      `unsupported GitHub issue lifecycle ${state}/${stateReason ?? "null"}`
+    )
+  )
 }
 
-const githubTarget = (
-  target: TrackerTarget
-): Effect.Effect<GithubIssueTarget, TrackerAdapterReadError> =>
+const githubTarget = (target: TrackerTarget): Effect.Effect<GithubIssueTarget, TrackerAdapterReadError> =>
   typeof target === "string"
-    ? Effect.fail(adapterError(
-      "GithubTrackerGraphReader.selectAdapter",
-      TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({}),
-      "GitHub reader cannot read a fixture target"
-    ))
+    ? Effect.fail(
+        adapterError(
+          "GithubTrackerGraphReader.selectAdapter",
+          TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({}),
+          "GitHub reader cannot read a fixture target"
+        )
+      )
     : Effect.succeed(target)
 
-const operationForRequest = (
-  request: GithubTrackerGraphReadRequest
-): GithubTrackerReadOperation => {
+const operationForRequest = (request: GithubTrackerGraphReadRequest): GithubTrackerReadOperation => {
   return Match.valueTags(request, {
     ResolveIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.resolveIssue",
     ReadIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readIssue",
@@ -140,42 +110,30 @@ const operationForRequest = (
   })
 }
 
-export const githubTrackerGraphReaderLayer: Layer.Layer<
+export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, never, GithubGraphqlClient> = Layer.effect(
   TrackerGraphReader,
-  never,
-  GithubGraphqlClient
-> = Layer.effect(
-  TrackerGraphReader,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
 
     /**
      * Produces an all-or-nothing bounded observation, not a GitHub
      * point-in-time transaction. See docs/ARCHITECTURE.md.
      */
-    const read = Effect.fn("GithubTrackerGraphReader.read")(function*(
-      target: TrackerTarget
-    ) {
+    const read = Effect.fn("GithubTrackerGraphReader.read")(function* (target: TrackerTarget) {
       const selectedTarget = yield* githubTarget(target)
-      const execute = Effect.fn("GithubTrackerGraphReader.execute")(function*(
-        request: GithubTrackerGraphReadRequest
-      ) {
+      const execute = Effect.fn("GithubTrackerGraphReader.execute")(function* (request: GithubTrackerGraphReadRequest) {
         const operation = operationForRequest(request)
-        const response = yield* client.execute(request).pipe(
-          Effect.mapError((error) =>
-            adapterError(
-              operation,
-              TrackerAdapterReadFailureReason.cases.Transport.make({}),
-              error.detail
+        const response = yield* client
+          .execute(request)
+          .pipe(
+            Effect.mapError((error) =>
+              adapterError(operation, TrackerAdapterReadFailureReason.cases.Transport.make({}), error.detail)
             )
           )
-        )
         return response
       })
 
-      const resolvedResponse = yield* execute(
-        GithubGraphqlRequest.cases.ResolveIssue.make({ target: selectedTarget })
-      )
+      const resolvedResponse = yield* execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target: selectedTarget }))
       const resolved = yield* decodeResponse(
         ResolveIssueResponse,
         "GithubTrackerGraphReader.resolveIssue",
@@ -198,20 +156,21 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
       const expandedChildren = new Set<GithubIssueNodeId>()
       const discoveredNodeIds = new Set<GithubIssueNodeId>([rootNodeId])
 
-      const registerDiscovered = Effect.fn("GithubTrackerGraphReader.registerDiscovered")(
-        function*(operation: GithubTrackerReadOperation, nodeIds: ReadonlyArray<GithubIssueNodeId>) {
-          const undiscoveredCount = nodeIds.filter((nodeId) => !discoveredNodeIds.has(nodeId)).length
-          if (discoveredNodeIds.size + undiscoveredCount > githubSnapshotTaskLimit) {
-            return yield* resourceLimitExceeded(
-              operation,
-              `GitHub tracker target closure exceeds ${githubSnapshotTaskLimit} tasks`
-            )
-          }
-          for (const nodeId of nodeIds) discoveredNodeIds.add(nodeId)
+      const registerDiscovered = Effect.fn("GithubTrackerGraphReader.registerDiscovered")(function* (
+        operation: GithubTrackerReadOperation,
+        nodeIds: ReadonlyArray<GithubIssueNodeId>
+      ) {
+        const undiscoveredCount = nodeIds.filter((nodeId) => !discoveredNodeIds.has(nodeId)).length
+        if (discoveredNodeIds.size + undiscoveredCount > githubSnapshotTaskLimit) {
+          return yield* resourceLimitExceeded(
+            operation,
+            `GitHub tracker target closure exceeds ${githubSnapshotTaskLimit} tasks`
+          )
         }
-      )
+        for (const nodeId of nodeIds) discoveredNodeIds.add(nodeId)
+      })
 
-      const readConnection = Effect.fn("GithubTrackerGraphReader.readConnection")(function*(
+      const readConnection = Effect.fn("GithubTrackerGraphReader.readConnection")(function* (
         issueNodeId: GithubIssueNodeId,
         relation: "blockedBy" | "subIssues"
       ) {
@@ -221,9 +180,8 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
         let cursor: GithubCursor | null = null
         let hasNextPage = true
         let pageCount = 0
-        const operation: GithubTrackerReadOperation = relation === "subIssues"
-          ? "GithubTrackerGraphReader.readSubIssues"
-          : "GithubTrackerGraphReader.readBlockedBy"
+        const operation: GithubTrackerReadOperation =
+          relation === "subIssues" ? "GithubTrackerGraphReader.readSubIssues" : "GithubTrackerGraphReader.readBlockedBy"
         while (hasNextPage) {
           if (pageCount >= githubConnectionPageLimit) {
             return yield* resourceLimitExceeded(
@@ -232,38 +190,34 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
             )
           }
           pageCount++
-          const request: GithubGraphqlRequest = relation === "subIssues"
-            ? GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor, issueNodeId })
-            : GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor, issueNodeId })
+          const request: GithubGraphqlRequest =
+            relation === "subIssues"
+              ? GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor, issueNodeId })
+              : GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor, issueNodeId })
           const response: GithubGraphqlResponse = yield* execute(request)
-          const relationNode = relation === "subIssues"
-            ? yield* decodeResponse(SubIssuesResponse, operation, response).pipe(
-              Effect.flatMap(({ data }) =>
-                data.node === null
-                  ? Effect.fail(incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`))
-                  : Effect.succeed({ connection: data.node.subIssues, id: data.node.id })
-              )
-            )
-            : yield* decodeResponse(BlockedByResponse, operation, response).pipe(
-              Effect.flatMap(({ data }) =>
-                data.node === null
-                  ? Effect.fail(incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`))
-                  : Effect.succeed({ connection: data.node.blockedBy, id: data.node.id })
-              )
-            )
+          const relationNode =
+            relation === "subIssues"
+              ? yield* decodeResponse(SubIssuesResponse, operation, response).pipe(
+                  Effect.flatMap(({ data }) =>
+                    data.node === null
+                      ? Effect.fail(incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`))
+                      : Effect.succeed({ connection: data.node.subIssues, id: data.node.id })
+                  )
+                )
+              : yield* decodeResponse(BlockedByResponse, operation, response).pipe(
+                  Effect.flatMap(({ data }) =>
+                    data.node === null
+                      ? Effect.fail(incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`))
+                      : Effect.succeed({ connection: data.node.blockedBy, id: data.node.id })
+                  )
+                )
           if (relationNode.id !== issueNodeId) {
-            return yield* incomplete(
-              operation,
-              `GitHub returned issue ${relationNode.id} while reading ${issueNodeId}`
-            )
+            return yield* incomplete(operation, `GitHub returned issue ${relationNode.id} while reading ${issueNodeId}`)
           }
           const connection: IssueConnection = relationNode.connection
           for (const { id } of connection.nodes) {
             if (seenNodeIds.has(id)) {
-              return yield* incomplete(
-                operation,
-                `GitHub returned duplicate ${relation} endpoint ${id}`
-              )
+              return yield* incomplete(operation, `GitHub returned duplicate ${relation} endpoint ${id}`)
             }
             seenNodeIds.add(id)
             nodeIds.push(id)
@@ -272,11 +226,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
           if (hasNextPage && connection.pageInfo.endCursor === null) {
             return yield* incomplete(operation, `GitHub returned an incomplete ${relation} page`)
           }
-          if (
-            hasNextPage
-            && connection.pageInfo.endCursor !== null
-            && seenCursors.has(connection.pageInfo.endCursor)
-          ) {
+          if (hasNextPage && connection.pageInfo.endCursor !== null && seenCursors.has(connection.pageInfo.endCursor)) {
             return yield* incomplete(
               operation,
               `GitHub repeated a ${relation} pagination cursor without making progress`
@@ -295,14 +245,8 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
         const { expandChildren, issueNodeId } = next
 
         if (!projections.has(issueNodeId)) {
-          const issueResponse = yield* execute(
-            GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId })
-          )
-          const decoded = yield* decodeResponse(
-            ReadIssueResponse,
-            "GithubTrackerGraphReader.readIssue",
-            issueResponse
-          )
+          const issueResponse = yield* execute(GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId }))
+          const decoded = yield* decodeResponse(ReadIssueResponse, "GithubTrackerGraphReader.readIssue", issueResponse)
           const node = decoded.data.node
           if (node === null) {
             return yield* incomplete(
@@ -325,11 +269,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
             )
           }
           const expectedParent = hierarchyParents.get(issueNodeId)
-          if (
-            expectedParent !== undefined
-            && expectedParent !== null
-            && node.parent?.id !== expectedParent
-          ) {
+          if (expectedParent !== undefined && expectedParent !== null && node.parent?.id !== expectedParent) {
             return yield* incomplete(
               "GithubTrackerGraphReader.readIssue",
               `GitHub issue ${issueNodeId} has a contradictory parent`
@@ -337,10 +277,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
           }
           const lifecycle = yield* lifecycleFrom(node.state, node.stateReason)
           const prerequisiteNodeIds = yield* readConnection(issueNodeId, "blockedBy")
-          yield* registerDiscovered(
-            "GithubTrackerGraphReader.readBlockedBy",
-            prerequisiteNodeIds
-          )
+          yield* registerDiscovered("GithubTrackerGraphReader.readBlockedBy", prerequisiteNodeIds)
           projections.set(issueNodeId, {
             issueNodeId,
             lifecycle,
@@ -349,10 +286,12 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
           })
           // Prerequisites enter the target closure, but their grouping
           // descendants do not unless reached from the selected root hierarchy.
-          pending.push(...prerequisiteNodeIds.map((prerequisiteNodeId) => ({
-            expandChildren: false,
-            issueNodeId: prerequisiteNodeId
-          })))
+          pending.push(
+            ...prerequisiteNodeIds.map((prerequisiteNodeId) => ({
+              expandChildren: false,
+              issueNodeId: prerequisiteNodeId
+            }))
+          )
         }
 
         if (expandChildren && !expandedChildren.has(issueNodeId)) {
@@ -361,10 +300,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
           yield* registerDiscovered("GithubTrackerGraphReader.readSubIssues", childNodeIds)
           for (const childNodeId of childNodeIds) {
             const observedChild = projections.get(childNodeId)
-            if (
-              observedChild !== undefined
-              && observedChild.observedParentNodeId !== issueNodeId
-            ) {
+            if (observedChild !== undefined && observedChild.observedParentNodeId !== issueNodeId) {
               return yield* incomplete(
                 "GithubTrackerGraphReader.readSubIssues",
                 `GitHub issue ${childNodeId} has a contradictory parent`
@@ -385,37 +321,23 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<
 
       const taskIds = new Map<GithubIssueNodeId, TaskId>()
       for (const projection of projections.values()) {
-        taskIds.set(
-          projection.issueNodeId,
-          githubTaskIdFor(rootRepositoryNodeId, projection.issueNodeId)
-        )
+        taskIds.set(projection.issueNodeId, githubTaskIdFor(rootRepositoryNodeId, projection.issueNodeId))
       }
       const tasks: Array<TrackerTask> = []
       for (const projection of projections.values()) {
         const id = Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(projection.issueNodeId)))
         const parentNodeId = hierarchyParents.get(projection.issueNodeId) ?? null
-        const parentTaskId = parentNodeId === null
-          ? null
-          : Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(parentNodeId)))
+        const parentTaskId =
+          parentNodeId === null ? null : Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(parentNodeId)))
         const prerequisiteIds: Array<TaskId> = []
         for (const prerequisiteNodeId of projection.prerequisiteNodeIds) {
-          const prerequisiteId = Option.getOrThrow(
-            Option.fromUndefinedOr(taskIds.get(prerequisiteNodeId))
-          )
+          const prerequisiteId = Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(prerequisiteNodeId)))
           prerequisiteIds.push(prerequisiteId)
         }
-        tasks.push({
-          id,
-          lifecycle: projection.lifecycle,
-          parentTaskId,
-          prerequisiteIds
-        })
+        tasks.push({ id, lifecycle: projection.lifecycle, parentTaskId, prerequisiteIds })
       }
 
-      const graph = projectTrackerSnapshot({
-        revision: trackerRevisionFor(tasks),
-        tasks
-      })
+      const graph = projectTrackerSnapshot({ revision: trackerRevisionFor(tasks), tasks })
       if (graph._tag === "Invalid") {
         return yield* new GraphProjectionError({ issues: graph.issues })
       }

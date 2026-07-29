@@ -85,8 +85,9 @@ requires a setting that cannot correctly be shared.
 
 ## Commands
 
-- `pnpm typecheck` runs the strict shared TypeScript program.
-- `pnpm lint:code` runs type-aware ESLint and Effect dprint rules.
+- `pnpm typecheck` runs the strict shared TypeScript program through Effect's
+  TypeScript-Go compiler, including Effect language-service diagnostics.
+- `pnpm lint:code` runs type-aware Oxlint rules and dprint formatting checks.
 - `pnpm check:circular` rejects runtime dependency cycles.
 - `pnpm check:complexity` rejects an increase in the number of production
   functions above cyclomatic complexity eight in each file.
@@ -103,6 +104,12 @@ requires a setting that cannot correctly be shared.
   proof-of-concept phase it excludes Quint-connected MBT.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT but not exhaustive formal model checking.
+
+The native TypeScript 7 compiler is installed as `@typescript/native` and
+patched by `@effect/tsgo` during `pnpm install`. Oxlint's TypeScript-Go plugin
+performs type-aware linting without a legacy TypeScript JavaScript compiler
+API. Effect errors fail `pnpm typecheck`, while existing warning- and
+suggestion-level diagnostics remain visible without failing the command.
 
 Duplication is a production-code gate. Tests are excluded because scenario and
 adapter contract setup intentionally repeats shapes across independent cases;
@@ -134,23 +141,19 @@ Install `gitleaks` locally before committing.
 ## Changing the harness
 
 `package.json`, `pnpm-workspace.yaml`, `tsconfig*.json`,
-`eslint.config.mjs`, `vitest.config.ts`, `.jscpd.json`, `.madgerc`, and CI or
+`.oxlintrc.json`, `dprint.json`, `oxlint.complexity.json`, `vitest.config.ts`,
+`.jscpd.json`, and CI or
 hook files collectively define repository quality policy. Explain threshold
 reductions or exclusions in the change that introduces them; generated-code
 exclusions must be narrow and must not hide authored logic.
 
-The empty `.eslintrc` file is a compatibility sentinel consumed by
-`import-x/no-unused-modules` while ESLint itself uses the flat
-`eslint.config.mjs` configuration. Keep the sentinel until the pinned plugin no
-longer requires it for flat-config file discovery.
-
-The separate `eslint.complexity.config.mjs` applies the production-code
-complexity gate. `eslint-complexity-suppressions.json` records the number of
+The separate `oxlint.complexity.json` applies the production-code complexity
+gate. `oxlint-complexity-suppressions.json` records the number of
 existing violations per file; it does not bind a suppression to one function or
 complexity value. After reducing complexity, run `pnpm check:complexity:prune`
 to remove obsolete suppressions.
 
-The repository-wide `dalph/effect-class-inheritance-only` rule permits class
+The repository-wide `dalph/effect-class-inheritance-only` Oxlint rule permits class
 inheritance only for Effect `Context.Service` tags and
 `Schema.TaggedErrorClass` failures. Other inheritance remains forbidden; do not
 replace this policy with per-class suppressions.

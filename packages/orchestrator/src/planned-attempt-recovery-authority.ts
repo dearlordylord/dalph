@@ -6,28 +6,16 @@ import { isExactTaskClaim, TrackerMutation } from "./tracker-mutation.js"
 import { type WorkflowOperation, workflowOperationId } from "./workflow-operation.js"
 
 /** A recovered attempt no longer has the exact tracker/Git facts that authorized it. */
-export class PlannedAttemptRecoveryAuthorityMismatch
-  extends Schema.TaggedErrorClass<PlannedAttemptRecoveryAuthorityMismatch>()(
-    "PlannedAttemptRecoveryAuthorityMismatch",
-    {
-      attemptId: AttemptId,
-      boundary: Schema.Literals(["Git", "TaskTracker"]),
-      detail: Schema.String
-    }
-  )
-{}
+export class PlannedAttemptRecoveryAuthorityMismatch extends Schema.TaggedErrorClass<PlannedAttemptRecoveryAuthorityMismatch>()(
+  "PlannedAttemptRecoveryAuthorityMismatch",
+  { attemptId: AttemptId, boundary: Schema.Literals(["Git", "TaskTracker"]), detail: Schema.String }
+) {}
 
 /** A recovery boundary could not currently provide authoritative evidence. */
-export class PlannedAttemptRecoveryAuthorityUnreadable
-  extends Schema.TaggedErrorClass<PlannedAttemptRecoveryAuthorityUnreadable>()(
-    "PlannedAttemptRecoveryAuthorityUnreadable",
-    {
-      attemptId: AttemptId,
-      boundary: Schema.Literals(["Git", "TaskTracker"]),
-      detail: Schema.String
-    }
-  )
-{}
+export class PlannedAttemptRecoveryAuthorityUnreadable extends Schema.TaggedErrorClass<PlannedAttemptRecoveryAuthorityUnreadable>()(
+  "PlannedAttemptRecoveryAuthorityUnreadable",
+  { attemptId: AttemptId, boundary: Schema.Literals(["Git", "TaskTracker"]), detail: Schema.String }
+) {}
 
 export type PlannedAttemptRecoveryAuthorityError =
   | JournalStoreError
@@ -35,22 +23,16 @@ export type PlannedAttemptRecoveryAuthorityError =
   | PlannedAttemptRecoveryAuthorityUnreadable
 
 interface PlannedAttemptRecoveryAuthorityService {
-  readonly verify: (
-    plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<void, PlannedAttemptRecoveryAuthorityError>
+  readonly verify: (plannedAttempt: PlannedTaskAttempt) => Effect.Effect<void, PlannedAttemptRecoveryAuthorityError>
 }
 
-const journaledOperation = (
-  event: WorkflowJournalEvent
-): WorkflowOperation | undefined => "operation" in event ? event.operation : undefined
+const journaledOperation = (event: WorkflowJournalEvent): WorkflowOperation | undefined =>
+  "operation" in event ? event.operation : undefined
 
 /** Finds every operation that causally precedes an operation in durable history. */
 const causalPredecessorClosure = (
   operation: WorkflowOperation,
-  operations: ReadonlyMap<
-    ReturnType<typeof workflowOperationId>,
-    WorkflowOperation
-  >
+  operations: ReadonlyMap<ReturnType<typeof workflowOperationId>, WorkflowOperation>
 ): ReadonlySet<ReturnType<typeof workflowOperationId>> => {
   const visit = (
     pending: ReadonlyArray<ReturnType<typeof workflowOperationId>>,
@@ -60,13 +42,7 @@ const causalPredecessorClosure = (
     if (operationId === undefined) return reachable
     if (reachable.has(operationId)) return visit(remaining, reachable)
     const predecessor = operations.get(operationId)
-    return visit(
-      [
-        ...remaining,
-        ...(predecessor?.predecessorOperationIds ?? [])
-      ],
-      new Set([...reachable, operationId])
-    )
+    return visit([...remaining, ...(predecessor?.predecessorOperationIds ?? [])], new Set([...reachable, operationId]))
   }
   return visit(operation.predecessorOperationIds, new Set())
 }
@@ -74,33 +50,20 @@ const causalPredecessorClosure = (
 const causalClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   attemptId: AttemptId
-):
-  | Extract<
-    WorkflowJournalEvent,
-    { readonly _tag: "TaskClaimAcquired" }
-  >
-  | undefined =>
-{
-  const plan = records.find(({ event }) =>
-    event._tag === "TaskAttemptPlanned"
-    && event.operation.plannedAttempt.attemptId === attemptId
+): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
+  const plan = records.find(
+    ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === attemptId
   )?.event
   if (plan?._tag !== "TaskAttemptPlanned") return undefined
   const operations = new Map(
     records.flatMap(({ event }) => {
       const operation = journaledOperation(event)
-      return operation === undefined
-        ? []
-        : [[workflowOperationId(operation), operation] as const]
+      return operation === undefined ? [] : [[workflowOperationId(operation), operation] as const]
     })
   )
-  const causalOperationIds = causalPredecessorClosure(
-    plan.operation,
-    operations
-  )
-  const claim = records.find(({ event }) =>
-    event._tag === "TaskClaimAcquired"
-    && causalOperationIds.has(event.claim.operationId)
+  const causalOperationIds = causalPredecessorClosure(plan.operation, operations)
+  const claim = records.find(
+    ({ event }) => event._tag === "TaskClaimAcquired" && causalOperationIds.has(event.claim.operationId)
   )?.event
   return claim?._tag === "TaskClaimAcquired" ? claim : undefined
 }
@@ -113,34 +76,27 @@ export class PlannedAttemptRecoveryAuthority extends Context.Service<
 
 export const livePlannedAttemptRecoveryAuthorityLayer = Layer.effect(
   PlannedAttemptRecoveryAuthority,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const git = yield* GitWorktree
     const journal = yield* JournalStore
     const tracker = yield* TrackerMutation
-    const verifyTrackerClaim = Effect.fn(
-      "PlannedAttemptRecoveryAuthority.verifyTrackerClaim"
-    )(function*(
+    const verifyTrackerClaim = Effect.fn("PlannedAttemptRecoveryAuthority.verifyTrackerClaim")(function* (
       plannedAttempt: PlannedTaskAttempt,
-      claim: Extract<
-        WorkflowJournalEvent,
-        { readonly _tag: "TaskClaimAcquired" }
-      >
+      claim: Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>
     ) {
-      const observedClaim = yield* tracker.readTaskClaim(
-        plannedAttempt.taskId
-      ).pipe(
-        Effect.mapError((error) =>
-          new PlannedAttemptRecoveryAuthorityUnreadable({
-            attemptId: plannedAttempt.attemptId,
-            boundary: "TaskTracker",
-            detail: error.detail
-          })
+      const observedClaim = yield* tracker
+        .readTaskClaim(plannedAttempt.taskId)
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new PlannedAttemptRecoveryAuthorityUnreadable({
+                attemptId: plannedAttempt.attemptId,
+                boundary: "TaskTracker",
+                detail: error.detail
+              })
+          )
         )
-      )
-      if (
-        observedClaim._tag !== "ActiveTaskClaim"
-        || !isExactTaskClaim(observedClaim, claim.claim)
-      ) {
+      if (observedClaim._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observedClaim, claim.claim)) {
         return yield* new PlannedAttemptRecoveryAuthorityMismatch({
           attemptId: plannedAttempt.attemptId,
           boundary: "TaskTracker",
@@ -148,25 +104,26 @@ export const livePlannedAttemptRecoveryAuthorityLayer = Layer.effect(
         })
       }
     })
-    const verifyGitWorktree = Effect.fn(
-      "PlannedAttemptRecoveryAuthority.verifyGitWorktree"
-    )(function*(plannedAttempt: PlannedTaskAttempt) {
-      const worktree = yield* git.readPlannedWorktree(
-        plannedAttempt
-      ).pipe(
-        Effect.mapError((error) =>
-          new PlannedAttemptRecoveryAuthorityUnreadable({
-            attemptId: plannedAttempt.attemptId,
-            boundary: "Git",
-            detail: error._tag
-          })
+    const verifyGitWorktree = Effect.fn("PlannedAttemptRecoveryAuthority.verifyGitWorktree")(function* (
+      plannedAttempt: PlannedTaskAttempt
+    ) {
+      const worktree = yield* git
+        .readPlannedWorktree(plannedAttempt)
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new PlannedAttemptRecoveryAuthorityUnreadable({
+                attemptId: plannedAttempt.attemptId,
+                boundary: "Git",
+                detail: error._tag
+              })
+          )
         )
-      )
       if (
-        worktree._tag !== "PlannedWorktreeReady"
-        || worktree.baseSha !== plannedAttempt.baseSha
-        || worktree.branch !== plannedAttempt.branch
-        || worktree.worktree !== plannedAttempt.worktree
+        worktree._tag !== "PlannedWorktreeReady" ||
+        worktree.baseSha !== plannedAttempt.baseSha ||
+        worktree.branch !== plannedAttempt.branch ||
+        worktree.worktree !== plannedAttempt.worktree
       ) {
         return yield* new PlannedAttemptRecoveryAuthorityMismatch({
           attemptId: plannedAttempt.attemptId,
@@ -176,14 +133,9 @@ export const livePlannedAttemptRecoveryAuthorityLayer = Layer.effect(
       }
     })
     return PlannedAttemptRecoveryAuthority.of({
-      verify: Effect.fn(
-        "PlannedAttemptRecoveryAuthority.verify"
-      )(function*(plannedAttempt) {
+      verify: Effect.fn("PlannedAttemptRecoveryAuthority.verify")(function* (plannedAttempt) {
         const records = yield* journal.read(plannedAttempt.runId)
-        const claim = causalClaimForAttempt(
-          records,
-          plannedAttempt.attemptId
-        )
+        const claim = causalClaimForAttempt(records, plannedAttempt.attemptId)
         if (claim === undefined) {
           return yield* new PlannedAttemptRecoveryAuthorityMismatch({
             attemptId: plannedAttempt.attemptId,
@@ -201,7 +153,5 @@ export const livePlannedAttemptRecoveryAuthorityLayer = Layer.effect(
 /** Unit scenarios may state that their already-constructed boundary facts are trusted. */
 export const trustedPlannedAttemptRecoveryAuthorityLayer = Layer.succeed(
   PlannedAttemptRecoveryAuthority,
-  PlannedAttemptRecoveryAuthority.of({
-    verify: () => Effect.void
-  })
+  PlannedAttemptRecoveryAuthority.of({ verify: () => Effect.void })
 )

@@ -6,27 +6,19 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 import { GithubIssueTarget, OperationId } from "./domain.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
-export const GithubIssueNodeId = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubIssueNodeId")
-)
+export const GithubIssueNodeId = Schema.NonEmptyString.pipe(Schema.brand("GithubIssueNodeId"))
 export type GithubIssueNodeId = typeof GithubIssueNodeId.Type
 
 /** Identifies one GitHub repository node at the provider boundary, not its owner/name locator. */
-export const GithubRepositoryNodeId = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubRepositoryNodeId")
-)
+export const GithubRepositoryNodeId = Schema.NonEmptyString.pipe(Schema.brand("GithubRepositoryNodeId"))
 export type GithubRepositoryNodeId = typeof GithubRepositoryNodeId.Type
 
 /** Identifies one GitHub label record used only inside the tracker adapter. */
-export const GithubLabelNodeId = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubLabelNodeId")
-)
+export const GithubLabelNodeId = Schema.NonEmptyString.pipe(Schema.brand("GithubLabelNodeId"))
 export type GithubLabelNodeId = typeof GithubLabelNodeId.Type
 
 /** Identifies one repository-scoped GitHub label by its provider name. */
-export const GithubLabelName = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubLabelName")
-)
+export const GithubLabelName = Schema.NonEmptyString.pipe(Schema.brand("GithubLabelName"))
 export type GithubLabelName = typeof GithubLabelName.Type
 
 /** Continues one GitHub connection read; it is not a journal or presentation position. */
@@ -34,36 +26,22 @@ export const GithubCursor = Schema.NonEmptyString.pipe(Schema.brand("GithubCurso
 export type GithubCursor = typeof GithubCursor.Type
 
 export const GithubGraphqlRequest = Schema.TaggedUnion({
-  FindClaimLabel: {
-    labelName: GithubLabelName,
-    repositoryNodeId: GithubRepositoryNodeId
-  },
+  FindClaimLabel: { labelName: GithubLabelName, repositoryNodeId: GithubRepositoryNodeId },
   CreateClaimLabel: {
     description: Schema.NonEmptyString,
     labelName: GithubLabelName,
     operationId: OperationId,
     repositoryNodeId: GithubRepositoryNodeId
   },
-  DeleteClaimLabel: {
-    labelNodeId: GithubLabelNodeId,
-    operationId: OperationId
-  },
+  DeleteClaimLabel: { labelNodeId: GithubLabelNodeId, operationId: OperationId },
   ResolveIssue: { target: GithubIssueTarget },
   ReadIssue: { issueNodeId: GithubIssueNodeId },
-  ReadSubIssues: {
-    cursor: Schema.NullOr(GithubCursor),
-    issueNodeId: GithubIssueNodeId
-  },
-  ReadBlockedBy: {
-    cursor: Schema.NullOr(GithubCursor),
-    issueNodeId: GithubIssueNodeId
-  }
+  ReadSubIssues: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId },
+  ReadBlockedBy: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId }
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
-export const GithubGraphqlResponse = Schema.Struct({
-  body: Schema.Unknown
-})
+export const GithubGraphqlResponse = Schema.Struct({ body: Schema.Unknown })
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
 const GithubGraphqlOperation = Schema.Literals([
@@ -78,16 +56,11 @@ const GithubGraphqlOperation = Schema.Literals([
 
 export class GithubGraphqlRequestError extends Schema.TaggedErrorClass<GithubGraphqlRequestError>()(
   "GithubGraphqlClient.RequestError",
-  {
-    detail: Schema.String,
-    operation: GithubGraphqlOperation
-  }
+  { detail: Schema.String, operation: GithubGraphqlOperation }
 ) {}
 
 interface GithubGraphqlClientService {
-  readonly execute: (
-    request: GithubGraphqlRequest
-  ) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
+  readonly execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
 }
 
 /** Executes GitHub GraphQL reads without granting tracker mutation authority. */
@@ -157,8 +130,7 @@ const findClaimLabelQuery = `query FindClaimLabel($repositoryNodeId: ID!, $label
   }
 }`
 
-const createClaimLabelMutation =
-  `mutation CreateClaimLabel($repositoryNodeId: ID!, $labelName: String!, $description: String!, $operationId: String!) {
+const createClaimLabelMutation = `mutation CreateClaimLabel($repositoryNodeId: ID!, $labelName: String!, $description: String!, $operationId: String!) {
   createLabel(input: { repositoryId: $repositoryNodeId, name: $labelName, color: "5319E7", description: $description, clientMutationId: $operationId }) {
     label { id name description }
   }
@@ -170,17 +142,13 @@ const deleteClaimLabelMutation = `mutation DeleteClaimLabel($labelNodeId: ID!, $
   }
 }`
 
-const requestBody = (request: GithubGraphqlRequest): {
-  readonly query: string
-  readonly variables: Readonly<Record<string, unknown>>
-} => {
+const requestBody = (
+  request: GithubGraphqlRequest
+): { readonly query: string; readonly variables: Readonly<Record<string, unknown>> } => {
   return Match.valueTags(request, {
     FindClaimLabel: (request) => ({
       query: findClaimLabelQuery,
-      variables: {
-        labelName: request.labelName,
-        repositoryNodeId: request.repositoryNodeId
-      }
+      variables: { labelName: request.labelName, repositoryNodeId: request.repositoryNodeId }
     }),
     CreateClaimLabel: (request) => ({
       query: createClaimLabelMutation,
@@ -193,10 +161,7 @@ const requestBody = (request: GithubGraphqlRequest): {
     }),
     DeleteClaimLabel: (request) => ({
       query: deleteClaimLabelMutation,
-      variables: {
-        labelNodeId: request.labelNodeId,
-        operationId: request.operationId
-      }
+      variables: { labelNodeId: request.labelNodeId, operationId: request.operationId }
     }),
     ResolveIssue: (request) => ({
       query: resolveIssueQuery,
@@ -206,41 +171,24 @@ const requestBody = (request: GithubGraphqlRequest): {
         repository: request.target.repository
       }
     }),
-    ReadIssue: (request) => ({
-      query: readIssueQuery,
-      variables: { issueNodeId: request.issueNodeId }
-    }),
+    ReadIssue: (request) => ({ query: readIssueQuery, variables: { issueNodeId: request.issueNodeId } }),
     ReadSubIssues: (request) => ({
       query: readSubIssuesQuery,
-      variables: {
-        cursor: request.cursor,
-        issueNodeId: request.issueNodeId,
-        pageSize: connectionPageSize
-      }
+      variables: { cursor: request.cursor, issueNodeId: request.issueNodeId, pageSize: connectionPageSize }
     }),
     ReadBlockedBy: (request) => ({
       query: readBlockedByQuery,
-      variables: {
-        cursor: request.cursor,
-        issueNodeId: request.issueNodeId,
-        pageSize: connectionPageSize
-      }
+      variables: { cursor: request.cursor, issueNodeId: request.issueNodeId, pageSize: connectionPageSize }
     })
   })
 }
 
-const requestError = (
-  operation: typeof GithubGraphqlOperation.Type,
-  cause: unknown
-) => new GithubGraphqlRequestError({ detail: String(cause), operation })
+const requestError = (operation: typeof GithubGraphqlOperation.Type, cause: unknown) =>
+  new GithubGraphqlRequestError({ detail: String(cause), operation })
 
-const makeClient = Effect.fn("GithubGraphqlClient.make")(function*(
-  token: Redacted.Redacted<string>
-) {
+const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redacted.Redacted<string>) {
   const httpClient = yield* HttpClient.HttpClient
-  const execute = Effect.fn("GithubGraphqlClient.execute")(function*(
-    request: GithubGraphqlRequest
-  ) {
+  const execute = Effect.fn("GithubGraphqlClient.execute")(function* (request: GithubGraphqlRequest) {
     const httpRequest = HttpClientRequest.post(graphqlEndpoint).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),
@@ -252,18 +200,16 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function*(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.mapError((cause) => requestError(request._tag, cause))
     )
-    const body = yield* response.json.pipe(
-      Effect.mapError((cause) => requestError(request._tag, cause))
-    )
+    const body = yield* response.json.pipe(Effect.mapError((cause) => requestError(request._tag, cause)))
     return GithubGraphqlResponse.make({ body })
   })
 
   return GithubGraphqlClient.of({ execute })
 })
 
-export const githubGraphqlClientLayer = (
-  options: { readonly token: Redacted.Redacted<string> }
-): Layer.Layer<GithubGraphqlClient, never, HttpClient.HttpClient> =>
+export const githubGraphqlClientLayer = (options: {
+  readonly token: Redacted.Redacted<string>
+}): Layer.Layer<GithubGraphqlClient, never, HttpClient.HttpClient> =>
   Layer.effect(GithubGraphqlClient, makeClient(options.token))
 
 export const githubGraphqlClientConfigLayer: Layer.Layer<
@@ -272,7 +218,7 @@ export const githubGraphqlClientConfigLayer: Layer.Layer<
   HttpClient.HttpClient
 > = Layer.effect(
   GithubGraphqlClient,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const token = yield* Config.redacted("GITHUB_TOKEN")
     return yield* makeClient(token)
   })

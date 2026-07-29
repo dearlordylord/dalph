@@ -39,10 +39,7 @@ export const StartupRecoveryIssue = Schema.Union([
   JournalBoundaryDecodeIssue,
   ManagedHistoryIdentityIssue,
   ManagedHistorySemanticIssue,
-  Schema.TaggedStruct("OtherUnfinishedManagedRunIssue", {
-    requestedRunId: RunId,
-    unfinishedRunId: RunId
-  })
+  Schema.TaggedStruct("OtherUnfinishedManagedRunIssue", { requestedRunId: RunId, unfinishedRunId: RunId })
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
 
@@ -56,58 +53,39 @@ export class StartupRecoveryBlocked extends Schema.TaggedErrorClass<StartupRecov
  * Composes the production-shaped milestone with live tracker/Git boundaries
  * and one same-process coarse fake executor.
  */
-export const productionWorkflowInterpreterLayer = <
-  TrackerError,
-  TrackerRequirements
->(
+export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
   runId: RunId,
   target: GitCommonDirectoryTarget,
-  trackerMutationAdapterLayer: Layer.Layer<
-    TrackerMutation,
-    TrackerError,
-    TrackerRequirements
-  >
+  trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
-  const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(
-    trackerMutationAdapterLayer
-  ).pipe(Layer.provide(ownershipLayer))
-  const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(
-    nodeGitWorktreeLayer(target).pipe(
-      Layer.provide(nodeGitCommandLayer),
-      Layer.provide(NodeServices.layer)
-    )
-  ).pipe(Layer.provide(ownershipLayer))
-  const journalLayer = productionJournalStoreLayer.pipe(
+  const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
     Layer.provide(ownershipLayer)
   )
-  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer(
-    "ProductionBase"
-  ).pipe(Layer.provide(trackerMutationLayer))
+  const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(
+    nodeGitWorktreeLayer(target).pipe(Layer.provide(nodeGitCommandLayer), Layer.provide(NodeServices.layer))
+  ).pipe(Layer.provide(ownershipLayer))
+  const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
+  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("ProductionBase").pipe(
+    Layer.provide(trackerMutationLayer)
+  )
   const baseInterpreterLayer = Layer.effect(
     WorkflowInterpreter,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
       const gitWorktree = yield* GitWorktree
       return WorkflowInterpreter.of({
         ...interpreter,
         reconcileTaskWorktree: (operation) =>
-          runGitWorktreeReconciliation(
-            gitWorktree,
-            operation.plannedAttempt
-          ).pipe(
+          runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
             Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
           )
       })
     })
-  ).pipe(
-    Layer.provide(liveInterpreterLayer),
-    Layer.provide(gitWorktreeLayer)
+  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
+  const interpreterLayer = journaledWorkflowInterpreterLayer(runId, baseInterpreterLayer).pipe(
+    Layer.provide(journalLayer)
   )
-  const interpreterLayer = journaledWorkflowInterpreterLayer(
-    runId,
-    baseInterpreterLayer
-  ).pipe(Layer.provide(journalLayer))
   const recoveryAuthorityLayer = livePlannedAttemptRecoveryAuthorityLayer.pipe(
     Layer.provide(gitWorktreeLayer),
     Layer.provide(trackerMutationLayer),
@@ -115,7 +93,7 @@ export const productionWorkflowInterpreterLayer = <
   )
 
   return Layer.effectContext(
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       yield* CoordinatorOwnership
       const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
@@ -133,20 +111,17 @@ export const productionWorkflowInterpreterLayer = <
       if (issues.length > 0) {
         return yield* new StartupRecoveryBlocked({ issues })
       }
-      const otherUnfinishedRun = reductions.find((reduction) =>
-        reduction._tag === "ValidManagedHistory"
-        && reduction.runId !== runId
-        && hasUnfinishedManagedRunResponsibility(reduction.managedRun)
+      const otherUnfinishedRun = reductions.find(
+        (reduction) =>
+          reduction._tag === "ValidManagedHistory" &&
+          reduction.runId !== runId &&
+          hasUnfinishedManagedRunResponsibility(reduction.managedRun)
       )
-      if (
-        otherUnfinishedRun?._tag === "ValidManagedHistory"
-      ) {
+      if (otherUnfinishedRun?._tag === "ValidManagedHistory") {
         return yield* new StartupRecoveryBlocked({
-          issues: [{
-            _tag: "OtherUnfinishedManagedRunIssue",
-            requestedRunId: runId,
-            unfinishedRunId: otherUnfinishedRun.runId
-          }]
+          issues: [
+            { _tag: "OtherUnfinishedManagedRunIssue", requestedRunId: runId, unfinishedRunId: otherUnfinishedRun.runId }
+          ]
         })
       }
       const recovery = yield* makeManagedRecoveryActivation(runId)

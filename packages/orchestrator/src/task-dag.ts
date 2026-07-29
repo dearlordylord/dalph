@@ -16,19 +16,10 @@ import { encodeTaskRevisionFingerprint } from "./task-revision-fingerprint.js"
 export const ProjectionIssue = Schema.TaggedUnion({
   BoundaryDecodeFailed: { detail: Schema.String },
   DuplicateTask: { taskId: TaskId },
-  DuplicatePrerequisite: {
-    dependant: TaskId,
-    prerequisite: TaskId
-  },
-  MissingPrerequisite: {
-    dependant: TaskId,
-    prerequisite: TaskId
-  },
+  DuplicatePrerequisite: { dependant: TaskId, prerequisite: TaskId },
+  MissingPrerequisite: { dependant: TaskId, prerequisite: TaskId },
   SelfPrerequisite: { taskId: TaskId },
-  MissingParent: {
-    child: TaskId,
-    parent: TaskId
-  },
+  MissingParent: { child: TaskId, parent: TaskId },
   SelfParent: { taskId: TaskId },
   Cycle: { taskIds: Schema.Array(TaskId) },
   ContainmentCycle: { taskIds: Schema.Array(TaskId) }
@@ -57,10 +48,7 @@ export const TaskDagWire = Schema.Struct({
 export type TaskDagWire = typeof TaskDagWire.Type
 
 type ProjectionResult =
-  | {
-    readonly _tag: "Invalid"
-    readonly issues: ReadonlyArray<ProjectionIssue>
-  }
+  | { readonly _tag: "Invalid"; readonly issues: ReadonlyArray<ProjectionIssue> }
   | { readonly _tag: "Valid"; readonly snapshot: TaskDagSnapshot }
 
 interface TaskProjection {
@@ -70,12 +58,14 @@ interface TaskProjection {
 }
 
 const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): TaskRevision =>
-  encodeTaskRevisionFingerprint(JSON.stringify({
-    id: taskId,
-    lifecycle: projection.lifecycle._tag,
-    parentTaskId: projection.parentTaskId,
-    prerequisiteIds: sorted(projection.prerequisiteIds)
-  }))
+  encodeTaskRevisionFingerprint(
+    JSON.stringify({
+      id: taskId,
+      lifecycle: projection.lifecycle._tag,
+      parentTaskId: projection.parentTaskId,
+      prerequisiteIds: sorted(projection.prerequisiteIds)
+    })
+  )
 
 /**
  * Derives the opaque, diagnostically reversible task revision fingerprint bound
@@ -96,21 +86,13 @@ const sorted = (taskIds: Iterable<TaskId>): ReadonlyArray<TaskId> => [...taskIds
 
 const parentTaskIdOrder = Order.mapInput(
   Order.Tuple([Order.Boolean, Order.String]),
-  (parentTaskId: TaskId | null) =>
-    [
-      parentTaskId !== null,
-      parentTaskId ?? ""
-    ] as const
+  (parentTaskId: TaskId | null) => [parentTaskId !== null, parentTaskId ?? ""] as const
 )
 
 const compareTrackerTasks = Order.mapInput(
   Order.Tuple([Order.String, parentTaskIdOrder, Order.Array(compareTaskIds)]),
   (record: TrackerTask) =>
-    [
-      record.lifecycle._tag,
-      record.parentTaskId,
-      [...record.prerequisiteIds].sort(compareTaskIds)
-    ] as const
+    [record.lifecycle._tag, record.parentTaskId, [...record.prerequisiteIds].sort(compareTaskIds)] as const
 )
 
 const taskProjection = (
@@ -118,17 +100,12 @@ const taskProjection = (
   taskId: TaskId
 ): Option.Option<TaskProjection> => HashMap.get(tasks, taskId)
 
-const getMapValueOrThrow = <Key, Value>(
-  values: Map<Key, Value>,
-  key: Key
-): Value => Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
+const getMapValueOrThrow = <Key, Value>(values: Map<Key, Value>, key: Key): Value =>
+  Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
 
 const stronglyConnectedComponents = (
   tasks: HashMap.HashMap<TaskId, TaskProjection>,
-  adjacentTaskIds: (
-    taskId: TaskId,
-    projection: TaskProjection
-  ) => Iterable<TaskId>
+  adjacentTaskIds: (taskId: TaskId, projection: TaskProjection) => Iterable<TaskId>
 ): ReadonlyArray<ReadonlyArray<TaskId>> => {
   let nextIndex = 0
   const indexes = new Map<TaskId, number>()
@@ -151,26 +128,17 @@ const stronglyConnectedComponents = (
         visit(adjacentTaskId)
         lowLinks.set(
           taskId,
-          Math.min(
-            getMapValueOrThrow(lowLinks, taskId),
-            getMapValueOrThrow(lowLinks, adjacentTaskId)
-          )
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(lowLinks, adjacentTaskId))
         )
       } else if (onStack.has(adjacentTaskId)) {
         lowLinks.set(
           taskId,
-          Math.min(
-            getMapValueOrThrow(lowLinks, taskId),
-            getMapValueOrThrow(indexes, adjacentTaskId)
-          )
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(indexes, adjacentTaskId))
         )
       }
     }
 
-    if (
-      getMapValueOrThrow(lowLinks, taskId)
-        !== getMapValueOrThrow(indexes, taskId)
-    ) return
+    if (getMapValueOrThrow(lowLinks, taskId) !== getMapValueOrThrow(indexes, taskId)) return
 
     const component: Array<TaskId> = []
     while (stack.length > 0) {
@@ -205,9 +173,7 @@ export class TaskDagSnapshot {
 
     for (const record of records) {
       if (recordsById.has(record.id)) {
-        issues.push(
-          ProjectionIssue.cases.DuplicateTask.make({ taskId: record.id })
-        )
+        issues.push(ProjectionIssue.cases.DuplicateTask.make({ taskId: record.id }))
       } else {
         recordsById.set(record.id, record)
       }
@@ -220,41 +186,21 @@ export class TaskDagSnapshot {
 
       for (const prerequisite of prerequisiteIds) {
         if (prerequisite === previous) {
-          issues.push(
-            ProjectionIssue.cases.DuplicatePrerequisite.make({
-              dependant: taskId,
-              prerequisite
-            })
-          )
+          issues.push(ProjectionIssue.cases.DuplicatePrerequisite.make({ dependant: taskId, prerequisite }))
           continue
         }
         previous = prerequisite
         if (prerequisite === taskId) {
-          issues.push(
-            ProjectionIssue.cases.SelfPrerequisite.make({ taskId })
-          )
+          issues.push(ProjectionIssue.cases.SelfPrerequisite.make({ taskId }))
         } else if (!recordsById.has(prerequisite)) {
-          issues.push(
-            ProjectionIssue.cases.MissingPrerequisite.make({
-              dependant: taskId,
-              prerequisite
-            })
-          )
+          issues.push(ProjectionIssue.cases.MissingPrerequisite.make({ dependant: taskId, prerequisite }))
         }
       }
 
       if (record.parentTaskId === taskId) {
         issues.push(ProjectionIssue.cases.SelfParent.make({ taskId }))
-      } else if (
-        record.parentTaskId !== null
-        && !recordsById.has(record.parentTaskId)
-      ) {
-        issues.push(
-          ProjectionIssue.cases.MissingParent.make({
-            child: taskId,
-            parent: record.parentTaskId
-          })
-        )
+      } else if (record.parentTaskId !== null && !recordsById.has(record.parentTaskId)) {
+        issues.push(ProjectionIssue.cases.MissingParent.make({ child: taskId, parent: record.parentTaskId }))
       }
     }
 
@@ -268,24 +214,16 @@ export class TaskDagSnapshot {
     }
 
     issues.push(
-      ...stronglyConnectedComponents(
-        tasks,
-        (_taskId, projection) => projection.prerequisiteIds
-      ).map((taskIds) => ProjectionIssue.cases.Cycle.make({ taskIds })),
-      ...stronglyConnectedComponents(
-        tasks,
-        (_taskId, projection) =>
-          projection.parentTaskId === null
-            ? []
-            : [projection.parentTaskId]
+      ...stronglyConnectedComponents(tasks, (_taskId, projection) => projection.prerequisiteIds).map((taskIds) =>
+        ProjectionIssue.cases.Cycle.make({ taskIds })
+      ),
+      ...stronglyConnectedComponents(tasks, (_taskId, projection) =>
+        projection.parentTaskId === null ? [] : [projection.parentTaskId]
       ).map((taskIds) => ProjectionIssue.cases.ContainmentCycle.make({ taskIds }))
     )
     return issues.length > 0
       ? { _tag: "Invalid", issues }
-      : {
-        _tag: "Valid",
-        snapshot: new TaskDagSnapshot(decoded.revision, tasks)
-      }
+      : { _tag: "Valid", snapshot: new TaskDagSnapshot(decoded.revision, tasks) }
   }
 
   /** Returns normalized runnable task values, never provider-specific records. */
@@ -306,30 +244,20 @@ export class TaskDagSnapshot {
   }
 
   lifecycleOf(taskId: TaskId): Option.Option<TaskLifecycle> {
-    return Option.map(
-      taskProjection(this.tasks, taskId),
-      (projection) => projection.lifecycle
-    )
+    return Option.map(taskProjection(this.tasks, taskId), (projection) => projection.lifecycle)
   }
 
   parentTaskIdOf(taskId: TaskId): Option.Option<TaskId | null> {
-    return Option.map(
-      taskProjection(this.tasks, taskId),
-      (projection) => projection.parentTaskId
-    )
+    return Option.map(taskProjection(this.tasks, taskId), (projection) => projection.parentTaskId)
   }
 
   childrenOf(parentTaskId: TaskId): ReadonlyArray<TaskId> {
-    return this.taskIds().filter(
-      (taskId) => HashMap.getUnsafe(this.tasks, taskId).parentTaskId === parentTaskId
-    )
+    return this.taskIds().filter((taskId) => HashMap.getUnsafe(this.tasks, taskId).parentTaskId === parentTaskId)
   }
 
   prerequisitesOf(taskId: TaskId): ReadonlyArray<TaskId> {
     const projection = taskProjection(this.tasks, taskId)
-    return Option.isSome(projection)
-      ? sorted(projection.value.prerequisiteIds)
-      : []
+    return Option.isSome(projection) ? sorted(projection.value.prerequisiteIds) : []
   }
 
   dependantsOf(prerequisite: TaskId): ReadonlyArray<TaskId> {
@@ -341,9 +269,7 @@ export class TaskDagSnapshot {
     const remainingPrerequisites = new Map<TaskId, number>(
       taskIds.map((taskId) => [taskId, this.prerequisitesOf(taskId).length])
     )
-    const ready = taskIds.filter(
-      (taskId) => remainingPrerequisites.get(taskId) === 0
-    )
+    const ready = taskIds.filter((taskId) => remainingPrerequisites.get(taskId) === 0)
     const order: Array<TaskId> = []
 
     while (ready.length > 0) {
@@ -370,10 +296,7 @@ export class TaskDagSnapshot {
       }
       return this.prerequisitesOf(taskId).every((prerequisite) => {
         const prerequisiteLifecycle = this.lifecycleOf(prerequisite)
-        return (
-          Option.isSome(prerequisiteLifecycle)
-          && isDependencySatisfied(prerequisiteLifecycle.value)
-        )
+        return Option.isSome(prerequisiteLifecycle) && isDependencySatisfied(prerequisiteLifecycle.value)
       })
     })
   }
@@ -395,24 +318,16 @@ export class TaskDagSnapshot {
   }
 
   canonicalJson(): string {
-    return JSON.stringify(
-      Schema.encodeUnknownSync(TaskDagWire)(this.toWire())
-    )
+    return JSON.stringify(Schema.encodeUnknownSync(TaskDagWire)(this.toWire()))
   }
 }
 
-const projectDecodedSnapshot = (
-  decoded: Result.Result<typeof TrackerSnapshot.Type, unknown>
-): ProjectionResult =>
+const projectDecodedSnapshot = (decoded: Result.Result<typeof TrackerSnapshot.Type, unknown>): ProjectionResult =>
   Result.isFailure(decoded)
     ? {
-      _tag: "Invalid",
-      issues: [
-        ProjectionIssue.cases.BoundaryDecodeFailed.make({
-          detail: String(decoded.failure)
-        })
-      ]
-    }
+        _tag: "Invalid",
+        issues: [ProjectionIssue.cases.BoundaryDecodeFailed.make({ detail: String(decoded.failure) })]
+      }
     : TaskDagSnapshot.project(decoded.success)
 
 export const projectTrackerSnapshot = (input: unknown): ProjectionResult =>

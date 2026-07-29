@@ -33,10 +33,7 @@ const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
   tokenPrefix: "cli-test-claim"
 })
 
-const runArguments = (
-  args: ReadonlyArray<string>,
-  outputLayer: Layer.Layer<TraceOutput>
-) =>
+const runArguments = (args: ReadonlyArray<string>, outputLayer: Layer.Layer<TraceOutput>) =>
   runCli(args).pipe(
     Effect.provide(dryRunWorkflowInterpreterLayer),
     Effect.provide(workflowTraceOutputLayer),
@@ -52,15 +49,13 @@ const runWithOutput = (target: string, outputLayer: Layer.Layer<TraceOutput>) =>
   runArguments(["run", target, "--dry"], outputLayer)
 
 it.effect("runs the dry CLI through the planned-attempt workflow", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     yield* runWithOutput(
       fixture("singleton"),
       Layer.succeed(
         TraceOutput,
-        TraceOutput.of({
-          writeLine: (line) => Ref.update(lines, (current) => [...current, line])
-        })
+        TraceOutput.of({ writeLine: (line) => Ref.update(lines, (current) => [...current, line]) })
       )
     )
 
@@ -76,29 +71,26 @@ it.effect("runs the dry CLI through the planned-attempt workflow", () =>
       "OperationSelected",
       "TaskWorktreeReconciliationSimulated"
     ])
-  }))
+  })
+)
 
 it.effect("requires the dry flag before running any workflow", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const failure = yield* runArguments(
       ["run", fixture("empty")],
-      Layer.succeed(
-        TraceOutput,
-        TraceOutput.of({ writeLine: () => Effect.void })
-      )
+      Layer.succeed(TraceOutput, TraceOutput.of({ writeLine: () => Effect.void }))
     ).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(CliUsageError)
-  }))
+  })
+)
 
 it.effect("propagates typed trace output failures", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const failure = new TraceOutputError({ detail: "write failed" })
     const observed = yield* runWithOutput(
       fixture("empty"),
-      Layer.succeed(
-        TraceOutput,
-        TraceOutput.of({ writeLine: () => Effect.fail(failure) })
-      )
+      Layer.succeed(TraceOutput, TraceOutput.of({ writeLine: () => Effect.fail(failure) }))
     ).pipe(Effect.flip)
     expect(observed).toBe(failure)
-  }))
+  })
+)

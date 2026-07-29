@@ -4,31 +4,16 @@ type JournalEventTag = WorkflowJournalEvent["_tag"]
 
 type ManagedHistoryTransitionRule =
   | { readonly _tag: "Intent" }
-  | {
-    readonly _tag: "Outcome"
-    readonly requiredIntent: JournalEventTag
-  }
+  | { readonly _tag: "Outcome"; readonly requiredIntent: JournalEventTag }
 
-const transitionRuleByEventKind: Partial<
-  Record<JournalEventTag, ManagedHistoryTransitionRule>
-> = {
-  TaskClaimAcquired: {
-    _tag: "Outcome",
-    requiredIntent: "TaskClaimAcquisitionIntended"
-  },
+const transitionRuleByEventKind: Partial<Record<JournalEventTag, ManagedHistoryTransitionRule>> = {
+  TaskClaimAcquired: { _tag: "Outcome", requiredIntent: "TaskClaimAcquisitionIntended" },
   TaskClaimAcquisitionIntended: { _tag: "Intent" },
-  TaskWorktreeReady: {
-    _tag: "Outcome",
-    requiredIntent: "TaskWorktreeReconciliationIntended"
-  },
+  TaskWorktreeReady: { _tag: "Outcome", requiredIntent: "TaskWorktreeReconciliationIntended" },
   TaskWorktreeReconciliationIntended: { _tag: "Intent" },
   TrackerGraphObservationIntentRecorded: { _tag: "Intent" },
-  TrackerGraphOutcomeObserved: {
-    _tag: "Outcome",
-    requiredIntent: "TrackerGraphObservationIntentRecorded"
-  }
+  TrackerGraphOutcomeObserved: { _tag: "Outcome", requiredIntent: "TrackerGraphObservationIntentRecorded" }
 }
 
-export const managedHistoryTransitionRuleFor = (
-  eventKind: JournalEventTag
-): ManagedHistoryTransitionRule | undefined => transitionRuleByEventKind[eventKind]
+export const managedHistoryTransitionRuleFor = (eventKind: JournalEventTag): ManagedHistoryTransitionRule | undefined =>
+  transitionRuleByEventKind[eventKind]

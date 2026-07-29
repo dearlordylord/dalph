@@ -28,13 +28,7 @@ const identityIssue = (
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(
-    new ManagedHistoryIdentityIssue({
-      detail,
-      position,
-      runId
-    })
-  )
+  issues.push(new ManagedHistoryIdentityIssue({ detail, position, runId }))
 }
 
 const semanticIssue = (
@@ -43,26 +37,17 @@ const semanticIssue = (
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(
-    new ManagedHistorySemanticIssue({
-      detail,
-      position,
-      runId
-    })
-  )
+  issues.push(new ManagedHistorySemanticIssue({ detail, position, runId }))
 }
 
 interface FoldIndexes {
   readonly executorReportOrdinals: Map<AttemptId, number>
-  readonly executorStarts: Map<AttemptId, {
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly position: JournalPosition
-  }>
-  readonly plans: Map<AttemptId, PlannedTaskAttempt>
-  readonly seenEventKindsByOperation: Map<
-    OperationId,
-    ReadonlySet<WorkflowJournalEvent["_tag"]>
+  readonly executorStarts: Map<
+    AttemptId,
+    { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
+  readonly plans: Map<AttemptId, PlannedTaskAttempt>
+  readonly seenEventKindsByOperation: Map<OperationId, ReadonlySet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: Set<JournalRecordKey>
   readonly seenOperationIds: Set<OperationId>
   readonly terminalExecutorAttempts: Set<AttemptId>
@@ -95,12 +80,7 @@ const validateRecordEnvelope = (
     )
   }
   if (record.runId !== runId) {
-    identityIssue(
-      issues,
-      runId,
-      record.position,
-      `record belongs to run ${record.runId}`
-    )
+    identityIssue(issues, runId, record.position, `record belongs to run ${record.runId}`)
   }
   const descriptor = describeJournalEvent(record.event)
   if (record.key !== descriptor.expectedKey) {
@@ -112,12 +92,7 @@ const validateRecordEnvelope = (
     )
   }
   if (indexes.seenKeys.has(record.key)) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `duplicate journal record key ${record.key}`
-    )
+    semanticIssue(issues, runId, record.position, `duplicate journal record key ${record.key}`)
     return false
   }
   indexes.seenKeys.add(record.key)
@@ -143,9 +118,7 @@ const validateOperationEvent = (
     }
   }
   for (const requiredKind of descriptor.requiredPredecessorKinds) {
-    const kinds = indexes.seenEventKindsByOperation.get(
-      descriptor.operationId
-    )
+    const kinds = indexes.seenEventKindsByOperation.get(descriptor.operationId)
     if (!kinds?.has(requiredKind)) {
       semanticIssue(
         issues,
@@ -156,8 +129,8 @@ const validateOperationEvent = (
     }
   }
   if (
-    descriptor.recordPredecessor._tag === "RequiredRecordPredecessor"
-    && !indexes.seenKeys.has(descriptor.recordPredecessor.key)
+    descriptor.recordPredecessor._tag === "RequiredRecordPredecessor" &&
+    !indexes.seenKeys.has(descriptor.recordPredecessor.key)
   ) {
     semanticIssue(
       issues,
@@ -169,12 +142,7 @@ const validateOperationEvent = (
   indexes.seenOperationIds.add(descriptor.operationId)
   indexes.seenEventKindsByOperation.set(
     descriptor.operationId,
-    new Set([
-      ...(indexes.seenEventKindsByOperation.get(
-        descriptor.operationId
-      ) ?? []),
-      record.event._tag
-    ])
+    new Set([...(indexes.seenEventKindsByOperation.get(descriptor.operationId) ?? []), record.event._tag])
   )
 }
 
@@ -209,27 +177,19 @@ const validateClaim = (
 ): void => {
   if (record.event._tag !== "TaskClaimAcquired") return
   const acquired = record.event.claim
-  const intent = records.find(({ event }) =>
-    event._tag === "TaskClaimAcquisitionIntended"
-    && event.operation.acquisition.operationId
-      === acquired.operationId
+  const intent = records.find(
+    ({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === acquired.operationId
   )?.event
-  const intended = intent?._tag === "TaskClaimAcquisitionIntended"
-    ? intent.operation.acquisition
-    : undefined
+  const intended = intent?._tag === "TaskClaimAcquisitionIntended" ? intent.operation.acquisition : undefined
   if (
-    intended === undefined
-    || acquired.operationId !== intended.operationId
-    || acquired.owner !== intended.owner
-    || acquired.taskId !== intended.taskId
-    || acquired.token !== intended.token
+    intended === undefined ||
+    acquired.operationId !== intended.operationId ||
+    acquired.owner !== intended.owner ||
+    acquired.taskId !== intended.taskId ||
+    acquired.token !== intended.token
   ) {
-    identityIssue(
-      issues,
-      runId,
-      record.position,
-      `acquired task claim contradicts operation ${acquired.operationId}`
-    )
+    identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
   }
 }
 
@@ -243,10 +203,7 @@ const validateExecutorEvent = (
   if (event._tag === "PlannedAttemptExecutorWorkStarted") {
     const attemptId = event.plannedAttempt.attemptId
     const plan = indexes.plans.get(attemptId)
-    if (
-      plan === undefined
-      || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)
-    ) {
+    if (plan === undefined || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)) {
       semanticIssue(
         issues,
         runId,
@@ -256,28 +213,24 @@ const validateExecutorEvent = (
     }
     const priorStart = indexes.executorStarts.get(attemptId)
     if (priorStart !== undefined) {
-      issues.push(duplicateUnfinishedTaskAttemptIssue(
-        runId,
-        priorStart.plannedAttempt,
-        priorStart.position,
-        event.plannedAttempt,
-        record.position
-      ))
+      issues.push(
+        duplicateUnfinishedTaskAttemptIssue(
+          runId,
+          priorStart.plannedAttempt,
+          priorStart.position,
+          event.plannedAttempt,
+          record.position
+        )
+      )
     } else {
-      indexes.executorStarts.set(attemptId, {
-        plannedAttempt: event.plannedAttempt,
-        position: record.position
-      })
+      indexes.executorStarts.set(attemptId, { plannedAttempt: event.plannedAttempt, position: record.position })
     }
     return
   }
   if (event._tag !== "PlannedAttemptExecutorWorkReported") return
   const attemptId = event.report.correlation.attemptId
   const start = indexes.executorStarts.get(attemptId)
-  if (
-    start === undefined
-    || event.report.correlation.runId !== start.plannedAttempt.runId
-  ) {
+  if (start === undefined || event.report.correlation.runId !== start.plannedAttempt.runId) {
     semanticIssue(
       issues,
       runId,
@@ -285,9 +238,7 @@ const validateExecutorEvent = (
       `executor report for attempt ${attemptId} has no prior matching executor-work start`
     )
   }
-  const expectedOrdinal = (
-    indexes.executorReportOrdinals.get(attemptId) ?? 0
-  ) + 1
+  const expectedOrdinal = (indexes.executorReportOrdinals.get(attemptId) ?? 0) + 1
   if (event.ordinal !== expectedOrdinal) {
     semanticIssue(
       issues,
@@ -317,29 +268,25 @@ const validateOneUnfinishedAttemptPerTask = (
 ): void => {
   const unfinishedByTask = new Map<
     TaskId,
-    {
-      readonly plannedAttempt: PlannedTaskAttempt
-      readonly position: JournalPosition
-    }
+    { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >()
   for (const [attemptId, start] of indexes.executorStarts) {
     if (indexes.terminalExecutorAttempts.has(attemptId)) continue
     const taskId = start.plannedAttempt.taskId
     const prior = unfinishedByTask.get(taskId)
     if (prior === undefined) {
-      unfinishedByTask.set(taskId, {
-        plannedAttempt: start.plannedAttempt,
-        position: start.position
-      })
+      unfinishedByTask.set(taskId, { plannedAttempt: start.plannedAttempt, position: start.position })
       continue
     }
-    issues.push(duplicateUnfinishedTaskAttemptIssue(
-      runId,
-      prior.plannedAttempt,
-      prior.position,
-      start.plannedAttempt,
-      start.position
-    ))
+    issues.push(
+      duplicateUnfinishedTaskAttemptIssue(
+        runId,
+        prior.plannedAttempt,
+        prior.position,
+        start.plannedAttempt,
+        start.position
+      )
+    )
   }
 }
 
@@ -354,18 +301,9 @@ export const reduceManagedHistory = (
   const issues = new Array<ManagedHistoryIssue>()
   const indexes = emptyIndexes()
   records.forEach((record, index) => {
-    const unique = validateRecordEnvelope(
-      record,
-      index,
-      runId,
-      indexes,
-      issues
-    )
+    const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
     const descriptor = describeJournalEvent(record.event)
-    if (
-      descriptor._tag === "ControlCommandEventDescriptor"
-      && descriptor.runId !== runId
-    ) {
+    if (descriptor._tag === "ControlCommandEventDescriptor" && descriptor.runId !== runId) {
       identityIssue(
         issues,
         runId,
@@ -373,10 +311,7 @@ export const reduceManagedHistory = (
         `control command ${descriptor.commandId} binds run ${descriptor.runId}`
       )
     }
-    if (
-      descriptor._tag === "PlannedAttemptExecutorEventDescriptor"
-      && descriptor.correlation.runId !== runId
-    ) {
+    if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
       identityIssue(
         issues,
         runId,
@@ -397,12 +332,7 @@ export const reduceManagedHistory = (
   })
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   if (issues.length > 0) {
-    return {
-      _tag: "InvalidManagedHistory",
-      issues,
-      records,
-      runId
-    }
+    return { _tag: "InvalidManagedHistory", issues, records, runId }
   }
   return {
     _tag: "ValidManagedHistory",

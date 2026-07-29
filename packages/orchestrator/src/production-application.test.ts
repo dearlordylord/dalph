@@ -67,54 +67,30 @@ import {
 
 it.effect("installs the running-then-terminal coarse fake in the production-shaped composition", () =>
   Effect.scoped(
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-production-fake-"
-      })
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-fake-" })
       const git = yield* GitCommand
       yield* git.runInWorktree(directory, ["init"])
-      yield* git.runInWorktree(directory, [
-        "config",
-        "user.email",
-        "dalph@example.invalid"
-      ])
-      yield* git.runInWorktree(directory, [
-        "config",
-        "user.name",
-        "Dalph Test"
-      ])
-      yield* fileSystem.writeFileString(
-        `${directory}/README.md`,
-        "production-shaped fake\n"
-      )
+      yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+      yield* fileSystem.writeFileString(`${directory}/README.md`, "production-shaped fake\n")
       yield* git.runInWorktree(directory, ["add", "README.md"])
       yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
-      const baseSha = GitCommitSha.make(
-        (yield* git.runInWorktree(directory, ["rev-parse", "HEAD"]))
-          .stdout.trim()
-      )
+      const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
       const runId = RunId.make("production-fake-run")
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("production-fake-attempt"),
         baseSha,
-        branch: TaskBranchRef.make(
-          "refs/heads/dalph/production-fake-attempt"
-        ),
-        executor: TaskExecutorLocator.make(
-          "executor:production-controlled-fake"
-        ),
+        branch: TaskBranchRef.make("refs/heads/dalph/production-fake-attempt"),
+        executor: TaskExecutorLocator.make("executor:production-controlled-fake"),
         runId,
         taskId: TaskId.make("A"),
         taskRevision: TaskRevision.make("revision-A"),
-        worktree: WorktreeLocator.make(
-          `${directory}/worktree`
-        )
+        worktree: WorktreeLocator.make(`${directory}/worktree`)
       })
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-      const filename = JournalDatabaseLocator.make(
-        `${directory}/journal.sqlite`
-      )
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       yield* git.runInWorktree(directory, [
         "worktree",
         "add",
@@ -129,10 +105,7 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         taskId: plannedAttempt.taskId,
         token: ClaimToken.make("production-token")
       }
-      const claimOperation = makeTaskClaimAcquisitionOperation({
-        acquisition,
-        predecessorOperationIds: []
-      })
+      const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
       const observation = makeTrackerGraphObservationOperation(
         OperationId.make("production-observation"),
         FixtureTarget.make("production-target"),
@@ -150,15 +123,12 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         predecessorOperationIds: [plan.operationId]
       })
       const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-      yield* Effect.gen(function*() {
+      yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         yield* journal.append(
           runId,
           intentRecordKey(acquisition.operationId),
-          TaskClaimAcquisitionIntendedEvent.make({
-            operation: claimOperation,
-            version: workflowJournalEventVersion
-          })
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
         )
         yield* journal.append(
           runId,
@@ -185,18 +155,12 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         yield* journal.append(
           runId,
           attemptPlanRecordKey(plannedAttempt.attemptId),
-          TaskAttemptPlannedEvent.make({
-            operation: plan,
-            version: workflowJournalEventVersion
-          })
+          TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
         )
         yield* journal.append(
           runId,
           intentRecordKey(worktree.operationId),
-          TaskWorktreeReconciliationIntendedEvent.make({
-            operation: worktree,
-            version: workflowJournalEventVersion
-          })
+          TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
         )
         yield* journal.append(
           runId,
@@ -214,25 +178,15 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         )
         yield* journal.append(
           runId,
-          plannedAttemptExecutorWorkStartedRecordKey(
-            plannedAttempt.attemptId
-          ),
-          PlannedAttemptExecutorWorkStartedEvent.make({
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
+          plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
+          PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
         )
         yield* journal.append(
           runId,
-          plannedAttemptExecutorWorkReportedRecordKey(
-            plannedAttempt.attemptId,
-            runningOrdinal
-          ),
+          plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, runningOrdinal),
           PlannedAttemptExecutorWorkReportedEvent.make({
             ordinal: runningOrdinal,
-            report: PlannedAttemptExecutorReport.cases.Running.make({
-              correlation
-            }),
+            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
             version: workflowJournalEventVersion
           })
         )
@@ -250,67 +204,36 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         trackerLayer
       ).pipe(
-        Layer.provide(
-          Layer.succeed(
-            TrackerGraphReader,
-            TrackerGraphReader.of({
-              read: () => Effect.die("unused")
-            })
-          )
-        ),
-        Layer.provide(
-          Layer.succeed(
-            WorkflowTrace,
-            WorkflowTrace.of({ emit: () => Effect.void })
-          )
-        )
+        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
-      yield* Effect.gen(function*() {
+      yield* Effect.gen(function* () {
         yield* (yield* WorkflowInterpreter).reconcileTaskWorktree(worktree)
-        yield* activateRecoveredResponsibilities(
-          runId,
-          TaskWorkCapacity.make(1)
-        )
+        yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1))
       }).pipe(
         Effect.provide(application),
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              DALPH_JOURNAL_DATABASE: filename
-            })
-          )
-        )
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
-      const records = yield* Effect.gen(function*() {
+      const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       expect(records.at(-1)?.event).toMatchObject({
         _tag: "PlannedAttemptExecutorWorkReported",
-        report: {
-          _tag: "Terminal",
-          correlation,
-          result: { _tag: "Completed" }
-        }
+        report: { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
       })
-    }).pipe(
-      Effect.provide(nodeGitCommandLayer),
-      Effect.provide(NodeServices.layer)
-    )
-  ))
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("blocks startup when any preserved run has an invalid causal history", () =>
   Effect.scoped(
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-production-invalid-history-"
-      })
-      const filename = JournalDatabaseLocator.make(
-        `${directory}/journal.sqlite`
-      )
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-invalid-history-" })
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const invalidRunId = RunId.make("invalid-preserved-run")
       const missingIntent = OperationId.make("missing-observation-intent")
-      yield* Effect.gen(function*() {
+      yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const validObservation = makeTrackerGraphObservationOperation(
           OperationId.make("valid-preserved-observation"),
@@ -330,41 +253,19 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
             taskIds: []
           })
         )
-      }).pipe(
-        Effect.provide(
-          sqliteJournalStoreLayer({ filename })
-        )
-      )
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
 
       const application = productionWorkflowInterpreterLayer(
         RunId.make("current-production-run"),
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(
-          Layer.succeed(
-            TrackerGraphReader,
-            TrackerGraphReader.of({
-              read: () => Effect.die("unused")
-            })
-          )
-        ),
-        Layer.provide(
-          Layer.succeed(
-            WorkflowTrace,
-            WorkflowTrace.of({ emit: () => Effect.void })
-          )
-        )
+        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       const blocked = yield* PlannedAttemptExecutor.pipe(
         Effect.provide(application),
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              DALPH_JOURNAL_DATABASE: filename
-            })
-          )
-        ),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
         Effect.flip
       )
       expect(blocked._tag).toBe("StartupRecoveryBlocked")
@@ -373,18 +274,15 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
       }
       expect(blocked.issues).not.toHaveLength(0)
     }).pipe(Effect.provide(NodeServices.layer))
-  ))
+  )
+)
 
 it.effect("blocks startup instead of ignoring another run's unfinished responsibility", () =>
   Effect.scoped(
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-production-other-run-"
-      })
-      const filename = JournalDatabaseLocator.make(
-        `${directory}/journal.sqlite`
-      )
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-other-run-" })
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const unfinishedRunId = RunId.make("other-unfinished-run")
       const unfinishedAcquisition = {
         operationId: OperationId.make("other-unfinished-claim"),
@@ -392,7 +290,7 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
         taskId: TaskId.make("other-unfinished-task"),
         token: ClaimToken.make("other-unfinished-token")
       }
-      yield* Effect.gen(function*() {
+      yield* Effect.gen(function* () {
         yield* (yield* JournalStore).append(
           unfinishedRunId,
           intentRecordKey(unfinishedAcquisition.operationId),
@@ -412,53 +310,28 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(
-          Layer.succeed(
-            TrackerGraphReader,
-            TrackerGraphReader.of({
-              read: () => Effect.die("unused")
-            })
-          )
-        ),
-        Layer.provide(
-          Layer.succeed(
-            WorkflowTrace,
-            WorkflowTrace.of({ emit: () => Effect.void })
-          )
-        )
+        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       const blocked = yield* PlannedAttemptExecutor.pipe(
         Effect.provide(application),
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              DALPH_JOURNAL_DATABASE: filename
-            })
-          )
-        ),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
         Effect.flip
       )
       expect(blocked).toMatchObject({
         _tag: "StartupRecoveryBlocked",
-        issues: [{
-          _tag: "OtherUnfinishedManagedRunIssue",
-          requestedRunId,
-          unfinishedRunId
-        }]
+        issues: [{ _tag: "OtherUnfinishedManagedRunIssue", requestedRunId, unfinishedRunId }]
       })
     }).pipe(Effect.provide(NodeServices.layer))
-  ))
+  )
+)
 
 it.effect("does not block startup for another run's completed responsibility", () =>
   Effect.scoped(
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-production-completed-run-"
-      })
-      const filename = JournalDatabaseLocator.make(
-        `${directory}/journal.sqlite`
-      )
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-completed-run-" })
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const completedRunId = RunId.make("other-completed-run")
       const completedAcquisition = {
         operationId: OperationId.make("other-completed-claim"),
@@ -470,15 +343,12 @@ it.effect("does not block startup for another run's completed responsibility", (
         acquisition: completedAcquisition,
         predecessorOperationIds: []
       })
-      yield* Effect.gen(function*() {
+      yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         yield* journal.append(
           completedRunId,
           intentRecordKey(completedAcquisition.operationId),
-          TaskClaimAcquisitionIntendedEvent.make({
-            operation,
-            version: workflowJournalEventVersion
-          })
+          TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion })
         )
         yield* journal.append(
           completedRunId,
@@ -495,32 +365,15 @@ it.effect("does not block startup for another run's completed responsibility", (
         GitCommonDirectoryTarget.make(directory),
         controlledTrackerMutationLayer
       ).pipe(
-        Layer.provide(
-          Layer.succeed(
-            TrackerGraphReader,
-            TrackerGraphReader.of({
-              read: () => Effect.die("unused")
-            })
-          )
-        ),
-        Layer.provide(
-          Layer.succeed(
-            WorkflowTrace,
-            WorkflowTrace.of({ emit: () => Effect.void })
-          )
-        )
+        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({ read: () => Effect.die("unused") }))),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       expect(
         yield* PlannedAttemptExecutor.pipe(
           Effect.provide(application),
-          Effect.provide(
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({
-                DALPH_JOURNAL_DATABASE: filename
-              })
-            )
-          )
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
         )
       ).toBeDefined()
     }).pipe(Effect.provide(NodeServices.layer))
-  ))
+  )
+)

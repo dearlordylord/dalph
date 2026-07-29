@@ -40,23 +40,21 @@ const plan = PlannedTaskAttempt.make({
 
 describe("GitWorktree contract", () => {
   it.effect("creates the exact absent worktree and proves Base is HEAD's ancestor", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const git = yield* GitWorktree
       const testGit = yield* TestGitWorktree
 
       const ready = yield* runGitWorktreeReconciliation(git, plan)
 
-      expect(ready).toEqual(PlannedWorktreeReady.make({
-        baseSha,
-        branch: plan.branch,
-        headSha: baseSha,
-        worktree: plan.worktree
-      }))
+      expect(ready).toEqual(
+        PlannedWorktreeReady.make({ baseSha, branch: plan.branch, headSha: baseSha, worktree: plan.worktree })
+      )
       expect(yield* testGit.createRequests()).toEqual([plan])
-    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))))
+    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))))
+  )
 
   it.effect("rediscovers an exact existing worktree without creating another", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const git = yield* GitWorktree
       const testGit = yield* TestGitWorktree
       const existing = PlannedWorktreeReady.make({
@@ -68,33 +66,46 @@ describe("GitWorktree contract", () => {
 
       expect(yield* runGitWorktreeReconciliation(git, plan)).toEqual(existing)
       expect(yield* testGit.createRequests()).toEqual([])
-    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedWorktreeReady.make({
-      baseSha,
-      branch: plan.branch,
-      headSha: GitCommitSha.make("abcdef0123456789abcdef0123456789abcdef01"),
-      worktree: plan.worktree
-    })))))
+    }).pipe(
+      Effect.provide(
+        gitWorktreeTestLayer(
+          PlannedWorktreeReady.make({
+            baseSha,
+            branch: plan.branch,
+            headSha: GitCommitSha.make("abcdef0123456789abcdef0123456789abcdef01"),
+            worktree: plan.worktree
+          })
+        )
+      )
+    )
+  )
 
   it.effect("rejects mismatched branch-ready evidence without creating resources", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const git = yield* GitWorktree
       const testGit = yield* TestGitWorktree
       const failure = yield* runGitWorktreeReconciliation(git, plan).pipe(Effect.flip)
 
       expect(failure).toBeInstanceOf(ContradictoryWorktreeState)
-      yield* testGit.setObservation(PlannedBranchReady.make({
-        baseSha: GitCommitSha.make("ffffffffffffffffffffffffffffffffffffffff"),
-        branch: plan.branch,
-        headSha: baseSha
-      }))
-      expect(yield* runGitWorktreeReconciliation(git, plan).pipe(Effect.flip))
-        .toBeInstanceOf(ContradictoryWorktreeState)
+      yield* testGit.setObservation(
+        PlannedBranchReady.make({
+          baseSha: GitCommitSha.make("ffffffffffffffffffffffffffffffffffffffff"),
+          branch: plan.branch,
+          headSha: baseSha
+        })
+      )
+      expect(yield* runGitWorktreeReconciliation(git, plan).pipe(Effect.flip)).toBeInstanceOf(
+        ContradictoryWorktreeState
+      )
       expect(yield* testGit.createRequests()).toEqual([])
-    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedBranchReady.make({
-      baseSha,
-      branch: TaskBranchRef.make("refs/heads/foreign"),
-      headSha: baseSha
-    })))))
+    }).pipe(
+      Effect.provide(
+        gitWorktreeTestLayer(
+          PlannedBranchReady.make({ baseSha, branch: TaskBranchRef.make("refs/heads/foreign"), headSha: baseSha })
+        )
+      )
+    )
+  )
 
   it.effect("rejects a ready proof for a different planned resource", () => {
     const foreignProof = PlannedWorktreeReady.make({
@@ -110,10 +121,9 @@ describe("GitWorktree contract", () => {
         readPlannedWorktree: () => Effect.succeed(foreignProof)
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
-      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan)))
-        .toBeInstanceOf(ContradictoryWorktreeState)
+      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toBeInstanceOf(ContradictoryWorktreeState)
     }).pipe(Effect.provide(layer))
   })
 
@@ -131,7 +141,7 @@ describe("GitWorktree contract", () => {
         readPlannedWorktree: () => Effect.fail(mismatch)
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
       expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(mismatch)
     }).pipe(Effect.provide(layer))
@@ -151,7 +161,7 @@ describe("GitWorktree contract", () => {
         readPlannedWorktree: () => Effect.fail(conflict)
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
       expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(conflict)
     }).pipe(Effect.provide(layer))
@@ -174,7 +184,7 @@ describe("GitWorktree contract", () => {
           })
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
       expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(failure)
       expect(reads).toBe(2)
@@ -197,14 +207,14 @@ describe("GitWorktree contract", () => {
             return reads === 1
               ? PlannedWorktreeAbsent.make({})
               : PlannedBranchReady.make({
-                baseSha,
-                branch: TaskBranchRef.make("refs/heads/foreign-after-create"),
-                headSha: baseSha
-              })
+                  baseSha,
+                  branch: TaskBranchRef.make("refs/heads/foreign-after-create"),
+                  headSha: baseSha
+                })
           })
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
       const failure = yield* runGitWorktreeReconciliation(git, plan).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(ContradictoryWorktreeState)
@@ -221,15 +231,14 @@ describe("GitWorktree contract", () => {
         readPlannedWorktree: () => Effect.succeed(PlannedWorktreeAbsent.make({}))
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const git = yield* GitWorktree
-      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan)))
-        .toBeInstanceOf(GitWorktreeCreateFailure)
+      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toBeInstanceOf(GitWorktreeCreateFailure)
     }).pipe(Effect.provide(layer))
   })
 
   it.effect("lets tests replace the next authoritative observation", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const git = yield* GitWorktree
       const testGit = yield* TestGitWorktree
       const ready = PlannedWorktreeReady.make({
@@ -240,5 +249,6 @@ describe("GitWorktree contract", () => {
       })
       yield* testGit.setObservation(ready)
       expect(yield* git.readPlannedWorktree(plan)).toEqual(ready)
-    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))))
+    }).pipe(Effect.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))))
+  )
 })

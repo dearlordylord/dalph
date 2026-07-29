@@ -17,64 +17,31 @@ import type { ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
-  CheckTaskClaim: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  CommitFreshTaskClaimIntent: {
-    readonly taskId: TaskId
-    readonly taskRevision: TaskRevision
-  }
-  ContinueFreshWorkflowOperation: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  StartPlannedAttemptExecutorWork: {
-    readonly plannedAttempt: PlannedTaskAttempt
-  }
-  ContinuePlannedAttemptExecutorWork: {
-    readonly plannedAttempt: PlannedTaskAttempt
-  }
-  SuspendPlannedAttemptExecutorWork: {
-    readonly plannedAttempt: PlannedTaskAttempt
-  }
-  ReconcileTaskClaim: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  ReconcileTaskWorktree: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
+  CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
+  CommitFreshTaskClaimIntent: { readonly taskId: TaskId; readonly taskRevision: TaskRevision }
+  ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
+  StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
+  ReconcileTaskWorktree: { readonly operationId: OperationId; readonly taskId: TaskId }
 }>
 
 export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransition>()
 
-export const runnableTransitionTaskId = (
-  transition: RunnableFrontierTransition
-): TaskId =>
-  transition._tag === "ContinuePlannedAttemptExecutorWork"
-    || transition._tag === "SuspendPlannedAttemptExecutorWork"
-    || transition._tag === "StartPlannedAttemptExecutorWork"
+export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId =>
+  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+  transition._tag === "SuspendPlannedAttemptExecutorWork" ||
+  transition._tag === "StartPlannedAttemptExecutorWork"
     ? transition.plannedAttempt.taskId
     : transition.taskId
 
-export const runnableTransitionOperationId = (
-  transition: RunnableFrontierTransition
-): OperationId | undefined =>
-  "operationId" in transition
-    ? transition.operationId
-    : undefined
+export const runnableTransitionOperationId = (transition: RunnableFrontierTransition): OperationId | undefined =>
+  "operationId" in transition ? transition.operationId : undefined
 
 export type FrontierExplanation = Data.TaggedEnum<{
-  CapacityWait: {
-    readonly taskId: TaskId
-    readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-  }
-  ActivationInProgress: {
-    readonly operationId: Option.Option<OperationId>
-    readonly taskId: TaskId
-  }
+  CapacityWait: { readonly taskId: TaskId; readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged" }
+  ActivationInProgress: { readonly operationId: Option.Option<OperationId>; readonly taskId: TaskId }
   DependencyWait: {
     readonly operationId: OperationId
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
@@ -86,10 +53,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorWorkTerminal: {
-    readonly report: Extract<
-      PlannedAttemptExecutorReport,
-      { readonly _tag: "Terminal" }
-    >
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorWorkTypedIssue: {
@@ -101,15 +65,8 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed"
     readonly taskId: TaskId
   }
-  Isolation: {
-    readonly operationId: OperationId
-    readonly reason: "ForeignClaim"
-    readonly taskId: TaskId
-  }
-  Pause: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
+  Isolation: { readonly operationId: OperationId; readonly reason: "ForeignClaim"; readonly taskId: TaskId }
+  Pause: { readonly operationId: OperationId; readonly taskId: TaskId }
   Relinquishment: {
     readonly operationId: OperationId
     readonly reason: "AuthorizedHandoff" | "FreshAuthorityRevocation"
@@ -120,10 +77,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly outcome: "ResponsibilityCompleted" | "TrackerCompleted"
     readonly taskId: TaskId
   }
-  TypedIssue: {
-    readonly operationId: OperationId
-    readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts"
-  }
+  TypedIssue: { readonly operationId: OperationId; readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts" }
   UnreadableFactWait: {
     readonly boundary: "Executor" | "Git" | "TaskTracker"
     readonly operationId: OperationId
@@ -135,10 +89,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
 export const FrontierExplanation = Data.taggedEnum<FrontierExplanation>()
 
 export interface RunnableFrontierInput {
-  readonly freshEligibleTasks: ReadonlyArray<{
-    readonly taskId: TaskId
-    readonly taskRevision: TaskRevision
-  }>
+  readonly freshEligibleTasks: ReadonlyArray<{ readonly taskId: TaskId; readonly taskRevision: TaskRevision }>
   readonly responsibility: WorkflowResponsibilityState
   readonly responsibilityFacts: ReadonlyArray<ResponsibilityFreshFacts>
 }
@@ -150,19 +101,12 @@ export interface RunnableFrontier {
 
 export type RunFinalityDecision = Data.TaggedEnum<{
   RunMayTerminate: Record<never, never>
-  RunMustRemainActive: {
-    readonly reason:
-      | "RunnableTransition"
-      | "TrackerTargetUnsettled"
-      | "UnsettledResponsibility"
-  }
+  RunMustRemainActive: { readonly reason: "RunnableTransition" | "TrackerTargetUnsettled" | "UnsettledResponsibility" }
 }>
 
 export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
 
-const workflowResponsibilityTaskId = (
-  responsibility: WorkflowResponsibilityEntry
-): TaskId =>
+const workflowResponsibilityTaskId = (responsibility: WorkflowResponsibilityEntry): TaskId =>
   responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
     ? responsibility.plannedAttempt.taskId
     : responsibility.taskId
@@ -178,9 +122,7 @@ export const deriveRunFinalityDecision = (
   }
   const terminalOperationIds = new Set(
     frontier.explanations.flatMap((explanation) =>
-      explanation._tag === "FinalOutcome"
-        || explanation._tag === "Relinquishment"
-        || explanation._tag === "Settlement"
+      explanation._tag === "FinalOutcome" || explanation._tag === "Relinquishment" || explanation._tag === "Settlement"
         ? [explanation.operationId]
         : []
     )
@@ -188,11 +130,7 @@ export const deriveRunFinalityDecision = (
   const terminalPlannedAttempts = new Set(
     frontier.explanations.flatMap((explanation) =>
       explanation._tag === "PlannedAttemptExecutorWorkTerminal"
-        ? [
-          plannedAttemptExecutorCorrelationKey(
-            explanation.report.correlation
-          )
-        ]
+        ? [plannedAttemptExecutorCorrelationKey(explanation.report.correlation)]
         : []
     )
   )
@@ -200,16 +138,12 @@ export const deriveRunFinalityDecision = (
     responsibility.entries.some((entry) =>
       entry._tag === "PlannedAttemptExecutorWorkResponsibility"
         ? !terminalPlannedAttempts.has(
-          plannedAttemptExecutorCorrelationKey(
-            plannedAttemptExecutorCorrelation(entry.plannedAttempt)
+            plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(entry.plannedAttempt))
           )
-        )
         : !terminalOperationIds.has(workflowResponsibilityOperationId(entry))
     )
   ) {
-    return RunFinalityDecision.RunMustRemainActive({
-      reason: "UnsettledResponsibility"
-    })
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
   return trackerTargetSettled
     ? RunFinalityDecision.RunMayTerminate()
@@ -217,10 +151,7 @@ export const deriveRunFinalityDecision = (
 }
 
 const readyTransition = (
-  facts: Extract<
-    ResponsibilityFreshFacts,
-    { readonly _tag: "WorkflowOperationFreshFacts" }
-  >
+  facts: Extract<ResponsibilityFreshFacts, { readonly _tag: "WorkflowOperationFreshFacts" }>
 ): RunnableFrontierTransition =>
   Match.value(facts.responsibility).pipe(
     Match.tags({
@@ -239,14 +170,8 @@ const readyTransition = (
   )
 
 const executorDecisionFor = (
-  facts: Extract<
-    ResponsibilityFreshFacts,
-    { readonly _tag: "PlannedAttemptExecutorFreshFacts" }
-  >
-): {
-  readonly explanation?: FrontierExplanation
-  readonly transition?: RunnableFrontierTransition
-} =>
+  facts: Extract<ResponsibilityFreshFacts, { readonly _tag: "PlannedAttemptExecutorFreshFacts" }>
+): { readonly explanation?: FrontierExplanation; readonly transition?: RunnableFrontierTransition } =>
   Match.value(facts.disposition).pipe(
     Match.tags({
       PlannedAttemptExecutorWorkSafelySuspended: ({ correlation }) => ({
@@ -262,30 +187,22 @@ const executorDecisionFor = (
         })
       }),
       PlannedAttemptExecutorSuspensionRequested: () => ({
-        transition: RunnableFrontierTransition
-          .SuspendPlannedAttemptExecutorWork({
-            plannedAttempt: facts.responsibility.plannedAttempt
-          })
+        transition: RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({
+          plannedAttempt: facts.responsibility.plannedAttempt
+        })
       }),
       Ready: () => ({
-        transition: RunnableFrontierTransition
-          .ContinuePlannedAttemptExecutorWork({
-            plannedAttempt: facts.responsibility.plannedAttempt
-          })
+        transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          plannedAttempt: facts.responsibility.plannedAttempt
+        })
       })
     }),
     Match.exhaustive
   )
 
 const operationDecisionFor = (
-  facts: Extract<
-    ResponsibilityFreshFacts,
-    { readonly _tag: "WorkflowOperationFreshFacts" }
-  >
-): {
-  readonly explanation?: FrontierExplanation
-  readonly transition?: RunnableFrontierTransition
-} =>
+  facts: Extract<ResponsibilityFreshFacts, { readonly _tag: "WorkflowOperationFreshFacts" }>
+): { readonly explanation?: FrontierExplanation; readonly transition?: RunnableFrontierTransition } =>
   Match.value(facts.disposition).pipe(
     Match.tags({
       DependencyWait: ({ prerequisiteTaskIds }) => ({
@@ -351,75 +268,52 @@ const operationDecisionFor = (
 
 const decisionFor = (
   facts: ResponsibilityFreshFacts
-): {
-  readonly explanation?: FrontierExplanation
-  readonly transition?: RunnableFrontierTransition
-} =>
-  facts._tag === "PlannedAttemptExecutorFreshFacts"
-    ? executorDecisionFor(facts)
-    : operationDecisionFor(facts)
+): { readonly explanation?: FrontierExplanation; readonly transition?: RunnableFrontierTransition } =>
+  facts._tag === "PlannedAttemptExecutorFreshFacts" ? executorDecisionFor(facts) : operationDecisionFor(facts)
 
 /** Derives process-local choices in responsibility-first, canonical task order. */
-export const deriveRunnableFrontier = (
-  input: RunnableFrontierInput
-): RunnableFrontier => {
-  const responsibleDecisions = input.responsibility.entries
-    .map((responsibility) => {
-      const responsibilityKey = workflowResponsibilityKey(responsibility)
-      const matchingFacts = input.responsibilityFacts.filter((facts) =>
-        workflowResponsibilityKey(facts.responsibility)
-          === responsibilityKey
-      )
-      const decision = matchingFacts.length === 1
+export const deriveRunnableFrontier = (input: RunnableFrontierInput): RunnableFrontier => {
+  const responsibleDecisions = input.responsibility.entries.map((responsibility) => {
+    const responsibilityKey = workflowResponsibilityKey(responsibility)
+    const matchingFacts = input.responsibilityFacts.filter(
+      (facts) => workflowResponsibilityKey(facts.responsibility) === responsibilityKey
+    )
+    const decision =
+      matchingFacts.length === 1
         ? decisionFor(Option.getOrThrow(Option.fromUndefinedOr(matchingFacts[0])))
-        : responsibility._tag
-            === "PlannedAttemptExecutorWorkResponsibility"
-        ? {
-          explanation: FrontierExplanation.PlannedAttemptExecutorWorkTypedIssue({
-            correlation: {
-              attemptId: responsibility.plannedAttempt.attemptId,
-              runId: responsibility.plannedAttempt.runId
-            },
-            reason: matchingFacts.length === 0
-              ? "MissingFreshFacts"
-              : "DuplicateFreshFacts"
-          })
-        }
-        : {
-          explanation: FrontierExplanation.TypedIssue({
-            operationId: workflowResponsibilityOperationId(responsibility),
-            reason: matchingFacts.length === 0
-              ? "MissingFreshFacts"
-              : "DuplicateFreshFacts"
-          })
-        }
-      return {
-        ...decision,
-        beganAt: responsibility.beganAt,
-        taskId: workflowResponsibilityTaskId(responsibility)
-      }
-    })
-  const responsibleTaskIds = new Set(
-    input.responsibility.entries.map(workflowResponsibilityTaskId)
-  )
+        : responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
+          ? {
+              explanation: FrontierExplanation.PlannedAttemptExecutorWorkTypedIssue({
+                correlation: {
+                  attemptId: responsibility.plannedAttempt.attemptId,
+                  runId: responsibility.plannedAttempt.runId
+                },
+                reason: matchingFacts.length === 0 ? "MissingFreshFacts" : "DuplicateFreshFacts"
+              })
+            }
+          : {
+              explanation: FrontierExplanation.TypedIssue({
+                operationId: workflowResponsibilityOperationId(responsibility),
+                reason: matchingFacts.length === 0 ? "MissingFreshFacts" : "DuplicateFreshFacts"
+              })
+            }
+    return { ...decision, beganAt: responsibility.beganAt, taskId: workflowResponsibilityTaskId(responsibility) }
+  })
+  const responsibleTaskIds = new Set(input.responsibility.entries.map(workflowResponsibilityTaskId))
   const responsibleTransitions = responsibleDecisions
-    .filter((decision): decision is typeof decision & {
-      readonly transition: RunnableFrontierTransition
-    } => decision.transition !== undefined)
+    .filter(
+      (decision): decision is typeof decision & { readonly transition: RunnableFrontierTransition } =>
+        decision.transition !== undefined
+    )
     .toSorted((left, right) => left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId))
     .map(({ transition }) => transition)
   const freshTransitions = input.freshEligibleTasks
     .filter(({ taskId }) => !responsibleTaskIds.has(taskId))
     .filter(({ taskId }, index, tasks) => tasks.findIndex((candidate) => candidate.taskId === taskId) === index)
     .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
-    .map(({ taskId, taskRevision }) =>
-      RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId,
-        taskRevision
-      })
-    )
+    .map(({ taskId, taskRevision }) => RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId, taskRevision }))
   return {
-    explanations: responsibleDecisions.flatMap(({ explanation }) => explanation === undefined ? [] : [explanation]),
+    explanations: responsibleDecisions.flatMap(({ explanation }) => (explanation === undefined ? [] : [explanation])),
     transitions: [...responsibleTransitions, ...freshTransitions]
   }
 }

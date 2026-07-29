@@ -46,19 +46,13 @@ it.effect("routes every recovered transition variant through its exact empty-his
       taskId,
       taskRevision: TaskRevision.make("runnable-transition-revision")
     }),
-    RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-      operationId,
-      taskId
-    }),
+    RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId, taskId }),
     RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId }),
     RunnableFrontierTransition.ReconcileTaskWorktree({ operationId, taskId })
   ]
 
-  return Effect.gen(function*() {
-    const results = yield* Effect.forEach(
-      transitions,
-      (transition) => recoverRunnableTransition(runId, transition)
-    )
+  return Effect.gen(function* () {
+    const results = yield* Effect.forEach(transitions, (transition) => recoverRunnableTransition(runId, transition))
     expect(results).toEqual(Array.from({ length: transitions.length }))
   }).pipe(
     Effect.provideService(
@@ -70,16 +64,13 @@ it.effect("routes every recovered transition variant through its exact empty-his
         recordTaskAttemptPlan: unused
       })
     ),
-    Effect.provideService(
-      WorkflowTrace,
-      WorkflowTrace.of({ emit: () => Effect.void })
-    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(memoryJournalStoreLayer)
   )
 })
 
 it.effect("settles a recovered generic claim through managed activation", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const runId = RunId.make("managed-generic-recovery")
     const taskId = TaskId.make("managed-generic-task")
     const claim = makeTaskClaimAcquisitionOperation({
@@ -95,48 +86,36 @@ it.effect("settles a recovered generic claim through managed activation", () =>
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
-      TaskClaimAcquisitionIntendedEvent.make({
-        operation: claim,
-        version: workflowJournalEventVersion
-      })
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
     )
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
-        journal.append(
-          runId,
-          outcomeRecordKey(operation.acquisition.operationId),
-          TaskClaimAcquiredEvent.make({
-            claim: {
-              _tag: "ActiveTaskClaim",
-              ...operation.acquisition
-            },
-            version: workflowJournalEventVersion
-          })
-        ).pipe(Effect.as({
-          ...AuthoritativeTaskClaimAcquired.make({
-            claim: {
-              _tag: "ActiveTaskClaim",
-              ...operation.acquisition
-            }
-          })
-        })),
+        journal
+          .append(
+            runId,
+            outcomeRecordKey(operation.acquisition.operationId),
+            TaskClaimAcquiredEvent.make({
+              claim: { _tag: "ActiveTaskClaim", ...operation.acquisition },
+              version: workflowJournalEventVersion
+            })
+          )
+          .pipe(
+            Effect.as({
+              ...AuthoritativeTaskClaimAcquired.make({ claim: { _tag: "ActiveTaskClaim", ...operation.acquisition } })
+            })
+          ),
       readTrackerGraph: unused,
       reconcileTaskWorktree: unused,
       recordTaskAttemptPlan: unused
     })
-    yield* activateRecoveredResponsibilities(
-      runId,
-      TaskWorkCapacity.make(1)
-    ).pipe(
+    yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter),
-      Effect.provideService(
-        WorkflowTrace,
-        WorkflowTrace.of({ emit: () => Effect.void })
-      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer),
       Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer)
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer)))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
 
 it.effect("replays the exact durable claim and worktree intents", () => {
   const runId = RunId.make("runnable-transition-intents")
@@ -166,62 +145,42 @@ it.effect("replays the exact durable claim and worktree intents", () => {
     predecessorOperationIds: []
   })
 
-  return Effect.gen(function*() {
+  return Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
-      TaskClaimAcquisitionIntendedEvent.make({
-        operation: claim,
-        version: workflowJournalEventVersion
-      })
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
     )
     yield* journal.append(
       runId,
       intentRecordKey(worktree.operationId),
-      TaskWorktreeReconciliationIntendedEvent.make({
-        operation: worktree,
-        version: workflowJournalEventVersion
-      })
+      TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
     )
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
-        Ref.update(calls, (current) => [
-          ...current,
-          `claim:${operation.acquisition.operationId}`
-        ]).pipe(Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })),
+        Ref.update(calls, (current) => [...current, `claim:${operation.acquisition.operationId}`]).pipe(
+          Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })
+        ),
       readTrackerGraph: unused,
       reconcileTaskWorktree: (operation) =>
-        Ref.update(calls, (current) => [
-          ...current,
-          `worktree:${operation.operationId}`
-        ]).pipe(Effect.as({
-          _tag: "TaskWorktreeReconciliationSimulated",
-          operation
-        })),
+        Ref.update(calls, (current) => [...current, `worktree:${operation.operationId}`]).pipe(
+          Effect.as({ _tag: "TaskWorktreeReconciliationSimulated", operation })
+        ),
       recordTaskAttemptPlan: unused
     })
     yield* recoverRunnableTransition(
       runId,
-      RunnableFrontierTransition.CheckTaskClaim({
-        operationId: claim.acquisition.operationId,
-        taskId
-      })
+      RunnableFrontierTransition.CheckTaskClaim({ operationId: claim.acquisition.operationId, taskId })
     ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     yield* recoverRunnableTransition(
       runId,
-      RunnableFrontierTransition.ReconcileTaskClaim({
-        operationId: claim.acquisition.operationId,
-        taskId
-      })
+      RunnableFrontierTransition.ReconcileTaskClaim({ operationId: claim.acquisition.operationId, taskId })
     ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     yield* recoverRunnableTransition(
       runId,
-      RunnableFrontierTransition.ReconcileTaskWorktree({
-        operationId: worktree.operationId,
-        taskId
-      })
+      RunnableFrontierTransition.ReconcileTaskWorktree({ operationId: worktree.operationId, taskId })
     ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     expect(yield* Ref.get(calls)).toEqual([
       "claim:recovered-claim",
@@ -232,7 +191,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
 })
 
 it.effect("fails closed when initial or reread managed history is invalid", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const runId = RunId.make("invalid-managed-recovery")
     const operation = makeTaskClaimAcquisitionOperation({
       acquisition: {
@@ -244,10 +203,7 @@ it.effect("fails closed when initial or reread managed history is invalid", () =
       predecessorOperationIds: []
     })
     const invalidRecord = {
-      event: TaskClaimAcquisitionIntendedEvent.make({
-        operation,
-        version: workflowJournalEventVersion
-      }),
+      event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
       key: intentRecordKey(operation.acquisition.operationId),
       position: JournalPosition.make(2),
       runId
@@ -256,27 +212,18 @@ it.effect("fails closed when initial or reread managed history is invalid", () =
     const changingJournal = JournalStore.of({
       append: () => Effect.die("unused"),
       read: () =>
-        Ref.getAndUpdate(reads, (count) => count + 1).pipe(
-          Effect.map((count) => count === 0 ? [] : [invalidRecord])
-        ),
+        Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
       scan: () => Effect.succeed({ issues: [], runs: [] })
     })
     const recovery = yield* makeManagedRecoveryActivation(runId).pipe(
       Effect.provideService(JournalStore, changingJournal)
     )
-    expect(
-      (yield* recovery.readFrontier.pipe(Effect.flip))._tag
-    ).toBe("InvalidManagedHistory")
+    expect((yield* recovery.readFrontier.pipe(Effect.flip))._tag).toBe("InvalidManagedHistory")
 
-    const initiallyInvalid = yield* makeManagedRecoveryActivation(
-      runId
-    ).pipe(
+    const initiallyInvalid = yield* makeManagedRecoveryActivation(runId).pipe(
       Effect.provideService(
         JournalStore,
-        JournalStore.of({
-          ...changingJournal,
-          read: () => Effect.succeed([invalidRecord])
-        })
+        JournalStore.of({ ...changingJournal, read: () => Effect.succeed([invalidRecord]) })
       ),
       Effect.flip
     )
@@ -293,8 +240,6 @@ it.effect("fails closed when initial or reread managed history is invalid", () =
         recordTaskAttemptPlan: unused
       })
     ),
-    Effect.provideService(
-      WorkflowTrace,
-      WorkflowTrace.of({ emit: () => Effect.void })
-    )
-  ))
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
+)

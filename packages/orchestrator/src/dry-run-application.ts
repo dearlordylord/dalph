@@ -11,11 +11,7 @@ import { type FixtureReader, fixtureReaderFileLayer, trackerGraphReaderLayer } f
 import { workflowTraceOutputLayer } from "./workflow-trace-output.js"
 
 const denied = (method: string) =>
-  PlatformError.systemError({
-    _tag: "PermissionDenied",
-    module: "DalphDryRun",
-    method
-  })
+  PlatformError.systemError({ _tag: "PermissionDenied", module: "DalphDryRun", method })
 
 const denyMutation = (method: string) => () => Effect.fail(denied(method))
 
@@ -56,9 +52,7 @@ export const dryCliEnvironmentLayer = Layer.mergeAll(
   Path.layer
 )
 
-const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer(
-  "dry-run-operation"
-)
+const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer("dry-run-operation")
 const dryRunTaskClaimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
   owner: ClaimOwner.make("dry-run"),
   tokenPrefix: "dry-run-claim"
@@ -71,9 +65,7 @@ const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
   worktreeRoot: WorktreeLocator.make("/dalph/dry-run")
 })
 
-export const makeDryRunCliApplication = (
-  fixtureReaderLayer: Layer.Layer<FixtureReader>
-) =>
+export const makeDryRunCliApplication = (fixtureReaderLayer: Layer.Layer<FixtureReader>) =>
   runCliFromStdio.pipe(
     Effect.provide(dryRunWorkflowInterpreterLayer),
     Effect.provide(workflowTraceOutputLayer),
@@ -88,6 +80,4 @@ export const makeDryRunCliApplication = (
 
 // Live GitHub dry-run CLI registration owner:
 // https://github.com/dearlordylord/dalph/issues/103
-export const dryRunCliApplication = makeDryRunCliApplication(
-  fixtureReaderFileLayer
-)
+export const dryRunCliApplication = makeDryRunCliApplication(fixtureReaderFileLayer)

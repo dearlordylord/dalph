@@ -6,37 +6,22 @@ import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } fro
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
-  FinalOutcome: {
-    readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed"
-  }
-  PlannedAttemptExecutorWorkSafelySuspended: {
-    readonly correlation: PlannedAttemptExecutorCorrelation
-  }
+  FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
+  PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
   PlannedAttemptExecutorWorkTerminal: {
-    readonly report: Extract<
-      PlannedAttemptExecutorReport,
-      { readonly _tag: "Terminal" }
-    >
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
   ForeignClaimIsolation: Record<never, never>
   MissingClaim: Record<never, never>
   Paused: Record<never, never>
   Ready: Record<never, never>
-  Relinquished: {
-    readonly reason: "AuthorizedHandoff" | "FreshAuthorityRevocation"
-  }
-  Settled: {
-    readonly outcome: "ResponsibilityCompleted" | "TrackerCompleted"
-  }
-  UnreadableFactWait: {
-    readonly boundary: "Executor" | "Git" | "TaskTracker"
-  }
+  Relinquished: { readonly reason: "AuthorizedHandoff" | "FreshAuthorityRevocation" }
+  Settled: { readonly outcome: "ResponsibilityCompleted" | "TrackerCompleted" }
+  UnreadableFactWait: { readonly boundary: "Executor" | "Git" | "TaskTracker" }
 }>
 
-export const ResponsibilityDisposition = Data.taggedEnum<
-  ResponsibilityDisposition
->()
+export const ResponsibilityDisposition = Data.taggedEnum<ResponsibilityDisposition>()
 
 type PlannedAttemptExecutorDisposition = Extract<
   ResponsibilityDisposition,
@@ -62,15 +47,15 @@ type WorkflowOperationDisposition = Exclude<
 /** The variant fixes which dispositions may accompany each responsibility kind. */
 export type ResponsibilityFreshFacts =
   | {
-    readonly _tag: "PlannedAttemptExecutorFreshFacts"
-    readonly disposition: PlannedAttemptExecutorDisposition
-    readonly responsibility: Extract<
-      WorkflowResponsibilityEntry,
-      { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
-    >
-  }
+      readonly _tag: "PlannedAttemptExecutorFreshFacts"
+      readonly disposition: PlannedAttemptExecutorDisposition
+      readonly responsibility: Extract<
+        WorkflowResponsibilityEntry,
+        { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+      >
+    }
   | {
-    readonly _tag: "WorkflowOperationFreshFacts"
-    readonly disposition: WorkflowOperationDisposition
-    readonly responsibility: WorkflowOperationResponsibility
-  }
+      readonly _tag: "WorkflowOperationFreshFacts"
+      readonly disposition: WorkflowOperationDisposition
+      readonly responsibility: WorkflowOperationResponsibility
+    }

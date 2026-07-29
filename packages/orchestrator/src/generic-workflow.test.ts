@@ -63,9 +63,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("plan-A"),
     plannedAttempt,
-    predecessorOperationIds: [
-      claimOperation.acquisition.operationId
-    ]
+    predecessorOperationIds: [claimOperation.acquisition.operationId]
   })
   const worktreeOperation = makeTaskWorktreeReconciliationOperation({
     operationId: OperationId.make("worktree-A"),
@@ -76,11 +74,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
     WorkflowInterpreter,
     WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
-        Effect.succeed(
-          AuthoritativeTaskClaimAcquired.make({
-            claim: ActiveTaskClaim.make(operation.acquisition)
-          })
-        ),
+        Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
       readTrackerGraph: () => Effect.die("unused"),
       reconcileTaskWorktree: () =>
         Effect.succeed(
@@ -96,12 +90,9 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       recordTaskAttemptPlan: () => Effect.die("journal wrapper owns this")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(
-    runId,
-    base
-  ).pipe(Layer.provideMerge(memoryJournalStoreLayer))
+  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))
 
-  return Effect.gen(function*() {
+  return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     yield* interpreter.acquireTaskClaim(claimOperation)
     yield* interpreter.recordTaskAttemptPlan(planOperation)
@@ -114,21 +105,14 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       "TaskWorktreeReconciliationIntended",
       "TaskWorktreeReady"
     ])
-  }).pipe(
-    Effect.provide(layer)
-  )
+  }).pipe(Effect.provide(layer))
 })
 
 it.effect("journals simulated generic boundaries and rejects cross-run plans", () => {
-  const snapshotResult = projectTrackerSnapshot({
-    revision: TrackerRevision.make("generic-snapshot"),
-    tasks: []
-  })
-  const snapshot = Option.getOrThrow(Option.fromUndefinedOr(
-    snapshotResult._tag === "Valid"
-      ? snapshotResult.snapshot
-      : undefined
-  ))
+  const snapshotResult = projectTrackerSnapshot({ revision: TrackerRevision.make("generic-snapshot"), tasks: [] })
+  const snapshot = Option.getOrThrow(
+    Option.fromUndefinedOr(snapshotResult._tag === "Valid" ? snapshotResult.snapshot : undefined)
+  )
   const graphOperation = makeTrackerGraphObservationOperation(
     OperationId.make("graph-A"),
     FixtureTarget.make("generic-fixture")
@@ -157,53 +141,35 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
     WorkflowInterpreter.of({
       acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
       readTrackerGraph: () => Effect.succeed(snapshot),
-      reconcileTaskWorktree: (operation) =>
-        Effect.succeed(
-          TaskWorktreeReconciliationSimulated.make({ operation })
-        ),
+      reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
       recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
     })
   )
-  const testLayer = journaledWorkflowInterpreterLayer(
-    runId,
-    base
-  ).pipe(Layer.provideMerge(memoryJournalStoreLayer))
+  const testLayer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))
 
-  return Effect.gen(function*() {
+  return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     yield* interpreter.readTrackerGraph(graphOperation)
     yield* interpreter.readTrackerGraph(graphOperation)
-    yield* interpreter.acquireTaskClaim(
-      claimOperation,
-      Effect.void
-    )
+    yield* interpreter.acquireTaskClaim(claimOperation, Effect.void)
 
-    const otherRunAttempt = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      runId: RunId.make("another-run")
-    })
-    const otherRunPlan = makeTaskAttemptPlanOperation({
-      ...planOperation,
-      plannedAttempt: otherRunAttempt
-    })
+    const otherRunAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: RunId.make("another-run") })
+    const otherRunPlan = makeTaskAttemptPlanOperation({ ...planOperation, plannedAttempt: otherRunAttempt })
+    expect((yield* interpreter.recordTaskAttemptPlan(otherRunPlan).pipe(Effect.flip))._tag).toBe(
+      "TaskAttemptPlanRunContradiction"
+    )
     expect(
-      (yield* interpreter.recordTaskAttemptPlan(otherRunPlan).pipe(
-        Effect.flip
-      ))._tag
-    ).toBe("TaskAttemptPlanRunContradiction")
-    expect(
-      (yield* interpreter.reconcileTaskWorktree(
-        makeTaskWorktreeReconciliationOperation({
-          ...worktreeOperation,
-          plannedAttempt: otherRunAttempt
-        })
-      ).pipe(Effect.flip))._tag
+      (yield* interpreter
+        .reconcileTaskWorktree(
+          makeTaskWorktreeReconciliationOperation({ ...worktreeOperation, plannedAttempt: otherRunAttempt })
+        )
+        .pipe(Effect.flip))._tag
     ).toBe("TaskAttemptPlanRunContradiction")
 
     yield* interpreter.recordTaskAttemptPlan(planOperation)
-    expect(
-      (yield* interpreter.reconcileTaskWorktree(worktreeOperation))._tag
-    ).toBe("TaskWorktreeReconciliationSimulated")
+    expect((yield* interpreter.reconcileTaskWorktree(worktreeOperation))._tag).toBe(
+      "TaskWorktreeReconciliationSimulated"
+    )
 
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
@@ -217,7 +183,7 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
 })
 
 it.effect("requires one exact causal planned-attempt acknowledgement", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const operationId = OperationId.make("evidence-worktree")
     const plan = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("evidence-plan"),
@@ -225,58 +191,35 @@ it.effect("requires one exact causal planned-attempt acknowledgement", () =>
       predecessorOperationIds: []
     })
     const record = {
-      event: TaskAttemptPlannedEvent.make({
-        operation: plan,
-        version: 4 as const
-      }),
+      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 4 as const }),
       key: attemptPlanRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(1),
       runId
     }
-    const reason = (
-      effect: ReturnType<typeof requireAcknowledgedPlan>
-    ) => effect.pipe(Effect.flip, Effect.map((error) => error.reason))
+    const reason = (effect: ReturnType<typeof requireAcknowledgedPlan>) =>
+      effect.pipe(
+        Effect.flip,
+        Effect.map((error) => error.reason)
+      )
 
+    expect(yield* reason(requireAcknowledgedPlan([], plannedAttempt, operationId, [plan.operationId]))).toBe("Missing")
     expect(
-      yield* reason(requireAcknowledgedPlan(
-        [],
-        plannedAttempt,
-        operationId,
-        [plan.operationId]
-      ))
-    ).toBe("Missing")
-    expect(
-      yield* reason(requireAcknowledgedPlan(
-        [record, { ...record, position: JournalPosition.make(2) }],
-        plannedAttempt,
-        operationId,
-        [plan.operationId]
-      ))
+      yield* reason(
+        requireAcknowledgedPlan(
+          [record, { ...record, position: JournalPosition.make(2) }],
+          plannedAttempt,
+          operationId,
+          [plan.operationId]
+        )
+      )
     ).toBe("MultiplePlans")
-    expect(
-      yield* reason(requireAcknowledgedPlan(
-        [record],
-        plannedAttempt,
-        operationId,
-        []
-      ))
-    ).toBe("CausalPredecessorMissing")
-    const changed = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      worktree: WorktreeLocator.make("/worktrees/changed")
-    })
-    expect(
-      yield* reason(requireAcknowledgedPlan(
-        [record],
-        changed,
-        operationId,
-        [plan.operationId]
-      ))
-    ).toBe("PlanMismatch")
-    yield* requireAcknowledgedPlan(
-      [record],
-      plannedAttempt,
-      operationId,
-      [plan.operationId]
+    expect(yield* reason(requireAcknowledgedPlan([record], plannedAttempt, operationId, []))).toBe(
+      "CausalPredecessorMissing"
     )
-  }))
+    const changed = PlannedTaskAttempt.make({ ...plannedAttempt, worktree: WorktreeLocator.make("/worktrees/changed") })
+    expect(yield* reason(requireAcknowledgedPlan([record], changed, operationId, [plan.operationId]))).toBe(
+      "PlanMismatch"
+    )
+    yield* requireAcknowledgedPlan([record], plannedAttempt, operationId, [plan.operationId])
+  })
+)

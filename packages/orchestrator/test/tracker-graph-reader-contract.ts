@@ -20,11 +20,9 @@ interface ContractScenario {
 }
 
 /** Shared black-box contract for every tracker graph reader implementation. */
-export const trackerGraphReaderContract = (
-  scenario: ContractScenario
-): void => {
+export const trackerGraphReaderContract = (scenario: ContractScenario): void => {
   it.effect(`${scenario.name} returns one complete opaque task snapshot`, () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const reader = yield* TrackerGraphReader
       const snapshot = yield* reader.read(scenario.complete.target)
       expect(snapshot.toWire().tasks).toEqual(scenario.complete.expectedTasks)
@@ -33,17 +31,16 @@ export const trackerGraphReaderContract = (
           expect(taskId).not.toContain(fragment)
         }
       }
-    }).pipe(Effect.provide(scenario.complete.layer)))
+    }).pipe(Effect.provide(scenario.complete.layer))
+  )
 
   for (const failure of scenario.failures) {
     it.effect(`${scenario.name} exposes no snapshot for ${failure.name}`, () =>
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         const reader = yield* TrackerGraphReader
-        const error = yield* reader.read(failure.target).pipe(
-          Effect.flip,
-          Effect.orDie
-        )
+        const error = yield* reader.read(failure.target).pipe(Effect.flip, Effect.orDie)
         expect(error._tag).toBe(failure.expectedErrorTag)
-      }).pipe(Effect.provide(failure.layer)))
+      }).pipe(Effect.provide(failure.layer))
+    )
   }
 }

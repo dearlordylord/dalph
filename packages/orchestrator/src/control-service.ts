@@ -12,59 +12,46 @@ import type { JournalRecord, JournalStoreError } from "./journal-store.js"
  */
 export class ControlCommandIdentityContradiction extends Schema.TaggedErrorClass<ControlCommandIdentityContradiction>()(
   "ControlCommandIdentityContradiction",
-  {
-    commandId: ControlCommandId,
-    existingPosition: JournalPosition,
-    runId: RunId
-  }
+  { commandId: ControlCommandId, existingPosition: JournalPosition, runId: RunId }
 ) {}
 
 interface ControlServiceInterface {
   readonly record: (
     operatorId: AuthenticatedOperatorIdentity,
     input: unknown
-  ) => Effect.Effect<
-    JournalRecord,
-    ControlCommandIdentityContradiction | JournalStoreError | Schema.SchemaError
-  >
+  ) => Effect.Effect<JournalRecord, ControlCommandIdentityContradiction | JournalStoreError | Schema.SchemaError>
 }
 
 /** Transport-independent boundary that decodes and journals user commands. */
-export class ControlService extends Context.Service<
-  ControlService,
-  ControlServiceInterface
->()("@dalph/ControlService") {}
+export class ControlService extends Context.Service<ControlService, ControlServiceInterface>()(
+  "@dalph/ControlService"
+) {}
 
 export const controlServiceLayer = Layer.effect(
   ControlService,
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const journal = yield* JournalStore
 
-    const record = Effect.fn("ControlService.record")(function*(
+    const record = Effect.fn("ControlService.record")(function* (
       operatorId: AuthenticatedOperatorIdentity,
       input: unknown
     ) {
       const request = yield* Schema.decodeUnknownEffect(ControlCommandRequest)(input)
       const command = ControlCommand.make({ ...request, operatorId })
-      const event = ControlCommandRecordedEvent.make({
-        command,
-        version: workflowJournalEventVersion
-      })
-      return yield* journal.append(
-        command.runId,
-        controlCommandRecordKey(command.commandId),
-        event
-      ).pipe(
-        Effect.mapError((failure) =>
-          failure._tag === "JournalStoreContradiction"
-            ? new ControlCommandIdentityContradiction({
-              commandId: command.commandId,
-              existingPosition: failure.existingPosition,
-              runId: command.runId
-            })
-            : failure
+      const event = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
+      return yield* journal
+        .append(command.runId, controlCommandRecordKey(command.commandId), event)
+        .pipe(
+          Effect.mapError((failure) =>
+            failure._tag === "JournalStoreContradiction"
+              ? new ControlCommandIdentityContradiction({
+                  commandId: command.commandId,
+                  existingPosition: failure.existingPosition,
+                  runId: command.runId
+                })
+              : failure
+          )
         )
-      )
     })
 
     return ControlService.of({ record })

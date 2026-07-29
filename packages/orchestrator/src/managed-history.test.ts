@@ -34,62 +34,43 @@ const attempt = (attemptId: string) =>
     worktree: WorktreeLocator.make(`/worktrees/${attemptId}`)
   })
 
-const planAndStart = (
-  plannedAttempt: PlannedTaskAttempt,
-  firstPosition: number
-): ReadonlyArray<JournalRecord> => {
+const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number): ReadonlyArray<JournalRecord> => {
   const operation = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make(
-      `plan-${plannedAttempt.attemptId}`
-    ),
+    operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
     plannedAttempt,
     predecessorOperationIds: []
   })
-  return [{
-    event: TaskAttemptPlannedEvent.make({
-      operation,
-      version: workflowJournalEventVersion
-    }),
-    key: attemptPlanRecordKey(plannedAttempt.attemptId),
-    position: JournalPosition.make(firstPosition),
-    runId
-  }, {
-    event: PlannedAttemptExecutorWorkStartedEvent.make({
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    }),
-    key: plannedAttemptExecutorWorkStartedRecordKey(
-      plannedAttempt.attemptId
-    ),
-    position: JournalPosition.make(firstPosition + 1),
-    runId
-  }]
+  return [
+    {
+      event: TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion }),
+      key: attemptPlanRecordKey(plannedAttempt.attemptId),
+      position: JournalPosition.make(firstPosition),
+      runId
+    },
+    {
+      event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
+      key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
+      position: JournalPosition.make(firstPosition + 1),
+      runId
+    }
+  ]
 }
 
 it("rejects duplicate unfinished planned-attempt executor work before frontier derivation or an executor call", () => {
   const first = attempt("attempt-A-3")
   const second = attempt("attempt-A-4")
-  const reduction = reduceManagedHistory(runId, [
-    ...planAndStart(first, 1),
-    ...planAndStart(second, 3)
-  ])
+  const reduction = reduceManagedHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
 
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag !== "InvalidManagedHistory") return
-  expect(reduction.issues).toContainEqual(expect.objectContaining({
-    _tag: "DuplicateUnfinishedTaskAttemptIssue",
-    first: expect.objectContaining({
-      attemptId: "attempt-A-3",
-      position: 2,
-      runId
-    }),
-    second: expect.objectContaining({
-      attemptId: "attempt-A-4",
-      position: 4,
-      runId
-    }),
-    taskId: "A"
-  }))
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({
+      _tag: "DuplicateUnfinishedTaskAttemptIssue",
+      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 2, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-A-4", position: 4, runId }),
+      taskId: "A"
+    })
+  )
 })
 
 it("rejects a second start for the same planned attempt without merging it", () => {
@@ -98,13 +79,8 @@ it("rejects a second start for the same planned attempt without merging it", () 
   const reduction = reduceManagedHistory(runId, [
     ...records,
     {
-      event: PlannedAttemptExecutorWorkStartedEvent.make({
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      }),
-      key: plannedAttemptExecutorWorkStartedRecordKey(
-        plannedAttempt.attemptId
-      ),
+      event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
+      key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(3),
       runId
     }
@@ -112,18 +88,12 @@ it("rejects a second start for the same planned attempt without merging it", () 
 
   expect(reduction._tag).toBe("InvalidManagedHistory")
   if (reduction._tag !== "InvalidManagedHistory") return
-  expect(reduction.issues).toContainEqual(expect.objectContaining({
-    _tag: "DuplicateUnfinishedTaskAttemptIssue",
-    first: expect.objectContaining({
-      attemptId: "attempt-A-3",
-      position: 2,
-      runId
-    }),
-    second: expect.objectContaining({
-      attemptId: "attempt-A-3",
-      position: 3,
-      runId
-    }),
-    taskId: "A"
-  }))
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({
+      _tag: "DuplicateUnfinishedTaskAttemptIssue",
+      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 2, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-A-3", position: 3, runId }),
+      taskId: "A"
+    })
+  )
 })

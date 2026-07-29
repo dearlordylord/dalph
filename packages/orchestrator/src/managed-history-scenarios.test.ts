@@ -79,10 +79,7 @@ import {
 const runId = RunId.make("managed-history")
 const taskId = TaskId.make("task-A")
 const target = FixtureTarget.make("fixture-A")
-const initial = makeTrackerGraphObservationOperation(
-  OperationId.make("observe-initial"),
-  target
-)
+const initial = makeTrackerGraphObservationOperation(OperationId.make("observe-initial"), target)
 const claim = makeTaskClaimAcquisitionOperation({
   acquisition: {
     operationId: OperationId.make("claim-A"),
@@ -127,10 +124,7 @@ const proof = PlannedWorktreeReady.make({
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
 
 const eventRows = [
-  {
-    event: trackerGraphObservationIntent(initial),
-    key: intentRecordKey(initial.operationId)
-  },
+  { event: trackerGraphObservationIntent(initial), key: intentRecordKey(initial.operationId) },
   {
     event: trackerGraphOutcomeObserved(initial.operationId, {
       _tag: "TrackerGraphObserved" as const,
@@ -140,10 +134,7 @@ const eventRows = [
     key: outcomeRecordKey(initial.operationId)
   },
   {
-    event: TaskClaimAcquisitionIntendedEvent.make({
-      operation: claim,
-      version: workflowJournalEventVersion
-    }),
+    event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion }),
     key: intentRecordKey(claim.acquisition.operationId)
   },
   {
@@ -153,10 +144,7 @@ const eventRows = [
     }),
     key: outcomeRecordKey(claim.acquisition.operationId)
   },
-  {
-    event: trackerGraphObservationIntent(admission),
-    key: intentRecordKey(admission.operationId)
-  },
+  { event: trackerGraphObservationIntent(admission), key: intentRecordKey(admission.operationId) },
   {
     event: trackerGraphOutcomeObserved(admission.operationId, {
       _tag: "TrackerGraphObserved" as const,
@@ -166,17 +154,11 @@ const eventRows = [
     key: outcomeRecordKey(admission.operationId)
   },
   {
-    event: TaskAttemptPlannedEvent.make({
-      operation: plan,
-      version: workflowJournalEventVersion
-    }),
+    event: TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion }),
     key: attemptPlanRecordKey(plannedAttempt.attemptId)
   },
   {
-    event: TaskWorktreeReconciliationIntendedEvent.make({
-      operation: worktree,
-      version: workflowJournalEventVersion
-    }),
+    event: TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion }),
     key: intentRecordKey(worktree.operationId)
   },
   {
@@ -188,20 +170,13 @@ const eventRows = [
     key: outcomeRecordKey(worktree.operationId)
   },
   {
-    event: PlannedAttemptExecutorWorkStartedEvent.make({
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    }),
-    key: plannedAttemptExecutorWorkStartedRecordKey(
-      plannedAttempt.attemptId
-    )
+    event: PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
+    key: plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId)
   },
   {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.Running.make({
-        correlation
-      }),
+      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -212,9 +187,7 @@ const eventRows = [
   {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-        correlation
-      }),
+      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -225,10 +198,7 @@ const eventRows = [
   {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({
-        correlation,
-        result: { _tag: "Completed" }
-      }),
+      report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -239,39 +209,18 @@ const eventRows = [
 ] as const
 
 const recordsFrom = (
-  rows: ReadonlyArray<{
-    readonly event: JournalRecord["event"]
-    readonly key: JournalRecord["key"]
-  }>
+  rows: ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }>
 ): ReadonlyArray<JournalRecord> =>
-  rows.map((row, index) => ({
-    ...row,
-    position: JournalPosition.make(index + 1),
-    runId
-  }))
+  rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 1), runId }))
 
 const records = recordsFrom(eventRows)
-const firstRecord = Option.getOrThrow(
-  Option.fromUndefinedOr(records[0])
-)
-const firstOutcomeRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[1])
-)
-const claimOutcomeRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[3])
-)
-const planRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[6])
-)
-const startRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[9])
-)
-const firstReportRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[10])
-)
-const terminalReportRow = Option.getOrThrow(
-  Option.fromUndefinedOr(eventRows[12])
-)
+const firstRecord = Option.getOrThrow(Option.fromUndefinedOr(records[0]))
+const firstOutcomeRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[1]))
+const claimOutcomeRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[3]))
+const planRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[6]))
+const startRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[9]))
+const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[10]))
+const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[12]))
 
 it("accepts every chronological managed-history boundary prefix", () => {
   for (let length = 0; length <= records.length; length += 1) {
@@ -281,10 +230,7 @@ it("accepts every chronological managed-history boundary prefix", () => {
   const final = reduceManagedHistory(runId, records)
   expect(final._tag).toBe("ValidManagedHistory")
   if (final._tag !== "ValidManagedHistory") return
-  expect(final.recoveryStage.entries).toContainEqual({
-    _tag: "Terminal",
-    plannedAttempt
-  })
+  expect(final.recoveryStage.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
   expect(final.managedRun.appliedThrough).toBe(records.length)
   expect(final.managedRun.graphKnowledge.targetClosures).toHaveLength(1)
 })
@@ -316,10 +262,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
   const malformed: ReadonlyArray<ReadonlyArray<JournalRecord>> = [
     [{ ...firstRecord, position: JournalPosition.make(2) }],
     [{ ...firstRecord, runId: otherRun }],
-    [{
-      ...firstRecord,
-      key: JournalRecordKey.make("wrong-key")
-    }],
+    [{ ...firstRecord, key: JournalRecordKey.make("wrong-key") }],
     [firstRecord, { ...firstRecord, position: JournalPosition.make(2) }],
     recordsFrom([firstOutcomeRow]),
     recordsFrom([claimOutcomeRow]),
@@ -327,10 +270,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
     recordsFrom([
       planRow,
       {
-        event: TaskAttemptPlannedEvent.make({
-          operation: plan,
-          version: workflowJournalEventVersion
-        }),
+        event: TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion }),
         key: JournalRecordKey.make("duplicate-plan-key")
       }
     ]),
@@ -338,10 +278,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
       planRow,
       {
         event: TaskAttemptPlannedEvent.make({
-          operation: makeTaskAttemptPlanOperation({
-            ...plan,
-            plannedAttempt: wrongAttempt
-          }),
+          operation: makeTaskAttemptPlanOperation({ ...plan, plannedAttempt: wrongAttempt }),
           version: workflowJournalEventVersion
         }),
         key: JournalRecordKey.make("contradictory-plan-key")
@@ -355,9 +292,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
-          report: PlannedAttemptExecutorReport.cases.Running.make({
-            correlation
-          }),
+          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -373,9 +308,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(4),
-          report: PlannedAttemptExecutorReport.cases.Running.make({
-            correlation
-          }),
+          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -386,9 +319,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
     ])
   ]
   for (const history of malformed) {
-    expect(reduceManagedHistory(runId, history)._tag).toBe(
-      "InvalidManagedHistory"
-    )
+    expect(reduceManagedHistory(runId, history)._tag).toBe("InvalidManagedHistory")
   }
 })
 
@@ -407,68 +338,40 @@ it("reconstructs all pause commands and responsibility identities", () => {
       runId,
       taskId
     }),
-    ControlCommand.cases.RequestRunPause.make({
-      commandId: ControlCommandId.make("pause-run"),
-      operatorId,
-      runId
-    }),
-    ControlCommand.cases.RequestRunUnpause.make({
-      commandId: ControlCommandId.make("unpause-run"),
-      operatorId,
-      runId
-    })
+    ControlCommand.cases.RequestRunPause.make({ commandId: ControlCommandId.make("pause-run"), operatorId, runId }),
+    ControlCommand.cases.RequestRunUnpause.make({ commandId: ControlCommandId.make("unpause-run"), operatorId, runId })
   ]
   const withCommands = recordsFrom([
     ...eventRows.slice(0, 10),
     ...commands.map((command) => ({
-      event: ControlCommandRecordedEvent.make({
-        command,
-        version: workflowJournalEventVersion
-      }),
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
       key: controlCommandRecordKey(command.commandId)
     }))
   ])
   for (let length = 11; length <= withCommands.length; length += 1) {
-    const reconstruction = reconstructManagedRunState(
-      runId,
-      withCommands.slice(0, length)
-    )
+    const reconstruction = reconstructManagedRunState(runId, withCommands.slice(0, length))
     expect(reconstruction._tag).toBe("ValidReconstructedManagedRun")
   }
-  const pausedTask = reconstructManagedRunState(
-    runId,
-    withCommands.slice(0, 11)
-  )
+  const pausedTask = reconstructManagedRunState(runId, withCommands.slice(0, 11))
   expect(pausedTask._tag).toBe("ValidReconstructedManagedRun")
   if (pausedTask._tag !== "ValidReconstructedManagedRun") return
   expect(reconstructedTaskIsPaused(pausedTask.state.pause, taskId)).toBe(true)
-  expect(reconstructedTaskIsPaused(
-    pausedTask.state.pause,
-    TaskId.make("another-task")
-  )).toBe(false)
+  expect(reconstructedTaskIsPaused(pausedTask.state.pause, TaskId.make("another-task"))).toBe(false)
   const responsibilities = pausedTask.state.responsibility.entries
   expect(responsibilities.map(workflowResponsibilityKey)).toEqual([
     `operation:${claim.acquisition.operationId}`,
     `operation:${worktree.operationId}`,
     plannedAttemptExecutorCorrelationKey(correlation)
   ])
-  const claimResponsibility = Option.getOrThrow(
-    Option.fromUndefinedOr(responsibilities[0])
-  )
-  const worktreeResponsibility = Option.getOrThrow(
-    Option.fromUndefinedOr(responsibilities[1])
-  )
+  const claimResponsibility = Option.getOrThrow(Option.fromUndefinedOr(responsibilities[0]))
+  const worktreeResponsibility = Option.getOrThrow(Option.fromUndefinedOr(responsibilities[1]))
   if (
-    claimResponsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
-    || worktreeResponsibility._tag
-      === "PlannedAttemptExecutorWorkResponsibility"
-  ) return
-  expect(workflowResponsibilityOperationId(claimResponsibility)).toBe(
-    claim.acquisition.operationId
+    claimResponsibility._tag === "PlannedAttemptExecutorWorkResponsibility" ||
+    worktreeResponsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
   )
-  expect(workflowResponsibilityOperationId(worktreeResponsibility)).toBe(
-    worktree.operationId
-  )
+    return
+  expect(workflowResponsibilityOperationId(claimResponsibility)).toBe(claim.acquisition.operationId)
+  expect(workflowResponsibilityOperationId(worktreeResponsibility)).toBe(worktree.operationId)
   expect(taskMembershipKey([taskId])).toBe(JSON.stringify([taskId]))
   expect(trackerTargetKey(target)).toContain("fixture-A")
 })
@@ -480,242 +383,162 @@ it("rejects commands and executor correlations bound to another run", () => {
     operatorId: AuthenticatedOperatorIdentity.make("operator"),
     runId: otherRun
   })
-  const commandRecord = recordsFrom([{
-    event: ControlCommandRecordedEvent.make({
-      command,
-      version: workflowJournalEventVersion
-    }),
-    key: controlCommandRecordKey(command.commandId)
-  }])
-  const wrongExecutorAttempt = PlannedTaskAttempt.make({
-    ...plannedAttempt,
-    runId: otherRun
-  })
-  const executorRecord = recordsFrom([{
-    event: PlannedAttemptExecutorWorkStartedEvent.make({
-      plannedAttempt: wrongExecutorAttempt,
-      version: workflowJournalEventVersion
-    }),
-    key: plannedAttemptExecutorWorkStartedRecordKey(
-      wrongExecutorAttempt.attemptId
-    )
-  }])
-  expect(reduceManagedHistory(runId, commandRecord)._tag).toBe(
-    "InvalidManagedHistory"
-  )
-  expect(reduceManagedHistory(runId, executorRecord)._tag).toBe(
-    "InvalidManagedHistory"
-  )
+  const commandRecord = recordsFrom([
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    }
+  ])
+  const wrongExecutorAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: otherRun })
+  const executorRecord = recordsFrom([
+    {
+      event: PlannedAttemptExecutorWorkStartedEvent.make({
+        plannedAttempt: wrongExecutorAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkStartedRecordKey(wrongExecutorAttempt.attemptId)
+    }
+  ])
+  expect(reduceManagedHistory(runId, commandRecord)._tag).toBe("InvalidManagedHistory")
+  expect(reduceManagedHistory(runId, executorRecord)._tag).toBe("InvalidManagedHistory")
 })
 
-effectIt.effect(
-  "enforces graph-knowledge, responsibility, and causal-operation invariants",
-  () =>
-    Effect.gen(function*() {
-      const observation = TaskTrackerTargetClosureObservation.make({
-        completeness: "Complete",
-        consistency: "PotentiallyMixedTime",
-        explicitlyCoveredTaskIds: [taskId],
-        factFamilies: ["TargetMembership"],
-        freshness: "FreshAtReadBoundary",
-        observedAt: JournalPosition.make(1),
-        operationId: initial.operationId,
-        provenAbsentTaskIds: [],
-        revision: TrackerRevision.make("schema-revision"),
-        target,
-        taskIds: [taskId]
-      })
-      yield* Schema.decodeUnknownEffect(
-        TaskTrackerTargetClosureObservation
-      )(observation)
-      for (
-        const invalid of [
-          { ...observation, provenAbsentTaskIds: [taskId] },
-          {
-            ...observation,
-            explicitlyCoveredTaskIds: [],
-            provenAbsentTaskIds: [TaskId.make("absent")]
-          },
-          {
-            ...observation,
-            explicitlyCoveredTaskIds: [TaskId.make("unknown")]
-          }
-        ]
-      ) {
-        expect(
-          yield* Schema.decodeUnknownEffect(
-            TaskTrackerTargetClosureObservation
-          )(invalid).pipe(Effect.result)
-        ).toMatchObject({ _tag: "Failure" })
-      }
-
-      const changed = TaskTrackerTargetClosureObservation.make({
-        ...observation,
-        observedAt: JournalPosition.make(2),
-        operationId: admission.operationId,
-        provenAbsentTaskIds: [taskId],
-        taskIds: []
-      })
-      yield* Schema.decodeUnknownEffect(
-        TaskTrackerTargetClosureKnowledgeConflict
-      )(TaskTrackerTargetClosureKnowledgeConflict.make({
-        observations: [observation, changed],
-        target
-      }))
-      for (
-        const conflict of [
-          {
-            _tag: "TaskTrackerTargetClosureKnowledgeConflict",
-            observations: [observation, observation],
-            target
-          },
-          {
-            _tag: "TaskTrackerTargetClosureKnowledgeConflict",
-            observations: [
-              observation,
-              {
-                ...changed,
-                target: FixtureTarget.make("other-target")
-              }
-            ],
-            target
-          }
-        ]
-      ) {
-        expect(
-          yield* Schema.decodeUnknownEffect(
-            TaskTrackerTargetClosureKnowledgeConflict
-          )(conflict).pipe(Effect.result)
-        ).toMatchObject({ _tag: "Failure" })
-      }
-
-      yield* Schema.decodeUnknownEffect(WorkflowResponsibilityEntry)({
-        _tag: "PlannedAttemptExecutorWorkResponsibility",
-        beganAt: 1,
-        plannedAttempt
-      })
+effectIt.effect("enforces graph-knowledge, responsibility, and causal-operation invariants", () =>
+  Effect.gen(function* () {
+    const observation = TaskTrackerTargetClosureObservation.make({
+      completeness: "Complete",
+      consistency: "PotentiallyMixedTime",
+      explicitlyCoveredTaskIds: [taskId],
+      factFamilies: ["TargetMembership"],
+      freshness: "FreshAtReadBoundary",
+      observedAt: JournalPosition.make(1),
+      operationId: initial.operationId,
+      provenAbsentTaskIds: [],
+      revision: TrackerRevision.make("schema-revision"),
+      target,
+      taskIds: [taskId]
+    })
+    yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureObservation)(observation)
+    for (const invalid of [
+      { ...observation, provenAbsentTaskIds: [taskId] },
+      { ...observation, explicitlyCoveredTaskIds: [], provenAbsentTaskIds: [TaskId.make("absent")] },
+      { ...observation, explicitlyCoveredTaskIds: [TaskId.make("unknown")] }
+    ]) {
       expect(
-        yield* Schema.decodeUnknownEffect(WorkflowResponsibilityEntry)({
-          _tag: "TaskClaimResponsibility",
-          acquisition: claim.acquisition,
-          beganAt: 1,
-          taskId: "different-task"
+        yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureObservation)(invalid).pipe(Effect.result)
+      ).toMatchObject({ _tag: "Failure" })
+    }
+
+    const changed = TaskTrackerTargetClosureObservation.make({
+      ...observation,
+      observedAt: JournalPosition.make(2),
+      operationId: admission.operationId,
+      provenAbsentTaskIds: [taskId],
+      taskIds: []
+    })
+    yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureKnowledgeConflict)(
+      TaskTrackerTargetClosureKnowledgeConflict.make({ observations: [observation, changed], target })
+    )
+    for (const conflict of [
+      { _tag: "TaskTrackerTargetClosureKnowledgeConflict", observations: [observation, observation], target },
+      {
+        _tag: "TaskTrackerTargetClosureKnowledgeConflict",
+        observations: [observation, { ...changed, target: FixtureTarget.make("other-target") }],
+        target
+      }
+    ]) {
+      expect(
+        yield* Schema.decodeUnknownEffect(TaskTrackerTargetClosureKnowledgeConflict)(conflict).pipe(Effect.result)
+      ).toMatchObject({ _tag: "Failure" })
+    }
+
+    yield* Schema.decodeUnknownEffect(WorkflowResponsibilityEntry)({
+      _tag: "PlannedAttemptExecutorWorkResponsibility",
+      beganAt: 1,
+      plannedAttempt
+    })
+    expect(
+      yield* Schema.decodeUnknownEffect(WorkflowResponsibilityEntry)({
+        _tag: "TaskClaimResponsibility",
+        acquisition: claim.acquisition,
+        beganAt: 1,
+        taskId: "different-task"
+      }).pipe(Effect.result)
+    ).toMatchObject({ _tag: "Failure" })
+
+    for (const operation of [claim, plan, worktree]) {
+      const operationId =
+        operation._tag === "AcquireTaskClaim" ? operation.acquisition.operationId : operation.operationId
+      expect(
+        yield* Schema.decodeUnknownEffect(WorkflowOperation)({
+          ...operation,
+          predecessorOperationIds: [operationId]
         }).pipe(Effect.result)
       ).toMatchObject({ _tag: "Failure" })
-
-      for (const operation of [claim, plan, worktree]) {
-        const operationId = operation._tag === "AcquireTaskClaim"
-          ? operation.acquisition.operationId
-          : operation.operationId
-        expect(
-          yield* Schema.decodeUnknownEffect(WorkflowOperation)({
-            ...operation,
-            predecessorOperationIds: [operationId]
-          }).pipe(Effect.result)
-        ).toMatchObject({ _tag: "Failure" })
-      }
-    })
+    }
+  })
 )
 
 it("combines equal, proven-changed, and conflicting tracker memberships", () => {
   const taskB = TaskId.make("task-B")
   const taskC = TaskId.make("task-C")
   const observations = [
-    makeTrackerGraphObservationOperation(
-      OperationId.make("membership-1"),
-      target
-    ),
-    makeTrackerGraphObservationOperation(
-      OperationId.make("membership-2"),
-      target
-    ),
-    makeTrackerGraphObservationOperation(
-      OperationId.make("membership-3"),
-      target
-    ),
-    makeTrackerGraphObservationOperation(
-      OperationId.make("membership-4"),
-      target,
-      [],
-      [taskId, taskB, taskC]
-    ),
+    makeTrackerGraphObservationOperation(OperationId.make("membership-1"), target),
+    makeTrackerGraphObservationOperation(OperationId.make("membership-2"), target),
+    makeTrackerGraphObservationOperation(OperationId.make("membership-3"), target),
+    makeTrackerGraphObservationOperation(OperationId.make("membership-4"), target, [], [taskId, taskB, taskC]),
     makeTrackerGraphObservationOperation(
       OperationId.make("membership-other-target"),
       FixtureTarget.make("other-target")
     )
   ]
-  const memberships = [
-    [taskId],
-    [taskB],
-    [taskC],
-    [taskId],
-    [taskC]
-  ]
-  const rows = observations.flatMap((operation, index) => [{
-    event: trackerGraphObservationIntent(operation),
-    key: intentRecordKey(operation.operationId)
-  }, {
-    event: trackerGraphOutcomeObserved(operation.operationId, {
-      _tag: "TrackerGraphObserved" as const,
-      revision: TrackerRevision.make(`membership-${index}`),
-      taskIds: Option.getOrThrow(
-        Option.fromUndefinedOr(memberships[index])
-      )
-    }),
-    key: outcomeRecordKey(operation.operationId)
-  }])
-  const reconstructed = reconstructManagedRunState(
-    runId,
-    recordsFrom(rows)
-  )
+  const memberships = [[taskId], [taskB], [taskC], [taskId], [taskC]]
+  const rows = observations.flatMap((operation, index) => [
+    { event: trackerGraphObservationIntent(operation), key: intentRecordKey(operation.operationId) },
+    {
+      event: trackerGraphOutcomeObserved(operation.operationId, {
+        _tag: "TrackerGraphObserved" as const,
+        revision: TrackerRevision.make(`membership-${index}`),
+        taskIds: Option.getOrThrow(Option.fromUndefinedOr(memberships[index]))
+      }),
+      key: outcomeRecordKey(operation.operationId)
+    }
+  ])
+  const reconstructed = reconstructManagedRunState(runId, recordsFrom(rows))
   expect(reconstructed._tag).toBe("ValidReconstructedManagedRun")
   if (reconstructed._tag !== "ValidReconstructedManagedRun") return
   expect(reconstructed.state.graphKnowledge.targetClosures).toHaveLength(2)
-  expect(reconstructed.state.graphKnowledge.targetClosures[0]?._tag).toBe(
-    "TaskTrackerTargetClosureObserved"
-  )
+  expect(reconstructed.state.graphKnowledge.targetClosures[0]?._tag).toBe("TaskTrackerTargetClosureObserved")
 
-  const conflicting = reconstructManagedRunState(
-    runId,
-    recordsFrom(rows.slice(0, 6))
-  )
+  const conflicting = reconstructManagedRunState(runId, recordsFrom(rows.slice(0, 6)))
   expect(conflicting._tag).toBe("ValidReconstructedManagedRun")
 
   const orphanId = OperationId.make("orphan")
   const orphanOutcome = reconstructManagedRunState(
     runId,
-    recordsFrom([{
-      event: trackerGraphOutcomeObserved(orphanId, {
-        _tag: "TrackerGraphObserved",
-        revision: TrackerRevision.make("orphan"),
-        taskIds: []
-      }),
-      key: outcomeRecordKey(orphanId)
-    }])
+    recordsFrom([
+      {
+        event: trackerGraphOutcomeObserved(orphanId, {
+          _tag: "TrackerGraphObserved",
+          revision: TrackerRevision.make("orphan"),
+          taskIds: []
+        }),
+        key: outcomeRecordKey(orphanId)
+      }
+    ])
   )
   expect(orphanOutcome._tag).toBe("ValidReconstructedManagedRun")
   expect(
     deriveManagedRunRecoveryStage(
-      orphanOutcome._tag === "ValidReconstructedManagedRun"
-        ? orphanOutcome.state.workflowHistory.records
-        : []
+      orphanOutcome._tag === "ValidReconstructedManagedRun" ? orphanOutcome.state.workflowHistory.records : []
     ).entries
   ).toEqual([])
 })
 
 it("projects the causal operation graph in canonical code-unit order", () => {
-  const duplicatePlanId = makeTaskAttemptPlanOperation({
-    ...plan,
-    operationId: initial.operationId
-  })
+  const duplicatePlanId = makeTaskAttemptPlanOperation({ ...plan, operationId: initial.operationId })
   expect(
-    causalGraphProjection([
-      worktree,
-      claim,
-      plan,
-      initial,
-      duplicatePlanId
-    ]).map(({ operationId }) => operationId)
+    causalGraphProjection([worktree, claim, plan, initial, duplicatePlanId]).map(({ operationId }) => operationId)
   ).toEqual([
     claim.acquisition.operationId,
     initial.operationId,
@@ -727,27 +550,12 @@ it("projects the causal operation graph in canonical code-unit order", () => {
 
 it("reports reconstructed state whose derived facts do not match their journal positions", () => {
   const malformedPositions: ReadonlyArray<JournalRecord> = [
-    {
-      ...recordsFrom([eventRows[0]])[0] as JournalRecord,
-      position: JournalPosition.make(10)
-    },
-    {
-      ...recordsFrom([eventRows[1]])[0] as JournalRecord,
-      position: JournalPosition.make(11)
-    },
-    {
-      ...recordsFrom([eventRows[2]])[0] as JournalRecord,
-      position: JournalPosition.make(12)
-    },
-    {
-      ...recordsFrom([eventRows[9]])[0] as JournalRecord,
-      position: JournalPosition.make(13)
-    }
+    { ...(recordsFrom([eventRows[0]])[0] as JournalRecord), position: JournalPosition.make(10) },
+    { ...(recordsFrom([eventRows[1]])[0] as JournalRecord), position: JournalPosition.make(11) },
+    { ...(recordsFrom([eventRows[2]])[0] as JournalRecord), position: JournalPosition.make(12) },
+    { ...(recordsFrom([eventRows[9]])[0] as JournalRecord), position: JournalPosition.make(13) }
   ]
-  const reconstruction = reconstructManagedRunState(
-    runId,
-    malformedPositions
-  )
+  const reconstruction = reconstructManagedRunState(runId, malformedPositions)
   expect(reconstruction._tag).toBe("InvalidReconstructedManagedRun")
   if (reconstruction._tag !== "InvalidReconstructedManagedRun") return
   expect(reconstruction.issues.map(({ _tag }) => _tag)).toEqual([
@@ -757,17 +565,8 @@ it("reports reconstructed state whose derived facts do not match their journal p
   ])
 
   const wrongRecordAtPosition = reconstructManagedRunState(runId, [
-    {
-      ...Option.getOrThrow(Option.fromUndefinedOr(
-        recordsFrom([eventRows[2]])[0]
-      )),
-      position: JournalPosition.make(2)
-    },
-    Option.getOrThrow(Option.fromUndefinedOr(
-      recordsFrom([eventRows[1]])[0]
-    ))
+    { ...Option.getOrThrow(Option.fromUndefinedOr(recordsFrom([eventRows[2]])[0])), position: JournalPosition.make(2) },
+    Option.getOrThrow(Option.fromUndefinedOr(recordsFrom([eventRows[1]])[0]))
   ])
-  expect(wrongRecordAtPosition._tag).toBe(
-    "InvalidReconstructedManagedRun"
-  )
+  expect(wrongRecordAtPosition._tag).toBe("InvalidReconstructedManagedRun")
 })

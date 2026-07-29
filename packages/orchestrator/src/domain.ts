@@ -1,27 +1,21 @@
 import { Schema } from "effect"
 
 /** Identifies a fixture locator, not a task, run, or execution resource. */
-export const FixtureTarget = Schema.NonEmptyString.pipe(
-  Schema.brand("FixtureTarget")
-)
+export const FixtureTarget = Schema.NonEmptyString.pipe(Schema.brand("FixtureTarget"))
 export type FixtureTarget = typeof FixtureTarget.Type
 
 /** Identifies one GitHub issue ordinal within a repository, not its stable task identity. */
-export const GithubIssueNumber = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1)
-).pipe(Schema.brand("GithubIssueNumber"))
+export const GithubIssueNumber = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+  Schema.brand("GithubIssueNumber")
+)
 export type GithubIssueNumber = typeof GithubIssueNumber.Type
 
 /** Identifies a GitHub repository owner only at the adapter target boundary. */
-export const GithubRepositoryOwner = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubRepositoryOwner")
-)
+export const GithubRepositoryOwner = Schema.NonEmptyString.pipe(Schema.brand("GithubRepositoryOwner"))
 export type GithubRepositoryOwner = typeof GithubRepositoryOwner.Type
 
 /** Identifies a GitHub repository name only at the adapter target boundary. */
-export const GithubRepositoryName = Schema.NonEmptyString.pipe(
-  Schema.brand("GithubRepositoryName")
-)
+export const GithubRepositoryName = Schema.NonEmptyString.pipe(Schema.brand("GithubRepositoryName"))
 export type GithubRepositoryName = typeof GithubRepositoryName.Type
 
 /** Names one GitHub issue-root query; it is interpreted only by the GitHub tracker adapter. */
@@ -51,18 +45,14 @@ export type OperationId = typeof OperationId.Type
  * Identifies one exact user control command within a run's workflow journal.
  * It is not a workflow operation, run, task, or provider request identity.
  */
-export const ControlCommandId = Schema.NonEmptyString.pipe(
-  Schema.brand("ControlCommandId")
-)
+export const ControlCommandId = Schema.NonEmptyString.pipe(Schema.brand("ControlCommandId"))
 export type ControlCommandId = typeof ControlCommandId.Type
 
 /**
  * Identifies the Dalph user proven by an authenticated transport boundary.
  * It records the actor and does not grant task-claim or provider authority.
  */
-export const AuthenticatedOperatorIdentity = Schema.NonEmptyString.pipe(
-  Schema.brand("AuthenticatedOperatorIdentity")
-)
+export const AuthenticatedOperatorIdentity = Schema.NonEmptyString.pipe(Schema.brand("AuthenticatedOperatorIdentity"))
 export type AuthenticatedOperatorIdentity = typeof AuthenticatedOperatorIdentity.Type
 
 /** Identifies the configured Dalph owner recorded in one task claim. */
@@ -84,9 +74,7 @@ export type RunId = typeof RunId.Type
  * Fingerprints the immutable inputs of one process-local selected transition.
  * It is not a task revision, operation identity, journal position, or random nonce.
  */
-export const SelectedTransitionFingerprint = Schema.NonEmptyString.pipe(
-  Schema.brand("SelectedTransitionFingerprint")
-)
+export const SelectedTransitionFingerprint = Schema.NonEmptyString.pipe(Schema.brand("SelectedTransitionFingerprint"))
 export type SelectedTransitionFingerprint = typeof SelectedTransitionFingerprint.Type
 
 /**
@@ -106,94 +94,75 @@ export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
 export type AttemptId = typeof AttemptId.Type
 
 /** Fingerprints the exact tracker-observed task content bound to one attempt; it is not a version counter. */
-export const TaskRevision = Schema.NonEmptyString.pipe(
-  Schema.brand("TaskRevision")
-)
+export const TaskRevision = Schema.NonEmptyString.pipe(Schema.brand("TaskRevision"))
 export type TaskRevision = typeof TaskRevision.Type
 
 /** Identifies one exact Git commit used as a planned task attempt's base. */
-export const GitCommitSha = Schema.String.check(
-  Schema.isPattern(/^[0-9a-f]{40}$/)
-).pipe(Schema.brand("GitCommitSha"))
+export const GitCommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)).pipe(Schema.brand("GitCommitSha"))
 export type GitCommitSha = typeof GitCommitSha.Type
 
 /** Locates the one exact worktree reserved for a planned task attempt. */
-export const WorktreeLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("WorktreeLocator")
-)
+export const WorktreeLocator = Schema.NonEmptyString.pipe(Schema.brand("WorktreeLocator"))
 export type WorktreeLocator = typeof WorktreeLocator.Type
 
 /** Locates the exact Git branch ref reserved for a planned task attempt. */
 const isValidTaskBranchRef = (ref: string): boolean => {
   if (!ref.startsWith("refs/heads/") || ref === "refs/heads/") return false
   if (
-    ref.includes("..")
-    || ref.includes("//")
-    || ref.includes("@{")
-    || ref.endsWith("/")
-    || ref.endsWith(".")
-    || /[\u0000-\u0020\u007f~^:?*\[\\]/.test(ref)
-  ) return false
+    ref.includes("..") ||
+    ref.includes("//") ||
+    ref.includes("@{") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".") ||
+    /[\u0000-\u0020\u007f~^:?*\[\\]/.test(ref)
+  )
+    return false
   return ref.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"))
 }
 
 export const TaskBranchRef = Schema.String.check(
-  Schema.makeFilter((ref) => isValidTaskBranchRef(ref) ? undefined : "must be a valid refs/heads Git ref")
+  Schema.makeFilter((ref) => (isValidTaskBranchRef(ref) ? undefined : "must be a valid refs/heads Git ref"))
 ).pipe(Schema.brand("TaskBranchRef"))
 export type TaskBranchRef = typeof TaskBranchRef.Type
 
 /** Locates the configured executor that will receive one planned task attempt. */
-export const TaskExecutorLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("TaskExecutorLocator")
-)
+export const TaskExecutorLocator = Schema.NonEmptyString.pipe(Schema.brand("TaskExecutorLocator"))
 export type TaskExecutorLocator = typeof TaskExecutorLocator.Type
 
 /** Identifies one durable managed-history fact within a run. */
-export const JournalRecordKey = Schema.NonEmptyString.pipe(
-  Schema.brand("JournalRecordKey")
-)
+export const JournalRecordKey = Schema.NonEmptyString.pipe(Schema.brand("JournalRecordKey"))
 export type JournalRecordKey = typeof JournalRecordKey.Type
 
 /** Orders committed journal facts within one run, starting at one. */
-export const JournalPosition = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1)
-).pipe(Schema.brand("JournalPosition"))
+export const JournalPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(Schema.brand("JournalPosition"))
 export type JournalPosition = typeof JournalPosition.Type
 
 /** Selects one immutable journal payload decoder; it is independent of the SQLite schema generation. */
-export const JournalEventVersion = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1)
-).pipe(Schema.brand("JournalEventVersion"))
+export const JournalEventVersion = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+  Schema.brand("JournalEventVersion")
+)
 export type JournalEventVersion = typeof JournalEventVersion.Type
 
 /** Names the decoded workflow-event variant duplicated in the physical row for boundary checks. */
-export const JournalEventKind = Schema.NonEmptyString.pipe(
-  Schema.brand("JournalEventKind")
-)
+export const JournalEventKind = Schema.NonEmptyString.pipe(Schema.brand("JournalEventKind"))
 export type JournalEventKind = typeof JournalEventKind.Type
 
 /** Locates Dalph's SQLite workflow journal, not a worktree or fixture. */
-export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("JournalDatabaseLocator")
-)
+export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(Schema.brand("JournalDatabaseLocator"))
 export type JournalDatabaseLocator = typeof JournalDatabaseLocator.Type
 
 /** Names a requested Git common-directory path before canonical resolution. */
-export const GitCommonDirectoryTarget = Schema.NonEmptyString.pipe(
-  Schema.brand("GitCommonDirectoryTarget")
-)
+export const GitCommonDirectoryTarget = Schema.NonEmptyString.pipe(Schema.brand("GitCommonDirectoryTarget"))
 export type GitCommonDirectoryTarget = typeof GitCommonDirectoryTarget.Type
 
 /** Canonically locates one Git common directory, not a requested path alias. */
-export const GitCommonDirectoryLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("GitCommonDirectoryLocator")
-)
+export const GitCommonDirectoryLocator = Schema.NonEmptyString.pipe(Schema.brand("GitCommonDirectoryLocator"))
 export type GitCommonDirectoryLocator = typeof GitCommonDirectoryLocator.Type
 
 /** Identifies an on-disk journal schema generation; zero means uninitialized. */
-export const JournalSchemaVersion = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(0)
-).pipe(Schema.brand("JournalSchemaVersion"))
+export const JournalSchemaVersion = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("JournalSchemaVersion")
+)
 export type JournalSchemaVersion = typeof JournalSchemaVersion.Type
 
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
@@ -217,21 +186,13 @@ export const TaskWorkCapacity = Schema.Int.check(
 ).pipe(Schema.brand("TaskWorkCapacity"))
 export type TaskWorkCapacity = typeof TaskWorkCapacity.Type
 
-export const defaultTaskWorkCapacity = TaskWorkCapacity.make(
-  defaultTaskWorkCapacityValue
-)
+export const defaultTaskWorkCapacity = TaskWorkCapacity.make(defaultTaskWorkCapacityValue)
 
 /** Identifies tracker snapshot content, not workflow or journal ordering. */
-export const TrackerRevision = Schema.NonEmptyString.pipe(
-  Schema.brand("TrackerRevision")
-)
+export const TrackerRevision = Schema.NonEmptyString.pipe(Schema.brand("TrackerRevision"))
 export type TrackerRevision = typeof TrackerRevision.Type
 
-export const TaskLifecycle = Schema.TaggedUnion({
-  Open: {},
-  CompletedSuccessfully: {},
-  TerminalWithoutSuccess: {}
-})
+export const TaskLifecycle = Schema.TaggedUnion({ Open: {}, CompletedSuccessfully: {}, TerminalWithoutSuccess: {} })
 export type TaskLifecycle = typeof TaskLifecycle.Type
 
 export const isTaskOpen = (lifecycle: TaskLifecycle): boolean => lifecycle._tag === "Open"
@@ -266,8 +227,5 @@ export const PlannedTaskAttempt = Schema.Struct({
 })
 export type PlannedTaskAttempt = typeof PlannedTaskAttempt.Type
 
-export const TrackerSnapshot = Schema.Struct({
-  revision: TrackerRevision,
-  tasks: Schema.Array(TrackerTask)
-})
+export const TrackerSnapshot = Schema.Struct({ revision: TrackerRevision, tasks: Schema.Array(TrackerTask) })
 export type TrackerSnapshot = Schema.Schema.Type<typeof TrackerSnapshot>

@@ -7,24 +7,10 @@ import { workflowJournalEventVersion } from "./journal-event-version.js"
  * It records no derived pause phase and selects no workflow action.
  */
 export const ControlCommandRequest = Schema.TaggedUnion({
-  RequestRunPause: {
-    commandId: ControlCommandId,
-    runId: RunId
-  },
-  RequestRunUnpause: {
-    commandId: ControlCommandId,
-    runId: RunId
-  },
-  RequestTaskPause: {
-    commandId: ControlCommandId,
-    runId: RunId,
-    taskId: TaskId
-  },
-  RequestTaskUnpause: {
-    commandId: ControlCommandId,
-    runId: RunId,
-    taskId: TaskId
-  }
+  RequestRunPause: { commandId: ControlCommandId, runId: RunId },
+  RequestRunUnpause: { commandId: ControlCommandId, runId: RunId },
+  RequestTaskPause: { commandId: ControlCommandId, runId: RunId, taskId: TaskId },
+  RequestTaskUnpause: { commandId: ControlCommandId, runId: RunId, taskId: TaskId }
 })
 export type ControlCommandRequest = typeof ControlCommandRequest.Type
 
@@ -33,16 +19,8 @@ export type ControlCommandRequest = typeof ControlCommandRequest.Type
  * exact operator who requested it.
  */
 export const ControlCommand = Schema.TaggedUnion({
-  RequestRunPause: {
-    commandId: ControlCommandId,
-    operatorId: AuthenticatedOperatorIdentity,
-    runId: RunId
-  },
-  RequestRunUnpause: {
-    commandId: ControlCommandId,
-    operatorId: AuthenticatedOperatorIdentity,
-    runId: RunId
-  },
+  RequestRunPause: { commandId: ControlCommandId, operatorId: AuthenticatedOperatorIdentity, runId: RunId },
+  RequestRunUnpause: { commandId: ControlCommandId, operatorId: AuthenticatedOperatorIdentity, runId: RunId },
   RequestTaskPause: {
     commandId: ControlCommandId,
     operatorId: AuthenticatedOperatorIdentity,
@@ -59,11 +37,8 @@ export const ControlCommand = Schema.TaggedUnion({
 export type ControlCommand = typeof ControlCommand.Type
 
 /** Records the exact authenticated command before later workflow selection. */
-export const ControlCommandRecordedEvent = Schema.TaggedStruct(
-  "ControlCommandRecorded",
-  {
-    command: ControlCommand,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
+export const ControlCommandRecordedEvent = Schema.TaggedStruct("ControlCommandRecorded", {
+  command: ControlCommand,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
 export type ControlCommandRecordedEvent = typeof ControlCommandRecordedEvent.Type

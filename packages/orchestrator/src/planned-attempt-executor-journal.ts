@@ -11,23 +11,17 @@ export const PlannedAttemptExecutorReportOrdinal = Schema.Int.pipe(
 export type PlannedAttemptExecutorReportOrdinal = typeof PlannedAttemptExecutorReportOrdinal.Type
 
 /** Records Dalph's intent before it first asks the executor to work on the attempt. */
-export const PlannedAttemptExecutorWorkStartedEvent = Schema.TaggedStruct(
-  "PlannedAttemptExecutorWorkStarted",
-  {
-    plannedAttempt: PlannedTaskAttempt,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
+export const PlannedAttemptExecutorWorkStartedEvent = Schema.TaggedStruct("PlannedAttemptExecutorWorkStarted", {
+  plannedAttempt: PlannedTaskAttempt,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
 
 /** Records the executor's latest complete-attempt report after the boundary returns. */
-export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct(
-  "PlannedAttemptExecutorWorkReported",
-  {
-    ordinal: PlannedAttemptExecutorReportOrdinal,
-    report: PlannedAttemptExecutorReport,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
+export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct("PlannedAttemptExecutorWorkReported", {
+  ordinal: PlannedAttemptExecutorReportOrdinal,
+  report: PlannedAttemptExecutorReport,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
 
 export const PlannedAttemptExecutorJournalEvent = Schema.Union([
   PlannedAttemptExecutorWorkStartedEvent,

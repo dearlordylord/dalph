@@ -8,27 +8,24 @@ import {
   acquireTaskClaimThrough,
   TaskClaimAcquisitionSimulated,
   TaskWorktreeReconciliationSimulated,
+  type WorkflowOperation,
   WorkflowInterpreter
 } from "./workflow.js"
 
 /** Live tracker operations with simulated plan and worktree boundaries for focused tests. */
-export const makeLiveWorkflowInterpreterLayer = (
-  operationPrefix: "ProductionBase" | "DeterministicTest"
-) =>
+export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBase" | "DeterministicTest") =>
   Layer.effect(
     WorkflowInterpreter,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const reader = yield* TrackerGraphReader
       const tracker = yield* TrackerMutation
-      const readTrackerGraph = Effect.fn(
-        `WorkflowInterpreter.${operationPrefix}.readTrackerGraph`
-      )(function*(operation) {
+      const readTrackerGraph = Effect.fn(`WorkflowInterpreter.${operationPrefix}.readTrackerGraph`)(function* (
+        operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+      ) {
         return yield* reader.read(operation.target)
       })
-      const acquireTaskClaim = Effect.fn(
-        `WorkflowInterpreter.${operationPrefix}.acquireTaskClaim`
-      )(function*(
-        operation,
+      const acquireTaskClaim = Effect.fn(`WorkflowInterpreter.${operationPrefix}.acquireTaskClaim`)(function* (
+        operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
         onIntentRecorded: Effect.Effect<void> = Effect.void
       ) {
         yield* onIntentRecorded
@@ -37,14 +34,8 @@ export const makeLiveWorkflowInterpreterLayer = (
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTrackerGraph,
-        reconcileTaskWorktree: (operation) =>
-          Effect.succeed(
-            TaskWorktreeReconciliationSimulated.make({ operation })
-          ),
-        recordTaskAttemptPlan: (operation) =>
-          Effect.succeed(
-            TaskAttemptPlanRecordingSimulated.make({ operation })
-          )
+        reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
+        recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })
     })
   )
@@ -53,39 +44,22 @@ export const deterministicTestWorkflowInterpreterLayer = makeLiveWorkflowInterpr
   Layer.provide(controlledTrackerMutationLayer)
 )
 
-export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<
-  WorkflowInterpreter,
-  never,
-  TrackerGraphReader
-> =>
+export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterpreter, never, TrackerGraphReader> =>
   Layer.effect(
     WorkflowInterpreter,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const reader = yield* TrackerGraphReader
       return WorkflowInterpreter.of({
-        acquireTaskClaim: (
-          operation,
-          onIntentRecorded: Effect.Effect<void> = Effect.void
-        ) =>
-          onIntentRecorded.pipe(
-            Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))
-          ),
+        acquireTaskClaim: (operation, onIntentRecorded: Effect.Effect<void> = Effect.void) =>
+          onIntentRecorded.pipe(Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))),
         readTrackerGraph: (operation) => reader.read(operation.target),
-        reconcileTaskWorktree: (operation) =>
-          Effect.succeed(
-            TaskWorktreeReconciliationSimulated.make({ operation })
-          ),
-        recordTaskAttemptPlan: (operation) =>
-          Effect.succeed(
-            TaskAttemptPlanRecordingSimulated.make({ operation })
-          )
+        reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
+        recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })
     })
   )
 
 export const dryRunWorkflowInterpreterLayer = Layer.merge(
   makeDryRunWorkflowInterpreterLayer(),
-  emptyManagedRecoveryActivationLayer.pipe(
-    Layer.provide(controlledFakePlannedAttemptExecutorLayer)
-  )
+  emptyManagedRecoveryActivationLayer.pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
 )

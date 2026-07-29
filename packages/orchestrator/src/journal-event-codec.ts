@@ -16,11 +16,7 @@ export type EncodedJournalEvent = Schema.Schema.Type<typeof EncodedJournalEvent>
 /** A current-version payload cannot be decoded into Dalph's event vocabulary. */
 export class JournalEventDecodeIssue extends Schema.TaggedErrorClass<JournalEventDecodeIssue>()(
   "JournalEventDecodeIssue",
-  {
-    detail: Schema.String,
-    kind: JournalEventKind,
-    version: JournalEventVersion
-  }
+  { detail: Schema.String, kind: JournalEventKind, version: JournalEventVersion }
 ) {}
 
 const decodePayload = (
@@ -43,30 +39,25 @@ const decodePayload = (
 /**
  * Decodes one current immutable payload into the current semantic event.
  */
-export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(
-  function*(encoded: EncodedJournalEvent) {
-    const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
-    const candidate: unknown = encoded.version === workflowJournalEventVersion
+export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(function* (encoded: EncodedJournalEvent) {
+  const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
+  const candidate: unknown =
+    encoded.version === workflowJournalEventVersion
       ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
       : undefined
-    if (candidate === undefined) {
-      return yield* new JournalEventDecodeIssue({
-        detail: `unsupported journal event version ${encoded.version}`,
-        kind: encoded.kind,
-        version: encoded.version
-      })
-    }
-    return yield* Schema.decodeUnknownEffect(WorkflowJournalEvent)(candidate).pipe(
-      Effect.mapError((cause) =>
-        new JournalEventDecodeIssue({
-          detail: String(cause),
-          kind: encoded.kind,
-          version: encoded.version
-        })
-      )
-    )
+  if (candidate === undefined) {
+    return yield* new JournalEventDecodeIssue({
+      detail: `unsupported journal event version ${encoded.version}`,
+      kind: encoded.kind,
+      version: encoded.version
+    })
   }
-)
+  return yield* Schema.decodeUnknownEffect(WorkflowJournalEvent)(candidate).pipe(
+    Effect.mapError(
+      (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind: encoded.kind, version: encoded.version })
+    )
+  )
+})
 
 /** Encodes current semantics without making JSON bytes the equality contract. */
 export const encodeJournalEvent = (event: WorkflowJournalEvent): EncodedJournalEvent => {
@@ -80,9 +71,6 @@ export const encodeJournalEvent = (event: WorkflowJournalEvent): EncodedJournalE
 }
 
 /** Compares decoded event meanings, never JSON representation. */
-export const equalJournalEvents = (
-  left: WorkflowJournalEvent,
-  right: WorkflowJournalEvent
-): boolean =>
-  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left))
-    === JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
+export const equalJournalEvents = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boolean =>
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))

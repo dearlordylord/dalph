@@ -44,17 +44,11 @@ type JournalEventDescriptor =
 
 type PlannedAttemptFact =
   | { readonly _tag: "NoPlannedAttempt" }
-  | {
-    readonly _tag: "PlannedAttempt"
-    readonly plannedAttempt: PlannedTaskAttempt
-  }
+  | { readonly _tag: "PlannedAttempt"; readonly plannedAttempt: PlannedTaskAttempt }
 
 type RecordPredecessorFact =
   | { readonly _tag: "NoRecordPredecessor" }
-  | {
-    readonly _tag: "RequiredRecordPredecessor"
-    readonly key: JournalRecordKey
-  }
+  | { readonly _tag: "RequiredRecordPredecessor"; readonly key: JournalRecordKey }
 
 interface OperationEventInput {
   readonly expectedKey: JournalRecordKey
@@ -66,24 +60,18 @@ interface OperationEventInput {
   readonly requiredPredecessorKinds?: ReadonlyArray<WorkflowJournalEvent["_tag"]>
 }
 
-const operationEvent = (
-  input: OperationEventInput
-): OperationEventDescriptor => ({
+const operationEvent = (input: OperationEventInput): OperationEventDescriptor => ({
   _tag: "OperationEventDescriptor",
   expectedKey: input.expectedKey,
   operationId: input.operationId,
-  plannedAttempt: input.plannedAttempt === undefined
-    ? { _tag: "NoPlannedAttempt" }
-    : {
-      _tag: "PlannedAttempt",
-      plannedAttempt: input.plannedAttempt
-    },
-  recordPredecessor: input.requiredPredecessorKey === undefined
-    ? { _tag: "NoRecordPredecessor" }
-    : {
-      _tag: "RequiredRecordPredecessor",
-      key: input.requiredPredecessorKey
-    },
+  plannedAttempt:
+    input.plannedAttempt === undefined
+      ? { _tag: "NoPlannedAttempt" }
+      : { _tag: "PlannedAttempt", plannedAttempt: input.plannedAttempt },
+  recordPredecessor:
+    input.requiredPredecessorKey === undefined
+      ? { _tag: "NoRecordPredecessor" }
+      : { _tag: "RequiredRecordPredecessor", key: input.requiredPredecessorKey },
   relatedOperationIds: input.relatedOperationIds ?? [],
   requiredOperationIds: input.requiredOperationIds,
   requiredPredecessorKinds: input.requiredPredecessorKinds ?? []
@@ -103,9 +91,7 @@ const plannedAttemptExecutorEvent = (
 })
 
 /** Derives canonical storage identity and causal facts from one generic event. */
-export const describeJournalEvent = (
-  event: WorkflowJournalEvent
-): JournalEventDescriptor => {
+export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventDescriptor => {
   switch (event._tag) {
     case "ControlCommandRecorded":
       return {
@@ -116,23 +102,15 @@ export const describeJournalEvent = (
       }
     case "PlannedAttemptExecutorWorkStarted":
       return plannedAttemptExecutorEvent(
-        {
-          attemptId: event.plannedAttempt.attemptId,
-          runId: event.plannedAttempt.runId
-        },
-        plannedAttemptExecutorWorkStartedRecordKey(
-          event.plannedAttempt.attemptId
-        ),
+        { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
+        plannedAttemptExecutorWorkStartedRecordKey(event.plannedAttempt.attemptId),
         event.plannedAttempt,
         undefined
       )
     case "PlannedAttemptExecutorWorkReported":
       return plannedAttemptExecutorEvent(
         event.report.correlation,
-        plannedAttemptExecutorWorkReportedRecordKey(
-          event.report.correlation.attemptId,
-          event.ordinal
-        ),
+        plannedAttemptExecutorWorkReportedRecordKey(event.report.correlation.attemptId, event.ordinal),
         undefined,
         event.ordinal
       )
@@ -148,19 +126,13 @@ export const describeJournalEvent = (
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKinds: [
-          "TrackerGraphObservationIntentRecorded"
-        ]
+        requiredPredecessorKinds: ["TrackerGraphObservationIntentRecorded"]
       })
     case "TaskClaimAcquisitionIntended":
       return operationEvent({
-        expectedKey: intentRecordKey(
-          event.operation.acquisition.operationId
-        ),
+        expectedKey: intentRecordKey(event.operation.acquisition.operationId),
         operationId: event.operation.acquisition.operationId,
-        relatedOperationIds: [
-          event.operation.acquisition.operationId
-        ],
+        relatedOperationIds: [event.operation.acquisition.operationId],
         requiredOperationIds: event.operation.predecessorOperationIds
       })
     case "TaskClaimAcquired":
@@ -174,9 +146,7 @@ export const describeJournalEvent = (
       })
     case "TaskAttemptPlanned":
       return operationEvent({
-        expectedKey: attemptPlanRecordKey(
-          event.operation.plannedAttempt.attemptId
-        ),
+        expectedKey: attemptPlanRecordKey(event.operation.plannedAttempt.attemptId),
         operationId: event.operation.operationId,
         plannedAttempt: event.operation.plannedAttempt,
         requiredOperationIds: event.operation.predecessorOperationIds
@@ -194,9 +164,7 @@ export const describeJournalEvent = (
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKinds: [
-          "TaskWorktreeReconciliationIntended"
-        ]
+        requiredPredecessorKinds: ["TaskWorktreeReconciliationIntended"]
       })
   }
 }

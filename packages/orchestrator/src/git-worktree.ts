@@ -26,30 +26,20 @@ export const PlannedWorktreeAbsent = Schema.TaggedStruct("PlannedWorktreeAbsent"
 export type PlannedWorktreeAbsent = typeof PlannedWorktreeAbsent.Type
 
 /** The planned path exists but Git does not register it as a worktree. */
-export class UntrackedWorktreePath extends Schema.TaggedErrorClass<UntrackedWorktreePath>()(
-  "UntrackedWorktreePath",
-  { worktree: WorktreeLocator }
-) {}
+export class UntrackedWorktreePath extends Schema.TaggedErrorClass<UntrackedWorktreePath>()("UntrackedWorktreePath", {
+  worktree: WorktreeLocator
+}) {}
 
 /** The planned branch is registered at a different worktree and remains untouched. */
 export class ForeignWorktreeRegistration extends Schema.TaggedErrorClass<ForeignWorktreeRegistration>()(
   "ForeignWorktreeRegistration",
-  {
-    branch: TaskBranchRef,
-    plannedWorktree: WorktreeLocator,
-    registeredWorktree: WorktreeLocator
-  }
+  { branch: TaskBranchRef, plannedWorktree: WorktreeLocator, registeredWorktree: WorktreeLocator }
 ) {}
 
 /** The planned path is registered to a different branch and remains untouched. */
 export class ConflictingWorktreeRegistration extends Schema.TaggedErrorClass<ConflictingWorktreeRegistration>()(
   "ConflictingWorktreeRegistration",
-  {
-    observedBranch: TaskBranchRef,
-    observedHead: GitCommitSha,
-    plannedBranch: TaskBranchRef,
-    worktree: WorktreeLocator
-  }
+  { observedBranch: TaskBranchRef, observedHead: GitCommitSha, plannedBranch: TaskBranchRef, worktree: WorktreeLocator }
 ) {}
 
 /** The planned path and branch are each registered to different competing resources. */
@@ -65,15 +55,12 @@ export class CompetingWorktreeRegistrations extends Schema.TaggedErrorClass<Comp
 ) {}
 
 /** The declared Base is not an ancestor of current HEAD; Dalph never repairs the branch. */
-export class WorktreeBaseMismatch extends Schema.TaggedErrorClass<WorktreeBaseMismatch>()(
-  "WorktreeBaseMismatch",
-  {
-    baseSha: GitCommitSha,
-    branch: TaskBranchRef,
-    headSha: GitCommitSha,
-    worktree: WorktreeLocator
-  }
-) {}
+export class WorktreeBaseMismatch extends Schema.TaggedErrorClass<WorktreeBaseMismatch>()("WorktreeBaseMismatch", {
+  baseSha: GitCommitSha,
+  branch: TaskBranchRef,
+  headSha: GitCommitSha,
+  worktree: WorktreeLocator
+}) {}
 
 /** Git returned mutually inconsistent branch/worktree facts which require operator repair. */
 export class ContradictoryWorktreeState extends Schema.TaggedErrorClass<ContradictoryWorktreeState>()(
@@ -99,9 +86,7 @@ type GitWorktreeReconciliationFact =
   | UntrackedWorktreePath
   | WorktreeBaseMismatch
 
-export type GitWorktreeObservationError =
-  | GitWorktreeReadFailure
-  | GitWorktreeReconciliationFact
+export type GitWorktreeObservationError = GitWorktreeReadFailure | GitWorktreeReconciliationFact
 
 export interface GitWorktreeService {
   readonly createPlannedWorktree: (
@@ -112,90 +97,87 @@ export interface GitWorktreeService {
   ) => Effect.Effect<PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady, GitWorktreeObservationError>
 }
 
-export class GitWorktree extends Context.Service<GitWorktree, GitWorktreeService>()(
-  "@dalph/GitWorktree"
-) {}
+export class GitWorktree extends Context.Service<GitWorktree, GitWorktreeService>()("@dalph/GitWorktree") {}
 
-export class TestGitWorktree extends Context.Service<TestGitWorktree, {
-  readonly createRequests: () => Effect.Effect<ReadonlyArray<PlannedTaskAttempt>>
-  readonly setObservation: (
-    observation: PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady
-  ) => Effect.Effect<void>
-}>()("@dalph/GitWorktree/Test") {}
+export class TestGitWorktree extends Context.Service<
+  TestGitWorktree,
+  {
+    readonly createRequests: () => Effect.Effect<ReadonlyArray<PlannedTaskAttempt>>
+    readonly setObservation: (
+      observation: PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady
+    ) => Effect.Effect<void>
+  }
+>()("@dalph/GitWorktree/Test") {}
 
 /** Deterministic Git contract used by workflow and reconciliation tests. */
 export const gitWorktreeTestLayer = (
   initialObservation: PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady
 ) =>
-  Layer.effectContext(Effect.gen(function*() {
-    const observation = yield* Ref.make(initialObservation)
-    const requests = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
-    const service = GitWorktree.of({
-      createPlannedWorktree: Effect.fn("GitWorktree.Test.createPlannedWorktree")(function*(plan) {
-        yield* Ref.update(requests, (current) => [...current, plan])
-        yield* Ref.set(
-          observation,
-          PlannedWorktreeReady.make({
-            baseSha: plan.baseSha,
-            branch: plan.branch,
-            headSha: plan.baseSha,
-            worktree: plan.worktree
-          })
-        )
-      }),
-      readPlannedWorktree: Effect.fn("GitWorktree.Test.readPlannedWorktree")(function*() {
-        return yield* Ref.get(observation)
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const observation = yield* Ref.make(initialObservation)
+      const requests = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
+      const service = GitWorktree.of({
+        createPlannedWorktree: Effect.fn("GitWorktree.Test.createPlannedWorktree")(function* (plan) {
+          yield* Ref.update(requests, (current) => [...current, plan])
+          yield* Ref.set(
+            observation,
+            PlannedWorktreeReady.make({
+              baseSha: plan.baseSha,
+              branch: plan.branch,
+              headSha: plan.baseSha,
+              worktree: plan.worktree
+            })
+          )
+        }),
+        readPlannedWorktree: Effect.fn("GitWorktree.Test.readPlannedWorktree")(function* () {
+          return yield* Ref.get(observation)
+        })
       })
+      return Context.empty().pipe(
+        Context.add(GitWorktree, service),
+        Context.add(TestGitWorktree, {
+          createRequests: () => Ref.get(requests),
+          setObservation: (value) => Ref.set(observation, value)
+        })
+      )
     })
-    return Context.empty().pipe(
-      Context.add(GitWorktree, service),
-      Context.add(TestGitWorktree, {
-        createRequests: () => Ref.get(requests),
-        setObservation: (value) => Ref.set(observation, value)
-      })
-    )
-  }))
+  )
 
-export const runGitWorktreeReconciliation = Effect.fn(
-  "GitWorktree.runReconciliation"
-)(function*(git: GitWorktreeService, plannedAttempt: PlannedTaskAttempt) {
+export const runGitWorktreeReconciliation = Effect.fn("GitWorktree.runReconciliation")(function* (
+  git: GitWorktreeService,
+  plannedAttempt: PlannedTaskAttempt
+) {
   const requireExactProof = (proof: PlannedWorktreeReady) =>
-    proof.baseSha === plannedAttempt.baseSha
-      && proof.branch === plannedAttempt.branch
-      && proof.worktree === plannedAttempt.worktree
+    proof.baseSha === plannedAttempt.baseSha &&
+    proof.branch === plannedAttempt.branch &&
+    proof.worktree === plannedAttempt.worktree
       ? Effect.succeed(proof)
       : Effect.fail(
-        new ContradictoryWorktreeState({
-          detail: "Git returned a ready proof for different planned resources",
-          worktree: plannedAttempt.worktree
-        })
-      )
+          new ContradictoryWorktreeState({
+            detail: "Git returned a ready proof for different planned resources",
+            worktree: plannedAttempt.worktree
+          })
+        )
   const requireExactObservation = (
     observation: PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady
-  ): Effect.Effect<
-    PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady,
-    ContradictoryWorktreeState
-  > =>
+  ): Effect.Effect<PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady, ContradictoryWorktreeState> =>
     observation._tag === "PlannedWorktreeReady"
       ? requireExactProof(observation)
-      : observation._tag === "PlannedBranchReady"
-          && (observation.baseSha !== plannedAttempt.baseSha || observation.branch !== plannedAttempt.branch)
-      ? Effect.fail(
-        new ContradictoryWorktreeState({
-          detail: "Git returned branch-ready evidence for different planned resources",
-          worktree: plannedAttempt.worktree
-        })
-      )
-      : Effect.succeed(observation)
-  const initial = yield* git.readPlannedWorktree(plannedAttempt).pipe(
-    Effect.flatMap(requireExactObservation)
-  )
+      : observation._tag === "PlannedBranchReady" &&
+          (observation.baseSha !== plannedAttempt.baseSha || observation.branch !== plannedAttempt.branch)
+        ? Effect.fail(
+            new ContradictoryWorktreeState({
+              detail: "Git returned branch-ready evidence for different planned resources",
+              worktree: plannedAttempt.worktree
+            })
+          )
+        : Effect.succeed(observation)
+  const initial = yield* git.readPlannedWorktree(plannedAttempt).pipe(Effect.flatMap(requireExactObservation))
   if (initial._tag === "PlannedWorktreeReady") return initial
 
   const request = yield* git.createPlannedWorktree(plannedAttempt).pipe(Effect.result)
-  const observed = yield* git.readPlannedWorktree(plannedAttempt).pipe(
-    Effect.flatMap(requireExactObservation)
-  )
+  const observed = yield* git.readPlannedWorktree(plannedAttempt).pipe(Effect.flatMap(requireExactObservation))
   if (observed._tag === "PlannedWorktreeReady") return observed
   if (request._tag === "Failure") return yield* request.failure
   return yield* new GitWorktreeCreateFailure({

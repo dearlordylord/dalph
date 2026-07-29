@@ -20,20 +20,12 @@ const command = {
 
 describe("ControlService", () => {
   it.effect("records explicit pause and unpause directions without claiming work resumed", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const control = yield* ControlService
       const journal = yield* JournalStore
       const inputs = [
-        {
-          _tag: "RequestRunPause",
-          commandId: ControlCommandId.make("command-2"),
-          runId
-        },
-        {
-          _tag: "RequestRunUnpause",
-          commandId: ControlCommandId.make("command-3"),
-          runId
-        },
+        { _tag: "RequestRunPause", commandId: ControlCommandId.make("command-2"), runId },
+        { _tag: "RequestRunUnpause", commandId: ControlCommandId.make("command-3"), runId },
         command,
         {
           _tag: "RequestTaskUnpause",
@@ -47,44 +39,23 @@ describe("ControlService", () => {
 
       const records = yield* journal.read(runId)
       expect(records.map(({ event }) => event)).toEqual([
-        {
-          _tag: "ControlCommandRecorded",
-          command: { ...inputs[0], operatorId },
-          version: 4
-        },
-        {
-          _tag: "ControlCommandRecorded",
-          command: { ...inputs[1], operatorId },
-          version: 4
-        },
-        {
-          _tag: "ControlCommandRecorded",
-          command: { ...inputs[2], operatorId },
-          version: 4
-        },
-        {
-          _tag: "ControlCommandRecorded",
-          command: { ...inputs[3], operatorId },
-          version: 4
-        }
+        { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: 4 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: 4 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: 4 },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: 4 }
       ])
       const reduced = reduceManagedHistory(runId, records)
       expect(reduced._tag).toBe("ValidManagedHistory")
       if (reduced._tag === "ValidManagedHistory") {
-        expect(reduced.managedRun.pause).toEqual({
-          run: { _tag: "RunUnpaused" },
-          tasks: { _tag: "NoTaskPauses" }
-        })
+        expect(reduced.managedRun.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
         expect(reduced.managedRun.responsibility.entries).toEqual([])
         expect(reduced.managedRun.workflowHistory.records).toEqual(records)
       }
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(memoryJournalStoreLayer)
-    ))
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
+  )
 
   it.effect("returns the original record for exact redelivery", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const control = yield* ControlService
       const journal = yield* JournalStore
       const first = yield* control.record(operatorId, command)
@@ -92,13 +63,11 @@ describe("ControlService", () => {
 
       expect(redelivered).toEqual(first)
       expect(yield* journal.read(runId)).toEqual([first])
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(memoryJournalStoreLayer)
-    ))
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
+  )
 
   it.effect("rejects reuse of a command identity with another direction, subject, or operator", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const control = yield* ControlService
       yield* control.record(operatorId, command)
       const contradictions = [
@@ -110,35 +79,23 @@ describe("ControlService", () => {
       for (const attempt of contradictions) {
         const failure = yield* Effect.flip(attempt)
         expect(failure).toBeInstanceOf(ControlCommandIdentityContradiction)
-        expect(failure).toMatchObject({
-          commandId: command.commandId,
-          existingPosition: 1,
-          runId
-        })
+        expect(failure).toMatchObject({ commandId: command.commandId, existingPosition: 1, runId })
       }
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(memoryJournalStoreLayer)
-    ))
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
+  )
 
   it.effect("rejects malformed transport payloads before appending", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const control = yield* ControlService
       const journal = yield* JournalStore
       const failure = yield* Effect.flip(
-        control.record(operatorId, {
-          _tag: "RequestTaskPause",
-          commandId: "command-without-task",
-          runId
-        })
+        control.record(operatorId, { _tag: "RequestTaskPause", commandId: "command-without-task", runId })
       )
 
       expect(failure._tag).toBe("SchemaError")
       expect(yield* journal.read(runId)).toEqual([])
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(memoryJournalStoreLayer)
-    ))
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
+  )
 
   it.effect("preserves a journal storage failure as distinct from identity contradiction", () => {
     const unavailable = new JournalStorageUnavailable({
@@ -153,73 +110,50 @@ describe("ControlService", () => {
         scan: () => Effect.succeed({ issues: [], runs: [] })
       })
     )
-    return Effect.gen(function*() {
+    return Effect.gen(function* () {
       const control = yield* ControlService
       expect(yield* Effect.flip(control.record(operatorId, command))).toBe(unavailable)
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(unavailableJournalLayer)
-    )
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(unavailableJournalLayer))
   })
 
   it.effect("fails recovery closed when a record run contradicts its command subject", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const control = yield* ControlService
       const recorded = yield* control.record(operatorId, command)
       const recordRunId = RunId.make("contradictory-record-run")
-      const reduced = reduceManagedHistory(recordRunId, [{
-        ...recorded,
-        runId: recordRunId
-      }])
+      const reduced = reduceManagedHistory(recordRunId, [{ ...recorded, runId: recordRunId }])
 
       expect(reduced._tag).toBe("InvalidManagedHistory")
       if (reduced._tag === "InvalidManagedHistory") {
         expect(reduced.issues).toContainEqual(
-          expect.objectContaining({
-            detail: `control command ${command.commandId} binds run ${runId}`
-          })
+          expect.objectContaining({ detail: `control command ${command.commandId} binds run ${runId}` })
         )
       }
-    }).pipe(
-      Effect.provide(controlServiceLayer),
-      Effect.provide(memoryJournalStoreLayer)
-    ))
+    }).pipe(Effect.provide(controlServiceLayer), Effect.provide(memoryJournalStoreLayer))
+  )
 
   it.effect("reopens the exact command from SQLite without assigning a pause phase", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "dalph-control-service-"
-      })
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-control-service-" })
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
 
-      const recorded = yield* Effect.gen(function*() {
+      const recorded = yield* Effect.gen(function* () {
         const control = yield* ControlService
         return yield* control.record(operatorId, command)
-      }).pipe(
-        Effect.provide(controlServiceLayer),
-        Effect.provide(sqliteJournalStoreLayer({ filename }))
-      )
+      }).pipe(Effect.provide(controlServiceLayer), Effect.provide(sqliteJournalStoreLayer({ filename })))
 
-      const reopened = yield* Effect.gen(function*() {
+      const reopened = yield* Effect.gen(function* () {
         const control = yield* ControlService
         const journal = yield* JournalStore
         const redelivered = yield* control.record(operatorId, command)
-        const contradiction = yield* Effect.flip(
-          control.record(operatorId, { ...command, _tag: "RequestTaskUnpause" })
-        )
-        return {
-          contradiction,
-          records: yield* journal.read(runId),
-          redelivered
-        }
-      }).pipe(
-        Effect.provide(controlServiceLayer),
-        Effect.provide(sqliteJournalStoreLayer({ filename }))
-      )
+        const contradiction = yield* Effect.flip(control.record(operatorId, { ...command, _tag: "RequestTaskUnpause" }))
+        return { contradiction, records: yield* journal.read(runId), redelivered }
+      }).pipe(Effect.provide(controlServiceLayer), Effect.provide(sqliteJournalStoreLayer({ filename })))
 
       expect(reopened.redelivered).toEqual(recorded)
       expect(reopened.records).toEqual([recorded])
       expect(reopened.contradiction).toBeInstanceOf(ControlCommandIdentityContradiction)
-    }).pipe(Effect.provide(NodeServices.layer)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 })

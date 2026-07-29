@@ -26,34 +26,16 @@ it("invalidates claim authority when any exact capability component changes", ()
         })
 
         expect(isExactTaskClaim(claim, claim)).toBe(true)
-        expect(isExactTaskClaim(
-          claim,
-          ActiveTaskClaim.make({
-            ...claim,
-            operationId: OperationId.make(otherOperation)
-          })
-        )).toBe(false)
-        expect(isExactTaskClaim(
-          claim,
-          ActiveTaskClaim.make({
-            ...claim,
-            owner: ClaimOwner.make(otherOwner)
-          })
-        )).toBe(false)
-        expect(isExactTaskClaim(
-          claim,
-          ActiveTaskClaim.make({
-            ...claim,
-            taskId: TaskId.make(otherTask)
-          })
-        )).toBe(false)
-        expect(isExactTaskClaim(
-          claim,
-          ActiveTaskClaim.make({
-            ...claim,
-            token: ClaimToken.make(otherToken)
-          })
-        )).toBe(false)
+        expect(
+          isExactTaskClaim(claim, ActiveTaskClaim.make({ ...claim, operationId: OperationId.make(otherOperation) }))
+        ).toBe(false)
+        expect(isExactTaskClaim(claim, ActiveTaskClaim.make({ ...claim, owner: ClaimOwner.make(otherOwner) }))).toBe(
+          false
+        )
+        expect(isExactTaskClaim(claim, ActiveTaskClaim.make({ ...claim, taskId: TaskId.make(otherTask) }))).toBe(false)
+        expect(isExactTaskClaim(claim, ActiveTaskClaim.make({ ...claim, token: ClaimToken.make(otherToken) }))).toBe(
+          false
+        )
       }
     ),
     { numRuns: 100 }

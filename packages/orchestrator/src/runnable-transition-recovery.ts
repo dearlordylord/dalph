@@ -4,28 +4,23 @@ import { JournalStore } from "./journal-store.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { WorkflowInterpreter } from "./workflow.js"
 
-const recoverClaim = Effect.fn(
-  "WorkflowRecovery.recoverClaim"
-)(function*(runId: RunId, operationId: string) {
+const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId: RunId, operationId: string) {
   const journal = yield* JournalStore
   const interpreter = yield* WorkflowInterpreter
-  const intent = (yield* journal.read(runId)).find(({ event }) =>
-    event._tag === "TaskClaimAcquisitionIntended"
-    && event.operation.acquisition.operationId === operationId
+  const intent = (yield* journal.read(runId)).find(
+    ({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === operationId
   )?.event
   if (intent?._tag === "TaskClaimAcquisitionIntended") {
     yield* interpreter.acquireTaskClaim(intent.operation)
   }
 })
 
-const recoverWorktree = Effect.fn(
-  "WorkflowRecovery.recoverWorktree"
-)(function*(runId: RunId, operationId: string) {
+const recoverWorktree = Effect.fn("WorkflowRecovery.recoverWorktree")(function* (runId: RunId, operationId: string) {
   const journal = yield* JournalStore
   const interpreter = yield* WorkflowInterpreter
-  const intent = (yield* journal.read(runId)).find(({ event }) =>
-    event._tag === "TaskWorktreeReconciliationIntended"
-    && event.operation.operationId === operationId
+  const intent = (yield* journal.read(runId)).find(
+    ({ event }) => event._tag === "TaskWorktreeReconciliationIntended" && event.operation.operationId === operationId
   )?.event
   if (intent?._tag === "TaskWorktreeReconciliationIntended") {
     yield* interpreter.reconcileTaskWorktree(intent.operation)
@@ -33,9 +28,7 @@ const recoverWorktree = Effect.fn(
 })
 
 /** Executes the one generic already-intended operation selected after reconstruction. */
-export const recoverRunnableTransition = Effect.fn(
-  "WorkflowRecovery.recoverRunnableTransition"
-)(function*(
+export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunnableTransition")(function* (
   runId: RunId,
   transition: RunnableFrontierTransition
 ) {

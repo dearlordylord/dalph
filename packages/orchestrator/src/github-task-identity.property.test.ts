@@ -9,14 +9,9 @@ const opaqueTaskIdPrefix = "t1."
 it("roundtrips opaque GitHub task identity across bounded provider IDs", () => {
   fc.assert(
     fc.property(githubNodeId, githubNodeId, (repositoryNodeId, issueNodeId) => {
-      const taskId = githubTaskIdFor(
-        GithubRepositoryNodeId.make(repositoryNodeId),
-        GithubIssueNodeId.make(issueNodeId)
-      )
+      const taskId = githubTaskIdFor(GithubRepositoryNodeId.make(repositoryNodeId), GithubIssueNodeId.make(issueNodeId))
       expect(taskId.startsWith(opaqueTaskIdPrefix)).toBe(true)
-      const decoded = JSON.parse(
-        Buffer.from(taskId.slice(opaqueTaskIdPrefix.length), "base64url").toString("utf8")
-      )
+      const decoded = JSON.parse(Buffer.from(taskId.slice(opaqueTaskIdPrefix.length), "base64url").toString("utf8"))
 
       expect(decoded).toEqual([repositoryNodeId, issueNodeId])
     }),

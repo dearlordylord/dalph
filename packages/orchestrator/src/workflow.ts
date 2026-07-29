@@ -86,33 +86,24 @@ export interface WorkflowInterpreterService {
   >
   readonly recordTaskAttemptPlan: (
     operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
-  ) => Effect.Effect<
-    TaskAttemptPlan.TaskAttemptPlanRecordingResult,
-    TaskAttemptPlanRecordingError
-  >
+  ) => Effect.Effect<TaskAttemptPlan.TaskAttemptPlanRecordingResult, TaskAttemptPlanRecordingError>
 }
 
-export class WorkflowInterpreter extends Context.Service<
-  WorkflowInterpreter,
-  WorkflowInterpreterService
->()("@dalph/WorkflowInterpreter") {}
+export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
+  "@dalph/WorkflowInterpreter"
+) {}
 
 /** The real tracker proved the exact task claim after a fresh observation. */
-export const AuthoritativeTaskClaimAcquired = Schema.TaggedStruct(
-  "AuthoritativeTaskClaimAcquired",
-  { claim: ActiveTaskClaim }
-)
+export const AuthoritativeTaskClaimAcquired = Schema.TaggedStruct("AuthoritativeTaskClaimAcquired", {
+  claim: ActiveTaskClaim
+})
 
 /** Dry-run records intended ownership without claiming or reading claim state. */
-export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct(
-  "TaskClaimAcquisitionSimulated",
-  { operation: WorkflowOperation.cases.AcquireTaskClaim }
-)
+export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct("TaskClaimAcquisitionSimulated", {
+  operation: WorkflowOperation.cases.AcquireTaskClaim
+})
 
-const TaskClaimAcquisitionResult = Schema.Union([
-  AuthoritativeTaskClaimAcquired,
-  TaskClaimAcquisitionSimulated
-])
+const TaskClaimAcquisitionResult = Schema.Union([AuthoritativeTaskClaimAcquired, TaskClaimAcquisitionSimulated])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
 /** Generic traces stop at the complete-attempt executor boundary. */
@@ -133,18 +124,12 @@ interface WorkflowTraceService {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
 }
 
-export class WorkflowTrace extends Context.Service<
-  WorkflowTrace,
-  WorkflowTraceService
->()("@dalph/WorkflowTrace") {}
+export class WorkflowTrace extends Context.Service<WorkflowTrace, WorkflowTraceService>()("@dalph/WorkflowTrace") {}
 
 export const acquireTaskClaimThrough = (
   tracker: TrackerMutationService,
   operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
 ) =>
-  runTaskClaimAcquisitionProtocol(
-    tracker,
-    operation.acquisition
-  ).pipe(
+  runTaskClaimAcquisitionProtocol(tracker, operation.acquisition).pipe(
     Effect.map((claim) => AuthoritativeTaskClaimAcquired.make({ claim }))
   )

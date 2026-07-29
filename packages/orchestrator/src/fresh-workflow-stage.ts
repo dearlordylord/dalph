@@ -8,9 +8,7 @@ import type { TraceOutputError } from "./trace-output.js"
 import type { WorkflowInterpreterService } from "./workflow.js"
 
 type InterpreterError = {
-  [Key in keyof WorkflowInterpreterService]: Effect.Error<
-    ReturnType<WorkflowInterpreterService[Key]>
-  >
+  [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
 }[keyof WorkflowInterpreterService]
 
 export type FreshWorkflowStageError =

@@ -5,11 +5,7 @@ import type { JournalRecord } from "./journal-store.js"
 import type { ManagedRunRecoveryStage } from "./managed-run-recovery-stage.js"
 import type { ReconstructedManagedRunState } from "./reconstructed-managed-run-state.js"
 
-const ManagedHistoryIssueFields = {
-  detail: Schema.String,
-  position: JournalPosition,
-  runId: RunId
-}
+const ManagedHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
 
 /** A journal record's key, event identity, or planned-attempt owner disagree. */
 export class ManagedHistoryIdentityIssue extends Schema.TaggedErrorClass<ManagedHistoryIdentityIssue>()(
@@ -27,17 +23,9 @@ export class ManagedHistorySemanticIssue extends Schema.TaggedErrorClass<Managed
 export class DuplicateUnfinishedTaskAttemptIssue extends Schema.TaggedErrorClass<DuplicateUnfinishedTaskAttemptIssue>()(
   "DuplicateUnfinishedTaskAttemptIssue",
   {
-    first: Schema.Struct({
-      attemptId: AttemptId,
-      position: JournalPosition,
-      runId: RunId
-    }),
+    first: Schema.Struct({ attemptId: AttemptId, position: JournalPosition, runId: RunId }),
     runId: RunId,
-    second: Schema.Struct({
-      attemptId: AttemptId,
-      position: JournalPosition,
-      runId: RunId
-    }),
+    second: Schema.Struct({ attemptId: AttemptId, position: JournalPosition, runId: RunId }),
     taskId: TaskId
   }
 ) {}
@@ -55,17 +43,9 @@ export const duplicateUnfinishedTaskAttemptIssue = (
   secondPosition: JournalPosition
 ) =>
   new DuplicateUnfinishedTaskAttemptIssue({
-    first: {
-      attemptId: first.attemptId,
-      position: firstPosition,
-      runId: first.runId
-    },
+    first: { attemptId: first.attemptId, position: firstPosition, runId: first.runId },
     runId,
-    second: {
-      attemptId: second.attemptId,
-      position: secondPosition,
-      runId: second.runId
-    },
+    second: { attemptId: second.attemptId, position: secondPosition, runId: second.runId },
     taskId: second.taskId
   })
 

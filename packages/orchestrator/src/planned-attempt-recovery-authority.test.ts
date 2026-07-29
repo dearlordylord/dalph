@@ -106,16 +106,13 @@ const authorityLayer = (
   )
 const layer = authorityLayer()
 
-const recordCausalHistory = Effect.gen(function*() {
+const recordCausalHistory = Effect.gen(function* () {
   const journal = yield* JournalStore
   yield* journal.append(
     runId,
     intentRecordKey(acquisition.operationId),
     TaskClaimAcquisitionIntendedEvent.make({
-      operation: makeTaskClaimAcquisitionOperation({
-        acquisition,
-        predecessorOperationIds: []
-      }),
+      operation: makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] }),
       version: workflowJournalEventVersion
     })
   )
@@ -123,10 +120,7 @@ const recordCausalHistory = Effect.gen(function*() {
     runId,
     outcomeRecordKey(acquisition.operationId),
     TaskClaimAcquiredEvent.make({
-      claim: {
-        _tag: "ActiveTaskClaim",
-        ...acquisition
-      },
+      claim: { _tag: "ActiveTaskClaim", ...acquisition },
       version: workflowJournalEventVersion
     })
   )
@@ -140,11 +134,7 @@ const recordCausalHistory = Effect.gen(function*() {
     [acquisition.operationId],
     [plannedAttempt.taskId]
   )
-  yield* journal.append(
-    runId,
-    intentRecordKey(observation.operationId),
-    trackerGraphObservationIntent(observation)
-  )
+  yield* journal.append(runId, intentRecordKey(observation.operationId), trackerGraphObservationIntent(observation))
   yield* journal.append(
     runId,
     outcomeRecordKey(observation.operationId),
@@ -162,10 +152,7 @@ const recordCausalHistory = Effect.gen(function*() {
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
-    TaskAttemptPlannedEvent.make({
-      operation: planOperation,
-      version: workflowJournalEventVersion
-    })
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
   )
   const worktreeOperation = makeTaskWorktreeReconciliationOperation({
     operationId: OperationId.make("authority-worktree"),
@@ -175,10 +162,7 @@ const recordCausalHistory = Effect.gen(function*() {
   yield* journal.append(
     runId,
     intentRecordKey(worktreeOperation.operationId),
-    TaskWorktreeReconciliationIntendedEvent.make({
-      operation: worktreeOperation,
-      version: workflowJournalEventVersion
-    })
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
   )
   yield* journal.append(
     runId,
@@ -202,26 +186,17 @@ const recordCausalHistory = Effect.gen(function*() {
   yield* journal.append(
     runId,
     controlCommandRecordKey(command.commandId),
-    ControlCommandRecordedEvent.make({
-      command,
-      version: workflowJournalEventVersion
-    })
+    ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
   )
   yield* journal.append(
     runId,
     plannedAttemptExecutorWorkStartedRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkStartedEvent.make({
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
+    PlannedAttemptExecutorWorkStartedEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
   const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(
     runId,
-    plannedAttemptExecutorWorkReportedRecordKey(
-      plannedAttempt.attemptId,
-      ordinal
-    ),
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal,
       report: PlannedAttemptExecutorReport.cases.Running.make({
@@ -233,96 +208,88 @@ const recordCausalHistory = Effect.gen(function*() {
 })
 
 it.effect("rereads the exact tracker claim and Git worktree before recovery", () =>
-  Effect.gen(function*() {
-    yield* (yield* TrackerMutation).acquireTaskClaim(
-      acquisition
-    )
+  Effect.gen(function* () {
+    yield* (yield* TrackerMutation).acquireTaskClaim(acquisition)
     yield* recordCausalHistory
 
-    yield* (yield* PlannedAttemptRecoveryAuthority).verify(
-      plannedAttempt
-    )
-  }).pipe(Effect.provide(layer)))
+    yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt)
+  }).pipe(Effect.provide(layer))
+)
 
 it.effect("rejects a changed tracker claim and an absent planned worktree", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     yield* recordCausalHistory
-    const trackerMismatch = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
-    expect(trackerMismatch).toBeInstanceOf(
-      PlannedAttemptRecoveryAuthorityMismatch
-    )
+    const trackerMismatch = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
+    expect(trackerMismatch).toBeInstanceOf(PlannedAttemptRecoveryAuthorityMismatch)
     expect(trackerMismatch).toMatchObject({ boundary: "TaskTracker" })
 
     yield* (yield* TrackerMutation).acquireTaskClaim(acquisition)
-    const gitMismatch = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
+    const gitMismatch = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
     expect(gitMismatch).toMatchObject({ boundary: "Git" })
-  }).pipe(Effect.provide(authorityLayer(
-    controlledTrackerMutationLayer,
-    Layer.succeed(
-      GitWorktree,
-      GitWorktree.of({
-        createPlannedWorktree: () => Effect.void,
-        readPlannedWorktree: () => Effect.succeed(PlannedWorktreeAbsent.make({}))
-      })
+  }).pipe(
+    Effect.provide(
+      authorityLayer(
+        controlledTrackerMutationLayer,
+        Layer.succeed(
+          GitWorktree,
+          GitWorktree.of({
+            createPlannedWorktree: () => Effect.void,
+            readPlannedWorktree: () => Effect.succeed(PlannedWorktreeAbsent.make({}))
+          })
+        )
+      )
     )
-  ))))
+  )
+)
 
 it.effect("preserves tracker read failures as unreadable authority", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     yield* recordCausalHistory
-    const trackerFailure = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
-    expect(trackerFailure).toBeInstanceOf(
-      PlannedAttemptRecoveryAuthorityUnreadable
-    )
+    const trackerFailure = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
+    expect(trackerFailure).toBeInstanceOf(PlannedAttemptRecoveryAuthorityUnreadable)
     expect(trackerFailure).toMatchObject({ detail: "tracker unavailable" })
-  }).pipe(Effect.provide(authorityLayer(
-    Layer.succeed(
-      TrackerMutation,
-      TrackerMutation.of({
-        acquireTaskClaim: () => Effect.die("unused"),
-        readTaskClaim: (taskId) =>
-          Effect.fail(
-            new TaskClaimReadFailure({
-              detail: "tracker unavailable",
-              taskId
-            })
-          ),
-        releaseTaskClaim: () => Effect.die("unused")
-      })
+  }).pipe(
+    Effect.provide(
+      authorityLayer(
+        Layer.succeed(
+          TrackerMutation,
+          TrackerMutation.of({
+            acquireTaskClaim: () => Effect.die("unused"),
+            readTaskClaim: (taskId) => Effect.fail(new TaskClaimReadFailure({ detail: "tracker unavailable", taskId })),
+            releaseTaskClaim: () => Effect.die("unused")
+          })
+        )
+      )
     )
-  ))))
+  )
+)
 
 it.effect("preserves Git read failures as unreadable authority", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     yield* recordCausalHistory
     yield* (yield* TrackerMutation).acquireTaskClaim(acquisition)
-    const gitFailure = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
+    const gitFailure = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
     expect(gitFailure).toMatchObject({ detail: "GitWorktreeReadFailure" })
-  }).pipe(Effect.provide(authorityLayer(
-    controlledTrackerMutationLayer,
-    Layer.succeed(
-      GitWorktree,
-      GitWorktree.of({
-        createPlannedWorktree: () => Effect.die("unused"),
-        readPlannedWorktree: () =>
-          Effect.fail(
-            new GitWorktreeReadFailure({
-              detail: "Git unavailable",
-              worktree: plannedAttempt.worktree
-            })
-          )
-      })
+  }).pipe(
+    Effect.provide(
+      authorityLayer(
+        controlledTrackerMutationLayer,
+        Layer.succeed(
+          GitWorktree,
+          GitWorktree.of({
+            createPlannedWorktree: () => Effect.die("unused"),
+            readPlannedWorktree: () =>
+              Effect.fail(new GitWorktreeReadFailure({ detail: "Git unavailable", worktree: plannedAttempt.worktree }))
+          })
+        )
+      )
     )
-  ))))
+  )
+)
 
 it.effect("rejects recovery without a causal durable claim", () =>
-  Effect.gen(function*() {
-    const missingPlan = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
+  Effect.gen(function* () {
+    const missingPlan = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
     expect(missingPlan).toMatchObject({ boundary: "TaskTracker" })
 
     yield* (yield* JournalStore).append(
@@ -337,12 +304,12 @@ it.effect("rejects recovery without a causal durable claim", () =>
         version: workflowJournalEventVersion
       })
     )
-    const mismatch = yield* (yield* PlannedAttemptRecoveryAuthority)
-      .verify(plannedAttempt).pipe(Effect.flip)
+    const mismatch = yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt).pipe(Effect.flip)
 
     expect(mismatch).toMatchObject({
       _tag: "PlannedAttemptRecoveryAuthorityMismatch",
       attemptId: plannedAttempt.attemptId,
       boundary: "TaskTracker"
     })
-  }).pipe(Effect.provide(layer)))
+  }).pipe(Effect.provide(layer))
+)

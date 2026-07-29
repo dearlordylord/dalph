@@ -51,12 +51,8 @@ const ExistingRecordRows = Schema.Array(
     payload_json: Schema.String
   })
 )
-const NextPositionRows = Schema.Tuple([
-  Schema.Struct({ next_position: JournalPosition })
-])
-const MigrationVersionRows = Schema.Tuple([
-  Schema.Struct({ schema_version: JournalSchemaVersion })
-])
+const NextPositionRows = Schema.Tuple([Schema.Struct({ next_position: JournalPosition })])
+const MigrationVersionRows = Schema.Tuple([Schema.Struct({ schema_version: JournalSchemaVersion })])
 
 const currentJournalSchemaVersionValue = 1
 const journalSchemaVersion = JournalSchemaVersion.make(currentJournalSchemaVersionValue)
@@ -77,7 +73,7 @@ interface SqliteJournalStoreConfig {
   readonly filename: JournalDatabaseLocator
 }
 
-const failureDetail = (cause: unknown): string => Cause.isCause(cause) ? Cause.pretty(cause) : String(cause)
+const failureDetail = (cause: unknown): string => (Cause.isCause(cause) ? Cause.pretty(cause) : String(cause))
 
 const sqliteCause = (failure: unknown): unknown => {
   const squashed = Cause.isCause(failure) ? Cause.squash(failure) : failure
@@ -111,11 +107,7 @@ export const classifyJournalStorageFailure = (
       () => new JournalStorageAccessDenied(fields)
     ),
     Match.when(sqliteResultCode.capacityExhausted, () => new JournalStorageCapacityExhausted(fields)),
-    Match.whenOr(
-      sqliteResultCode.corrupt,
-      sqliteResultCode.notADatabase,
-      () => new JournalDataCorruption(fields)
-    ),
+    Match.whenOr(sqliteResultCode.corrupt, sqliteResultCode.notADatabase, () => new JournalDataCorruption(fields)),
     Match.orElse(() => new JournalStorageUnavailable(fields))
   )
 }
@@ -134,37 +126,29 @@ const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,
   operation: JournalDataCorruption["operation"]
 ): Effect.Effect<WorkflowJournalEvent, JournalDataCorruption> =>
-  decodeJournalEvent({
-    kind: row.event_kind,
-    payloadJson: row.payload_json,
-    version: row.event_version
-  }).pipe(
+  decodeJournalEvent({ kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version }).pipe(
     Effect.mapError((cause) => new JournalDataCorruption({ detail: cause.detail, operation }))
   )
 
-const fromPersistedRow = Effect.fn("JournalStore.Sqlite.fromPersistedRow")(
-  function*(row: PersistedJournalRow) {
-    // Effect Schema proves that one physical row and event payload decode. It
-    // does not prove that the ordered log is semantically recoverable. Issue
-    // #50 owns the total history fold that must return a valid recovery state
-    // or typed, accumulated issues for illegal transitions and contradictions.
-    // https://github.com/dearlordylord/dalph/issues/50
-    return {
-      event: yield* parseEvent(row, "JournalStore.read"),
-      key: row.record_key,
-      position: row.position,
-      runId: row.run_id
-    } satisfies JournalRecord
-  }
-)
+const fromPersistedRow = Effect.fn("JournalStore.Sqlite.fromPersistedRow")(function* (row: PersistedJournalRow) {
+  // Effect Schema proves that one physical row and event payload decode. It
+  // does not prove that the ordered log is semantically recoverable. Issue
+  // #50 owns the total history fold that must return a valid recovery state
+  // or typed, accumulated issues for illegal transitions and contradictions.
+  // https://github.com/dearlordylord/dalph/issues/50
+  return {
+    event: yield* parseEvent(row, "JournalStore.read"),
+    key: row.record_key,
+    position: row.position,
+    runId: row.run_id
+  } satisfies JournalRecord
+})
 
-const migrate = Effect.fn("JournalStore.Sqlite.migrate")(function*(
-  sql: SqliteClient.SqliteClient
-) {
+const migrate = Effect.fn("JournalStore.Sqlite.migrate")(function* (sql: SqliteClient.SqliteClient) {
   yield* sql`PRAGMA locking_mode = EXCLUSIVE`.pipe(
     Effect.mapError(classifyJournalStorageFailure.bind(undefined, "JournalStore.migrate"))
   )
-  const createCurrentJournal = Effect.gen(function*() {
+  const createCurrentJournal = Effect.gen(function* () {
     const migrationSql = yield* SqlClient.SqlClient
     yield* migrationSql`
       CREATE TABLE IF NOT EXISTS journal_records (
@@ -209,9 +193,9 @@ const migrate = Effect.fn("JournalStore.Sqlite.migrate")(function*(
   }
 })
 
-const acquireExclusiveWriter = Effect.fn(
-  "JournalStore.Sqlite.acquireExclusiveWriter"
-)(function*(sql: SqliteClient.SqliteClient) {
+const acquireExclusiveWriter = Effect.fn("JournalStore.Sqlite.acquireExclusiveWriter")(function* (
+  sql: SqliteClient.SqliteClient
+) {
   yield* sql`UPDATE effect_sql_migrations SET name = name WHERE migration_id = ${journalSchemaVersion}`.pipe(
     sql.withTransaction,
     Effect.mapError(classifyJournalStorageFailure.bind(undefined, "JournalStore.open"))
@@ -228,11 +212,8 @@ export const sqliteJournalStoreLayer = (
 ): Layer.Layer<JournalStore, JournalStoreError> =>
   Layer.effect(
     JournalStore,
-    Effect.gen(function*() {
-      const sql = yield* SqliteClient.make({
-        disableWAL: false,
-        filename: config.filename
-      }).pipe(
+    Effect.gen(function* () {
+      const sql = yield* SqliteClient.make({ disableWAL: false, filename: config.filename }).pipe(
         Effect.catchCauseIf(
           (cause) => !Cause.hasInterrupts(cause),
           (cause) => Effect.fail(classifyJournalStorageFailure("JournalStore.open", cause))
@@ -241,57 +222,32 @@ export const sqliteJournalStoreLayer = (
       yield* migrate(sql)
       yield* acquireExclusiveWriter(sql)
 
-      const append = Effect.fn("JournalStore.Sqlite.append")(function*(
+      const append = Effect.fn("JournalStore.Sqlite.append")(function* (
         runId: RunId,
         key: JournalRecordKey,
         event: WorkflowJournalEvent
       ) {
         const encoded = encodeJournalEvent(event)
-        return yield* Effect.gen(function*() {
+        return yield* Effect.gen(function* () {
           const existingRows = yield* sql`
             SELECT position, event_kind, event_version, payload_json
             FROM journal_records
             WHERE run_id = ${runId} AND record_key = ${key}
-          `.pipe(
-            Effect.flatMap((rows) =>
-              decodeBoundary(
-                ExistingRecordRows,
-                rows,
-                "JournalStore.append"
-              )
-            )
-          )
+          `.pipe(Effect.flatMap((rows) => decodeBoundary(ExistingRecordRows, rows, "JournalStore.append")))
           const existing = existingRows[0]
           if (existing !== undefined) {
             const existingEvent = yield* parseEvent(existing, "JournalStore.append")
             if (equalJournalEvents(existingEvent, event)) {
-              return {
-                event,
-                key,
-                position: existing.position,
-                runId
-              } satisfies JournalRecord
+              return { event, key, position: existing.position, runId } satisfies JournalRecord
             }
-            return yield* new JournalStoreContradiction({
-              existingPosition: existing.position,
-              key,
-              runId
-            })
+            return yield* new JournalStoreContradiction({ existingPosition: existing.position, key, runId })
           }
 
           const positions = yield* sql`
             SELECT COALESCE(MAX(position), 0) + 1 AS next_position
             FROM journal_records
             WHERE run_id = ${runId}
-          `.pipe(
-            Effect.flatMap((rows) =>
-              decodeBoundary(
-                NextPositionRows,
-                rows,
-                "JournalStore.append"
-              )
-            )
-          )
+          `.pipe(Effect.flatMap((rows) => decodeBoundary(NextPositionRows, rows, "JournalStore.append")))
           const position = positions[0].next_position
           yield* sql`
             INSERT INTO journal_records (
@@ -304,17 +260,17 @@ export const sqliteJournalStoreLayer = (
         }).pipe(
           sql.withTransaction,
           Effect.mapError((cause) =>
-            cause instanceof JournalStoreContradiction
-              || cause instanceof JournalDataCorruption
-              || cause instanceof JournalSchemaIncompatible
-              || cause instanceof JournalStorageUnavailable
+            cause instanceof JournalStoreContradiction ||
+            cause instanceof JournalDataCorruption ||
+            cause instanceof JournalSchemaIncompatible ||
+            cause instanceof JournalStorageUnavailable
               ? cause
               : classifyJournalStorageFailure("JournalStore.append", cause)
           )
         )
       })
 
-      const read = Effect.fn("JournalStore.Sqlite.read")(function*(runId: RunId) {
+      const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
         const rows = yield* sql`
           SELECT run_id, position, record_key, event_kind, event_version, payload_json
           FROM journal_records
@@ -327,7 +283,7 @@ export const sqliteJournalStoreLayer = (
         return yield* Effect.forEach(rows, fromPersistedRow)
       })
 
-      const scan = Effect.fn("JournalStore.Sqlite.scan")(function*() {
+      const scan = Effect.fn("JournalStore.Sqlite.scan")(function* () {
         const rows = yield* sql`
           SELECT run_id, position, record_key, event_kind, event_version, payload_json
           FROM journal_records
@@ -370,24 +326,18 @@ export const sqliteJournalStoreLayer = (
           current.push(record)
           recordsByRun.set(record.runId, current)
         }
-        return {
-          issues,
-          runs: [...recordsByRun].map(([runId, records]) => ({ records, runId }))
-        }
+        return { issues, runs: [...recordsByRun].map(([runId, records]) => ({ records, runId })) }
       })
 
       return JournalStore.of({ append, read, scan })
     })
   ).pipe(Layer.provide(Reactivity.layer))
 
-export const journalDatabaseLocatorConfig = Config.schema(
-  JournalDatabaseLocator,
-  "DALPH_JOURNAL_DATABASE"
-)
+export const journalDatabaseLocatorConfig = Config.schema(JournalDatabaseLocator, "DALPH_JOURNAL_DATABASE")
 
 /** Opens production SQLite only after the coordinator holds the Git-directory lock. */
 export const productionJournalStoreLayer = Layer.unwrap(
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     yield* CoordinatorOwnership
     const filename = yield* journalDatabaseLocatorConfig
     return sqliteJournalStoreLayer({ filename })

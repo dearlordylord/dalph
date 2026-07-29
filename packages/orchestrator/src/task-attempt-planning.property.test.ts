@@ -24,18 +24,17 @@ import {
 import { samePlannedTaskAttempt } from "./planned-task-attempt.js"
 
 const nonEmpty = fc.string({ minLength: 1, maxLength: 40 })
-const plannedTaskAttemptEncodedArbitrary = fc.record({
-  attemptId: nonEmpty,
-  branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
-  executor: nonEmpty,
-  runId: nonEmpty,
-  taskId: nonEmpty,
-  taskRevision: nonEmpty,
-  worktree: nonEmpty
-}).map((fields) => ({
-  ...fields,
-  baseSha: "0123456789abcdef0123456789abcdef01234567"
-}))
+const plannedTaskAttemptEncodedArbitrary = fc
+  .record({
+    attemptId: nonEmpty,
+    branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
+    executor: nonEmpty,
+    runId: nonEmpty,
+    taskId: nonEmpty,
+    taskRevision: nonEmpty,
+    worktree: nonEmpty
+  })
+  .map((fields) => ({ ...fields, baseSha: "0123456789abcdef0123456789abcdef01234567" }))
 
 it.each([
   "main",
@@ -54,7 +53,7 @@ it.each([
 })
 
 it.effect("binds every exact attempt identity and resource locator", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const snapshot = validSnapshot({
       revision: "attempt-plan-snapshot",
       tasks: [{ id: "task-44", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
@@ -80,53 +79,49 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     expect(retryPlan.attemptId).not.toBe(plan.attemptId)
     expect(retryPlan.branch).not.toBe(plan.branch)
     expect(retryPlan.worktree).not.toBe(plan.worktree)
-  }).pipe(Effect.provide(deterministicPlannedTaskAttemptLayer({
-    baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
-    executor: TaskExecutorLocator.make("executor:deterministic"),
-    runId: RunId.make("run-44"),
-    worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
-  }))))
+  }).pipe(
+    Effect.provide(
+      deterministicPlannedTaskAttemptLayer({
+        baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+        executor: TaskExecutorLocator.make("executor:deterministic"),
+        runId: RunId.make("run-44"),
+        worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
+      })
+    )
+  )
+)
 
 it("roundtrips arbitrary valid planned task attempts through the persisted Schema boundary", () => {
-  fc.assert(fc.property(
-    plannedTaskAttemptEncodedArbitrary,
-    (encoded) => {
+  fc.assert(
+    fc.property(plannedTaskAttemptEncodedArbitrary, (encoded) => {
       expect(
-        Schema.encodeUnknownSync(PlannedTaskAttempt)(
-          Schema.decodeUnknownSync(PlannedTaskAttempt)(encoded)
-        )
+        Schema.encodeUnknownSync(PlannedTaskAttempt)(Schema.decodeUnknownSync(PlannedTaskAttempt)(encoded))
       ).toEqual(encoded)
-    }
-  ))
+    })
+  )
 })
 
 it("satisfies the planned-attempt equivalence laws for arbitrary valid plans", () => {
   const decode = Schema.decodeUnknownSync(PlannedTaskAttempt)
   const copy = (plan: PlannedTaskAttempt) => decode(Schema.encodeUnknownSync(PlannedTaskAttempt)(plan))
 
-  fc.assert(fc.property(
-    plannedTaskAttemptEncodedArbitrary,
-    plannedTaskAttemptEncodedArbitrary,
-    (leftEncoded, rightEncoded) => {
+  fc.assert(
+    fc.property(plannedTaskAttemptEncodedArbitrary, plannedTaskAttemptEncodedArbitrary, (leftEncoded, rightEncoded) => {
       const left = decode(leftEncoded)
       const right = decode(rightEncoded)
       const middle = copy(left)
       const end = copy(middle)
 
       expect(samePlannedTaskAttempt(left, left)).toBe(true)
-      expect(samePlannedTaskAttempt(left, right))
-        .toBe(samePlannedTaskAttempt(right, left))
-      expect(
-        samePlannedTaskAttempt(left, middle)
-          && samePlannedTaskAttempt(middle, end)
-      ).toBe(true)
+      expect(samePlannedTaskAttempt(left, right)).toBe(samePlannedTaskAttempt(right, left))
+      expect(samePlannedTaskAttempt(left, middle) && samePlannedTaskAttempt(middle, end)).toBe(true)
       expect(samePlannedTaskAttempt(left, end)).toBe(true)
-    }
-  ))
+    })
+  )
 })
 
 it("derives the task revision (fingerprint) inside the planner", () =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     const task = Schema.decodeUnknownSync(TrackerTask)({
       id: "task-44",
       lifecycle: { _tag: "Open" },
@@ -136,12 +131,16 @@ it("derives the task revision (fingerprint) inside the planner", () =>
     const planner = yield* PlannedTaskAttemptPlanner
 
     expect((yield* planner.plan(task)).taskRevision).toBe(taskRevisionFor(task))
-  }).pipe(Effect.provide(deterministicPlannedTaskAttemptLayer({
-    baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
-    executor: TaskExecutorLocator.make("executor:deterministic"),
-    runId: RunId.make("run-44"),
-    worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
-  }))))
+  }).pipe(
+    Effect.provide(
+      deterministicPlannedTaskAttemptLayer({
+        baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+        executor: TaskExecutorLocator.make("executor:deterministic"),
+        runId: RunId.make("run-44"),
+        worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
+      })
+    )
+  ))
 
 it("keeps the task revision fingerprint opaque and diagnostically reversible", () => {
   const task = Schema.decodeUnknownSync(TrackerTask)({
@@ -153,9 +152,7 @@ it("keeps the task revision fingerprint opaque and diagnostically reversible", (
   const fingerprint = taskRevisionFor(task)
 
   expect(fingerprint.startsWith("tr1.")).toBe(true)
-  expect(JSON.parse(Result.getOrThrow(
-    Encoding.decodeBase64UrlString(fingerprint.slice("tr1.".length))
-  ))).toEqual({
+  expect(JSON.parse(Result.getOrThrow(Encoding.decodeBase64UrlString(fingerprint.slice("tr1.".length))))).toEqual({
     id: "task-44",
     lifecycle: "Open",
     parentTaskId: null,
@@ -164,9 +161,8 @@ it("keeps the task revision fingerprint opaque and diagnostically reversible", (
 })
 
 it("changes a task revision (fingerprint) when any normalized task field changes", () => {
-  fc.assert(fc.property(
-    fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/),
-    (suffix) => {
+  fc.assert(
+    fc.property(fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/), (suffix) => {
       const task = (input: unknown) => Schema.decodeUnknownSync(TrackerTask)(input)
       const baseline = {
         id: `task-${suffix}-left`,
@@ -182,27 +178,29 @@ it("changes a task revision (fingerprint) when any normalized task field changes
         { ...baseline, prerequisiteIds: [`prerequisite-${suffix}-right`] }
       ]
 
-      expect(variants.map((variant) => taskRevisionFor(task(variant))))
-        .not.toContain(baselineRevision)
-    }
-  ))
+      expect(variants.map((variant) => taskRevisionFor(task(variant)))).not.toContain(baselineRevision)
+    })
+  )
 })
 
 it("makes task revision (fingerprint) independent of prerequisite order", () => {
-  fc.assert(fc.property(
-    fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/), { minLength: 1, maxLength: 8 }),
-    (prerequisiteIds) => {
-      const makeTask = (ids: ReadonlyArray<string>) =>
-        Schema.decodeUnknownSync(TrackerTask)({
-          id: "task-44",
-          lifecycle: { _tag: "Open" },
-          parentTaskId: null,
-          prerequisiteIds: ids
-        })
-      expect(taskRevisionFor(makeTask(prerequisiteIds)))
-        .toBe(taskRevisionFor(makeTask([...prerequisiteIds].reverse())))
-    }
-  ))
+  fc.assert(
+    fc.property(
+      fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/), { minLength: 1, maxLength: 8 }),
+      (prerequisiteIds) => {
+        const makeTask = (ids: ReadonlyArray<string>) =>
+          Schema.decodeUnknownSync(TrackerTask)({
+            id: "task-44",
+            lifecycle: { _tag: "Open" },
+            parentTaskId: null,
+            prerequisiteIds: ids
+          })
+        expect(taskRevisionFor(makeTask(prerequisiteIds))).toBe(
+          taskRevisionFor(makeTask([...prerequisiteIds].reverse()))
+        )
+      }
+    )
+  )
 })
 
 it("compares decoded plans structurally and observes every planned field", () => {
@@ -230,8 +228,7 @@ it("compares decoded plans structurally and observes every planned field", () =>
     { ...baseline, taskRevision: "revision-2" },
     { ...baseline, worktree: "/worktree-2" }
   ]
-  expect(variants.every((variant) => !samePlannedTaskAttempt(decode(baseline), decode(variant))))
-    .toBe(true)
+  expect(variants.every((variant) => !samePlannedTaskAttempt(decode(baseline), decode(variant)))).toBe(true)
 })
 
 it("rejects an empty executor locator at the plan boundary", () => {
@@ -260,11 +257,7 @@ it("projects plan operation identity and rejects self-causality", () => {
     taskRevision: "revision",
     worktree: "/worktree"
   })
-  const operation = makeTaskAttemptPlanOperation({
-    operationId,
-    plannedAttempt: plan,
-    predecessorOperationIds: []
-  })
+  const operation = makeTaskAttemptPlanOperation({ operationId, plannedAttempt: plan, predecessorOperationIds: [] })
 
   expect(workflowOperationId(operation)).toBe(operationId)
   expect(
