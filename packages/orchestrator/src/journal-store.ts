@@ -77,12 +77,14 @@ export const trackerGraphOutcomeObserved = (
 ): typeof TrackerGraphOutcomeObservedEvent.Type =>
   TrackerGraphOutcomeObservedEvent.make({ operationId, outcome, version: workflowJournalEventVersion })
 
-export interface JournalRecord {
-  readonly runId: RunId
-  readonly key: JournalRecordKey
-  readonly position: JournalPosition
-  readonly event: WorkflowJournalEvent
-}
+/** One schema-decodable durable envelope around a workflow event. */
+export const JournalRecord = Schema.Struct({
+  event: WorkflowJournalEvent,
+  key: JournalRecordKey,
+  position: JournalPosition,
+  runId: RunId
+})
+export type JournalRecord = typeof JournalRecord.Type
 
 const JournalStoreOperation = Schema.Literals([
   "JournalStore.open",

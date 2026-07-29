@@ -13,6 +13,7 @@ import type { JournalRecord } from "./journal-store.js"
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "./planned-attempt-executor.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 import { WorkflowOperation } from "./workflow-operation.js"
+import type { WorkflowOutcome } from "./workflow-outcome.js"
 
 /** Coverage currently retained by the normalized target-closure membership event. */
 const TaskGraphFactFamily = Schema.Literals(["TargetMembership"])
@@ -53,6 +54,29 @@ export const TaskTrackerTargetClosureObservation = Schema.TaggedStruct("TaskTrac
   )
 )
 export type TaskTrackerTargetClosureObservation = typeof TaskTrackerTargetClosureObservation.Type
+
+/** Normalizes one exact accepted tracker read and its durable outcome evidence. */
+export const makeTaskTrackerTargetClosureObservation = (
+  operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
+  outcome: typeof WorkflowOutcome.cases.TrackerGraphObserved.Type,
+  observedAt: JournalPosition
+): TaskTrackerTargetClosureObservation => {
+  const taskIds = [...new Set(outcome.taskIds)].sort()
+  const explicitlyCoveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds]
+  return TaskTrackerTargetClosureObservation.make({
+    completeness: "Complete",
+    consistency: "PotentiallyMixedTime",
+    explicitlyCoveredTaskIds,
+    factFamilies: [...completeTargetClosureFactFamilies],
+    freshness: "FreshAtReadBoundary",
+    observedAt,
+    operationId: operation.operationId,
+    provenAbsentTaskIds: explicitlyCoveredTaskIds.filter((taskId) => !taskIds.includes(taskId)),
+    revision: outcome.revision,
+    target: operation.target,
+    taskIds
+  })
+}
 
 const minimumConflictObservations = 2
 

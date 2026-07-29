@@ -75,8 +75,9 @@ _Avoid_: Tracker facts observed, tracker edit, operation selected
 **Task-tracker facts observed**:
 The non-action occurrence established when Dalph receives exact normalized
 tracker evidence through one identified tracker-graph read action. It may
-reference that action by `OperationId`, but it neither copies the action's actor
-nor claims the read caused the tracker facts.
+reference that earlier action by `OperationId`; its concrete evidence retains
+coverage, freshness, target, revision, and journal position. It neither copies
+the action's actor nor claims the read caused the tracker facts.
 _Avoid_: Tracker edit, tracker read initiated, cached graph state
 
 **Applied control direction**:

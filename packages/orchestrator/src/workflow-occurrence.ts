@@ -1,8 +1,13 @@
 import { Option, Schema } from "effect"
-import { OperationId, RunId, TaskId } from "./domain.js"
+import { JournalPosition, OperationId, RunId, TaskId } from "./domain.js"
 import type { JournalRecord, WorkflowJournalEvent } from "./journal-store.js"
+import {
+  makeTaskTrackerTargetClosureObservation,
+  taskMembershipKey,
+  TaskTrackerTargetClosureObservation,
+  trackerTargetKey
+} from "./reconstructed-managed-run-state.js"
 import { WorkflowOperation } from "./workflow-operation.js"
-import { WorkflowOutcome } from "./workflow-outcome.js"
 
 /**
  * An actor variant is present only after an accepted production action earns
@@ -34,6 +39,7 @@ export const TrackerGraphReadInitiated = Schema.TaggedStruct("TrackerGraphReadIn
   ...initiatedActionFields,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   operation: WorkflowOperation.cases.ReadTrackerGraph,
+  recordedAt: JournalPosition,
   runId: RunId
 })
 export type TrackerGraphReadInitiated = typeof TrackerGraphReadInitiated.Type
@@ -43,11 +49,17 @@ export type TrackerGraphReadInitiated = typeof TrackerGraphReadInitiated.Type
  * observation does not claim that the read caused those tracker facts.
  */
 export const TaskTrackerFactsObserved = Schema.TaggedStruct("TaskTrackerFactsObserved", {
+  evidence: TaskTrackerTargetClosureObservation,
   ...nonActionOccurrenceFields,
   originatingActionOperationId: OperationId,
-  outcome: WorkflowOutcome.cases.TrackerGraphObserved,
   runId: RunId
-})
+}).check(
+  Schema.makeFilter((occurrence) =>
+    occurrence.evidence.operationId === occurrence.originatingActionOperationId
+      ? undefined
+      : "tracker evidence must name the originating read operation"
+  )
+)
 export type TaskTrackerFactsObserved = typeof TaskTrackerFactsObserved.Type
 
 export const ControlDirectionSubject = Schema.TaggedUnion({
@@ -104,15 +116,22 @@ const isOriginatingActionFor =
   (occurrence: WorkflowOccurrence): occurrence is TrackerGraphReadInitiated =>
     occurrence._tag === "TrackerGraphReadInitiated" &&
     occurrence.runId === observation.runId &&
-    occurrence.operation.operationId === observation.originatingActionOperationId
+    occurrence.operation.operationId === observation.originatingActionOperationId &&
+    occurrence.recordedAt < observation.evidence.observedAt &&
+    trackerTargetKey(occurrence.operation.target) === trackerTargetKey(observation.evidence.target) &&
+    taskMembershipKey(occurrence.operation.readShape.explicitlyCoveredTaskIds) ===
+      taskMembershipKey(observation.evidence.explicitlyCoveredTaskIds)
 
-const missingOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
+const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
   for (const [index, occurrence] of projection.occurrences.entries()) {
     if (occurrence._tag !== "TaskTrackerFactsObserved") continue
-    const hasExactAction = projection.occurrences.some(isOriginatingActionFor(occurrence))
-    if (!hasExactAction) {
+    const matchingActionIndexes = projection.occurrences.flatMap((candidate, candidateIndex) =>
+      isOriginatingActionFor(occurrence)(candidate) ? [candidateIndex] : []
+    )
+    const [matchingActionIndex] = matchingActionIndexes
+    if (matchingActionIndexes.length !== 1 || matchingActionIndex === undefined || matchingActionIndex >= index) {
       return {
-        issue: `tracker observation has no exact initiating read action ${occurrence.originatingActionOperationId}`,
+        issue: `tracker observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
         path: ["occurrences", index, "originatingActionOperationId"]
       }
     }
@@ -124,7 +143,7 @@ const missingOriginatingAction = (projection: { readonly occurrences: ReadonlyAr
 export const WorkflowOccurrenceProjection = Schema.Struct({
   occurrences: Schema.Array(WorkflowOccurrence),
   version: Schema.Literal(workflowOccurrenceProjectionVersion)
-}).check(Schema.makeFilter(missingOriginatingAction))
+}).check(Schema.makeFilter(invalidOriginatingAction))
 export type WorkflowOccurrenceProjection = typeof WorkflowOccurrenceProjection.Type
 
 type ProjectedJournalEvent = Extract<
@@ -149,7 +168,11 @@ const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOc
   return []
 }
 
-const projectRecord = (record: JournalRecord): ReadonlyArray<WorkflowOccurrence> => {
+const projectRecord = (
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  index: number
+): ReadonlyArray<WorkflowOccurrence> => {
   const event = record.event
   if (event._tag === "TrackerGraphObservationIntentRecorded") {
     return [
@@ -157,16 +180,26 @@ const projectRecord = (record: JournalRecord): ReadonlyArray<WorkflowOccurrence>
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         operation: event.operation,
+        recordedAt: record.position,
         runId: record.runId
       })
     ]
   }
   if (event._tag === "TrackerGraphOutcomeObserved") {
+    const intent = records
+      .slice(0, index)
+      .findLast(
+        ({ event: candidate, runId }) =>
+          runId === record.runId &&
+          candidate._tag === "TrackerGraphObservationIntentRecorded" &&
+          candidate.operation.operationId === event.operationId
+      )?.event
+    if (intent?._tag !== "TrackerGraphObservationIntentRecorded") return []
     return [
       TaskTrackerFactsObserved.make({
+        evidence: makeTaskTrackerTargetClosureObservation(intent.operation, event.outcome, record.position),
         occurrenceClassification: "NonActionOccurrence",
         originatingActionOperationId: event.operationId,
-        outcome: event.outcome,
         runId: record.runId
       })
     ]
@@ -176,7 +209,7 @@ const projectRecord = (record: JournalRecord): ReadonlyArray<WorkflowOccurrence>
 
 export const projectWorkflowOccurrences = (records: ReadonlyArray<JournalRecord>): WorkflowOccurrenceProjection =>
   WorkflowOccurrenceProjection.make({
-    occurrences: records.flatMap(projectRecord),
+    occurrences: records.flatMap((record, index) => projectRecord(records, record, index)),
     version: workflowOccurrenceProjectionVersion
   })
 

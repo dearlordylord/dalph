@@ -6,7 +6,7 @@ import type { JournalRecord } from "./journal-store.js"
 import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
 import {
   BestAvailableDurableGraphKnowledge,
-  completeTargetClosureFactFamilies,
+  makeTaskTrackerTargetClosureObservation,
   ReconstructedManagedRunInvariantIssue,
   type ReconstructedManagedRunResult,
   type ReconstructedManagedRunState,
@@ -15,9 +15,9 @@ import {
   ReconstructedTaskPauseState,
   type ReconstructedWorkflowHistory,
   taskMembershipKey,
+  type TaskTrackerTargetClosureObservation,
   type TaskTrackerTargetClosureKnowledge,
   TaskTrackerTargetClosureKnowledgeConflict,
-  TaskTrackerTargetClosureObservation,
   trackerTargetKey,
   WorkflowResponsibilityEntry,
   workflowResponsibilityOperationId,
@@ -39,22 +39,7 @@ const applyGraphKnowledgeRecord = (
 
   const targetKey = trackerTargetKey(intent.operation.target)
   const priorKnowledge = targetClosures.get(targetKey)
-  const taskIds = [...new Set(graphOutcome.outcome.taskIds)].sort()
-  const explicitlyCoveredTaskIds = [...intent.operation.readShape.explicitlyCoveredTaskIds]
-  const provenAbsentTaskIds = explicitlyCoveredTaskIds.filter((taskId) => !taskIds.includes(taskId))
-  const observation = TaskTrackerTargetClosureObservation.make({
-    completeness: "Complete",
-    consistency: "PotentiallyMixedTime",
-    explicitlyCoveredTaskIds,
-    factFamilies: [...completeTargetClosureFactFamilies],
-    freshness: "FreshAtReadBoundary",
-    observedAt: record.position,
-    operationId: graphOutcome.operationId,
-    provenAbsentTaskIds,
-    revision: graphOutcome.outcome.revision,
-    target: intent.operation.target,
-    taskIds
-  })
+  const observation = makeTaskTrackerTargetClosureObservation(intent.operation, graphOutcome.outcome, record.position)
   targetClosures.set(targetKey, combineTargetClosureKnowledge(priorKnowledge, observation))
 }
 

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -17,7 +17,7 @@ import {
 } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { attemptPlanRecordKey, plannedAttemptExecutorWorkStartedRecordKey } from "./journal-record-key.js"
-import { type JournalRecord, JournalStore, TaskAttemptPlannedEvent, WorkflowJournalEvent } from "./journal-store.js"
+import { JournalRecord, JournalStore, TaskAttemptPlannedEvent } from "./journal-store.js"
 import { activateRecoveredResponsibilities } from "./managed-activation.js"
 import { PlannedAttemptExecutorWorkStartedEvent } from "./planned-attempt-executor-journal.js"
 import { PlannedAttemptExecutor } from "./planned-attempt-executor.js"
@@ -71,12 +71,45 @@ const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(second
 
 const failIfCalled = (boundary: string) => Effect.die(`${boundary} must not be called for invalid managed history`)
 
+const boundaryLayer = Layer.mergeAll(
+  Layer.succeed(
+    JournalStore,
+    JournalStore.of({
+      append: () => failIfCalled("journal append"),
+      read: () => Effect.succeed(invalidRecords),
+      scan: () => failIfCalled("journal scan")
+    })
+  ),
+  Layer.succeed(
+    WorkflowInterpreter,
+    WorkflowInterpreter.of({
+      acquireTaskClaim: () => failIfCalled("task tracker claim"),
+      readTrackerGraph: () => failIfCalled("task tracker read"),
+      reconcileTaskWorktree: () => failIfCalled("Git worktree"),
+      recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording")
+    })
+  ),
+  Layer.succeed(
+    PlannedAttemptExecutor,
+    PlannedAttemptExecutor.of({
+      project: () => failIfCalled("executor projection"),
+      requestSuspension: () => failIfCalled("executor suspension"),
+      startOrContinue: () => failIfCalled("executor start or continuation")
+    })
+  ),
+  Layer.succeed(
+    PlannedAttemptRecoveryAuthority,
+    PlannedAttemptRecoveryAuthority.of({ verify: () => failIfCalled("tracker or Git recovery verification") })
+  ),
+  Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))
+)
+
 it.effect(
   "rejects duplicate unfinished planned-attempt executor work before frontier derivation or an executor call",
   () =>
     Effect.gen(function* () {
-      for (const { event } of invalidRecords) {
-        expect(yield* Schema.decodeUnknownEffect(WorkflowJournalEvent)(event)).toEqual(event)
+      for (const record of invalidRecords) {
+        expect(yield* Schema.decodeUnknownEffect(JournalRecord)(record)).toEqual(record)
       }
 
       const failure = yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(Effect.flip)
@@ -95,36 +128,5 @@ it.effect(
         records: invalidRecords,
         runId
       })
-    }).pipe(
-      Effect.provideService(
-        JournalStore,
-        JournalStore.of({
-          append: () => failIfCalled("journal append"),
-          read: () => Effect.succeed(invalidRecords),
-          scan: () => failIfCalled("journal scan")
-        })
-      ),
-      Effect.provideService(
-        WorkflowInterpreter,
-        WorkflowInterpreter.of({
-          acquireTaskClaim: () => failIfCalled("task tracker claim"),
-          readTrackerGraph: () => failIfCalled("task tracker read"),
-          reconcileTaskWorktree: () => failIfCalled("Git worktree"),
-          recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording")
-        })
-      ),
-      Effect.provideService(
-        PlannedAttemptExecutor,
-        PlannedAttemptExecutor.of({
-          project: () => failIfCalled("executor projection"),
-          requestSuspension: () => failIfCalled("executor suspension"),
-          startOrContinue: () => failIfCalled("executor start or continuation")
-        })
-      ),
-      Effect.provideService(
-        PlannedAttemptRecoveryAuthority,
-        PlannedAttemptRecoveryAuthority.of({ verify: () => failIfCalled("tracker or Git recovery verification") })
-      ),
-      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))
-    )
+    }).pipe(Effect.provide(boundaryLayer))
 )
