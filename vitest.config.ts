@@ -45,7 +45,7 @@ export default defineConfig(({ mode }) => ({
       ...(mode === "coverage" ? [mbtTestPattern] : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: 4,
+    maxWorkers: 2,
     testTimeout: mode === "coverage" ? coverageTestTimeoutMilliseconds : ordinaryTestTimeoutMilliseconds
   }
 }))

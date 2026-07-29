@@ -84,6 +84,7 @@ export {
   githubTrackerMutationNodeLayer
 } from "./authorities/task-tracker/github/claim-mutation.js"
 export * from "./workflow-journal/event-codec.js"
+export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"
 export * from "./workflow/kernel/event.js"
 export * from "./workflow-journal/record-key.js"
 export * from "./workflow-journal/recovery-model.js"
@@ -97,7 +98,7 @@ export {
   JournalStore,
   JournalStoreContradiction,
   type JournalStoreError,
-  type JournalRecord
+  JournalRecord
 } from "./workflow-journal/store.js"
 export {
   TaskAttemptPlannedEvent,
@@ -182,6 +183,7 @@ export {
   fixtureReaderFileLayer,
   FixtureReadError,
   TestTrackerGraphReader,
+  TrackerAdapterReadContext,
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,

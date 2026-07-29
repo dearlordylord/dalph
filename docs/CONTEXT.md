@@ -257,6 +257,14 @@ meaning. A V1 complete graph observation contains exactly these five kinds:
 task identities, task lifecycles, task prerequisites, parent groupings, and
 target membership. “Family” does not mean a task grouping, compatibility
 generation, provider response, or cache partition.
+
+For example, suppose GitHub work item #11 “Ship CLI” is open, cannot start
+until #10 “Build parser” finishes, sits under #5 “Release 1.0”, and belongs to
+the repository or project Dalph is running. The five families answer five
+separate questions: which work item this is, its current state, which other
+work must finish first, which larger work item contains it, and whether it
+belongs to the body of work Dalph is running. They are five kinds of answer
+from one graph read, not five separate tracker reads.
 _Avoid_: Family without naming the facts, provider field group, response page
 
 **Complete task-tracker facts observation**:

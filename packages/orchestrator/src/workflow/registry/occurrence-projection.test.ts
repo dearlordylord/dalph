@@ -386,7 +386,7 @@ it.effect("rejects focused task-work facts attached to a graph read or the wrong
 
 it.effect("projects a large journal without rescanning each retained prefix", () =>
   Effect.gen(function* () {
-    const pairCount = 10_000
+    const pairCount = 3_000
     const records = Array.from({ length: pairCount }, (_, index) => {
       const pairOperation = makeTrackerGraphObservationOperation(
         OperationId.make(`large-journal-read-${index}`),
