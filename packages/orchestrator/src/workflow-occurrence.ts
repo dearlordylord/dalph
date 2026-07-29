@@ -99,15 +99,17 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
 
 export const workflowOccurrenceProjectionVersion = 1 as const // eslint-disable-line no-magic-numbers
 
+const isOriginatingActionFor =
+  (observation: TaskTrackerFactsObserved) =>
+  (occurrence: WorkflowOccurrence): occurrence is TrackerGraphReadInitiated =>
+    occurrence._tag === "TrackerGraphReadInitiated" &&
+    occurrence.runId === observation.runId &&
+    occurrence.operation.operationId === observation.originatingActionOperationId
+
 const missingOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
   for (const [index, occurrence] of projection.occurrences.entries()) {
     if (occurrence._tag !== "TaskTrackerFactsObserved") continue
-    const hasExactAction = projection.occurrences.some(
-      (candidate) =>
-        candidate._tag === "TrackerGraphReadInitiated" &&
-        candidate.runId === occurrence.runId &&
-        candidate.operation.operationId === occurrence.originatingActionOperationId
-    )
+    const hasExactAction = projection.occurrences.some(isOriginatingActionFor(occurrence))
     if (!hasExactAction) {
       return {
         issue: `tracker observation has no exact initiating read action ${occurrence.originatingActionOperationId}`,
@@ -183,11 +185,4 @@ export const originatingActionForTrackerObservation = (
   projection: WorkflowOccurrenceProjection,
   observation: TaskTrackerFactsObserved
 ): Option.Option<TrackerGraphReadInitiated> =>
-  Option.fromUndefinedOr(
-    projection.occurrences.find(
-      (occurrence): occurrence is TrackerGraphReadInitiated =>
-        occurrence._tag === "TrackerGraphReadInitiated" &&
-        occurrence.runId === observation.runId &&
-        occurrence.operation.operationId === observation.originatingActionOperationId
-    )
-  )
+  Option.fromUndefinedOr(projection.occurrences.find(isOriginatingActionFor(observation)))
