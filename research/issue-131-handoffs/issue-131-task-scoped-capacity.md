@@ -13,6 +13,35 @@ Issue: [#131](https://github.com/dearlordylord/dalph/issues/131)
 This historical handoff must not be given to an implementation agent. It
 records the superseded provider-correlation design only.
 
+## Worktree reconciliation
+
+The `issue-131-task-capacity` branch at `ed5066af6` was reconciled into
+`master` as a merge parent after issue #162 was accepted. Its production tree
+was deliberately not copied over the accepted planned-attempt specification.
+
+The branch's single task-keyed map is accepted work, not discarded work.
+Issue #131 still requires one task-keyed map of task capacity states, absence
+as no position, and atomic replacement of one task's state. Its focused
+capacity tests and executable-model techniques remain implementation evidence
+for that map.
+
+The branch file cannot be copied as a unit because its map values and the
+functions that reserve, update, and release a task's position are built around
+`ExecutorOuterInvocationId`, expected/reported invocation mismatch,
+provider-report-driven release, executor-declared capacity policy, and
+review-loop stage projections. Those are superseded behaviors and must not
+return through conflict resolution or selective copying. Reusing the map means
+retaining its task-keyed representation while replacing those states and
+triggers with the complete planned attempt's running, suspending, terminal,
+and safely suspended lifecycle.
+
+The integration changes no Dalph runtime behavior. Issue #158 must first
+replace the transitional generic executor shapes with the accepted
+`(RunId, AttemptId)` boundary and controlled fake executor. Issue #161 then
+proves duplicate unfinished planned-attempt responsibilities fail through
+production recovery. Issue #131 then ports the accepted task-keyed map onto
+that boundary and implements terminal-result and safe-suspension release.
+
 ## Superseded behavior — do not implement
 
 1. Dalph owns capacity. The executor does not request, declare, acquire, or
