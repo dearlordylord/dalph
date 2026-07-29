@@ -66,9 +66,13 @@ database encoding. Readable lyrics are rendered from those entries.
 
 For each corresponding prefix, Dalph folds the source journal and folds the
 recorded cassette as history. It compares reconstructed domain state and runs
-the same pure frontier selector on both states. Generated identities use one
-consistent renaming when they differ. A later occurrence cannot hide an
-earlier mismatch merely because the final states agree.
+the same pure frontier selector on both states. It separately compares the
+complete domain workflow history and logical applied-through occurrence count.
+Generated identities use one consistent renaming when they differ. In the
+illegal-early-start negative, the final operational state converges while the
+retained occurrence history and an earlier selector decision expose the
+illegal ordering. A later occurrence cannot hide that mismatch merely because
+the final operational states agree.
 
 No outside provider call, crash, or retry occurs during this pure projection
 and fold. Repeating projection of the same valid history produces the same

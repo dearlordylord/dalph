@@ -27,6 +27,11 @@ import {
   runWorkflow,
   TaskLifecycle,
   TaskWorkCapacity,
+  AuthoritativeTaskWorktreeReady,
+  GitWorktree,
+  gitWorktreeTestLayer,
+  PlannedWorktreeAbsent,
+  runGitWorktreeReconciliation,
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
@@ -34,6 +39,7 @@ import {
   TrackerRevision,
   TrackerTarget,
   type TraceItem,
+  WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
 
@@ -160,15 +166,17 @@ const startingSpecificationTaskIdsAreUnique = Schema.makeFilter(
       : "authored starting task-work specifications must name each task at most once"
 )
 
+const isTaskWorkSpecificationReturn = (
+  occurrence: AuthoredOutsideOccurrence
+): occurrence is Extract<AuthoredOutsideOccurrence, { readonly _tag: "TaskWorkSpecificationReadReturned" }> =>
+  occurrence._tag === "TaskWorkSpecificationReadReturned"
+
 const firstReturnedSpecificationsMatchStartingFacts = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
-    const firstReturns = cassette.outsideOccurrences.flatMap((occurrence, index, occurrences) =>
-      occurrence._tag === "TaskWorkSpecificationReadReturned" &&
-      occurrences.findIndex(
-        (candidate) => candidate._tag === "TaskWorkSpecificationReadReturned" && candidate.taskId === occurrence.taskId
-      ) === index
-        ? [occurrence]
-        : []
+    const specificationReturns = cassette.outsideOccurrences.filter(isTaskWorkSpecificationReturn)
+    const firstReturns = specificationReturns.filter(
+      (occurrence, index, occurrences) =>
+        occurrences.findIndex((candidate) => candidate.taskId === occurrence.taskId) === index
     )
     const mismatch = firstReturns.find((occurrence) => {
       const startingSpecification = cassette.startingFacts.taskWorkSpecifications.find(
@@ -337,10 +345,25 @@ export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthor
   })
   const journalLayer = memoryJournalStoreLayer
   const trackerLayer = controlledTrackerGraphReaderLayer(cassette.outsideOccurrences)
-  const interpreterBase = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
+  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
     Layer.provide(Layer.merge(trackerLayer, controlledTrackerMutationLayer))
   )
-  const interpreterLayer = journaledWorkflowInterpreterLayer(command.runId, interpreterBase)
+  const gitWorktreeLayer = gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))
+  const authoritativeInterpreterLayer = Layer.effect(
+    WorkflowInterpreter,
+    Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      const gitWorktree = yield* GitWorktree
+      return WorkflowInterpreter.of({
+        ...interpreter,
+        reconcileTaskWorktree: (operation) =>
+          runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
+            Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
+          )
+      })
+    })
+  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
+  const interpreterLayer = journaledWorkflowInterpreterLayer(command.runId, authoritativeInterpreterLayer)
   const executorLayer = makeControlledFakePlannedAttemptExecutorLayer(executorSteps(cassette.outsideOccurrences))
   const recoveryLayer = journaledFreshRunRecoveryActivationLayer.pipe(Layer.provide(executorLayer))
   const workflowLayer = Layer.mergeAll(

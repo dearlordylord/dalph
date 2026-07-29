@@ -8,8 +8,6 @@ import {
   ControlCommandRecordedEvent,
   describeJournalEvent,
   JournalPosition,
-  PlannedWorktreeReady,
-  TaskWorktreeReadyEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -58,7 +56,7 @@ const singletonCassette = {
     { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
   ],
   expectedVisibleBehavior: {
-    forbiddenJournalOccurrenceTags: ["ControlCommandRecorded", "TaskWorktreeReady"],
+    forbiddenJournalOccurrenceTags: ["ControlCommandRecorded"],
     journalHistory: "ValidWorkflowJournalHistory",
     plannedAttemptExecutorReports: [
       { _tag: "Running", correlation },
@@ -213,7 +211,10 @@ it.effect("accepts generated identities only through one consistent renaming", (
 
     expect(renamed.runId).toBe("renamed-run")
     expect(
-      checkpoints.every(({ decisionsEquivalent, stateEquivalent }) => decisionsEquivalent && stateEquivalent)
+      checkpoints.every(
+        ({ decisionsEquivalent, stateEquivalent, workflowHistoryEquivalent }) =>
+          decisionsEquivalent && stateEquivalent && workflowHistoryEquivalent
+      )
     ).toBe(true)
     const inconsistent = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
       ...renaming,
@@ -264,7 +265,7 @@ it.effect("round-trips every journaled occurrence and preserves state and decisi
         checkpoint: index + 1,
         decisionsEquivalent: true,
         stateEquivalent: true,
-        visibleOutcomeEquivalent: true
+        workflowHistoryEquivalent: true
       }))
     )
     expect(renderRecordedCassetteLyrics(recorded)).toContain(
@@ -331,6 +332,18 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
     }).pipe(Effect.flip)
     expect(inconsistentStartingFacts._tag).toBe("SchemaError")
 
+    const duplicateStartingSpecification = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      startingFacts: {
+        ...singletonCassette.startingFacts,
+        taskWorkSpecifications: [
+          ...singletonCassette.startingFacts.taskWorkSpecifications,
+          ...singletonCassette.startingFacts.taskWorkSpecifications
+        ]
+      }
+    }).pipe(Effect.flip)
+    expect(duplicateStartingSpecification._tag).toBe("SchemaError")
+
     const onlyOneGraphReturn = {
       ...singletonCassette,
       outsideOccurrences: singletonCassette.outsideOccurrences.filter(
@@ -366,40 +379,17 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
     }).pipe(Effect.flip)
     expect(wrongSpecification._tag).toBe("SchemaError")
 
-    const duplicateStartingSpecification = yield* runAuthoredScenarioCassette({
+    const wrongRuntimeSpecification = yield* runAuthoredScenarioCassette({
       ...singletonCassette,
-      startingFacts: {
-        ...singletonCassette.startingFacts,
-        taskWorkSpecifications: [
-          singletonCassette.startingFacts.taskWorkSpecifications[0],
-          singletonCassette.startingFacts.taskWorkSpecifications[0]
-        ]
-      }
-    }).pipe(Effect.flip)
-    expect(duplicateStartingSpecification._tag).toBe("SchemaError")
-
-    const specificationB = {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement task B.",
-      taskId: "B",
-      title: "Implement B"
-    }
-    const startingSpecificationB = {
-      body: specificationB.body,
-      taskId: specificationB.taskId,
-      title: specificationB.title
-    }
-    const returnedOutOfRequestedOrder = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.flatMap((occurrence) =>
-        occurrence._tag === "TaskWorkSpecificationReadReturned" ? [specificationB, occurrence] : [occurrence]
+      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
+        occurrence._tag === "TaskWorkSpecificationReadReturned" ? { ...occurrence, taskId: "B" } : occurrence
       ),
       startingFacts: {
         ...singletonCassette.startingFacts,
-        taskWorkSpecifications: [...singletonCassette.startingFacts.taskWorkSpecifications, startingSpecificationB]
+        taskWorkSpecifications: [{ ...singletonCassette.startingFacts.taskWorkSpecifications[0], taskId: "B" }]
       }
     }).pipe(Effect.flip)
-    expect(returnedOutOfRequestedOrder._tag).toBe("TrackerGraphReader.AdapterReadError")
+    expect(wrongRuntimeSpecification._tag).toBe("TrackerGraphReader.AdapterReadError")
 
     const decisionMismatch = yield* runAuthoredScenarioCassette({ ...singletonCassette, expectedDecisions: [] }).pipe(
       Effect.flip
@@ -449,51 +439,29 @@ it.effect("renders recorded operator commands from their structured entry", () =
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(singletonCassette)
     const recorded = yield* projectRecordedCassette(run.records)
-    const worktreeIntent = recorded.entries.find((entry) => entry._tag === "TaskWorktreeReconciliationInitiated")
-    expect(worktreeIntent?._tag).toBe("TaskWorktreeReconciliationInitiated")
-    if (worktreeIntent?._tag !== "TaskWorktreeReconciliationInitiated") return
-    const plannedAttempt = worktreeIntent.operation.plannedAttempt
-    const readyProof = PlannedWorktreeReady.make({
-      baseSha: plannedAttempt.baseSha,
-      branch: plannedAttempt.branch,
-      headSha: plannedAttempt.baseSha,
-      worktree: plannedAttempt.worktree
-    })
     const command = ControlCommand.cases.RequestRunPause.make({
       commandId: ControlCommandId.make("cassette-pause"),
       operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
       runId: recorded.runId
     })
-    const readyEvent = TaskWorktreeReadyEvent.make({
-      operationId: worktreeIntent.operation.operationId,
-      proof: readyProof,
-      version: workflowJournalEventVersion
-    })
     const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-    const recordFor = (event: typeof readyEvent | typeof commandEvent) => ({
-      event,
-      key: describeJournalEvent(event).expectedKey,
+    const commandRecord = {
+      event: commandEvent,
+      key: describeJournalEvent(commandEvent).expectedKey,
       position: JournalPosition.make(1),
       runId: recorded.runId
-    })
-    const worktreeIntentIndex = run.records.findIndex(
-      ({ event }) => event._tag === "TaskWorktreeReconciliationIntended"
+    }
+    const withCommand = yield* projectRecordedCassette(
+      [...run.records, commandRecord].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
     )
-    const withExtraOccurrences = [
-      ...run.records.slice(0, worktreeIntentIndex + 1),
-      recordFor(readyEvent),
-      ...run.records.slice(worktreeIntentIndex + 1),
-      recordFor(commandEvent)
-    ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
-    const withCommandAndReady = yield* projectRecordedCassette(withExtraOccurrences)
 
-    expect(renderRecordedCassetteLyrics(withCommandAndReady)).toContain(
+    expect(renderRecordedCassetteLyrics(withCommand)).toContain(
       "Dalph recorded the operator's RequestRunPause command."
     )
-    expect(renderRecordedCassetteLyrics(withCommandAndReady)).toContain(
-      `Git showed worktree ${plannedAttempt.worktree} ready`
+    expect(renderRecordedCassetteLyrics(withCommand)).toContain(
+      "Git showed worktree /dalph/cassettes/attempt-A-0 ready"
     )
-    expect(foldRecordedCassette(withCommandAndReady)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(foldRecordedCassette(withCommand)._tag).toBe("ValidWorkflowJournalHistory")
   })
 )
 
@@ -523,8 +491,8 @@ it.effect("rejects an illegal early start even when the final semantic state agr
 
     expect(expectedFinal._tag).toBe("ValidWorkflowJournalHistory")
     expect(actualFinal._tag).toBe("ValidWorkflowJournalHistory")
-    expect(checkpoints.at(-1)?.stateEquivalent).toBe(false)
-    expect(checkpoints.at(-1)?.visibleOutcomeEquivalent).toBe(true)
+    expect(checkpoints.at(-1)?.stateEquivalent).toBe(true)
+    expect(checkpoints.at(-1)?.workflowHistoryEquivalent).toBe(false)
     expect(checkpoints.some(({ decisionsEquivalent }) => !decisionsEquivalent)).toBe(true)
   })
 )
