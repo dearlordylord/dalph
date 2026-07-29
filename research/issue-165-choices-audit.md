@@ -123,14 +123,14 @@ concerns are omitted as well.
 
 ## 17. Public support seams across package boundaries
 
-- Choice: The public `@dalph/dalph` cassette runner consumes `journaledFreshRunRecoveryActivationLayer` and `controlledTrackerMutationLayerFrom` through the public `@dalph/orchestrator` root API.
-- Limited confidence: The source-organization refactor gives these exports current consumers and clear package ownership, but both remain narrow support seams for authored fresh-run cassettes rather than broadly production-shaped capabilities.
+- Choice: The public `@dalph/dalph` cassette runner consumes fresh-run, startup-recovery, live recovery-authority, and controlled tracker-mutation layers through the public `@dalph/orchestrator` root API.
+- Limited confidence: The source-organization refactor gives these exports current consumers and clear package ownership, but they remain narrow support seams for authored cassette activations rather than broadly production-shaped capabilities.
 - Risk: Other application code can depend on APIs whose semantics are intentionally narrow, making later recovery or tracker-adapter refactoring harder.
-- Verify: Decide whether these are supported orchestrator contracts. If not, expose a purpose-named cassette support composition instead of the two low-level seams.
+- Verify: Decide whether these are supported orchestrator contracts. If not, expose a purpose-named cassette support composition instead of the low-level seams.
 
 ## 18. GitHub and project-memory follow-through
 
-- Choice: Committed implementation locally but did not update GitHub or add an OptMem note.
-- Limited confidence: `/implement` did not explicitly authorize tracker mutation, and the durable decisions are already checked into code/scenarios.
+- Choice: Pushed the implementation branches but did not comment on or close the issue, and did not add an OptMem note.
+- Limited confidence: The user authorized the push but not tracker mutation, and the durable decisions are already checked into code/scenarios.
 - Risk: The issue may remain operationally stale, or a reusable architectural decision may not be recalled.
 - Verify: Confirm the repository’s post-implementation workflow before commenting/closing; search OptMem for an existing equivalent note before adding one.
