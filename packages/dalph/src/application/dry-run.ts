@@ -71,18 +71,24 @@ const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
   worktreeRoot: WorktreeLocator.make("/dalph/dry-run")
 })
 
-export const makeDryRunCliApplication = (fixtureReaderLayer: Layer.Layer<FixtureReader>) =>
-  runCliFromStdio.pipe(
-    Effect.provide(dryRunWorkflowInterpreterLayer),
-    Effect.provide(workflowTraceOutputLayer),
-    Effect.provide(traceOutputStdioLayer),
-    Effect.provide(dryRunOperationIdAllocatorLayer),
-    Effect.provide(dryRunTaskClaimPlannerLayer),
-    Effect.provide(dryRunPlannedTaskAttemptLayer),
-    Effect.provide(trackerGraphReaderLayer),
-    Effect.provide(fixtureReaderLayer),
-    Effect.provide(dryCliEnvironmentLayer)
+export const makeDryRunCliApplication = (fixtureReaderLayer: Layer.Layer<FixtureReader>) => {
+  const dryRunTrackerGraphReaderLayer = trackerGraphReaderLayer.pipe(Layer.provide(fixtureReaderLayer))
+  const dryRunInterpreterLayer = dryRunWorkflowInterpreterLayer.pipe(Layer.provide(dryRunTrackerGraphReaderLayer))
+  const dryRunTraceLayer = workflowTraceOutputLayer.pipe(Layer.provide(traceOutputStdioLayer))
+
+  return runCliFromStdio.pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        dryRunInterpreterLayer,
+        dryRunTraceLayer,
+        dryRunOperationIdAllocatorLayer,
+        dryRunTaskClaimPlannerLayer,
+        dryRunPlannedTaskAttemptLayer,
+        dryCliEnvironmentLayer
+      )
+    )
   )
+}
 
 // Live GitHub dry-run CLI registration owner:
 // https://github.com/dearlordylord/dalph/issues/103

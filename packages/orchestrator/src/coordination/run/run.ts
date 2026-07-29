@@ -241,7 +241,9 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
         admissionController,
         readFrontier: readFrontier(),
         runId:
-          recovery._tag === "AuthoritativeRunRecoveryActivation" ? recovery.runId : RunId.make(`workflow:${target}`),
+          recovery._tag === "AuthoritativeRunRecoveryActivation"
+            ? recovery.runId
+            : RunId.make(`workflow:${typeof target === "string" ? target : Object.prototype.toString.call(target)}`),
         runTransition: (transition, execution) =>
           Effect.gen(function* () {
             const stage = (yield* Ref.get(stages)).find((candidate) => candidate.transition === transition)

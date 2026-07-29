@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import { Data, Effect, Option, Ref, Schema } from "effect"
 import {
   SelectedTransitionIdentity as SelectedTransitionIdentitySchema,

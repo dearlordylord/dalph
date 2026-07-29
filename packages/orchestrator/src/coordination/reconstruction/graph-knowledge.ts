@@ -58,7 +58,7 @@ const fullObservationForReconfirmation = (
 /** Projects only complete journal-reconstructed facts into the graph selector input. */
 export const reconstructedTaskGraphFor = (
   knowledge: { readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation> },
-  target: typeof TrackerTarget.Type
+  target: TrackerTarget
 ): Option.Option<TaskDagSnapshot> => {
   const latest = knowledge.taskTrackerFacts.findLast(
     (candidate): candidate is GraphFactsObservation =>
@@ -99,7 +99,7 @@ export const reconstructedTaskWorkSpecificationFor = (
 /** Reconstructs usable graph knowledge only from decoded journal-event meanings. */
 export const reconstructedTaskGraphFromEvents = (
   events: ReadonlyArray<unknown>,
-  target: typeof TrackerTarget.Type
+  target: TrackerTarget
 ): Option.Option<TaskDagSnapshot> =>
   reconstructedTaskGraphFor(
     {

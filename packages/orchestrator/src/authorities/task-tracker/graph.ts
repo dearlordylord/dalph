@@ -162,7 +162,7 @@ export class TaskDagSnapshot {
     private readonly tasks: HashMap.HashMap<TaskId, TaskProjection>
   ) {}
 
-  static project(decoded: typeof TrackerSnapshot.Type): ProjectionResult {
+  static project(decoded: TrackerSnapshot): ProjectionResult {
     const issues: Array<ProjectionIssue> = []
     const recordsById = new Map<TaskId, TrackerTask>()
     const records = [...decoded.tasks].sort((left, right) => {
@@ -321,7 +321,7 @@ export class TaskDagSnapshot {
   }
 }
 
-const projectDecodedSnapshot = (decoded: Result.Result<typeof TrackerSnapshot.Type, unknown>): ProjectionResult =>
+const projectDecodedSnapshot = (decoded: Result.Result<TrackerSnapshot, unknown>): ProjectionResult =>
   Result.isFailure(decoded)
     ? {
         _tag: "Invalid",

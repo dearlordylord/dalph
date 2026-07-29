@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
 import { Effect, Layer, Match } from "effect"
 import { trackerGraphReaderContract } from "../../../../test/contracts/tracker-graph-reader-contract.js"

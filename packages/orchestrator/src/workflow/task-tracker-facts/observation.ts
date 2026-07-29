@@ -97,10 +97,7 @@ const completeFactFamilySubjectsDiffer = (factFamilies: typeof CompleteTaskGraph
 }
 
 const invalidCompleteCoverage = (
-  observation: {
-    readonly factFamilies: typeof CompleteTaskGraphFactFamilies.Type
-    readonly target: typeof TrackerTarget.Type
-  },
+  observation: { readonly factFamilies: typeof CompleteTaskGraphFactFamilies.Type; readonly target: TrackerTarget },
   identities: typeof TaskIdentitiesObserved.Type,
   membership: typeof TaskTargetMembershipObserved.Type
 ): string | undefined => {
@@ -125,7 +122,7 @@ const invalidCompleteCoverage = (
 const invalidCompleteTaskGraphFacts = (observation: {
   readonly factFamilies: typeof CompleteTaskGraphFactFamilies.Type
   readonly operationId: OperationId
-  readonly target: typeof TrackerTarget.Type
+  readonly target: TrackerTarget
 }) => {
   const [identities, , prerequisites, , membership] = observation.factFamilies
   if (completeFactFamilySubjectsDiffer(observation.factFamilies)) {
@@ -209,7 +206,7 @@ const reconfirmedFactFamilySubjectsDiffer = (factFamilies: typeof ReconfirmedTas
 
 const invalidReconfirmedCoverage = (reconfirmation: {
   readonly factFamilies: typeof ReconfirmedTaskGraphFactFamilies.Type
-  readonly target: typeof TrackerTarget.Type
+  readonly target: TrackerTarget
 }): string | undefined => {
   if (!factFamiliesCoverTarget(reconfirmation.factFamilies, reconfirmation.target)) {
     return "every reconfirmed fact family must declare complete coverage of the logical read target"

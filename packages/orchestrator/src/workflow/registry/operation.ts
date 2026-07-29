@@ -21,10 +21,7 @@ const ReadTrackerGraphOperation = Schema.TaggedStruct("ReadTrackerGraph", {
 })
 
 const withoutSelfPredecessor = <
-  A extends {
-    readonly operationId: typeof OperationId.Type
-    readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
-  }
+  A extends { readonly operationId: OperationId; readonly predecessorOperationIds: ReadonlyArray<OperationId> }
 >(
   operation: A
 ) =>
@@ -89,11 +86,11 @@ export const WorkflowOperation = Object.assign(
 export type WorkflowOperation = typeof WorkflowOperation.Type
 
 interface CausalGraphEntry {
-  readonly operationId: typeof OperationId.Type
-  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+  readonly operationId: OperationId
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }
 
-export const workflowOperationId = (operation: WorkflowOperation): typeof OperationId.Type =>
+export const workflowOperationId = (operation: WorkflowOperation): OperationId =>
   operation._tag === "AcquireTaskClaim" ? operation.acquisition.operationId : operation.operationId
 
 const orderedBefore = -1
@@ -101,7 +98,7 @@ const orderedSame = 0
 const orderedAfter = 1
 
 /** Canonical code-unit order; independent of host locale and presentation rules. */
-const compareOperationIds = (left: typeof OperationId.Type, right: typeof OperationId.Type): number =>
+const compareOperationIds = (left: OperationId, right: OperationId): number =>
   left < right ? orderedBefore : left > right ? orderedAfter : orderedSame
 
 export const causalGraphProjection = (operations: ReadonlyArray<WorkflowOperation>): ReadonlyArray<CausalGraphEntry> =>
@@ -112,13 +109,13 @@ export const causalGraphProjection = (operations: ReadonlyArray<WorkflowOperatio
     }))
     .toSorted((left, right) => compareOperationIds(left.operationId, right.operationId))
 
-const canonicalPredecessors = (predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>) =>
+const canonicalPredecessors = (predecessorOperationIds: ReadonlyArray<OperationId>) =>
   [...new Set(predecessorOperationIds)].sort(compareOperationIds)
 
 export const makeTrackerGraphObservationOperation = (
-  operationId: typeof OperationId.Type,
+  operationId: OperationId,
   target: TrackerTarget,
-  predecessorOperationIds: ReadonlyArray<typeof OperationId.Type> = [],
+  predecessorOperationIds: ReadonlyArray<OperationId> = [],
   explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []
 ): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
   WorkflowOperation.cases.ReadTrackerGraph.make({
@@ -131,10 +128,10 @@ export const makeTrackerGraphObservationOperation = (
   })
 
 export const makeTaskWorkSpecificationObservationOperation = (
-  operationId: typeof OperationId.Type,
+  operationId: OperationId,
   target: TrackerTarget,
   taskId: TaskId,
-  predecessorOperationIds: ReadonlyArray<typeof OperationId.Type> = []
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
 ): typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type =>
   WorkflowOperation.cases.ReadTaskWorkSpecification.make({
     operationId,
@@ -145,7 +142,7 @@ export const makeTaskWorkSpecificationObservationOperation = (
 
 export const makeTaskClaimAcquisitionOperation = (fields: {
   readonly acquisition: TaskClaimAcquisition
-  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
   WorkflowOperation.cases.AcquireTaskClaim.make({
     acquisition: fields.acquisition,
@@ -153,9 +150,9 @@ export const makeTaskClaimAcquisitionOperation = (fields: {
   })
 
 export const makeTaskAttemptPlanOperation = (fields: {
-  readonly operationId: typeof OperationId.Type
-  readonly plannedAttempt: typeof PlannedTaskAttempt.Type
-  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+  readonly operationId: OperationId
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }): typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type =>
   WorkflowOperation.cases.RecordTaskAttemptPlan.make({
     ...fields,
@@ -163,9 +160,9 @@ export const makeTaskAttemptPlanOperation = (fields: {
   })
 
 export const makeTaskWorktreeReconciliationOperation = (fields: {
-  readonly operationId: typeof OperationId.Type
-  readonly plannedAttempt: typeof PlannedTaskAttempt.Type
-  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+  readonly operationId: OperationId
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }): typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type =>
   WorkflowOperation.cases.ReconcileTaskWorktree.make({
     ...fields,

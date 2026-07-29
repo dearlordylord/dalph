@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { ConfigProvider, Effect, Layer } from "effect"

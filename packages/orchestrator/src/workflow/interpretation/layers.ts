@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import { Effect, Layer } from "effect"
 import { TaskAttemptPlanRecordingSimulated } from "../protocols/task-attempt-planning/record.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"

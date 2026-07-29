@@ -44,13 +44,15 @@ export const deterministicTaskClaimAcquisitionPlannerLayer = (options: {
   Layer.succeed(
     TaskClaimAcquisitionPlanner,
     TaskClaimAcquisitionPlanner.of({
-      plan: Effect.fn("TaskClaimAcquisitionPlanner.Deterministic.plan")(function* (operationId, taskId) {
-        return TaskClaimAcquisition.make({
-          operationId,
-          owner: options.owner,
-          taskId,
-          token: ClaimToken.make(`${options.tokenPrefix}:${taskId}:${operationId}`)
-        })
-      })
+      plan: Effect.fn("TaskClaimAcquisitionPlanner.Deterministic.plan")((operationId, taskId) =>
+        Effect.succeed(
+          TaskClaimAcquisition.make({
+            operationId,
+            owner: options.owner,
+            taskId,
+            token: ClaimToken.make(`${options.tokenPrefix}:${taskId}:${operationId}`)
+          })
+        )
+      )
     })
   )

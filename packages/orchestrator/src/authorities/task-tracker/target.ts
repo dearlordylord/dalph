@@ -18,11 +18,11 @@ export const factFamilyCoverageMatchesExplicitTaskIds = (
       exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) === exactTaskIdSetKey(explicitlyCoveredTaskIds)
   )
 
-export const taskTrackerTargetKey = (target: typeof TrackerTarget.Type): string =>
+export const taskTrackerTargetKey = (target: TrackerTarget): string =>
   JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
 
 export const factFamiliesCoverTarget = (
-  factFamilies: ReadonlyArray<{ readonly coverage: { readonly target: typeof TrackerTarget.Type } }>,
-  target: typeof TrackerTarget.Type
+  factFamilies: ReadonlyArray<{ readonly coverage: { readonly target: TrackerTarget } }>,
+  target: TrackerTarget
 ): boolean =>
   factFamilies.every(({ coverage }) => taskTrackerTargetKey(coverage.target) === taskTrackerTargetKey(target))

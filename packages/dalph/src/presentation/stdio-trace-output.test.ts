@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
 import { TraceOutput, TraceOutputError } from "@dalph/orchestrator"
 import { Effect, Sink, Stdio } from "effect"

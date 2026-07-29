@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import type { Effect } from "effect"
 import { Context, Schema } from "effect"
 import { RunId } from "@dalph/contracts"

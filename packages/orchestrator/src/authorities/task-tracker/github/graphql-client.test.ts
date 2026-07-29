@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
 import { ConfigProvider, Effect, Layer, Option, Redacted, Ref, Schema } from "effect"
 import * as Headers from "effect/unstable/http/Headers"

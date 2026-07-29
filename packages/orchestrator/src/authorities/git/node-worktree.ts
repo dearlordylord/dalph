@@ -95,7 +95,7 @@ export const nodeGitWorktreeLayer = (gitDirectory: GitCommonDirectoryTarget) =>
 
       const proveBase = Effect.fn("GitWorktree.Node.proveBase")(function* (
         plan: PlannedTaskAttempt,
-        headSha: typeof GitCommitSha.Type
+        headSha: GitCommitSha
       ) {
         const result = yield* runRead(plan, ["merge-base", "--is-ancestor", plan.baseSha, headSha])
         if (successful(result)) return

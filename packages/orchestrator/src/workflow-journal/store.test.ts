@@ -1,3 +1,4 @@
+// @effect-diagnostics unnecessaryEffectGen:off
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"

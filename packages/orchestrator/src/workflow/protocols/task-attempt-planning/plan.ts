@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
 import { type GitCommitSha, type RunId, type TaskExecutorLocator } from "@dalph/contracts"
 import { AttemptId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"

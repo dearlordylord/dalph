@@ -235,9 +235,7 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
   const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
     return yield* readRecoveredFrontier(runId)
   })
-  const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(function* () {
-    return
-  })
+  const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
   const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution

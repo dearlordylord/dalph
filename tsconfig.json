@@ -20,7 +20,29 @@
     "plugins": [
       {
         "name": "@effect/language-service",
-        "ignoreEffectWarningsInTscExitCode": true
+        "diagnosticSeverity": {
+          "lazyEffect": "off"
+        },
+        "ignoreEffectWarningsInTscExitCode": true,
+        "overrides": [
+          {
+            "include": ["src/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "floatingEffect": "error"
+              }
+            }
+          },
+          {
+            "include": ["packages/**/*.test.ts", "packages/**/*.spec.ts", "test/**/*.test.ts", "test/**/*.spec.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "multipleEffectProvide": "off",
+                "unnecessaryEffectGen": "off"
+              }
+            }
+          }
+        ]
       }
     ],
     "rewriteRelativeImportExtensions": true,

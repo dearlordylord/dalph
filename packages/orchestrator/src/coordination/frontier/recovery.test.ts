@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { Effect, Ref } from "effect"

@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { Effect, Layer, Option, Ref, Result, Schema } from "effect"
 import { expect, it } from "vitest"
 import { RunId, TaskId, TaskRevision } from "@dalph/contracts"

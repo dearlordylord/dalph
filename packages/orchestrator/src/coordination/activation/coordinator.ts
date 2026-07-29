@@ -301,11 +301,7 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
     }
 
     const recordIntent = Effect.fn("ActivationCoordinator.recordIntent")(function* (operationId: OperationId) {
-      yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* ownership.bindOperation(key, operationId)
-        })
-      )
+      yield* Effect.uninterruptible(ownership.bindOperation(key, operationId))
       yield* checkpoint((observation) => ({
         _tag: "IntentBound",
         observation,

@@ -109,8 +109,8 @@ const hasLaterGraphForTarget = (
 
 const unclaimedEntriesForRecord = (
   records: ReadonlyArray<JournalRecord>,
-  claimedTaskIds: ReadonlySet<typeof TaskId.Type>,
-  plannedTaskIds: ReadonlySet<typeof TaskId.Type>,
+  claimedTaskIds: ReadonlySet<TaskId>,
+  plannedTaskIds: ReadonlySet<TaskId>,
   record: JournalRecord,
   recordIndex: number
 ): ReadonlyArray<TaskClaimAcquisitionNeeded> => {

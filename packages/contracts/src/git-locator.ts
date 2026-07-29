@@ -17,6 +17,7 @@ const isValidTaskBranchRef = (ref: string): boolean => {
     ref.includes("@{") ||
     ref.endsWith("/") ||
     ref.endsWith(".") ||
+    // oxlint-disable-next-line no-control-regex -- Git ref syntax rejects ASCII control characters.
     /[\u0000-\u0020\u007f~^:?*[\\]/.test(ref)
   )
     return false

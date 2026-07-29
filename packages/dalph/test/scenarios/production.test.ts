@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import {
   AttemptId,
   GitCommitSha,

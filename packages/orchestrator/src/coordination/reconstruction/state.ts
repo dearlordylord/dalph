@@ -75,7 +75,7 @@ export const ReconstructedPauseState = Schema.Struct({
 })
 export type ReconstructedPauseState = typeof ReconstructedPauseState.Type
 
-export const reconstructedTaskIsPaused = (pause: ReconstructedPauseState, taskId: typeof TaskId.Type): boolean =>
+export const reconstructedTaskIsPaused = (pause: ReconstructedPauseState, taskId: TaskId): boolean =>
   pause.run._tag === "RunPaused" || (pause.tasks._tag === "TaskPauses" && pause.tasks.taskIds.includes(taskId))
 
 export interface ReconstructedWorkflowHistory {

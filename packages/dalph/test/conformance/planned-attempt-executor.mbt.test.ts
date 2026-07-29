@@ -63,18 +63,16 @@ const executorConformanceDriver = defineDriver(
     startOrContinueRunning: {}
   },
   () => {
-    let latestReport: typeof PlannedAttemptExecutorReport.Type | undefined
-    let nextStartReport: typeof PlannedAttemptExecutorReport.Type = PlannedAttemptExecutorReport.cases.Running.make({
-      correlation
-    })
-    let pendingSuspension: Fiber.Fiber<typeof PlannedAttemptExecutorReport.Type> | undefined
-    let pendingStart: Fiber.Fiber<typeof PlannedAttemptExecutorReport.Type> | undefined
+    let latestReport: PlannedAttemptExecutorReport | undefined
+    let nextStartReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    let pendingSuspension: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
+    let pendingStart: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
     let controller: TaskAdmissionController | undefined
     let records: ReadonlyArray<JournalRecord> = []
     let status = "NoReport"
     let responsibilityRecorded = Deferred.makeUnsafe<void>()
-    let startResponse: Deferred.Deferred<typeof PlannedAttemptExecutorReport.Type> | undefined
-    let suspensionResponse = Deferred.makeUnsafe<typeof PlannedAttemptExecutorReport.Type>()
+    let startResponse: Deferred.Deferred<PlannedAttemptExecutorReport> | undefined
+    let suspensionResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
     const executor = PlannedAttemptExecutor.of({
       project: () => Effect.succeed(Option.fromUndefinedOr(latestReport)),
       requestSuspension: () =>
@@ -152,7 +150,7 @@ const executorConformanceDriver = defineDriver(
         }
       }
     )
-    const completePendingSuspension = (report: typeof PlannedAttemptExecutorReport.Type) =>
+    const completePendingSuspension = (report: PlannedAttemptExecutorReport) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(suspensionResponse, report)
         if (pendingSuspension === undefined) {
@@ -165,7 +163,7 @@ const executorConformanceDriver = defineDriver(
           yield* releasePositionIfHeld()
         }
       })
-    const completePendingStart = (report: typeof PlannedAttemptExecutorReport.Type) =>
+    const completePendingStart = (report: PlannedAttemptExecutorReport) =>
       Effect.gen(function* () {
         const start = pendingStart
         const response = startResponse
@@ -178,7 +176,7 @@ const executorConformanceDriver = defineDriver(
         startResponse = undefined
         return result
       })
-    const invokeStart = (report: typeof PlannedAttemptExecutorReport.Type) =>
+    const invokeStart = (report: PlannedAttemptExecutorReport) =>
       Effect.gen(function* () {
         const admission = yield* requireController()
         const snapshot = yield* admission.snapshot()

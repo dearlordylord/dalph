@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import { NodeFileSystem } from "@effect/platform-node"
 import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
 import { TaskId } from "@dalph/contracts"

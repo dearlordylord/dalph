@@ -1,3 +1,4 @@
+// @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../coordinator-ownership/ownership.js"
 import { type PlannedTaskAttempt } from "@dalph/contracts"

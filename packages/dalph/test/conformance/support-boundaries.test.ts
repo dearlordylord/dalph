@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import * as Contracts from "@dalph/contracts"

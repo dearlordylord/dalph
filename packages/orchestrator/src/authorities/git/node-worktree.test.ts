@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, FileSystem, Layer, PlatformError, Stream } from "effect"
