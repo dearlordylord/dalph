@@ -11,6 +11,7 @@ import {
   ActiveTaskClaim,
   ClaimToken,
   ControlCommand,
+  ControlCommandId,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
@@ -81,6 +82,9 @@ const consistentIdentityRenaming = Schema.makeFilter(
 export const CassetteIdentityRenaming = Schema.Struct({
   attemptIds: Schema.Array(Schema.Struct({ from: AttemptId, to: AttemptId })).check(consistentIdentityRenaming),
   claimTokens: Schema.Array(Schema.Struct({ from: ClaimToken, to: ClaimToken })).check(consistentIdentityRenaming),
+  controlCommandIds: Schema.Array(Schema.Struct({ from: ControlCommandId, to: ControlCommandId })).check(
+    consistentIdentityRenaming
+  ),
   operationIds: Schema.Array(Schema.Struct({ from: OperationId, to: OperationId })).check(consistentIdentityRenaming),
   runIds: Schema.Array(Schema.Struct({ from: RunId, to: RunId })).check(consistentIdentityRenaming),
   taskBranchRefs: Schema.Array(Schema.Struct({ from: TaskBranchRef, to: TaskBranchRef })).check(
@@ -118,6 +122,7 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   const maps: IdentityRenamingMaps = new Map([
     ["attemptId", identityRenamingMap(renaming.attemptIds)],
     ["branch", identityRenamingMap(renaming.taskBranchRefs)],
+    ["commandId", identityRenamingMap(renaming.controlCommandIds)],
     ["operationId", operationIds],
     ["originatingActionOperationId", operationIds],
     ["predecessorOperationIds", operationIds],
@@ -134,6 +139,7 @@ export const invertCassetteIdentityRenaming = (renaming: CassetteIdentityRenamin
   CassetteIdentityRenaming.make({
     attemptIds: renaming.attemptIds.map(({ from, to }) => ({ from: to, to: from })),
     claimTokens: renaming.claimTokens.map(({ from, to }) => ({ from: to, to: from })),
+    controlCommandIds: renaming.controlCommandIds.map(({ from, to }) => ({ from: to, to: from })),
     operationIds: renaming.operationIds.map(({ from, to }) => ({ from: to, to: from })),
     runIds: renaming.runIds.map(({ from, to }) => ({ from: to, to: from })),
     taskBranchRefs: renaming.taskBranchRefs.map(({ from, to }) => ({ from: to, to: from })),

@@ -96,58 +96,66 @@ export const isExactTaskClaim = (left: ActiveTaskClaim, right: ActiveTaskClaim):
   left.token === right.token
 
 /** In-memory atomic adapter used by shared contracts and deterministic tests. */
-export const controlledTrackerMutationLayer = Layer.effect(
-  TrackerMutation,
-  Effect.gen(function* () {
-    const claims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(new Map())
-    const readTaskClaim = Effect.fn("TrackerMutation.Controlled.readTaskClaim")(function* (taskId: TaskId) {
-      const current = yield* Ref.get(claims)
-      return current.get(taskId) ?? UnclaimedTask.make({ taskId })
-    })
-    const acquireTaskClaim = Effect.fn("TrackerMutation.Controlled.acquireTaskClaim")(function* (
-      acquisition: TaskClaimAcquisition
-    ) {
-      const attempted = claimFrom(acquisition)
-      const result = yield* Ref.modify(claims, (current) => {
-        const observed = current.get(acquisition.taskId)
-        if (observed === undefined) {
-          const next = new Map(current)
-          next.set(acquisition.taskId, attempted)
-          return [{ _tag: "Acquired", claim: attempted } as const, next]
-        }
-        return [
-          isExactTaskClaim(observed, attempted)
-            ? ({ _tag: "Acquired", claim: observed } as const)
-            : ({ _tag: "Conflict", claim: observed } as const),
-          current
-        ]
-      })
-      return result._tag === "Acquired"
-        ? result.claim
-        : yield* new TaskClaimConflict({ attempted: acquisition, observed: result.claim })
-    })
-    const releaseTaskClaim = Effect.fn("TrackerMutation.Controlled.releaseTaskClaim")(function* (
-      attempted: ActiveTaskClaim
-    ) {
-      type ReleaseResult =
-        | { readonly _tag: "Released" }
-        | { readonly _tag: "Conflict"; readonly observed: TaskClaimObservation }
-      const result: ReleaseResult = yield* Ref.modify(
-        claims,
-        (current): readonly [ReleaseResult, ReadonlyMap<TaskId, ActiveTaskClaim>] => {
-          const observed = current.get(attempted.taskId)
-          if (observed !== undefined && isExactTaskClaim(observed, attempted)) {
-            const next = new Map(current)
-            next.delete(attempted.taskId)
-            return [{ _tag: "Released" }, next]
-          }
-          return [{ _tag: "Conflict", observed: observed ?? UnclaimedTask.make({ taskId: attempted.taskId }) }, current]
-        }
+export const controlledTrackerMutationLayerFrom = (initialClaims: ReadonlyArray<ActiveTaskClaim>) =>
+  Layer.effect(
+    TrackerMutation,
+    Effect.gen(function* () {
+      const claims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(
+        new Map(initialClaims.map((claim) => [claim.taskId, claim]))
       )
-      if (result._tag === "Conflict") {
-        return yield* new TaskClaimOwnershipConflict({ attempted, observed: result.observed })
-      }
+      const readTaskClaim = Effect.fn("TrackerMutation.Controlled.readTaskClaim")(function* (taskId: TaskId) {
+        const current = yield* Ref.get(claims)
+        return current.get(taskId) ?? UnclaimedTask.make({ taskId })
+      })
+      const acquireTaskClaim = Effect.fn("TrackerMutation.Controlled.acquireTaskClaim")(function* (
+        acquisition: TaskClaimAcquisition
+      ) {
+        const attempted = claimFrom(acquisition)
+        const result = yield* Ref.modify(claims, (current) => {
+          const observed = current.get(acquisition.taskId)
+          if (observed === undefined) {
+            const next = new Map(current)
+            next.set(acquisition.taskId, attempted)
+            return [{ _tag: "Acquired", claim: attempted } as const, next]
+          }
+          return [
+            isExactTaskClaim(observed, attempted)
+              ? ({ _tag: "Acquired", claim: observed } as const)
+              : ({ _tag: "Conflict", claim: observed } as const),
+            current
+          ]
+        })
+        return result._tag === "Acquired"
+          ? result.claim
+          : yield* new TaskClaimConflict({ attempted: acquisition, observed: result.claim })
+      })
+      const releaseTaskClaim = Effect.fn("TrackerMutation.Controlled.releaseTaskClaim")(function* (
+        attempted: ActiveTaskClaim
+      ) {
+        type ReleaseResult =
+          | { readonly _tag: "Released" }
+          | { readonly _tag: "Conflict"; readonly observed: TaskClaimObservation }
+        const result: ReleaseResult = yield* Ref.modify(
+          claims,
+          (current): readonly [ReleaseResult, ReadonlyMap<TaskId, ActiveTaskClaim>] => {
+            const observed = current.get(attempted.taskId)
+            if (observed !== undefined && isExactTaskClaim(observed, attempted)) {
+              const next = new Map(current)
+              next.delete(attempted.taskId)
+              return [{ _tag: "Released" }, next]
+            }
+            return [
+              { _tag: "Conflict", observed: observed ?? UnclaimedTask.make({ taskId: attempted.taskId }) },
+              current
+            ]
+          }
+        )
+        if (result._tag === "Conflict") {
+          return yield* new TaskClaimOwnershipConflict({ attempted, observed: result.observed })
+        }
+      })
+      return TrackerMutation.of({ acquireTaskClaim, readTaskClaim, releaseTaskClaim })
     })
-    return TrackerMutation.of({ acquireTaskClaim, readTaskClaim, releaseTaskClaim })
-  })
-)
+  )
+
+export const controlledTrackerMutationLayer = controlledTrackerMutationLayerFrom([])

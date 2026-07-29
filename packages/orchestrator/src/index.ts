@@ -195,6 +195,7 @@ export {
 export {
   ActiveTaskClaim,
   controlledTrackerMutationLayer,
+  controlledTrackerMutationLayerFrom,
   isExactTaskClaim,
   TaskClaimAcquisition,
   TaskClaimConflict,
