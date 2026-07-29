@@ -56,7 +56,7 @@
     "@dalph/executor": "workspace:*",
     "@dalph/orchestrator": "workspace:*",
     "@effect/tsgo": "0.24.3",
-    "@effect/vitest": "4.0.0-beta.99",
+    "@effect/vitest": "4.0.0-beta.102",
     "@firfi/quint-connect": "2.0.2-effect4.1",
     "@informalsystems/quint": "0.32.0",
     "@types/node": "26.1.1",
