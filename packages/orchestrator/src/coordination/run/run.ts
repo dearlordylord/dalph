@@ -23,16 +23,16 @@ import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutat
 import {
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
-  makeTrackerGraphObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import {
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
-  type TraceItem,
   TrackerExecutionAdmitted,
-  TaskTrackerFactsObservedTrace,
-  WorkflowInterpreter,
-  WorkflowTrace
-} from "../../workflow/interpretation/interpreter.js"
+  TaskTrackerFactsObservedTrace
+} from "../../presentation/tracker-workflow-trace.js"
+import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))

@@ -2,13 +2,9 @@ import { Effect, Layer } from "effect"
 import { TaskAttemptPlanRecordingSimulated } from "../protocols/task-attempt-planning/record.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
 import { controlledTrackerMutationLayer, TrackerMutation } from "../../authorities/task-tracker/claim-mutation.js"
-import {
-  acquireTaskClaimThrough,
-  TaskClaimAcquisitionSimulated,
-  TaskWorktreeReconciliationSimulated,
-  type WorkflowOperation,
-  WorkflowInterpreter
-} from "./interpreter.js"
+import { acquireTaskClaimThrough, TaskClaimAcquisitionSimulated, WorkflowInterpreter } from "./interpreter.js"
+import { TaskWorktreeReconciliationSimulated } from "../protocols/worktree-reconciliation/protocol.js"
+import type { WorkflowOperation } from "../registry/operation.js"
 
 /** Live tracker operations with simulated plan and worktree boundaries for focused tests. */
 export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBase" | "DeterministicTest") =>

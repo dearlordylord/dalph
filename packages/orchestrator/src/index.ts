@@ -243,26 +243,32 @@ export {
 export {
   acquireTaskClaimThrough,
   AuthoritativeTaskClaimAcquired,
+  TaskClaimAcquisitionSimulated,
+  TraceItem,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "./workflow/interpretation/interpreter.js"
+export {
   AuthoritativeTaskWorktreeReady,
+  TaskWorktreeExecutionModeContradiction,
+  TaskWorktreeHistoryContradiction,
+  TaskWorktreeReadyTrace,
+  TaskWorktreeReconciliationSimulated,
+  TaskWorktreeReconciliationSimulatedTrace
+} from "./workflow/protocols/worktree-reconciliation/protocol.js"
+export {
   causalGraphProjection,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
+  WorkflowOperation,
+  workflowOperationId
+} from "./workflow/registry/operation.js"
+export {
   OperationSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
-  TaskClaimAcquisitionSimulated,
-  TaskWorktreeExecutionModeContradiction,
-  TaskWorktreeHistoryContradiction,
-  TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulated,
-  TaskWorktreeReconciliationSimulatedTrace,
-  TraceItem,
   TrackerExecutionAdmitted,
-  TaskTrackerFactsObservedTrace,
-  WorkflowInterpreter,
-  WorkflowOperation,
-  workflowOperationId,
-  WorkflowTrace
-} from "./workflow/interpretation/interpreter.js"
+  TaskTrackerFactsObservedTrace
+} from "./presentation/tracker-workflow-trace.js"

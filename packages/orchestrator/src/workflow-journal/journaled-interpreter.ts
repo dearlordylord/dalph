@@ -26,7 +26,8 @@ import {
   reconstructedTaskWorkSpecificationFor,
   TaskTrackerKnowledgeUnavailable
 } from "../coordination/reconstruction/graph-knowledge.js"
-import { type WorkflowOperation, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
+import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
+import type { WorkflowOperation } from "../workflow/registry/operation.js"
 
 const requireTaskTrackerKnowledge = <A>(
   knowledge: Option.Option<A>,

@@ -28,26 +28,6 @@ import {
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowOperation } from "../registry/operation.js"
 
-export {
-  causalGraphProjection,
-  makeTaskAttemptPlanOperation,
-  makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecificationObservationOperation,
-  makeTaskWorktreeReconciliationOperation,
-  makeTrackerGraphObservationOperation,
-  workflowOperationId
-} from "../registry/operation.js"
-export { WorkflowOperation }
-export {
-  AuthoritativeTaskWorktreeReady,
-  TaskWorktreeExecutionModeContradiction,
-  TaskWorktreeHistoryContradiction,
-  TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulated,
-  TaskWorktreeReconciliationSimulatedTrace
-} from "../protocols/worktree-reconciliation/protocol.js"
-export * from "../../presentation/tracker-workflow-trace.js"
-
 type TaskAttemptPlanRecordingError =
   | JournalStoreContradiction
   | JournalStoreError

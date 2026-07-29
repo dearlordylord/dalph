@@ -1030,12 +1030,14 @@ were deliberately not folded into this structural change:
   boundary. No accepted scenario authorizes that semantic migration, so this
   proposal preserves the existing tags and channels for a focused future
   behavior ticket.
-- `workflow/interpretation/interpreter.ts` remains a broad compatibility
-  aggregation around one existing service tag and its public trace contract.
-  Fully splitting that surface would change exports, service requirements, and
-  trace/event contracts rather than merely moving files. It now lives under
-  its semantic owner; a later focused refactor can split it when accepted
-  scenarios define the replacement contracts.
+- `workflow/interpretation/interpreter.ts` retains one existing service tag and
+  its trace contract. The final standards pass removed its unrelated operation,
+  worktree-protocol, and presentation re-exports; internal consumers now import
+  those values from their owners, while the package root preserves its public
+  surface through direct exports. Fully splitting the remaining service and
+  trace contracts would change service requirements and trace/event contracts
+  rather than merely moving files, so that deeper change still needs accepted
+  replacement scenarios.
 
 These are recorded deferrals, not claims that the suggested end states are
 undesirable. The migration's behavior-neutral constraint is the concrete

@@ -19,13 +19,14 @@ import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutat
 import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import {
   makeTaskAttemptPlanOperation,
-  makeTaskWorktreeReconciliationOperation,
-  OperationSelected,
+  makeTaskWorktreeReconciliationOperation
+} from "../../workflow/registry/operation.js"
+import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
+import {
   TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulatedTrace,
-  type TraceItem,
-  type WorkflowInterpreterService
-} from "../../workflow/interpretation/interpreter.js"
+  TaskWorktreeReconciliationSimulatedTrace
+} from "../../workflow/protocols/worktree-reconciliation/protocol.js"
+import { type TraceItem, type WorkflowInterpreterService } from "../../workflow/interpretation/interpreter.js"
 
 // eslint-disable-next-line functional/no-mixed-types -- Dependencies and the serialized trace emitter form one stage factory input.
 interface FreshTaskAttemptStageOptions {

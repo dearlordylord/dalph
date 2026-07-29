@@ -30,10 +30,10 @@ import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-w
 import { discardFreshStagesOwnedByRecovery, runWorkflow } from "./run.js"
 import {
   AuthoritativeTaskClaimAcquired,
-  AuthoritativeTaskWorktreeReady,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
+import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 
 const stage = (taskId: string): FreshWorkflowStage => ({
   run: () => Effect.die("projection test does not run stages"),
