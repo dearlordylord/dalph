@@ -1,12 +1,17 @@
 // Models issue #158's coarse same-process executor boundary. Detailed review,
 // retry, provider-session, and convergence policy are intentionally absent.
 module plannedAttemptExecutor {
-  type Report = NoReport | Running | SafelySuspended | Terminal
+  type Status =
+    | NoReport
+    | Running
+    | SuspensionRequested
+    | SafelySuspended
+    | Terminal
 
   type State = {
-    report: Report,
-    reportRunId: int,
-    reportAttemptId: int,
+    status: Status,
+    correlationRunId: int,
+    correlationAttemptId: int,
     positionHeld: bool,
   }
 
@@ -15,61 +20,77 @@ module plannedAttemptExecutor {
 
   var state: State
 
-  val everyReportUsesExactPlannedAttempt: bool =
-    state.report == NoReport
+  val everyStatusUsesExactPlannedAttempt: bool =
+    state.status == NoReport
       or and {
-        state.reportRunId == RUN_ID,
-        state.reportAttemptId == ATTEMPT_ID,
+        state.correlationRunId == RUN_ID,
+        state.correlationAttemptId == ATTEMPT_ID,
       }
 
-  val positionHeldExactlyWhileRunning: bool =
-    state.positionHeld == (state.report == Running)
+  val positionHeldUntilSuspensionResult: bool =
+    state.positionHeld
+      == (state.status == Running or state.status == SuspensionRequested)
 
   val safeSuspensionReleasesPosition: bool =
-    state.report != SafelySuspended or not(state.positionHeld)
+    state.status != SafelySuspended or not(state.positionHeld)
 
   val terminalReleasesPosition: bool =
-    state.report != Terminal or not(state.positionHeld)
+    state.status != Terminal or not(state.positionHeld)
 
-  val runningReached: bool = state.report == Running
-  val safelySuspendedReached: bool = state.report == SafelySuspended
-  val terminalReached: bool = state.report == Terminal
+  val suspensionRequestRetainsPosition: bool =
+    state.status != SuspensionRequested or state.positionHeld
+
+  val runningReached: bool = state.status == Running
+  val suspensionRequestedReached: bool = state.status == SuspensionRequested
+  val safelySuspendedReached: bool = state.status == SafelySuspended
+  val terminalReached: bool = state.status == Terminal
 
   action init: bool = all {
     state' = {
-      report: NoReport,
-      reportRunId: RUN_ID,
-      reportAttemptId: ATTEMPT_ID,
+      status: NoReport,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
       positionHeld: false,
     }
   }
 
   action startOrContinueRunning: bool = all {
-    state.report != Terminal,
+    state.status != Terminal,
+    state.status != SuspensionRequested,
     state' = {
-      report: Running,
-      reportRunId: RUN_ID,
-      reportAttemptId: ATTEMPT_ID,
+      status: Running,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
       positionHeld: true,
     },
   }
 
   action requestSafeSuspension: bool = all {
-    state.report == Running,
+    state.status == Running,
     state' = {
-      report: SafelySuspended,
-      reportRunId: RUN_ID,
-      reportAttemptId: ATTEMPT_ID,
+      status: SuspensionRequested,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
+      positionHeld: true,
+    },
+  }
+
+  action reportSafelySuspended: bool = all {
+    state.status == SuspensionRequested,
+    state' = {
+      status: SafelySuspended,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
       positionHeld: false,
     },
   }
 
   action finishTerminal: bool = all {
-    state.report != Terminal,
+    state.status != Terminal,
     state' = {
-      report: Terminal,
-      reportRunId: RUN_ID,
-      reportAttemptId: ATTEMPT_ID,
+      status: Terminal,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
       positionHeld: false,
     },
   }
@@ -77,6 +98,7 @@ module plannedAttemptExecutor {
   action step: bool = any {
     startOrContinueRunning,
     requestSafeSuspension,
+    reportSafelySuspended,
     finishTerminal,
   }
 }

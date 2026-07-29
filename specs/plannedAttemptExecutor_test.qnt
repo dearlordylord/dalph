@@ -12,7 +12,15 @@ module plannedAttemptExecutorTest {
     init
       .then(startOrContinueRunning)
       .then(requestSafeSuspension)
+      .then(reportSafelySuspended)
       .then(startOrContinueRunning)
-      .expect(runningReached and everyReportUsesExactPlannedAttempt)
+      .expect(runningReached and everyStatusUsesExactPlannedAttempt)
+  }
+
+  run suspensionRequestKeepsPosition = {
+    init
+      .then(startOrContinueRunning)
+      .then(requestSafeSuspension)
+      .expect(suspensionRequestedReached and suspensionRequestRetainsPosition)
   }
 }

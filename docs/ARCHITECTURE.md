@@ -748,7 +748,11 @@ Resolution, integration, tracker completion, and executor-internal review policy
 
 ## Formal Model and Executable Scenarios
 
-The canonical `plannedAttemptExecutor` Quint model covers only the coarse executor boundary: exact planned-attempt correlation, running position ownership, safe suspension, and terminal position release. Detailed task-session, review, retry, and convergence models are not part of current Dalph.
+The canonical `plannedAttemptExecutor` Quint model covers only the coarse
+executor boundary: exact planned-attempt correlation, running position
+ownership, retention of that position between a suspension request and its
+result, safe-suspension release, and terminal release. Detailed executor
+internals are not part of current Dalph.
 
 Executable TypeScript scenarios cover the same reports and recovery boundary,
 including generated traces replayed through the executor service. The Quint

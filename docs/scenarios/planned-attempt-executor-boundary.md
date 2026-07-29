@@ -86,6 +86,9 @@ independent executor response survives to retry.
 - `releases capacity only after the planned attempt is safely suspended`
   proves the stop-for-resume boundary.
 - `resumes the same planned attempt after unpause` proves identity reuse.
+- `suspensionRequestKeepsPosition` proves the formal model retains the
+  position after Dalph requests suspension and before the executor reports it
+  safely suspended.
 
 ## Dalph and the controlled fake executor restart together
 
