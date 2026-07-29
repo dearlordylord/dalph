@@ -1,41 +1,57 @@
-import { Effect, Match } from "effect"
-import type { OperationId, RunId } from "./domain.js"
+import { Effect } from "effect"
+import type { RunId } from "./domain.js"
+import { JournalStore } from "./journal-store.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
-import {
-  recoverTaskClaimAcquisitions,
-  recoverTaskWorkSessionEstablishments,
-  recoverTaskWorktreeReconciliations
-} from "./workflow-operation-recovery.js"
+import { WorkflowInterpreter } from "./workflow.js"
 
-/**
- * Executes the one already-intended workflow operation named by a recovered
- * frontier transition. Each recovery helper is filtered by exact OperationId,
- * so an owner cannot consume an independent responsibility.
- */
+const recoverClaim = Effect.fn(
+  "WorkflowRecovery.recoverClaim"
+)(function*(runId: RunId, operationId: string) {
+  const journal = yield* JournalStore
+  const interpreter = yield* WorkflowInterpreter
+  const intent = (yield* journal.read(runId)).find(({ event }) =>
+    event._tag === "TaskClaimAcquisitionIntended"
+    && event.operation.acquisition.operationId === operationId
+  )?.event
+  if (intent?._tag === "TaskClaimAcquisitionIntended") {
+    yield* interpreter.acquireTaskClaim(intent.operation)
+  }
+})
+
+const recoverWorktree = Effect.fn(
+  "WorkflowRecovery.recoverWorktree"
+)(function*(runId: RunId, operationId: string) {
+  const journal = yield* JournalStore
+  const interpreter = yield* WorkflowInterpreter
+  const intent = (yield* journal.read(runId)).find(({ event }) =>
+    event._tag === "TaskWorktreeReconciliationIntended"
+    && event.operation.operationId === operationId
+  )?.event
+  if (intent?._tag === "TaskWorktreeReconciliationIntended") {
+    yield* interpreter.reconcileTaskWorktree(intent.operation)
+  }
+})
+
+/** Executes the one generic already-intended operation selected after reconstruction. */
 export const recoverRunnableTransition = Effect.fn(
   "WorkflowRecovery.recoverRunnableTransition"
-)(function*<E, R>(
+)(function*(
   runId: RunId,
-  transition: RunnableFrontierTransition,
-  recoverExecutorInvocation: (
-    runId: RunId,
-    invocationId: OperationId
-  ) => Effect.Effect<void, E, R>
+  transition: RunnableFrontierTransition
 ) {
-  yield* Match.value(transition).pipe(
-    Match.tagsExhaustive({
-      CheckTaskClaim: ({ operationId }) => recoverTaskClaimAcquisitions(runId, operationId),
-      CheckTaskWorkSession: ({ operationId }) => recoverTaskWorkSessionEstablishments(runId, operationId),
-      CommitFreshTaskClaimIntent: () => Effect.void,
-      ContinueFreshWorkflowOperation: () => Effect.void,
-      StartExecutorInvocation: () => Effect.void,
-      ContinueExecutorInvocation: ({ invocation }) =>
-        recoverExecutorInvocation(
-          runId,
-          invocation.correlation.invocationId
-        ),
-      ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimAcquisitions(runId, operationId),
-      ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeReconciliations(runId, operationId)
-    })
-  )
+  switch (transition._tag) {
+    case "CheckTaskClaim":
+    case "ReconcileTaskClaim":
+      yield* recoverClaim(runId, transition.operationId)
+      return
+    case "ReconcileTaskWorktree":
+      yield* recoverWorktree(runId, transition.operationId)
+      return
+    case "CommitFreshTaskClaimIntent":
+    case "ContinueFreshWorkflowOperation":
+    case "ContinuePlannedAttemptExecutorWork":
+    case "SuspendPlannedAttemptExecutorWork":
+    case "StartPlannedAttemptExecutorWork":
+      return
+  }
 })

@@ -101,7 +101,7 @@ export const SelectedTransitionIdentity = Schema.Struct({
 }).pipe(Schema.brand("SelectedTransitionIdentity"))
 export type SelectedTransitionIdentity = typeof SelectedTransitionIdentity.Type
 
-/** Identifies one planned task attempt, not its task, run, or provider session. */
+/** Identifies one planned task attempt, not its task or run. */
 export const AttemptId = Schema.NonEmptyString.pipe(Schema.brand("AttemptId"))
 export type AttemptId = typeof AttemptId.Type
 
@@ -148,103 +148,6 @@ export const TaskExecutorLocator = Schema.NonEmptyString.pipe(
 )
 export type TaskExecutorLocator = typeof TaskExecutorLocator.Type
 
-/** Locates one durable task-work session before a provider creates or discovers it. */
-export const TaskWorkSessionLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("TaskWorkSessionLocator")
-)
-export type TaskWorkSessionLocator = typeof TaskWorkSessionLocator.Type
-
-/** Identifies one provider-assigned task-work session. */
-export const TaskWorkSessionId = Schema.NonEmptyString.pipe(
-  Schema.brand("TaskWorkSessionId")
-)
-export type TaskWorkSessionId = typeof TaskWorkSessionId.Type
-
-/** Identifies one durable reviewer session, not a task-work or implementer session. */
-export const ReviewerSessionId = Schema.NonEmptyString.pipe(
-  Schema.brand("ReviewerSessionId")
-)
-export type ReviewerSessionId = typeof ReviewerSessionId.Type
-
-/** Orders semantic review rounds for one planned task attempt, starting at one. */
-export const SemanticReviewRound = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1)
-).pipe(Schema.brand("SemanticReviewRound"))
-export type SemanticReviewRound = typeof SemanticReviewRound.Type
-
-/** Bounds successful semantic reviewer dispositions for one implementation attempt; it is not a technical retry limit. */
-const maximumImplementationReviewRounds = 20
-export const ImplementationReviewRoundLimit = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(maximumImplementationReviewRounds)
-).pipe(Schema.brand("ImplementationReviewRoundLimit"))
-export type ImplementationReviewRoundLimit = typeof ImplementationReviewRoundLimit.Type
-
-/** Bounds automatic technical retries after an invocation failure; it is not a semantic review-round limit. */
-export const TechnicalRetryLimit = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
-).pipe(Schema.brand("TechnicalRetryLimit"))
-export type TechnicalRetryLimit = typeof TechnicalRetryLimit.Type
-
-/** Orders retries after the first technical invocation, starting at one; it is not a semantic review round. */
-export const TechnicalRetryOrdinal = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
-).pipe(Schema.brand("TechnicalRetryOrdinal"))
-export type TechnicalRetryOrdinal = typeof TechnicalRetryOrdinal.Type
-
-/** A positive whole-millisecond technical retry delay, distinct from an absolute time. */
-export const TechnicalRetryDelayMillis = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
-).pipe(Schema.brand("TechnicalRetryDelayMillis"))
-export type TechnicalRetryDelayMillis = typeof TechnicalRetryDelayMillis.Type
-
-/** The absolute virtual-clock millisecond before which one technical retry is ineligible. */
-export const TechnicalRetryNotBefore = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
-).pipe(Schema.brand("TechnicalRetryNotBefore"))
-export type TechnicalRetryNotBefore = typeof TechnicalRetryNotBefore.Type
-
-/** Identifies one reviewer finding across immutable review evidence. */
-export const ReviewFindingId = Schema.NonEmptyString.pipe(
-  Schema.brand("ReviewFindingId")
-)
-export type ReviewFindingId = typeof ReviewFindingId.Type
-
-/** Identifies one task-work-provider response to a start request. */
-export const ProviderRequestId = Schema.NonEmptyString.pipe(
-  Schema.brand("ProviderRequestId")
-)
-export type ProviderRequestId = typeof ProviderRequestId.Type
-
-/** Identifies one completed provider observation, not journal ordering. */
-export const ProviderObservationId = Schema.NonEmptyString.pipe(
-  Schema.brand("ProviderObservationId")
-)
-export type ProviderObservationId = typeof ProviderObservationId.Type
-
-/** Identifies one provider-owned work unit within a task-work session. */
-export const ProviderWorkUnitId = Schema.NonEmptyString.pipe(
-  Schema.brand("ProviderWorkUnitId")
-)
-export type ProviderWorkUnitId = typeof ProviderWorkUnitId.Type
-
-/** Identifies one operating-system worker process reported by a task runner. */
-export const WorkerProcessId = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1)
-).pipe(Schema.brand("WorkerProcessId"))
-export type WorkerProcessId = typeof WorkerProcessId.Type
-
-/** A provider-reported positive safe-integer status that proves task work failed. */
-export const FailedProcessExitCode = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1),
-  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
-).pipe(Schema.brand("FailedProcessExitCode"))
-export type FailedProcessExitCode = typeof FailedProcessExitCode.Type
-
 /** Identifies one durable managed-history fact within a run. */
 export const JournalRecordKey = Schema.NonEmptyString.pipe(
   Schema.brand("JournalRecordKey")
@@ -274,12 +177,6 @@ export const JournalDatabaseLocator = Schema.NonEmptyString.pipe(
   Schema.brand("JournalDatabaseLocator")
 )
 export type JournalDatabaseLocator = typeof JournalDatabaseLocator.Type
-
-/** Locates one EvidenceStore root, not a worktree or workflow journal. */
-export const EvidenceStoreLocator = Schema.NonEmptyString.pipe(
-  Schema.brand("EvidenceStoreLocator")
-)
-export type EvidenceStoreLocator = typeof EvidenceStoreLocator.Type
 
 /** Names a requested Git common-directory path before canonical resolution. */
 export const GitCommonDirectoryTarget = Schema.NonEmptyString.pipe(
@@ -354,8 +251,8 @@ export const Task = TrackerTask
 export type Task = typeof Task.Type
 
 /**
- * Binds one attempt to its exact task revision (fingerprint) and every Git/executor
- * resource locator before any execution resource is created or discovered.
+ * Binds one attempt to its exact task revision and Git/executor resource
+ * locators before executor work begins.
  */
 export const PlannedTaskAttempt = Schema.Struct({
   attemptId: AttemptId,
@@ -363,7 +260,6 @@ export const PlannedTaskAttempt = Schema.Struct({
   branch: TaskBranchRef,
   executor: TaskExecutorLocator,
   runId: RunId,
-  session: TaskWorkSessionLocator,
   taskId: TaskId,
   taskRevision: TaskRevision,
   worktree: WorktreeLocator

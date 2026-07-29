@@ -16,7 +16,6 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   taskRevisionFor,
-  TaskWorkSessionLocator,
   TrackerTask,
   WorkflowOperation,
   workflowOperationId,
@@ -30,7 +29,6 @@ const plannedTaskAttemptEncodedArbitrary = fc.record({
   branch: fc.stringMatching(/^refs\/heads\/[a-z]{1,20}$/),
   executor: nonEmpty,
   runId: nonEmpty,
-  session: nonEmpty,
   taskId: nonEmpty,
   taskRevision: nonEmpty,
   worktree: nonEmpty
@@ -75,20 +73,17 @@ it.effect("binds every exact attempt identity and resource locator", () =>
       branch: "refs/heads/dalph/attempt-task-44-0",
       executor: "executor:deterministic",
       runId: "run-44",
-      session: "sessions/run-44/attempt-task-44-0",
       taskId: "task-44",
       taskRevision,
       worktree: "/worktrees/run-44/attempt-task-44-0"
     })
     expect(retryPlan.attemptId).not.toBe(plan.attemptId)
     expect(retryPlan.branch).not.toBe(plan.branch)
-    expect(retryPlan.session).not.toBe(plan.session)
     expect(retryPlan.worktree).not.toBe(plan.worktree)
   }).pipe(Effect.provide(deterministicPlannedTaskAttemptLayer({
     baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
     executor: TaskExecutorLocator.make("executor:deterministic"),
     runId: RunId.make("run-44"),
-    sessionRoot: TaskWorkSessionLocator.make("sessions/run-44"),
     worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
   }))))
 
@@ -145,7 +140,6 @@ it("derives the task revision (fingerprint) inside the planner", () =>
     baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
     executor: TaskExecutorLocator.make("executor:deterministic"),
     runId: RunId.make("run-44"),
-    sessionRoot: TaskWorkSessionLocator.make("sessions/run-44"),
     worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
   }))))
 
@@ -218,7 +212,6 @@ it("compares decoded plans structurally and observes every planned field", () =>
     branch: "refs/heads/task-1",
     executor: "executor-1",
     runId: "run-1",
-    session: "session-1",
     taskId: "task-1",
     taskRevision: "revision-1",
     worktree: "/worktree-1"
@@ -233,7 +226,6 @@ it("compares decoded plans structurally and observes every planned field", () =>
     { ...baseline, branch: "refs/heads/task-2" },
     { ...baseline, executor: "executor-2" },
     { ...baseline, runId: "run-2" },
-    { ...baseline, session: "session-2" },
     { ...baseline, taskId: "task-2" },
     { ...baseline, taskRevision: "revision-2" },
     { ...baseline, worktree: "/worktree-2" }
@@ -242,14 +234,13 @@ it("compares decoded plans structurally and observes every planned field", () =>
     .toBe(true)
 })
 
-it("rejects an empty executor or session locator at the plan boundary", () => {
+it("rejects an empty executor locator at the plan boundary", () => {
   const encoded = {
     attemptId: "attempt",
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     branch: "refs/heads/task",
     executor: "",
     runId: "run",
-    session: "",
     taskId: "task",
     taskRevision: "revision",
     worktree: "/worktree"
@@ -265,7 +256,6 @@ it("projects plan operation identity and rejects self-causality", () => {
     branch: "refs/heads/task",
     executor: "executor",
     runId: "run",
-    session: "session",
     taskId: "task",
     taskRevision: "revision",
     worktree: "/worktree"
@@ -293,7 +283,6 @@ it("projects worktree operation identity and rejects self-causality", () => {
     branch: "refs/heads/task",
     executor: "executor",
     runId: "run",
-    session: "session",
     taskId: "task",
     taskRevision: "revision",
     worktree: "/worktree"

@@ -14,7 +14,7 @@ export class TaskAttemptPlanRunContradiction extends Schema.TaggedErrorClass<Tas
   }
 ) {}
 
-/** Journal history cannot prove the exact plan required by session establishment. */
+/** Journal history cannot prove the exact plan required by executor work. */
 export class TaskAttemptPlanHistoryContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanHistoryContradiction>()(
   "TaskAttemptPlanHistoryContradiction",
   {

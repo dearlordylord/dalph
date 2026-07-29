@@ -1,5 +1,6 @@
-import type { AttemptId, ControlCommandId, OperationId, ProviderObservationId } from "./domain.js"
+import type { AttemptId, ControlCommandId, OperationId } from "./domain.js"
 import { JournalRecordKey } from "./domain.js"
+import type { PlannedAttemptExecutorReportOrdinal } from "./planned-attempt-executor-journal.js"
 
 export const controlCommandRecordKey = (
   commandId: ControlCommandId
@@ -14,53 +15,11 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)
 
-export const implementationDispositionRecordKey = (attemptId: AttemptId): JournalRecordKey =>
-  JournalRecordKey.make(`attempt:${attemptId}:implementation-disposition`)
+export const plannedAttemptExecutorWorkStartedRecordKey = (
+  attemptId: AttemptId
+): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-work-started`)
 
-export const providerObservationRequestRecordKey = (
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:request`)
-
-export const taskWorkStartAcknowledgedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-acknowledged:${observationId}`)
-
-export const taskWorkStartFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-start-failed:${observationId}`)
-
-export const taskWorkSessionReportedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-work-session-reported:${observationId}`)
-
-export const taskWorkSessionResultRecordKey = (
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`provider-observation:${observationId}:task-work-session-result`)
-
-export const taskExecutionRequestReturnedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-) => JournalRecordKey.make(`operation:${operationId}:task-execution-request-returned:${observationId}`)
-
-export const taskExecutionRequestAttemptRecordKey = (
-  operationId: OperationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-attempt`)
-
-export const taskExecutionRequestFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-request-failed:${observationId}`)
-
-export const taskExecutionReportedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey => JournalRecordKey.make(`operation:${operationId}:task-execution-reported:${observationId}`)
-
-export const taskExecutionObservationFailedRecordKey = (
-  operationId: OperationId,
-  observationId: ProviderObservationId
-): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:task-execution-observation-failed:${observationId}`)
+export const plannedAttemptExecutorWorkReportedRecordKey = (
+  attemptId: AttemptId,
+  ordinal: PlannedAttemptExecutorReportOrdinal
+): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-work-report:${ordinal}`)

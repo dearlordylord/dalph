@@ -1,69 +1,52 @@
 import { Effect } from "effect"
 import fc from "fast-check"
 import { expect, it } from "vitest"
-import { OperationId, ProviderObservationId, RunId, TaskId, TaskWorkCapacity } from "./domain.js"
-import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
+import { AttemptId, RunId, TaskId, TaskRevision, TaskWorkCapacity } from "./domain.js"
 import { RunnableFrontierTransition } from "./runnable-frontier.js"
+import { makeSelectedTransitionIdentity } from "./selected-transition.js"
 import { makeTaskAdmissionController } from "./task-admission-controller.js"
 
 const taskArbitrary = fc.integer({ min: 0, max: 3 })
-const operationArbitrary = fc.integer({ min: 0, max: 7 })
-const commandArbitrary = fc.oneof(
-  fc.record({
-    _tag: fc.constant("Admit" as const),
-    operation: operationArbitrary,
-    task: taskArbitrary
-  }),
-  fc.record({
-    _tag: fc.constant("ReleaseOperation" as const),
-    operation: operationArbitrary
-  })
-)
+const attemptArbitrary = fc.integer({ min: 0, max: 7 })
 
-it("generated controller commands never create more new positions than configured capacity", async () => {
+const transitionFor = (task: number, attempt: number) =>
+  RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+    taskId: TaskId.make(`generated-task-${task}`),
+    taskRevision: TaskRevision.make(`generated-revision-${attempt}`)
+  })
+
+it("generated selection and cancellation commands stay within configured capacity", async () => {
   await fc.assert(
     fc.asyncProperty(
       fc.integer({ min: 1, max: 4 }),
-      fc.array(commandArbitrary, { maxLength: 40 }),
+      fc.array(
+        fc.record({
+          cancel: fc.boolean(),
+          attempt: attemptArbitrary,
+          task: taskArbitrary
+        }),
+        { maxLength: 40 }
+      ),
       async (capacityValue, commands) => {
-        const capacity = TaskWorkCapacity.make(capacityValue)
+        const runId = RunId.make("generated-run")
         await Effect.runPromise(Effect.gen(function*() {
           const controller = yield* makeTaskAdmissionController({
-            capacity,
-            freshOccupiedInvocations: [],
-            reconstructedReservedPositions: []
+            capacity: TaskWorkCapacity.make(capacityValue)
           })
-
-          for (const [ordinal, command] of commands.entries()) {
-            const taskId = TaskId.make(`generated-task-${"task" in command ? command.task : 0}`)
-            const operationId = OperationId.make(
-              `generated-operation-${"operation" in command ? command.operation : ordinal}`
-            )
-            if (command._tag === "Admit") {
+          for (const command of commands) {
+            const transition = transitionFor(command.task, command.attempt)
+            if (command.cancel) {
+              yield* controller.cancelReservedPosition(
+                makeSelectedTransitionIdentity(runId, transition)
+              ).pipe(Effect.catch(() => Effect.void))
+            } else {
               yield* controller.admit({
                 explanations: [],
-                transitions: [
-                  RunnableFrontierTransition.ContinueExecutorInvocation({
-                    invocation: makeExecutorOuterInvocation(
-                      operationId,
-                      taskId,
-                      oneTaskWorkCapacityPosition
-                    )
-                  })
-                ]
-              }, RunId.make("generated-run"))
-            } else {
-              yield* controller.releaseTaskAdmissionPosition(operationId).pipe(
-                Effect.catchTag(
-                  "TaskAdmissionPositionReleaseIssue",
-                  () => Effect.void
-                )
-              )
+                transitions: [transition]
+              }, runId)
             }
-
-            const snapshot = yield* controller.snapshot()
             expect(
-              snapshot.occupied.length + snapshot.reservedTaskIds.length
+              (yield* controller.snapshot()).reservedTaskIds.length
             ).toBeLessThanOrEqual(capacityValue)
           }
         }))
@@ -73,35 +56,37 @@ it("generated controller commands never create more new positions than configure
   )
 })
 
-it("a delayed release changes only its exact operation", async () => {
+it("a delayed planned-attempt release changes only its exact pair", async () => {
   await fc.assert(
     fc.asyncProperty(
-      operationArbitrary,
-      operationArbitrary.filter((later) => later !== 0),
+      attemptArbitrary,
+      attemptArbitrary.filter((later) => later !== 0),
       async (earlier, laterOffset) => {
-        const taskId = TaskId.make("delayed-release-task")
-        const earlierOperation = OperationId.make(`attempt-${earlier}`)
-        const laterOperation = OperationId.make(`attempt-${earlier + laterOffset + 1}`)
+        const runId = RunId.make("delayed-release-run")
+        const laterAttemptId = AttemptId.make(
+          `attempt-${earlier + laterOffset + 1}`
+        )
         await Effect.runPromise(Effect.gen(function*() {
           const controller = yield* makeTaskAdmissionController({
             capacity: TaskWorkCapacity.make(1),
-            freshOccupiedInvocations: [{
-              observationId: ProviderObservationId.make("later-observation"),
-              operationId: laterOperation,
-              taskId
-            }],
-            reconstructedReservedPositions: []
+            reconstructedPlannedAttemptPositions: [{
+              attemptId: laterAttemptId,
+              runId,
+              taskId: TaskId.make("delayed-release-task")
+            }]
           })
-
-          const delayed = yield* controller.releaseTaskAdmissionPosition(
-            earlierOperation
-          ).pipe(Effect.flip)
-          expect(delayed._tag).toBe("TaskAdmissionPositionReleaseIssue")
-
-          expect((yield* controller.snapshot()).occupied).toEqual([{
-            observationId: "later-observation",
-            operationId: laterOperation,
-            taskId
+          const delayed = yield* controller.releasePlannedAttemptPosition({
+            attemptId: AttemptId.make(`attempt-${earlier}`),
+            runId
+          }).pipe(Effect.flip)
+          expect(delayed._tag).toBe("PlannedAttemptPositionReleaseIssue")
+          expect((yield* controller.snapshot()).reservedPositions).toEqual([{
+            correlation: {
+              _tag: "PlannedAttemptReservation",
+              attemptId: laterAttemptId,
+              runId
+            },
+            taskId: "delayed-release-task"
           }])
         }))
       }

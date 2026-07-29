@@ -1,37 +1,16 @@
-import { Match } from "effect"
-import type {
-  ControlCommandId,
-  JournalRecordKey,
-  OperationId,
-  PlannedTaskAttempt,
-  RunId,
-  TaskWorkSessionId
-} from "./domain.js"
-import { TechnicalRetryOrdinal } from "./domain.js"
+import type { ControlCommandId, JournalRecordKey, OperationId, PlannedTaskAttempt, RunId } from "./domain.js"
 import {
   attemptPlanRecordKey,
   controlCommandRecordKey,
-  implementationDispositionRecordKey,
   intentRecordKey,
   outcomeRecordKey,
-  providerObservationRequestRecordKey,
-  taskExecutionObservationFailedRecordKey,
-  taskExecutionReportedRecordKey,
-  taskExecutionRequestAttemptRecordKey,
-  taskExecutionRequestFailedRecordKey,
-  taskExecutionRequestReturnedRecordKey,
-  taskWorkSessionReportedRecordKey,
-  taskWorkSessionResultRecordKey,
-  taskWorkStartAcknowledgedRecordKey,
-  taskWorkStartFailedRecordKey
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkStartedRecordKey
 } from "./journal-record-key.js"
 import type { WorkflowJournalEvent } from "./journal-store.js"
-import {
-  technicalRetryDeferralSupersededRecordKey,
-  technicalRetryPolicyRecordKey,
-  technicalRetryScheduledRecordKey
-} from "./technical-retry.js"
-/** Canonical physical identity and predecessor facts derived from one typed event. */
+import type { PlannedAttemptExecutorReportOrdinal } from "./planned-attempt-executor-journal.js"
+import type { PlannedAttemptExecutorCorrelation } from "./planned-attempt-executor.js"
+
 interface OperationEventDescriptor {
   readonly _tag: "OperationEventDescriptor"
   readonly expectedKey: JournalRecordKey
@@ -41,351 +20,183 @@ interface OperationEventDescriptor {
   readonly requiredOperationIds: ReadonlyArray<OperationId>
   readonly requiredPredecessorKinds: ReadonlyArray<WorkflowJournalEvent["_tag"]>
   readonly recordPredecessor: RecordPredecessorFact
-  readonly session: SessionFact
 }
-interface SessionResultEventDescriptor {
-  readonly _tag: "SessionResultEventDescriptor"
-  readonly expectedKey: JournalRecordKey
-  readonly requiredSessionId: TaskWorkSessionId
-}
+
 interface ControlCommandEventDescriptor {
   readonly _tag: "ControlCommandEventDescriptor"
   readonly commandId: ControlCommandId
   readonly expectedKey: JournalRecordKey
   readonly runId: RunId
 }
+
+interface PlannedAttemptExecutorEventDescriptor {
+  readonly _tag: "PlannedAttemptExecutorEventDescriptor"
+  readonly correlation: PlannedAttemptExecutorCorrelation
+  readonly expectedKey: JournalRecordKey
+  readonly ordinal: PlannedAttemptExecutorReportOrdinal | undefined
+  readonly plannedAttempt: PlannedTaskAttempt | undefined
+}
+
 type JournalEventDescriptor =
   | ControlCommandEventDescriptor
   | OperationEventDescriptor
-  | SessionResultEventDescriptor
-type PlannedAttemptFact = {
-  readonly _tag: "NoPlannedAttempt"
-} | {
-  readonly _tag: "PlannedAttempt"
-  readonly plannedAttempt: PlannedTaskAttempt
-}
-type RecordPredecessorFact = {
-  readonly _tag: "NoRecordPredecessor"
-} | {
-  readonly _tag: "RequiredRecordPredecessor"
-  readonly key: JournalRecordKey
-}
-type SessionFact = {
-  readonly _tag: "NoSessionFact"
-} | {
-  readonly _tag: "ProducedSession"
-  readonly sessionId: TaskWorkSessionId
-} | {
-  readonly _tag: "RequiredSession"
-  readonly sessionId: TaskWorkSessionId
-}
+  | PlannedAttemptExecutorEventDescriptor
+
+type PlannedAttemptFact =
+  | { readonly _tag: "NoPlannedAttempt" }
+  | {
+    readonly _tag: "PlannedAttempt"
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+
+type RecordPredecessorFact =
+  | { readonly _tag: "NoRecordPredecessor" }
+  | {
+    readonly _tag: "RequiredRecordPredecessor"
+    readonly key: JournalRecordKey
+  }
+
 interface OperationEventInput {
   readonly expectedKey: JournalRecordKey
   readonly operationId: OperationId
   readonly plannedAttempt?: PlannedTaskAttempt
-  readonly producedSessionId?: TaskWorkSessionId
   readonly relatedOperationIds?: ReadonlyArray<OperationId>
-  readonly requiredOperationIds?: ReadonlyArray<OperationId>
+  readonly requiredOperationIds: ReadonlyArray<OperationId>
   readonly requiredPredecessorKey?: JournalRecordKey
   readonly requiredPredecessorKinds?: ReadonlyArray<WorkflowJournalEvent["_tag"]>
 }
-const operationEvent = (input: OperationEventInput): OperationEventDescriptor => ({
+
+const operationEvent = (
+  input: OperationEventInput
+): OperationEventDescriptor => ({
   _tag: "OperationEventDescriptor",
   expectedKey: input.expectedKey,
   operationId: input.operationId,
   plannedAttempt: input.plannedAttempt === undefined
     ? { _tag: "NoPlannedAttempt" }
-    : { _tag: "PlannedAttempt", plannedAttempt: input.plannedAttempt },
+    : {
+      _tag: "PlannedAttempt",
+      plannedAttempt: input.plannedAttempt
+    },
   recordPredecessor: input.requiredPredecessorKey === undefined
     ? { _tag: "NoRecordPredecessor" }
-    : { _tag: "RequiredRecordPredecessor", key: input.requiredPredecessorKey },
+    : {
+      _tag: "RequiredRecordPredecessor",
+      key: input.requiredPredecessorKey
+    },
   relatedOperationIds: input.relatedOperationIds ?? [],
-  requiredOperationIds: input.requiredOperationIds ?? [],
-  requiredPredecessorKinds: input.requiredPredecessorKinds ?? [],
-  session: input.producedSessionId === undefined
-    ? { _tag: "NoSessionFact" }
-    : { _tag: "ProducedSession", sessionId: input.producedSessionId }
+  requiredOperationIds: input.requiredOperationIds,
+  requiredPredecessorKinds: input.requiredPredecessorKinds ?? []
 })
-const sessionResultEvent = (
+
+const plannedAttemptExecutorEvent = (
+  correlation: PlannedAttemptExecutorCorrelation,
   expectedKey: JournalRecordKey,
-  requiredSessionId: TaskWorkSessionId
-): SessionResultEventDescriptor => ({
-  _tag: "SessionResultEventDescriptor",
-  expectedKey,
-  requiredSessionId
-})
-const controlCommandEvent = (
-  commandId: ControlCommandId,
-  runId: RunId
-): ControlCommandEventDescriptor => ({
-  _tag: "ControlCommandEventDescriptor",
-  commandId,
-  expectedKey: controlCommandRecordKey(commandId),
-  runId
-})
-const intentEvent = (
-  expectedKey: JournalRecordKey,
-  operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt | undefined,
-  requiredOperationIds: ReadonlyArray<OperationId>,
-  requiredPredecessorKinds: ReadonlyArray<WorkflowJournalEvent["_tag"]> = []
-): OperationEventDescriptor =>
-  operationEvent({
-    expectedKey,
-    operationId,
-    ...(plannedAttempt === undefined ? {} : { plannedAttempt }),
-    requiredOperationIds,
-    requiredPredecessorKinds
-  })
-const describeJournalEventShape = (event: WorkflowJournalEvent): JournalEventDescriptor => {
-  return Match.valueTags(event, {
-    ControlCommandRecorded: event => controlCommandEvent(event.command.commandId, event.command.runId),
-    ImplementationConvergenceDispositionRecorded: event => {
-      const request = event.operation.request
-      const plannedAttempt = request._tag === "AuthorizedImplementationConvergenceDisposition"
-        ? request.disposition.subject.plannedAttempt
-        : request.plannedAttempt
-      const requiredKind = request._tag === "SimulatedImplementationConvergenceDisposition"
-        ? []
-        : request.disposition._tag === "Accepted"
-            || request.disposition._tag === "ImplementationNonConvergent"
-        ? ["ImplementationReviewCompleted" as const]
-        : request.disposition._tag === "ReviewTechnicalRetryExhausted"
-        ? ["ImplementationReviewIntended" as const]
-        : request.disposition._tag === "HandbackTechnicalRetryExhausted"
-        ? ["ReviewFindingsHandbackIntended" as const]
-        : ["TaskExecutionOutcomeObserved" as const]
+  ordinal: PlannedAttemptExecutorReportOrdinal | undefined
+): PlannedAttemptExecutorEventDescriptor => ({
+  _tag: "PlannedAttemptExecutorEventDescriptor",
+  correlation,
+  expectedKey,
+  ordinal,
+  plannedAttempt
+})
+
+/** Derives canonical storage identity and causal facts from one generic event. */
+export const describeJournalEvent = (
+  event: WorkflowJournalEvent
+): JournalEventDescriptor => {
+  switch (event._tag) {
+    case "ControlCommandRecorded":
+      return {
+        _tag: "ControlCommandEventDescriptor",
+        commandId: event.command.commandId,
+        expectedKey: controlCommandRecordKey(event.command.commandId),
+        runId: event.command.runId
+      }
+    case "PlannedAttemptExecutorWorkStarted":
+      return plannedAttemptExecutorEvent(
+        {
+          attemptId: event.plannedAttempt.attemptId,
+          runId: event.plannedAttempt.runId
+        },
+        plannedAttemptExecutorWorkStartedRecordKey(
+          event.plannedAttempt.attemptId
+        ),
+        event.plannedAttempt,
+        undefined
+      )
+    case "PlannedAttemptExecutorWorkReported":
+      return plannedAttemptExecutorEvent(
+        event.report.correlation,
+        plannedAttemptExecutorWorkReportedRecordKey(
+          event.report.correlation.attemptId,
+          event.ordinal
+        ),
+        undefined,
+        event.ordinal
+      )
+    case "TrackerGraphObservationIntentRecorded":
       return operationEvent({
-        expectedKey: implementationDispositionRecordKey(plannedAttempt.attemptId),
-        operationId: request.operationId,
-        plannedAttempt,
-        requiredOperationIds: event.operation.predecessorOperationIds,
-        requiredPredecessorKinds: requiredKind
+        expectedKey: intentRecordKey(event.operation.operationId),
+        operationId: event.operation.operationId,
+        requiredOperationIds: event.operation.predecessorOperationIds
       })
-    },
-    TrackerGraphObservationIntentRecorded: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.operationId),
-        event.operation.operationId,
-        undefined,
-        event.operation.predecessorOperationIds
-      )
-    },
-    TaskWorktreeReconciliationIntended: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.operationId),
-        event.operation.operationId,
-        event.operation.plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["TaskAttemptPlanned"]
-      )
-    },
-    ImplementationEvidenceSealingIntended: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.operationId),
-        event.operation.operationId,
-        event.operation.plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["TaskExecutionOutcomeObserved"]
-      )
-    },
-    ImplementationReviewIntended: event => {
-      const plannedAttempt = "plannedAttempt" in event.operation.request
-        ? event.operation.request.plannedAttempt
-        : undefined
-      return intentEvent(
-        intentRecordKey(event.operation.request.operationId),
-        event.operation.request.operationId,
-        plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["ImplementationEvidenceSealed"]
-      )
-    },
-    ReviewFindingsHandbackIntended: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.request.operationId),
-        event.operation.request.operationId,
-        event.operation.request.plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["ImplementationReviewCompleted"]
-      )
-    },
-    TaskClaimAcquisitionIntended: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.acquisition.operationId),
-        event.operation.acquisition.operationId,
-        undefined,
-        event.operation.predecessorOperationIds
-      )
-    },
-    TaskWorkSessionEstablishmentIntentRecorded: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.request.operationId),
-        event.operation.request.operationId,
-        event.operation.request.plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["TaskAttemptPlanned", "TaskWorktreeReady"]
-      )
-    },
-    TaskExecutionIntentRecorded: event => {
-      return intentEvent(
-        intentRecordKey(event.operation.request.operationId),
-        event.operation.request.operationId,
-        event.operation.request.plannedAttempt,
-        event.operation.predecessorOperationIds,
-        ["TaskWorkSessionEstablished"]
-      )
-    },
-    TrackerGraphOutcomeObserved: event =>
-      operationEvent({ expectedKey: outcomeRecordKey(event.operationId), operationId: event.operationId }),
-    TaskWorktreeReady: event =>
-      operationEvent({ expectedKey: outcomeRecordKey(event.operationId), operationId: event.operationId }),
-    ImplementationEvidenceSealed: event =>
-      operationEvent({ expectedKey: outcomeRecordKey(event.operationId), operationId: event.operationId }),
-    TaskClaimAcquired: event => {
+    case "TrackerGraphOutcomeObserved":
+      return operationEvent({
+        expectedKey: outcomeRecordKey(event.operationId),
+        operationId: event.operationId,
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: [
+          "TrackerGraphObservationIntentRecorded"
+        ]
+      })
+    case "TaskClaimAcquisitionIntended":
+      return operationEvent({
+        expectedKey: intentRecordKey(
+          event.operation.acquisition.operationId
+        ),
+        operationId: event.operation.acquisition.operationId,
+        relatedOperationIds: [
+          event.operation.acquisition.operationId
+        ],
+        requiredOperationIds: event.operation.predecessorOperationIds
+      })
+    case "TaskClaimAcquired":
       return operationEvent({
         expectedKey: outcomeRecordKey(event.claim.operationId),
-        operationId: event.claim.operationId
+        operationId: event.claim.operationId,
+        relatedOperationIds: [event.claim.operationId],
+        requiredOperationIds: [event.claim.operationId],
+        requiredPredecessorKey: intentRecordKey(event.claim.operationId),
+        requiredPredecessorKinds: ["TaskClaimAcquisitionIntended"]
       })
-    },
-    TaskWorkSessionEstablished: event => {
+    case "TaskAttemptPlanned":
       return operationEvent({
-        expectedKey: outcomeRecordKey(event.outcome.operationId),
-        operationId: event.outcome.operationId,
-        producedSessionId: event.outcome.sessionId
-      })
-    },
-    TaskExecutionOutcomeObserved: event => {
-      return operationEvent({
-        expectedKey: outcomeRecordKey(event.outcome.outcome.operationId),
-        operationId: event.outcome.outcome.operationId
-      })
-    },
-    ImplementationReviewCompleted: event => {
-      return operationEvent({
-        expectedKey: outcomeRecordKey(event.review.manifest.operationId),
-        operationId: event.review.manifest.operationId,
-        plannedAttempt: event.review.manifest.plannedAttempt
-      })
-    },
-    ReviewFindingsHandbackCompleted: event => {
-      return operationEvent({
-        expectedKey: outcomeRecordKey(event.acknowledgement.operationId),
-        operationId: event.acknowledgement.operationId
-      })
-    },
-    TaskAttemptPlanned: event => {
-      return operationEvent({
-        expectedKey: attemptPlanRecordKey(event.operation.plannedAttempt.attemptId),
+        expectedKey: attemptPlanRecordKey(
+          event.operation.plannedAttempt.attemptId
+        ),
         operationId: event.operation.operationId,
         plannedAttempt: event.operation.plannedAttempt,
         requiredOperationIds: event.operation.predecessorOperationIds
       })
-    },
-    TaskWorkStartRequested: event => {
+    case "TaskWorktreeReconciliationIntended":
       return operationEvent({
-        expectedKey: providerObservationRequestRecordKey(event.observationId),
-        operationId: event.request.operationId,
-        plannedAttempt: event.request.plannedAttempt
+        expectedKey: intentRecordKey(event.operation.operationId),
+        operationId: event.operation.operationId,
+        plannedAttempt: event.operation.plannedAttempt,
+        requiredOperationIds: event.operation.predecessorOperationIds
       })
-    },
-    TaskWorkSessionLookupRequested: event => {
+    case "TaskWorktreeReady":
       return operationEvent({
-        expectedKey: providerObservationRequestRecordKey(event.observationId),
-        operationId: event.lookup.operationId,
-        plannedAttempt: event.lookup.plannedAttempt
-      })
-    },
-    TaskWorkStartRequestAcknowledged: event => {
-      return operationEvent({
-        expectedKey: taskWorkStartAcknowledgedRecordKey(event.operationId, event.acknowledgement.observationId),
+        expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
-        requiredPredecessorKey: providerObservationRequestRecordKey(event.acknowledgement.observationId)
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: [
+          "TaskWorktreeReconciliationIntended"
+        ]
       })
-    },
-    TaskWorkStartRequestFailed: event => {
-      return operationEvent({
-        expectedKey: taskWorkStartFailedRecordKey(event.request.operationId, event.failure.observationId),
-        operationId: event.request.operationId,
-        plannedAttempt: event.request.plannedAttempt,
-        requiredPredecessorKey: providerObservationRequestRecordKey(event.failure.observationId)
-      })
-    },
-    TaskWorkSessionLookupFailed: event => {
-      return operationEvent({
-        expectedKey: taskWorkSessionReportedRecordKey(event.operationId, event.failure.observationId),
-        operationId: event.operationId,
-        requiredPredecessorKey: providerObservationRequestRecordKey(event.failure.observationId)
-      })
-    },
-    TaskWorkSessionReported: event => {
-      return operationEvent({
-        expectedKey: taskWorkSessionReportedRecordKey(event.operationId, event.report.observationId),
-        operationId: event.operationId,
-        requiredPredecessorKey: providerObservationRequestRecordKey(event.report.observationId)
-      })
-    },
-    TaskWorkSessionResultReported: event =>
-      sessionResultEvent(taskWorkSessionResultRecordKey(event.report.observationId), event.report.sessionId),
-    TaskExecutionRequestAttemptRecorded: event => {
-      return operationEvent({
-        expectedKey: taskExecutionRequestAttemptRecordKey(event.request.operationId),
-        operationId: event.request.operationId,
-        plannedAttempt: event.request.plannedAttempt
-      })
-    },
-    TaskExecutionRequestReturned: event => {
-      return operationEvent({
-        expectedKey: taskExecutionRequestReturnedRecordKey(event.operationId, event.acknowledgement.observationId),
-        operationId: event.operationId,
-        requiredPredecessorKey: taskExecutionRequestAttemptRecordKey(event.operationId)
-      })
-    },
-    TaskExecutionRequestFailed: event => {
-      return operationEvent({
-        expectedKey: taskExecutionRequestFailedRecordKey(event.request.operationId, event.failure.observationId),
-        operationId: event.request.operationId,
-        plannedAttempt: event.request.plannedAttempt,
-        relatedOperationIds: [event.failure.operationId],
-        requiredPredecessorKey: taskExecutionRequestAttemptRecordKey(event.request.operationId)
-      })
-    },
-    TaskExecutionObservationFailed: event => {
-      return operationEvent({
-        expectedKey: taskExecutionObservationFailedRecordKey(event.operationId, event.failure.observationId),
-        operationId: event.operationId,
-        relatedOperationIds: [event.failure.operationId]
-      })
-    },
-    TaskExecutionReported: event => {
-      return operationEvent({
-        expectedKey: taskExecutionReportedRecordKey(event.operationId, event.report.observationId),
-        operationId: event.operationId,
-        relatedOperationIds: [event.report.operationId]
-      })
-    },
-    TechnicalRetryPolicyCaptured: event => {
-      return operationEvent({
-        expectedKey: technicalRetryPolicyRecordKey(event.scope),
-        operationId: event.scope.operationId
-      })
-    },
-    TechnicalRetryScheduled: event => {
-      return operationEvent({
-        expectedKey: technicalRetryScheduledRecordKey(event.scope, event.retryOrdinal),
-        operationId: event.scope.operationId,
-        requiredPredecessorKey: event.retryOrdinal === 1
-          ? technicalRetryPolicyRecordKey(event.scope)
-          : technicalRetryDeferralSupersededRecordKey(event.scope, TechnicalRetryOrdinal.make(event.retryOrdinal - 1))
-      })
-    },
-    TechnicalRetryDeferralSuperseded: event => {
-      return operationEvent({
-        expectedKey: technicalRetryDeferralSupersededRecordKey(event.scope, event.retryOrdinal),
-        operationId: event.scope.operationId,
-        requiredPredecessorKey: technicalRetryScheduledRecordKey(event.scope, event.retryOrdinal)
-      })
-    }
-  })
+  }
 }
-export const describeJournalEvent = describeJournalEventShape

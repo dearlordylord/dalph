@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Pure reducers mutate only local scratch that never escapes. */
 import { Option } from "effect"
-import type { OperationId, RunId } from "./domain.js"
+import type { RunId, TaskId } from "./domain.js"
 import { describeJournalEvent } from "./journal-event-descriptor.js"
 import type { JournalRecord } from "./journal-store.js"
 import { managedHistoryTransitionRuleFor } from "./managed-history-transition.js"
@@ -23,27 +23,6 @@ import {
   workflowResponsibilityOperationId,
   WorkflowResponsibilityState
 } from "./reconstructed-managed-run-state.js"
-
-type HasOutcome = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-) => boolean
-
-export interface ExecutorReconstructionProtocol {
-  readonly responsibilityFor: (
-    records: ReadonlyArray<JournalRecord>,
-    record: JournalRecord,
-    hasOutcome: HasOutcome
-  ) => WorkflowResponsibilityEntry | undefined
-  readonly unresolvedSubjects: (
-    records: ReadonlyArray<JournalRecord>,
-    responsibility: WorkflowResponsibilityState,
-    hasOutcome: HasOutcome
-  ) => ReadonlyArray<{
-    readonly operationId: OperationId
-    readonly position: JournalRecord["position"]
-  }>
-}
 
 const applyGraphKnowledgeRecord = (
   records: ReadonlyArray<JournalRecord>,
@@ -138,18 +117,6 @@ const reduceGraphKnowledge = (
   })
 }
 
-const hasOutcome = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-): boolean =>
-  records.some(({ event }) => {
-    const transition = managedHistoryTransitionRuleFor(event._tag)
-    if (transition?._tag !== "Outcome" && transition?._tag !== "ProviderOutcome") return false
-    const descriptor = describeJournalEvent(event)
-    return descriptor._tag === "OperationEventDescriptor"
-      && descriptor.operationId === operationId
-  })
-
 const taskBoundaryResponsibility = (
   record: JournalRecord
 ): WorkflowResponsibilityEntry | undefined => {
@@ -168,24 +135,28 @@ const taskBoundaryResponsibility = (
       taskId: event.operation.plannedAttempt.taskId
     })
   }
-  if (event._tag === "TaskWorkSessionEstablishmentIntentRecorded") {
-    return WorkflowResponsibilityEntry.cases.TaskWorkSessionResponsibility.make({
-      beganAt: record.position,
-      operation: event.operation,
-      taskId: event.operation.request.plannedAttempt.taskId
-    })
-  }
   return undefined
+}
+
+const responsibilityForRecord = (
+  record: JournalRecord
+): WorkflowResponsibilityEntry | undefined => {
+  if (record.event._tag === "PlannedAttemptExecutorWorkStarted") {
+    return WorkflowResponsibilityEntry.cases
+      .PlannedAttemptExecutorWorkResponsibility.make({
+        beganAt: record.position,
+        plannedAttempt: record.event.plannedAttempt
+      })
+  }
+  return taskBoundaryResponsibility(record)
 }
 
 /** Pure per-subject responsibility reducer. */
 const reduceWorkflowResponsibility = (
-  records: ReadonlyArray<JournalRecord>,
-  executor: ExecutorReconstructionProtocol
+  records: ReadonlyArray<JournalRecord>
 ): WorkflowResponsibilityState => {
   const entries = records.flatMap<WorkflowResponsibilityEntry>((record) => {
-    const entry = taskBoundaryResponsibility(record)
-      ?? executor.responsibilityFor(records, record, hasOutcome)
+    const entry = responsibilityForRecord(record)
     return entry === undefined ? [] : [entry]
   })
   return WorkflowResponsibilityState.make({ entries })
@@ -196,14 +167,39 @@ const reduceWorkflowHistory = (
   records: ReadonlyArray<JournalRecord>
 ): ReconstructedWorkflowHistory => ({ records })
 
-/** Pure pause reducer, ready for the pause command algebra introduced later. */
+/** Applies each recorded operator direction in journal order. */
 const reducePauseState = (
-  _records: ReadonlyArray<JournalRecord>
-): ReconstructedPauseState =>
-  ReconstructedPauseState.make({
-    run: ReconstructedRunPauseState.cases.RunUnpaused.make({}),
-    tasks: ReconstructedTaskPauseState.cases.NoTaskPauses.make({})
+  records: ReadonlyArray<JournalRecord>
+): ReconstructedPauseState => {
+  let runPaused = false
+  const pausedTaskIds = new Set<TaskId>()
+  for (const { event } of records) {
+    if (event._tag !== "ControlCommandRecorded") continue
+    switch (event.command._tag) {
+      case "RequestRunPause":
+        runPaused = true
+        break
+      case "RequestRunUnpause":
+        runPaused = false
+        break
+      case "RequestTaskPause":
+        pausedTaskIds.add(event.command.taskId)
+        break
+      case "RequestTaskUnpause":
+        pausedTaskIds.delete(event.command.taskId)
+        break
+    }
+  }
+  const taskIds = [...pausedTaskIds].sort()
+  return ReconstructedPauseState.make({
+    run: runPaused
+      ? ReconstructedRunPauseState.cases.RunPaused.make({})
+      : ReconstructedRunPauseState.cases.RunUnpaused.make({}),
+    tasks: taskIds.length === 0
+      ? ReconstructedTaskPauseState.cases.NoTaskPauses.make({})
+      : ReconstructedTaskPauseState.cases.TaskPauses.make({ taskIds })
   })
+}
 
 const graphKnowledgeObservations = (
   knowledge: BestAvailableDurableGraphKnowledge
@@ -232,59 +228,68 @@ const validateGraphKnowledge = (
     ]
   })
 
+const plannedResponsibilityHasOrigin = (
+  entry: Extract<
+    WorkflowResponsibilityEntry,
+    { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+  >,
+  record: JournalRecord | undefined
+): boolean => {
+  if (record?.event._tag === "PlannedAttemptExecutorWorkStarted") {
+    return record.event.plannedAttempt.runId === entry.plannedAttempt.runId
+      && record.event.plannedAttempt.attemptId === entry.plannedAttempt.attemptId
+  }
+  return false
+}
+
+const validateResponsibilityEntry = (
+  entry: WorkflowResponsibilityEntry,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<ReconstructedManagedRunInvariantIssue> => {
+  const record = records.at(entry.beganAt - 1)
+  if (entry._tag === "PlannedAttemptExecutorWorkResponsibility") {
+    return plannedResponsibilityHasOrigin(entry, record)
+      ? []
+      : [
+        ReconstructedManagedRunInvariantIssue.cases
+          .PlannedAttemptExecutorWorkHistoryMismatch.make({
+            attemptId: entry.plannedAttempt.attemptId,
+            position: entry.beganAt
+          })
+      ]
+  }
+  const operationId = workflowResponsibilityOperationId(entry)
+  if (record !== undefined) {
+    const descriptor = describeJournalEvent(record.event)
+    const transition = managedHistoryTransitionRuleFor(record.event._tag)
+    if (
+      descriptor._tag === "OperationEventDescriptor"
+      && descriptor.operationId === operationId
+      && transition?._tag === "Intent"
+    ) return []
+  }
+  return [
+    ReconstructedManagedRunInvariantIssue.cases.ResponsibilityHistoryMismatch.make({
+      operationId,
+      position: entry.beganAt
+    })
+  ]
+}
+
 const validateResponsibility = (
   responsibility: WorkflowResponsibilityState,
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<ReconstructedManagedRunInvariantIssue> =>
-  responsibility.entries.flatMap((entry) => {
-    const operationId = workflowResponsibilityOperationId(entry)
-    const record = records.at(entry.beganAt - 1)
-    if (record !== undefined) {
-      const descriptor = describeJournalEvent(record.event)
-      const transition = managedHistoryTransitionRuleFor(record.event._tag)
-      if (
-        descriptor._tag === "OperationEventDescriptor"
-        && descriptor.operationId === operationId
-        && transition?._tag === "Intent"
-      ) return []
-    }
-    return [
-      ReconstructedManagedRunInvariantIssue.cases.ResponsibilityHistoryMismatch.make({
-        operationId,
-        position: entry.beganAt
-      })
-    ]
-  })
+  responsibility.entries.flatMap((entry) => validateResponsibilityEntry(entry, records))
 
-const validateExecutorSubjects = (
-  responsibility: WorkflowResponsibilityState,
-  records: ReadonlyArray<JournalRecord>,
-  executor: ExecutorReconstructionProtocol
-): ReadonlyArray<ReconstructedManagedRunInvariantIssue> =>
-  executor.unresolvedSubjects(
-    records,
-    responsibility,
-    hasOutcome
-  ).map(({ operationId, position }) =>
-    ReconstructedManagedRunInvariantIssue.cases
-      .UnresolvedExecutorInvocationSubject.make({
-        operationId,
-        position
-      })
-  )
-
-/**
- * Composes the distinct reducers only after managed-history validation has
- * accepted canonical order and causal relationships.
- */
-export const reconstructManagedRunState = (
+/** Composes the distinct reducers for records already accepted as valid managed history. */
+export const reconstructValidatedManagedRunState = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
-  executor: ExecutorReconstructionProtocol
-): ReconstructedManagedRunResult => {
+  records: ReadonlyArray<JournalRecord>
+): ReconstructedManagedRunState => {
   const graphKnowledge = reduceGraphKnowledge(records)
-  const responsibility = reduceWorkflowResponsibility(records, executor)
-  const state: ReconstructedManagedRunState = {
+  const responsibility = reduceWorkflowResponsibility(records)
+  return {
     appliedThrough: records.at(records.length - 1)?.position ?? null,
     graphKnowledge,
     pause: reducePauseState(records),
@@ -292,10 +297,17 @@ export const reconstructManagedRunState = (
     runId,
     workflowHistory: reduceWorkflowHistory(records)
   }
+}
+
+/** Reconstructs arbitrary records and reports broken history-to-state invariants. */
+export const reconstructManagedRunState = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): ReconstructedManagedRunResult => {
+  const state = reconstructValidatedManagedRunState(runId, records)
   const issues = [
-    ...validateGraphKnowledge(graphKnowledge, records),
-    ...validateResponsibility(responsibility, records),
-    ...validateExecutorSubjects(responsibility, records, executor)
+    ...validateGraphKnowledge(state.graphKnowledge, records),
+    ...validateResponsibility(state.responsibility, records)
   ]
   if (issues.length === 0) return { _tag: "ValidReconstructedManagedRun", state }
   return {

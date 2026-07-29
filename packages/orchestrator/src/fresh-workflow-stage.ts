@@ -1,8 +1,7 @@
 import type { Effect, PlatformError } from "effect"
-import type { OperationId } from "./domain.js"
-import type { FreshImplementationConvergenceStageError } from "./implementation-convergence-stage.js"
+import type { OwnedTransitionExecution } from "./activation-coordinator.js"
+import type { ManagedRecoveryActivationError } from "./managed-activation.js"
 import type { RunnableFrontierTransition } from "./runnable-frontier.js"
-import type { SimulatedImplementationConvergenceStageError } from "./simulated-implementation-convergence-stages.js"
 import type { PlannedTaskAttemptError } from "./task-work-planning.js"
 import type { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
@@ -16,10 +15,9 @@ type InterpreterError = {
 
 export type FreshWorkflowStageError =
   | InterpreterError
-  | FreshImplementationConvergenceStageError
+  | ManagedRecoveryActivationError
   | PlannedTaskAttemptError
   | PlatformError.PlatformError
-  | SimulatedImplementationConvergenceStageError
   | TaskWorktreeExecutionModeContradiction
   | TraceOutputError
 
@@ -29,6 +27,6 @@ export interface FreshWorkflowStage {
   readonly transition: RunnableFrontierTransition
 
   readonly run: (
-    recordActivationIntent: (operationId: OperationId) => Effect.Effect<void>
+    execution: OwnedTransitionExecution
   ) => Effect.Effect<FreshWorkflowStage | undefined, FreshWorkflowStageError>
 }

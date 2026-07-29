@@ -9,14 +9,3 @@ export const encodeTaskRevisionFingerprint = (normalizedTaskJson: string): TaskR
   TaskRevision.make(
     `${taskRevisionFingerprintEncodingVersion}${Encoding.encodeBase64Url(normalizedTaskJson)}`
   )
-
-/** Upcasts the raw normalized JSON used by journal events before event version 4. */
-export const upcastLegacyTaskRevisionFingerprint = (value: unknown): unknown => {
-  if (typeof value !== "string" || !value.startsWith("{")) return value
-  try {
-    JSON.parse(value)
-    return encodeTaskRevisionFingerprint(value)
-  } catch {
-    return value
-  }
-}

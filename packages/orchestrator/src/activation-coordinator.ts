@@ -3,6 +3,7 @@ import { Data, Deferred, Effect, Exit, Option, Queue, Ref, Schema } from "effect
 import type * as Scope from "effect/Scope"
 import { SelectedTransitionIdentity as SelectedTransitionIdentitySchema } from "./domain.js"
 import type { OperationId, RunId, SelectedTransitionIdentity } from "./domain.js"
+import type { PlannedAttemptExecutorCorrelation } from "./planned-attempt-executor.js"
 import {
   FrontierExplanation,
   type RunnableFrontier,
@@ -56,6 +57,12 @@ const OwnedTransitionExecutionTypeId: unique symbol = Symbol.for("@dalph/OwnedTr
 export interface OwnedTransitionExecution {
   readonly [OwnedTransitionExecutionTypeId]: typeof OwnedTransitionExecutionTypeId
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
+  readonly bindPlannedAttemptExecutorPosition: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void>
+  readonly releasePlannedAttemptExecutorWorkPosition: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void>
 }
 
 type ActivationCoordinatorCheckpointFailure = Data.TaggedEnum<{
@@ -255,12 +262,8 @@ const makeActivationOwnershipRegistry = Effect.fn(
         const key = selectedTransitionKey(selected)
         return Option.match(Option.fromUndefinedOr(current.get(key)), {
           onNone: () => {
-            const operationId = runnableTransitionOperationId(transition)
             const entry: ActivationOwnershipEntry = {
-              operationId: operationId !== undefined
-                  && transition._tag === "ContinueExecutorInvocation"
-                ? Option.some(operationId)
-                : Option.none(),
+              operationId: Option.none(),
               selected,
               transition
             }
@@ -346,37 +349,24 @@ export const makeActivationCoordinator = Effect.fn(
     entry: ActivationOwnershipEntry
   ): Effect.Effect<void, never, R> => {
     const settleRunnerAdmission = (
-      owned: ActivationOwnershipEntry,
-      exit: Exit.Exit<void, unknown>
+      owned: ActivationOwnershipEntry
     ): Effect.Effect<void> => {
       if (!transitionRequiresTaskAdmissionPosition(owned.transition)) {
         return Effect.void
       }
-      if (Option.isNone(owned.operationId)) {
-        return input.admissionController.cancelReservedPosition(entry.selected).pipe(
-          Effect.orDie,
-          Effect.asVoid
-        )
-      }
-      return Exit.isSuccess(exit)
-        ? input.admissionController.releaseTaskAdmissionPosition(
-          owned.operationId.value
-        ).pipe(Effect.orDie)
-        : Effect.void
+      if (
+        owned.transition._tag === "ContinuePlannedAttemptExecutorWork"
+        || owned.transition._tag === "StartPlannedAttemptExecutorWork"
+      ) return Effect.void
+      return input.admissionController.cancelReservedPosition(entry.selected).pipe(
+        Effect.orDie,
+        Effect.asVoid
+      )
     }
 
     const recordIntent = Effect.fn("ActivationCoordinator.recordIntent")(
       function*(operationId: OperationId) {
         yield* Effect.uninterruptible(Effect.gen(function*() {
-          // Bind the controller first. If that exact reservation is absent,
-          // ownership remains pre-intent and finalization can still cancel it
-          // by the immutable selection identity.
-          if (transitionRequiresTaskAdmissionPosition(entry.transition)) {
-            yield* input.admissionController.bindReservedPosition(
-              entry.selected,
-              operationId
-            ).pipe(Effect.orDie)
-          }
           yield* ownership.bindOperation(key, operationId)
         }))
         yield* checkpoint((observation) => ({
@@ -388,9 +378,28 @@ export const makeActivationCoordinator = Effect.fn(
       }
     )
 
+    const bindPlannedAttemptExecutorPosition = Effect.fn(
+      "ActivationCoordinator.bindPlannedAttemptExecutorPosition"
+    )(function*(correlation: PlannedAttemptExecutorCorrelation) {
+      yield* input.admissionController.bindPlannedAttemptPosition(
+        entry.selected,
+        correlation
+      ).pipe(Effect.orDie)
+    })
+
+    const releasePlannedAttemptExecutorWorkPosition = Effect.fn(
+      "ActivationCoordinator.releasePlannedAttemptExecutorWorkPosition"
+    )(function*(correlation: PlannedAttemptExecutorCorrelation) {
+      yield* input.admissionController.releasePlannedAttemptPosition(
+        correlation
+      ).pipe(Effect.orDie)
+    })
+
     return input.runTransition(entry.transition, {
       [OwnedTransitionExecutionTypeId]: OwnedTransitionExecutionTypeId,
-      recordIntent
+      recordIntent,
+      bindPlannedAttemptExecutorPosition,
+      releasePlannedAttemptExecutorWorkPosition
     }).pipe(
       Effect.exit,
       Effect.flatMap((exit) =>
@@ -409,7 +418,7 @@ export const makeActivationCoordinator = Effect.fn(
             runnerExit,
             transition: entry.transition
           })).pipe(Effect.orDie)
-          yield* settleRunnerAdmission(owned, exit)
+          yield* settleRunnerAdmission(owned)
           yield* ownership.remove(key)
           yield* checkpoint((observation) => ({
             _tag: "OwnershipReleased",

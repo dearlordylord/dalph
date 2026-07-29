@@ -1,6 +1,13 @@
 import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "./activation-coordinator.js"
-import { type OperationId, RunId, type TaskId, type TaskWorkCapacity, type TrackerTarget } from "./domain.js"
+import {
+  type OperationId,
+  type PlannedTaskAttempt,
+  RunId,
+  type TaskId,
+  type TaskWorkCapacity,
+  type TrackerTarget
+} from "./domain.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-workflow-stage.js"
 import { ManagedRecoveryActivation, type ManagedRecoveryActivationError } from "./managed-activation.js"
@@ -36,25 +43,12 @@ const explanationTaskIds = (
     Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId"))
   )
 
-export const watchExecutorDeadlines = Effect.fn(
-  "Workflow.watchExecutorDeadlines"
-)(function*<WaitError, WaitRequirements, SignalError, SignalRequirements>(
-  waitForNextExecutorWake: Effect.Effect<
-    boolean,
-    WaitError,
-    WaitRequirements
-  >,
-  signal: Effect.Effect<void, SignalError, SignalRequirements>
-): Effect.fn.Return<
-  void,
-  WaitError | SignalError,
-  WaitRequirements | SignalRequirements
-> {
-  const woke = yield* waitForNextExecutorWake
-  if (!woke) return
-  yield* signal
-  yield* watchExecutorDeadlines(waitForNextExecutorWake, signal)
-})
+/** Journal reconstruction exclusively owns every task it has rediscovered. */
+export const discardFreshStagesOwnedByRecovery = (
+  stages: ReadonlyArray<FreshWorkflowStage>,
+  recoveredTaskIds: ReadonlySet<TaskId>
+): ReadonlyArray<FreshWorkflowStage> =>
+  stages.filter(({ transition }) => !recoveredTaskIds.has(runnableTransitionTaskId(transition)))
 
 export const runWorkflow = Effect.fn("Workflow.run")(function*(
   target: TrackerTarget,
@@ -81,12 +75,13 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
     capacity,
-    freshOccupiedInvocations: recovery.capacityEvidence.freshOccupiedInvocations,
-    freshlyReleasedOperationIds: recovery.capacityEvidence.freshlyReleasedOperationIds,
-    reconstructedReservedPositions: recovery.reconstructedReservedPositions
+    reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
   type WorkflowStage = FreshWorkflowStage
+  const continuePlannedExecutorWork = (
+    plannedAttempt: PlannedTaskAttempt
+  ) => recovery.continuePlannedAttemptExecutorWork(plannedAttempt)
 
   const continued = (
     operationId: OperationId,
@@ -103,7 +98,13 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
     predecessorOperationId: OperationId
   ) =>
     makeFreshTaskAttemptStage(
-      { allocator, emit, interpreter, planner },
+      {
+        allocator,
+        continuePlannedAttemptExecutorWork: continuePlannedExecutorWork,
+        emit,
+        interpreter,
+        planner
+      },
       task,
       activeClaim,
       predecessorOperationId
@@ -164,13 +165,13 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
           taskId: task.id,
           taskRevision: taskRevisionFor(task)
         }),
-        run: (recordActivationIntent) =>
+        run: (execution) =>
           Effect.gen(function*() {
             yield* emit(OperationSelected.make({ operation }))
             yield* emit(TaskClaimAcquisitionIntended.make({ operation }))
             const result = yield* interpreter.acquireTaskClaim(
               operation,
-              recordActivationIntent(operation.acquisition.operationId)
+              execution.recordIntent(operation.acquisition.operationId)
             )
             if (result._tag === "AuthoritativeTaskClaimAcquired") {
               yield* emit(TaskClaimAcquiredTrace.make({
@@ -272,6 +273,16 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
               ])
           )
         }
+        if (recoveredTaskIds.size > 0) {
+          yield* Ref.update(
+            stages,
+            (current) =>
+              discardFreshStagesOwnedByRecovery(
+                current,
+                recoveredTaskIds
+              )
+          )
+        }
         const current = yield* Ref.get(stages)
         return {
           explanations: recovered.explanations,
@@ -308,7 +319,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
                 : Effect.die(
                   "synthetic activation cannot derive a recovered transition"
                 ),
-            onSome: (fresh) => fresh.run(execution.recordIntent)
+            onSome: (fresh) => fresh.run(execution)
           })
           const exit = yield* Effect.exit(operation)
           const acknowledged = yield* Deferred.make<void>()
@@ -319,15 +330,6 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
             : Effect.void
         })
     })
-    yield* Effect.forkScoped(
-      watchExecutorDeadlines(
-        recovery.waitForNextExecutorWake,
-        coordinator.signal(
-          ActivationCause.AdmissionMayNowBePossible()
-        )
-      ).pipe(Effect.orDie)
-    )
-
     const applyCompletion = Effect.fn("Workflow.applyOperationCompletion")(
       function*(completion: WorkflowOperationCompletion) {
         const { exit, stage } = completion
@@ -356,12 +358,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function*(
         continue
       }
       const currentFrontier = yield* readFrontier()
-      if (
-        currentFrontier.transitions.length === 0
-        && !currentFrontier.explanations.some(
-          ({ _tag }) => _tag === "ExecutorInvocationWait"
-        )
-      ) return
+      if (currentFrontier.transitions.length === 0) return
       const awaitedCompletion = yield* Queue.take(completions)
       yield* applyCompletion(awaitedCompletion)
     }

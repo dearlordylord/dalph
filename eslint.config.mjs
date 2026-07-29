@@ -281,6 +281,14 @@ export default [
       "import-x/no-unused-modules": "off"
     }
   },
+  {
+    files: [
+      "packages/orchestrator/src/planned-attempt-executor-source-boundary.test.ts"
+    ],
+    rules: {
+      "import/no-nodejs-modules": "off"
+    }
+  },
   // This adapter-contract test reads the fixture independently to establish
   // its expected graph; production control-plane modules retain the ban.
   {

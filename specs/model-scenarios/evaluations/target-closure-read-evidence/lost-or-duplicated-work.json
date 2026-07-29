@@ -1,7 +1,0 @@
-{
-  "evaluator": "lost-or-duplicated-work",
-  "scenarioId": "target-closure-read-evidence",
-  "verdict": "acceptable",
-  "confidence": "high",
-  "reason": "Only explicit read coverage proves absence; predecessor evidence cannot erase a task, and graph membership observations cannot create duplicate workflow responsibility."
-}

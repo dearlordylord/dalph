@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { PlannedTaskAttempt, TaskId, TaskWorkSessionId } from "./domain.js"
+import { PlannedTaskAttempt, TaskId } from "./domain.js"
 import type { JournalRecord } from "./journal-store.js"
 import { plannedTaskAttemptEquivalence } from "./planned-task-attempt.js"
 import { WorkflowOperation } from "./workflow-operation.js"
@@ -35,24 +35,10 @@ export const ManagedRunRecoveryStageEntry = Schema.TaggedUnion({
   TaskWorktreeReconciliationUnresolved: {
     operation: WorkflowOperation.cases.ReconcileTaskWorktree
   },
-  TaskWorkSessionEstablishmentNeeded: {
-    authority: Schema.Literal("TaskRunner"),
-    planOperation: WorkflowOperation.cases.RecordTaskAttemptPlan,
-    worktreeOperation: WorkflowOperation.cases.ReconcileTaskWorktree
+  PlannedAttemptExecutorWorkNeeded: {
+    planOperation: WorkflowOperation.cases.RecordTaskAttemptPlan
   },
-  TaskWorkSessionEstablishmentUnresolved: {
-    operation: WorkflowOperation.cases.EstablishTaskWorkSession
-  },
-  TaskExecutionNeeded: {
-    authority: Schema.Literal("TaskExecutor"),
-    planOperation: WorkflowOperation.cases.RecordTaskAttemptPlan,
-    sessionEstablishmentOperation: WorkflowOperation.cases.EstablishTaskWorkSession,
-    sessionId: TaskWorkSessionId
-  },
-  TaskExecutionUnresolved: {
-    operation: WorkflowOperation.cases.ExecuteTaskWork
-  },
-  ImplementationConvergencePending: {
+  PlannedAttemptExecutorWorkUnresolved: {
     planOperation: WorkflowOperation.cases.RecordTaskAttemptPlan
   },
   Terminal: {
@@ -69,11 +55,8 @@ export const NonterminalRecoveryStageTag = Schema.Literals([
   "TaskAttemptPlanNeeded",
   "TaskWorktreeReconciliationNeeded",
   "TaskWorktreeReconciliationUnresolved",
-  "TaskWorkSessionEstablishmentNeeded",
-  "TaskWorkSessionEstablishmentUnresolved",
-  "TaskExecutionNeeded",
-  "TaskExecutionUnresolved",
-  "ImplementationConvergencePending"
+  "PlannedAttemptExecutorWorkNeeded",
+  "PlannedAttemptExecutorWorkUnresolved"
 ])
 
 /**
@@ -92,15 +75,6 @@ const stageForAttempt = (
   planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
 ): ManagedRunRecoveryStageEntry => {
   const plannedAttempt = planOperation.plannedAttempt
-  const terminal = records.some(({ event }) =>
-    event._tag === "ImplementationConvergenceDispositionRecorded"
-    && event.operation.request._tag === "AuthorizedImplementationConvergenceDisposition"
-    && sameAttempt(event.operation.request.disposition.subject.plannedAttempt, plannedAttempt)
-  )
-  if (terminal) {
-    return ManagedRunRecoveryStageEntry.cases.Terminal.make({ plannedAttempt })
-  }
-
   const worktreeIntent = records.find(({ event }) =>
     event._tag === "TaskWorktreeReconciliationIntended"
     && sameAttempt(event.operation.plannedAttempt, plannedAttempt)
@@ -121,50 +95,24 @@ const stageForAttempt = (
     })
   }
 
-  const sessionIntent = records.find(({ event }) =>
-    event._tag === "TaskWorkSessionEstablishmentIntentRecorded"
-    && sameAttempt(event.operation.request.plannedAttempt, plannedAttempt)
-  )?.event
-  if (sessionIntent?._tag !== "TaskWorkSessionEstablishmentIntentRecorded") {
-    return ManagedRunRecoveryStageEntry.cases.TaskWorkSessionEstablishmentNeeded.make({
-      authority: "TaskRunner",
-      planOperation,
-      worktreeOperation: worktreeIntent.operation
-    })
-  }
-  const sessionEstablished = records.find(({ event }) =>
-    event._tag === "TaskWorkSessionEstablished"
-    && event.outcome.operationId === sessionIntent.operation.request.operationId
-  )?.event
-  if (sessionEstablished?._tag !== "TaskWorkSessionEstablished") {
-    return ManagedRunRecoveryStageEntry.cases.TaskWorkSessionEstablishmentUnresolved.make({
-      operation: sessionIntent.operation
-    })
-  }
-
-  const executionIntent = records.findLast(({ event }) =>
-    event._tag === "TaskExecutionIntentRecorded"
-    && sameAttempt(event.operation.request.plannedAttempt, plannedAttempt)
-  )?.event
-  if (executionIntent?._tag !== "TaskExecutionIntentRecorded") {
-    return ManagedRunRecoveryStageEntry.cases.TaskExecutionNeeded.make({
-      authority: "TaskExecutor",
-      planOperation,
-      sessionEstablishmentOperation: sessionIntent.operation,
-      sessionId: sessionEstablished.outcome.sessionId
-    })
-  }
-  const executionObserved = records.some(({ event }) =>
-    event._tag === "TaskExecutionOutcomeObserved"
-    && event.outcome.outcome.operationId === executionIntent.operation.request.operationId
+  const started = records.some(({ event }) =>
+    event._tag === "PlannedAttemptExecutorWorkStarted"
+    && sameAttempt(event.plannedAttempt, plannedAttempt)
   )
-  return executionObserved
-    ? ManagedRunRecoveryStageEntry.cases.ImplementationConvergencePending.make({
-      planOperation
-    })
-    : ManagedRunRecoveryStageEntry.cases.TaskExecutionUnresolved.make({
-      operation: executionIntent.operation
-    })
+  if (!started) {
+    return ManagedRunRecoveryStageEntry.cases
+      .PlannedAttemptExecutorWorkNeeded.make({ planOperation })
+  }
+  const latestReport = records.findLast(({ event }) =>
+    event._tag === "PlannedAttemptExecutorWorkReported"
+    && event.report.correlation.attemptId === plannedAttempt.attemptId
+    && event.report.correlation.runId === plannedAttempt.runId
+  )?.event
+  return latestReport?._tag === "PlannedAttemptExecutorWorkReported"
+      && latestReport.report._tag === "Terminal"
+    ? ManagedRunRecoveryStageEntry.cases.Terminal.make({ plannedAttempt })
+    : ManagedRunRecoveryStageEntry.cases
+      .PlannedAttemptExecutorWorkUnresolved.make({ planOperation })
 }
 
 /** Reduces immutable managed history into one total run-level recovery stage. */

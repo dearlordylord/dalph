@@ -18,8 +18,6 @@ export {
   ClaimOwner,
   ClaimToken,
   ControlCommandId,
-  EvidenceStoreLocator,
-  FailedProcessExitCode,
   FixtureTarget,
   GitCommitSha,
   GitCommonDirectoryLocator,
@@ -28,7 +26,6 @@ export {
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
-  ImplementationReviewRoundLimit,
   isDependencySatisfied,
   isTaskOpen,
   JournalDatabaseLocator,
@@ -39,46 +36,22 @@ export {
   JournalSchemaVersion,
   OperationId,
   PlannedTaskAttempt,
-  ProviderObservationId,
-  ProviderRequestId,
-  ProviderWorkUnitId,
-  ReviewerSessionId,
-  ReviewFindingId,
   RunId,
   SelectedTransitionFingerprint,
   SelectedTransitionIdentity,
-  SemanticReviewRound,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
   TaskLifecycle,
   TaskRevision,
   TaskWorkCapacity,
-  TaskWorkSessionId,
-  TaskWorkSessionLocator,
-  TechnicalRetryDelayMillis,
-  TechnicalRetryLimit,
-  TechnicalRetryNotBefore,
-  TechnicalRetryOrdinal,
   TrackerRevision,
   TrackerSnapshot,
   TrackerTarget,
   TrackerTask,
-  WorkerProcessId,
   WorktreeLocator
 } from "./domain.js"
 export { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run-application.js"
-export {
-  ExecutorOuterInvocation,
-  ExecutorOuterInvocationCorrelation,
-  ExecutorOuterInvocationInterruption,
-  ExecutorOuterInvocationOutcome,
-  ExecutorOuterInvocationResourceUse,
-  ExecutorOuterInvocationWait,
-  makeExecutorOuterInvocation,
-  noTaskWorkCapacityUse,
-  oneTaskWorkCapacityPosition
-} from "./executor-boundary.js"
 export { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
 export {
   CompetingWorktreeRegistrations,
@@ -107,12 +80,6 @@ export {
 } from "./github-graphql-client.js"
 export { githubTrackerGraphReaderNodeLayer } from "./github-tracker-graph-reader.js"
 export { githubTrackerMutationLayer, githubTrackerMutationNodeLayer } from "./github-tracker-mutation.js"
-export * from "./implementation-convergence-trace.js"
-export * from "./implementation-convergence.js"
-export * from "./implementation-evidence-journal.js"
-export * from "./implementation-evidence.js"
-export * from "./implementation-review-journal.js"
-export * from "./implementation-review.js"
 export * from "./journal-event-codec.js"
 export * from "./journal-recovery-model.js"
 export {
@@ -134,13 +101,8 @@ export {
   trackerGraphOutcomeObserved,
   WorkflowJournalEvent
 } from "./journal-store.js"
-export { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 export {
-  coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
-  coordinatorOwnedImplementationReviewLayer,
-  coordinatorOwnedTaskExecutorLayer,
-  coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
@@ -148,8 +110,24 @@ export {
 export * from "./managed-history.js"
 export * from "./managed-run-recovery-stage.js"
 export { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
-export { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
 export { nodeGitWorktreeLayer } from "./node-git-worktree.js"
+export {
+  continuePlannedAttemptExecutorWork,
+  PlannedAttemptExecutorCorrelationMismatch,
+  requestPlannedAttemptExecutorSuspension
+} from "./planned-attempt-executor-workflow.js"
+export {
+  ControlledFakeExecutorMismatch,
+  ControlledFakeExecutorStep,
+  controlledFakePlannedAttemptExecutorLayer,
+  makeControlledFakePlannedAttemptExecutorLayer,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorResult,
+  type PlannedAttemptExecutorService
+} from "./planned-attempt-executor.js"
 export {
   productionWorkflowInterpreterLayer,
   StartupRecoveryBlocked,
@@ -185,14 +163,6 @@ export {
   taskRevisionFor
 } from "./task-dag.js"
 export {
-  TaskExecutionAdmitted,
-  TaskExecutionOutcomeObserved,
-  TaskExecutionSimulated,
-  TaskExecutionStarted
-} from "./task-execution-trace.js"
-export { TaskWorkSessionEstablishmentSimulatedTrace } from "./task-execution-trace.js"
-export * from "./task-execution.js"
-export {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   freshOperationIdAllocatorLayer,
@@ -200,28 +170,6 @@ export {
   PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "./task-work-planning.js"
-export {
-  AvailableProviderWorkUnit,
-  MatchingTaskWorkSessionReported,
-  NoMatchingTaskWorkSessionReported,
-  PurgedProviderWorkUnit,
-  ReportedWorkerProcess,
-  TaskRunner,
-  taskRunnerTestLayer,
-  TaskWorkSessionCorrelationConflict,
-  TaskWorkSessionLookup,
-  TaskWorkSessionLookupFailure,
-  TaskWorkSessionReport,
-  TaskWorkSessionResult,
-  TaskWorkSessionResultReported,
-  TaskWorkSessionWork,
-  TaskWorkStartRequest,
-  TaskWorkStartRequestAcknowledgement,
-  TaskWorkStartRequestFailure,
-  TestTaskRunner,
-  UnreadableProviderWorkUnit
-} from "./task-work-start.js"
-export * from "./technical-retry.js"
 export { TraceOutput, TraceOutputError, traceOutputStdioLayer } from "./trace-output.js"
 export {
   FixtureReader,
@@ -255,61 +203,20 @@ export {
   dryRunWorkflowInterpreterLayer,
   makeDryRunWorkflowInterpreterLayer
 } from "./workflow-interpreters.js"
-export {
-  recoverExactRunAfterCoordinatorDeath,
-  RecoveryOwnershipIssue,
-  RecoveryProgressIssue,
-  RecoveryReconciliationIssue
-} from "./workflow-recovery.js"
-export {
-  recoverImplementationEvidenceSealings,
-  recoverImplementationReviews,
-  recoverReviewFindingsHandbacks,
-  recoverTaskClaimAcquisitions,
-  recoverTaskExecutions,
-  recoverTaskWorkSessionEstablishments,
-  recoverTaskWorktreeReconciliations
-} from "./workflow-recovery.js"
 export { runWorkflow } from "./workflow-run.js"
-export { RecoveryTaskEligibilityIssue } from "./workflow-stage-recovery.js"
 export { encodeTraceItem, semanticTrace, workflowTraceOutputLayer } from "./workflow-trace-output.js"
 export {
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
   causalGraphProjection,
-  decideTaskWorkSessionRecovery,
-  ImplementationEvidenceSealingSimulatedTrace,
-  ImplementationReviewCompletedTrace,
-  ImplementationReviewSimulatedTrace,
-  makeImplementationDispositionOperation,
-  makeImplementationEvidenceSealingOperation,
-  makeImplementationReviewOperation,
-  makeReviewFindingsHandbackOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskExecutionOperation,
-  makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   OperationSelected,
-  ReviewFindingsHandedBackTrace,
-  SealedImplementationEvidenceTrace,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TaskClaimAcquisitionSimulated,
-  TaskWorkSessionEstablishedTrace,
-  TaskWorkSessionEstablishmentDidNotConverge,
-  TaskWorkSessionEstablishmentDidNotConvergeTrace,
-  TaskWorkSessionEvidenceContradiction,
-  TaskWorkSessionLookupDidNotConverge,
-  TaskWorkSessionLookupDidNotConvergeTrace,
-  TaskWorkSessionLookupFailedTrace,
-  TaskWorkSessionLookupRequestedTrace,
-  TaskWorkSessionReportedTrace,
-  TaskWorkSessionRunContradiction,
-  TaskWorkStartRequestAcknowledgedTrace,
-  TaskWorkStartRequestedTrace,
-  TaskWorkStartRequestFailedTrace,
   TaskWorktreeExecutionModeContradiction,
   TaskWorktreeHistoryContradiction,
   TaskWorktreeReadyTrace,

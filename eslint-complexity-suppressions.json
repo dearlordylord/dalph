@@ -4,54 +4,24 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/fresh-implementation-convergence-stages.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/github-tracker-graph-reader.ts": {
     "complexity": {
       "count": 3
     }
   },
-  "packages/orchestrator/src/implementation-convergence-history.ts": {
-    "complexity": {
-      "count": 4
-    }
-  },
-  "packages/orchestrator/src/implementation-convergence-recovery.ts": {
+  "packages/orchestrator/src/journal-event-descriptor.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/orchestrator/src/journal-event-codec.ts": {
+  "packages/orchestrator/src/managed-activation.ts": {
     "complexity": {
       "count": 1
-    }
-  },
-  "packages/orchestrator/src/journaled-implementation-convergence.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/journaled-implementation-evidence.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/journaled-implementation-review.ts": {
-    "complexity": {
-      "count": 4
-    }
-  },
-  "packages/orchestrator/src/journaled-task-execution.ts": {
-    "complexity": {
-      "count": 2
     }
   },
   "packages/orchestrator/src/managed-history.ts": {
     "complexity": {
-      "count": 2
+      "count": 3
     }
   },
   "packages/orchestrator/src/managed-run-recovery-stage.ts": {
@@ -64,44 +34,19 @@
       "count": 1
     }
   },
+  "packages/orchestrator/src/reconstructed-managed-run.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/runnable-transition-recovery.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/task-dag.ts": {
     "complexity": {
       "count": 2
-    }
-  },
-  "packages/orchestrator/src/task-worktree-journal-evidence.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/technical-retry-temporal.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/technical-retry.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow-operation.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow-recovery.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
-  "packages/orchestrator/src/workflow-stage-recovery.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow.ts": {
-    "complexity": {
-      "count": 1
     }
   }
 }

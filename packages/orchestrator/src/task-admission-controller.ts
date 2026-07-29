@@ -1,78 +1,41 @@
-/* eslint-disable max-lines -- Exact admission correlations and their atomic state transitions remain one domain owner. */
 import { Data, Effect, Option, Ref, Schema } from "effect"
-import {
-  OperationId as OperationIdSchema,
-  SelectedTransitionIdentity as SelectedTransitionIdentitySchema
-} from "./domain.js"
-import type {
-  OperationId,
-  ProviderObservationId,
-  RunId,
-  SelectedTransitionIdentity,
-  TaskId,
-  TaskWorkCapacity
-} from "./domain.js"
+import { SelectedTransitionIdentity as SelectedTransitionIdentitySchema } from "./domain.js"
+import type { AttemptId, RunId, SelectedTransitionIdentity, TaskId, TaskWorkCapacity } from "./domain.js"
+import type { PlannedAttemptExecutorCorrelation } from "./planned-attempt-executor.js"
 import {
   FrontierExplanation,
   type RunnableFrontier,
   type RunnableFrontierTransition,
-  runnableTransitionOperationId,
   runnableTransitionTaskId
 } from "./runnable-frontier.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "./selected-transition.js"
 
-/** A fresh provider observation that one task invocation currently occupies capacity. */
-interface FreshCapacityConsumingInvocation {
-  readonly observationId: ProviderObservationId
-  readonly operationId: OperationId
-  readonly taskId: TaskId
-}
-
-type FreshInvocationCapacityObservation =
-  | {
-    readonly _tag: "FreshCapacityConsumed"
-    readonly observationId: ProviderObservationId
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-  | {
-    readonly _tag: "FreshCapacityReleased"
-    readonly observationId: ProviderObservationId
-    readonly operationId: OperationId
-    readonly taskId: TaskId
-  }
-
 type AdmissionAvailabilityChange = Data.TaggedEnum<{
-  AdmissionAvailabilityUnchanged: Record<never, never>
   AdmissionMayNowBePossible: Record<never, never>
 }>
 
 const AdmissionAvailabilityChange = Data.taggedEnum<AdmissionAvailabilityChange>()
 
-/** The exact pre-intent reservation was absent when operation intent tried to bind it. */
-class TaskAdmissionPositionBindingIssue extends Schema.TaggedErrorClass<TaskAdmissionPositionBindingIssue>()(
-  "TaskAdmissionPositionBindingIssue",
-  {
-    operationId: OperationIdSchema,
-    selected: SelectedTransitionIdentitySchema
-  }
-) {}
-
-/** The exact pre-intent reservation was absent when cancellation tried to free it. */
+/** The exact selected transition reservation was absent during cancellation. */
 class TaskAdmissionPositionCancellationIssue extends Schema.TaggedErrorClass<TaskAdmissionPositionCancellationIssue>()(
   "TaskAdmissionPositionCancellationIssue",
   { selected: SelectedTransitionIdentitySchema }
 ) {}
 
-/** The exact post-intent position was absent when its operation tried to release it. */
-class TaskAdmissionPositionReleaseIssue extends Schema.TaggedErrorClass<TaskAdmissionPositionReleaseIssue>()(
-  "TaskAdmissionPositionReleaseIssue",
-  { operationId: OperationIdSchema }
+/** No selected transition reservation existed to bind to the planned attempt. */
+class PlannedAttemptPositionBindingIssue extends Schema.TaggedErrorClass<PlannedAttemptPositionBindingIssue>()(
+  "PlannedAttemptPositionBindingIssue",
+  { selected: SelectedTransitionIdentitySchema }
+) {}
+
+/** The planned-attempt position was absent at terminal result or safe suspension. */
+class PlannedAttemptPositionReleaseIssue extends Schema.TaggedErrorClass<PlannedAttemptPositionReleaseIssue>()(
+  "PlannedAttemptPositionReleaseIssue",
+  {}
 ) {}
 
 export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
-  readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
   readonly reservedPositions: ReadonlyArray<{
     readonly correlation: TaskAdmissionReservationCorrelation
     readonly taskId: TaskId
@@ -91,52 +54,41 @@ export interface TaskAdmissionController {
     frontier: RunnableFrontier,
     runId: RunId
   ) => Effect.Effect<NextAdmissionDecision>
-  readonly applyFreshInvocationObservation: (
-    observation: FreshInvocationCapacityObservation
-  ) => Effect.Effect<AdmissionAvailabilityChange>
-  readonly bindReservedPosition: (
+  readonly bindPlannedAttemptPosition: (
     selected: SelectedTransitionIdentity,
-    operationId: OperationId
-  ) => Effect.Effect<void, TaskAdmissionPositionBindingIssue>
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void, PlannedAttemptPositionBindingIssue>
   readonly cancelReservedPosition: (
     selected: SelectedTransitionIdentity
   ) => Effect.Effect<
     AdmissionAvailabilityChange,
     TaskAdmissionPositionCancellationIssue
   >
-  readonly releaseTaskAdmissionPosition: (
-    operationId: OperationId
-  ) => Effect.Effect<AdmissionAvailabilityChange, TaskAdmissionPositionReleaseIssue>
+  readonly releasePlannedAttemptPosition: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<
+    AdmissionAvailabilityChange,
+    PlannedAttemptPositionReleaseIssue
+  >
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
 }
 
 interface MakeTaskAdmissionControllerInput {
   readonly capacity: TaskWorkCapacity
-  readonly freshOccupiedInvocations: ReadonlyArray<FreshCapacityConsumingInvocation>
-  readonly freshlyReleasedOperationIds?: ReadonlySet<OperationId>
-  readonly reconstructedReservedPositions: ReadonlyArray<{
-    readonly operationId: OperationId
+  readonly reconstructedPlannedAttemptPositions?: ReadonlyArray<{
+    readonly attemptId: AttemptId
+    readonly runId: RunId
     readonly taskId: TaskId
   }>
 }
 
-/** Applies capacity from the transition's declared outer resource use. */
+/** Task-work capacity starts at claim selection and ends at terminal result or safe suspension. */
 export const transitionRequiresTaskAdmissionPosition = (
   transition: RunnableFrontierTransition
 ): boolean =>
   transition._tag === "CommitFreshTaskClaimIntent"
-  || (
-    (
-      transition._tag === "ContinueExecutorInvocation"
-      || transition._tag === "StartExecutorInvocation"
-    )
-    && transition.invocation.resourceUse._tag === "UsesTaskWorkCapacity"
-  )
-
-interface TaskAdmissionReservation {
-  readonly correlation: TaskAdmissionReservationCorrelation
-  readonly taskId: TaskId
-}
+  || transition._tag === "ContinuePlannedAttemptExecutorWork"
+  || transition._tag === "StartPlannedAttemptExecutorWork"
 
 type TaskAdmissionReservationCorrelation =
   | {
@@ -144,36 +96,42 @@ type TaskAdmissionReservationCorrelation =
     readonly selected: SelectedTransitionIdentity
   }
   | {
-    readonly _tag: "OperationReservation"
-    readonly operationId: OperationId
+    readonly _tag: "PlannedAttemptReservation"
+    readonly attemptId: AttemptId
+    readonly runId: RunId
   }
 
-const operationReservation = (
-  operationId: OperationId
+interface TaskAdmissionReservation {
+  readonly correlation: TaskAdmissionReservationCorrelation
+  readonly taskId: TaskId
+}
+
+interface TaskAdmissionControllerState {
+  readonly capacity: TaskWorkCapacity
+  readonly reservations: ReadonlyArray<TaskAdmissionReservation>
+}
+
+const plannedAttemptReservation = (
+  correlation: PlannedAttemptExecutorCorrelation
 ): TaskAdmissionReservationCorrelation => ({
-  _tag: "OperationReservation",
-  operationId
+  _tag: "PlannedAttemptReservation",
+  attemptId: correlation.attemptId,
+  runId: correlation.runId
 })
 
 const transitionReservation = (
   transition: RunnableFrontierTransition,
   runId: RunId
-): TaskAdmissionReservationCorrelation => {
-  const operationId = runnableTransitionOperationId(transition)
-  return operationId !== undefined
-      && transition._tag === "ContinueExecutorInvocation"
-    ? operationReservation(operationId)
+): TaskAdmissionReservationCorrelation =>
+  transition._tag === "ContinuePlannedAttemptExecutorWork"
+    ? plannedAttemptReservation({
+      attemptId: transition.plannedAttempt.attemptId,
+      runId: transition.plannedAttempt.runId
+    })
     : {
       _tag: "SelectedTransitionReservation",
       selected: makeSelectedTransitionIdentity(runId, transition)
     }
-}
-interface TaskAdmissionControllerState {
-  readonly capacity: TaskWorkCapacity
-  readonly occupied: ReadonlyArray<FreshCapacityConsumingInvocation>
-  readonly releasedOperationIds: ReadonlySet<OperationId>
-  readonly reservations: ReadonlyArray<TaskAdmissionReservation>
-}
 
 const sameReservation = (
   reservation: TaskAdmissionReservation,
@@ -182,25 +140,17 @@ const sameReservation = (
 ): boolean =>
   reservation.taskId === runnableTransitionTaskId(transition)
   && (
-    runnableTransitionOperationId(transition) !== undefined
-      && transition._tag === "ContinueExecutorInvocation"
-      ? reservation.correlation._tag === "OperationReservation"
-        && reservation.correlation.operationId
-          === runnableTransitionOperationId(transition)
+    transition._tag === "ContinuePlannedAttemptExecutorWork"
+      ? reservation.correlation._tag === "PlannedAttemptReservation"
+        && reservation.correlation.attemptId
+          === transition.plannedAttempt.attemptId
+        && reservation.correlation.runId === transition.plannedAttempt.runId
       : reservation.correlation._tag === "SelectedTransitionReservation"
         && selectedTransitionKey(reservation.correlation.selected)
-          === selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
+          === selectedTransitionKey(
+            makeSelectedTransitionIdentity(runId, transition)
+          )
   )
-
-const usedPositions = (state: TaskAdmissionControllerState): number => state.occupied.length + state.reservations.length
-
-const changeAfterUsageDecrease = (
-  before: TaskAdmissionControllerState,
-  after: TaskAdmissionControllerState
-): AdmissionAvailabilityChange =>
-  usedPositions(after) < usedPositions(before)
-    ? AdmissionAvailabilityChange.AdmissionMayNowBePossible()
-    : AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged()
 
 type AdmissionAttempt =
   | {
@@ -222,25 +172,11 @@ const tryAdmitTransition = (
   ) {
     return { _tag: "TransitionAdmitted", state: current }
   }
+  const taskId = runnableTransitionTaskId(transition)
   if (
-    runnableTransitionOperationId(transition) !== undefined
-    && current.occupied.some(({ operationId, taskId }) =>
-      taskId === runnableTransitionTaskId(transition)
-      && operationId === runnableTransitionOperationId(transition)
-    )
+    current.reservations.some((reservation) => reservation.taskId === taskId)
+    || current.reservations.length >= current.capacity
   ) {
-    // A provider-observed invocation is the post-intent position for this
-    // exact operation. Restart resumes its responsibility without reserving
-    // another position or waiting for itself to release capacity.
-    return { _tag: "TransitionAdmitted", state: current }
-  }
-  const taskAlreadyUsesPosition = current.reservations.some(
-    ({ taskId }) => taskId === runnableTransitionTaskId(transition)
-  )
-    || current.occupied.some(
-      ({ taskId }) => taskId === runnableTransitionTaskId(transition)
-    )
-  if (taskAlreadyUsesPosition || usedPositions(current) >= current.capacity) {
     return { _tag: "CapacityUnavailable" }
   }
   return {
@@ -251,35 +187,27 @@ const tryAdmitTransition = (
         ...current.reservations,
         {
           correlation: transitionReservation(transition, runId),
-          taskId: runnableTransitionTaskId(transition)
+          taskId
         }
       ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
     }
   }
 }
 
-/** Creates the one process-local owner of reserved and occupied admission positions. */
+const availabilityAfterRemoval = (): AdmissionAvailabilityChange =>
+  AdmissionAvailabilityChange.AdmissionMayNowBePossible()
+
+/** Creates the one process-local owner of planned-attempt task-work positions. */
 export const makeTaskAdmissionController = Effect.fn(
   "TaskAdmissionController.make"
 )(function*(input: MakeTaskAdmissionControllerInput) {
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
-    occupied: [...input.freshOccupiedInvocations].sort((left, right) => left.taskId.localeCompare(right.taskId)),
-    releasedOperationIds: input.freshlyReleasedOperationIds ?? new Set(),
-    reservations: [
-      ...input.reconstructedReservedPositions.map(
-        ({ operationId, taskId }) => ({
-          correlation: operationReservation(operationId),
-          taskId
-        })
-      ).filter(({ correlation, taskId }) =>
-        !input.freshOccupiedInvocations.some((invocation) =>
-          invocation.taskId === taskId
-          && correlation._tag === "OperationReservation"
-          && invocation.operationId === correlation.operationId
-        )
-      )
-    ]
+    reservations: (input.reconstructedPlannedAttemptPositions ?? [])
+      .map(({ attemptId, runId, taskId }) => ({
+        correlation: plannedAttemptReservation({ attemptId, runId }),
+        taskId
+      }))
       .sort((left, right) => left.taskId.localeCompare(right.taskId))
   })
 
@@ -289,7 +217,6 @@ export const makeTaskAdmissionController = Effect.fn(
         let next = current
         let admitted: RunnableFrontierTransition | undefined
         let explanations = [...frontier.explanations]
-
         for (const transition of frontier.transitions) {
           const attempt = tryAdmitTransition(current, transition, runId)
           if (attempt._tag === "TransitionAdmitted") {
@@ -305,180 +232,96 @@ export const makeTaskAdmissionController = Effect.fn(
             })
           ]
         }
-
-        return [
-          {
-            explanations,
-            transition: Option.fromUndefinedOr(admitted)
-          },
-          next
-        ] as const
+        return [{
+          explanations,
+          transition: Option.fromUndefinedOr(admitted)
+        }, next] as const
       })
   )
 
   return {
     admit,
-    applyFreshInvocationObservation: (observation) =>
-      Ref.modify(state, (current) => {
-        const next = {
-          ...current,
-          occupied: observation._tag === "FreshCapacityConsumed"
-            ? [
-              ...current.occupied.filter(({ taskId }) => taskId !== observation.taskId),
-              {
-                observationId: observation.observationId,
-                operationId: observation.operationId,
-                taskId: observation.taskId
-              }
-            ].sort((left, right) => left.taskId.localeCompare(right.taskId))
-            : current.occupied.filter(({ operationId, taskId }) =>
-              taskId !== observation.taskId
-              || operationId !== observation.operationId
-            ),
-          releasedOperationIds: observation._tag === "FreshCapacityConsumed"
-            ? new Set(
-              [...current.releasedOperationIds].filter(
-                (operationId) => operationId !== observation.operationId
-              )
-            )
-            : new Set([
-              ...current.releasedOperationIds,
-              observation.operationId
-            ]),
-          reservations: current.reservations.filter(({ correlation, taskId }) =>
-            taskId !== observation.taskId
-            || correlation._tag !== "OperationReservation"
-            || correlation.operationId !== observation.operationId
-          )
-        }
-        return [changeAfterUsageDecrease(current, next), next] as const
-      }),
-    bindReservedPosition: Effect.fn("TaskAdmissionController.bindReservedPosition")(
-      function*(selected, operationId) {
-        const found = yield* Ref.modify(state, (current) => {
-          const key = selectedTransitionKey(selected)
-          const matched = current.reservations.some((reservation) =>
-            reservation.correlation._tag === "SelectedTransitionReservation"
-            && selectedTransitionKey(reservation.correlation.selected) === key
-          )
-          return [
-            matched,
-            matched
-              ? {
-                ...current,
-                reservations: current.reservations.map((reservation) =>
-                  reservation.correlation._tag
-                      === "SelectedTransitionReservation"
-                    && selectedTransitionKey(reservation.correlation.selected)
-                      === key
-                    ? {
-                      ...reservation,
-                      correlation: operationReservation(operationId)
-                    }
-                    : reservation
-                )
-              }
-              : current
-          ] as const
-        })
-        if (!found) {
-          return yield* new TaskAdmissionPositionBindingIssue({
-            operationId,
-            selected
-          })
-        }
-      }
-    ),
-    cancelReservedPosition: Effect.fn("TaskAdmissionController.cancelReservedPosition")(
-      function*(selected) {
+    bindPlannedAttemptPosition: Effect.fn(
+      "TaskAdmissionController.bindPlannedAttemptPosition"
+    )(function*(selected, correlation) {
+      const found = yield* Ref.modify(state, (current) => {
         const key = selectedTransitionKey(selected)
-        const [change, found] = yield* Ref.modify(state, (
-          current
-        ): readonly [
-          readonly [AdmissionAvailabilityChange, boolean],
-          TaskAdmissionControllerState
-        ] => {
-          const matched = current.reservations.some((reservation) =>
-            reservation.correlation._tag === "SelectedTransitionReservation"
-            && selectedTransitionKey(reservation.correlation.selected) === key
-          )
-          if (!matched) {
-            return [
-              [
-                AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged(),
-                false
-              ] as const,
-              current
-            ] as const
-          }
-          const next = {
-            ...current,
-            reservations: current.reservations.filter((reservation) =>
-              reservation.correlation._tag !== "SelectedTransitionReservation"
-              || selectedTransitionKey(reservation.correlation.selected) !== key
-            )
-          }
-          return [[changeAfterUsageDecrease(current, next), true] as const, next] as const
-        })
-        if (!found) {
-          return yield* new TaskAdmissionPositionCancellationIssue({ selected })
-        }
-        return change
-      }
-    ),
-    releaseTaskAdmissionPosition: Effect.fn(
-      "TaskAdmissionController.releaseTaskAdmissionPosition"
-    )(function*(operationId) {
-      const [change, found] = yield* Ref.modify(state, (
-        current
-      ): readonly [
-        readonly [AdmissionAvailabilityChange, boolean],
-        TaskAdmissionControllerState
-      ] => {
-        const matched = current.reservations.some(
-          (reservation) =>
-            reservation.correlation._tag === "OperationReservation"
-            && reservation.correlation.operationId === operationId
-        ) || current.occupied.some(
-          (invocation) => invocation.operationId === operationId
-        ) || current.releasedOperationIds.has(operationId)
-        if (!matched) {
-          return [
-            [
-              AdmissionAvailabilityChange.AdmissionAvailabilityUnchanged(),
-              false
-            ] as const,
-            current
-          ] as const
-        }
-        const next = {
-          ...current,
-          occupied: current.occupied.filter(
-            (invocation) => invocation.operationId !== operationId
-          ),
-          // Retain exact release evidence so same-operation finalization is
-          // idempotent after an observed release or a duplicate completion.
-          releasedOperationIds: new Set([
-            ...current.releasedOperationIds,
-            operationId
-          ]),
-          reservations: current.reservations.filter((reservation) =>
-            reservation.correlation._tag !== "OperationReservation"
-            || reservation.correlation.operationId !== operationId
-          )
-        }
-        return [[changeAfterUsageDecrease(current, next), true] as const, next] as const
+        const matches = (reservation: TaskAdmissionReservation): boolean =>
+          reservation.correlation._tag === "SelectedTransitionReservation"
+            ? selectedTransitionKey(reservation.correlation.selected) === key
+            : reservation.correlation.attemptId === correlation.attemptId
+              && reservation.correlation.runId === correlation.runId
+        const matched = current.reservations.some(matches)
+        return [
+          matched,
+          matched
+            ? {
+              ...current,
+              reservations: current.reservations.map((reservation) =>
+                reservation.correlation._tag
+                    === "SelectedTransitionReservation"
+                  && selectedTransitionKey(
+                      reservation.correlation.selected
+                    ) === key
+                  ? {
+                    ...reservation,
+                    correlation: plannedAttemptReservation(correlation)
+                  }
+                  : reservation
+              )
+            }
+            : current
+        ] as const
       })
       if (!found) {
-        return yield* new TaskAdmissionPositionReleaseIssue({ operationId })
+        return yield* new PlannedAttemptPositionBindingIssue({ selected })
       }
-      return change
+    }),
+    cancelReservedPosition: Effect.fn(
+      "TaskAdmissionController.cancelReservedPosition"
+    )(function*(selected) {
+      const key = selectedTransitionKey(selected)
+      const removed = yield* Ref.modify(state, (current) => {
+        const nextReservations = current.reservations.filter(
+          (reservation) =>
+            reservation.correlation._tag
+              !== "SelectedTransitionReservation"
+            || selectedTransitionKey(reservation.correlation.selected) !== key
+        )
+        return [
+          nextReservations.length < current.reservations.length,
+          { ...current, reservations: nextReservations }
+        ] as const
+      })
+      if (!removed) {
+        return yield* new TaskAdmissionPositionCancellationIssue({ selected })
+      }
+      return availabilityAfterRemoval()
+    }),
+    releasePlannedAttemptPosition: Effect.fn(
+      "TaskAdmissionController.releasePlannedAttemptPosition"
+    )(function*(correlation) {
+      const removed = yield* Ref.modify(state, (current) => {
+        const nextReservations = current.reservations.filter(
+          (reservation) =>
+            reservation.correlation._tag !== "PlannedAttemptReservation"
+            || reservation.correlation.attemptId !== correlation.attemptId
+            || reservation.correlation.runId !== correlation.runId
+        )
+        return [
+          nextReservations.length < current.reservations.length,
+          { ...current, reservations: nextReservations }
+        ] as const
+      })
+      if (!removed) {
+        return yield* new PlannedAttemptPositionReleaseIssue()
+      }
+      return availabilityAfterRemoval()
     }),
     snapshot: () =>
       Ref.get(state).pipe(
         Effect.map((current) => ({
           capacity: current.capacity,
-          occupied: current.occupied,
           reservedPositions: current.reservations,
           reservedTaskIds: current.reservations.map(({ taskId }) => taskId)
         }))

@@ -6,13 +6,6 @@ import {
   TaskId as TaskIdSchema,
   TrackerTarget as TrackerTargetSchema
 } from "./domain.js"
-import {
-  ImplementationConvergenceDispositionRequest,
-  implementationConvergencePredecessorOperationId
-} from "./implementation-convergence.js"
-import { ImplementationReviewRequest, ReviewFindingsHandbackRequest } from "./implementation-review.js"
-import { TaskExecutionOutcome, TaskExecutionRequest } from "./task-execution.js"
-import { TaskWorkStartRequest } from "./task-work-start.js"
 import { TaskClaimAcquisition } from "./tracker-mutation.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(
@@ -26,47 +19,35 @@ const TaskGraphReadShape = Schema.TaggedUnion({
   }
 })
 
-const ReadTrackerGraphOperation = Schema.TaggedStruct(
-  "ReadTrackerGraph",
-  {
-    operationId: OperationId,
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    readShape: TaskGraphReadShape,
-    target: TrackerTargetSchema
-  }
-)
+const ReadTrackerGraphOperation = Schema.TaggedStruct("ReadTrackerGraph", {
+  operationId: OperationId,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  readShape: TaskGraphReadShape,
+  target: TrackerTargetSchema
+})
 
-const EstablishTaskWorkSessionOperation = Schema.TaggedStruct(
-  "EstablishTaskWorkSession",
-  {
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    request: TaskWorkStartRequest
+const withoutSelfPredecessor = <
+  A extends {
+    readonly operationId: typeof OperationId.Type
+    readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
   }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.includes(operation.request.operationId)
-      ? {
-        path: ["predecessorOperationIds"],
-        issue: "an operation cannot causally precede itself"
-      }
-      : undefined
-  )
-)
+>(operation: A) =>
+  operation.predecessorOperationIds.includes(operation.operationId)
+    ? {
+      issue: "an operation cannot causally precede itself",
+      path: ["predecessorOperationIds"]
+    }
+    : undefined
 
-const AcquireTaskClaimOperation = Schema.TaggedStruct(
-  "AcquireTaskClaim",
-  {
-    acquisition: TaskClaimAcquisition,
-    predecessorOperationIds: CausalPredecessorOperationIds
-  }
-).check(
+const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
+  acquisition: TaskClaimAcquisition,
+  predecessorOperationIds: CausalPredecessorOperationIds
+}).check(
   Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.includes(operation.acquisition.operationId)
-      ? {
-        path: ["predecessorOperationIds"],
-        issue: "an operation cannot causally precede itself"
-      }
-      : undefined
+    withoutSelfPredecessor({
+      operationId: operation.acquisition.operationId,
+      predecessorOperationIds: operation.predecessorOperationIds
+    })
   )
 )
 
@@ -77,16 +58,7 @@ const RecordTaskAttemptPlanOperation = Schema.TaggedStruct(
     plannedAttempt: PlannedTaskAttempt,
     predecessorOperationIds: CausalPredecessorOperationIds
   }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.includes(operation.operationId)
-      ? {
-        path: ["predecessorOperationIds"],
-        issue: "an operation cannot causally precede itself"
-      }
-      : undefined
-  )
-)
+).check(Schema.makeFilter(withoutSelfPredecessor))
 
 const ReconcileTaskWorktreeOperation = Schema.TaggedStruct(
   "ReconcileTaskWorktree",
@@ -95,140 +67,22 @@ const ReconcileTaskWorktreeOperation = Schema.TaggedStruct(
     plannedAttempt: PlannedTaskAttempt,
     predecessorOperationIds: CausalPredecessorOperationIds
   }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.includes(operation.operationId)
-      ? {
-        path: ["predecessorOperationIds"],
-        issue: "an operation cannot causally precede itself"
-      }
-      : undefined
-  )
-)
+).check(Schema.makeFilter(withoutSelfPredecessor))
 
-const ExecuteTaskWorkOperation = Schema.TaggedStruct(
-  "ExecuteTaskWork",
-  {
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    request: TaskExecutionRequest
-  }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.includes(operation.request.operationId)
-      ? {
-        path: ["predecessorOperationIds"],
-        issue: "an operation cannot causally precede itself"
-      }
-      : undefined
-  )
-)
-
-const SealImplementationEvidenceOperation = Schema.TaggedStruct(
-  "SealImplementationEvidence",
-  {
-    operationId: OperationId,
-    execution: Schema.TaggedUnion({
-      SuccessfulExecution: { outcome: TaskExecutionOutcome.cases.Succeeded },
-      SimulatedExecution: { predecessorOperationId: OperationId }
-    }),
-    plannedAttempt: PlannedTaskAttempt,
-    predecessorOperationIds: CausalPredecessorOperationIds
-  }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.length === 1
-      && operation.predecessorOperationIds[0] === (
-          operation.execution._tag === "SuccessfulExecution"
-            ? operation.execution.outcome.operationId
-            : operation.execution.predecessorOperationId
-        )
-      ? undefined
-      : {
-        path: ["predecessorOperationIds"],
-        issue: "implementation evidence must directly follow its successful execution"
-      }
-  )
-)
-
-const ReviewImplementationOperation = Schema.TaggedStruct(
-  "ReviewImplementation",
-  {
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    request: ImplementationReviewRequest
-  }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.length === 1
-      && operation.predecessorOperationIds[0] === operation.request.evidenceSealingOperationId
-      ? undefined
-      : {
-        path: ["predecessorOperationIds"],
-        issue: "implementation review must directly follow its sealed evidence"
-      }
-  )
-)
-
-const HandBackReviewFindingsOperation = Schema.TaggedStruct(
-  "HandBackReviewFindings",
-  {
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    request: ReviewFindingsHandbackRequest
-  }
-).check(
-  Schema.makeFilter((operation) =>
-    operation.predecessorOperationIds.length === 1
-      && operation.predecessorOperationIds[0] === operation.request.reviewOperationId
-      ? undefined
-      : {
-        path: ["predecessorOperationIds"],
-        issue: "findings handback must directly follow its review evidence"
-      }
-  )
-)
-
-const RecordImplementationDispositionOperation = Schema.TaggedStruct(
-  "RecordImplementationDisposition",
-  {
-    predecessorOperationIds: CausalPredecessorOperationIds,
-    request: ImplementationConvergenceDispositionRequest
-  }
-).check(
-  Schema.makeFilter((operation) => {
-    const expected = operation.request._tag === "AuthorizedImplementationConvergenceDisposition"
-      ? implementationConvergencePredecessorOperationId(operation.request.disposition)
-      : operation.predecessorOperationIds[0]
-    return operation.predecessorOperationIds.length === 1
-        && operation.predecessorOperationIds[0] === expected
-      ? undefined
-      : {
-        path: ["predecessorOperationIds"],
-        issue: "implementation disposition must directly follow the selecting invocation or review"
-      }
-  })
-)
-
+/**
+ * Generic orchestration knows only tracker, claim, plan, and Git operations.
+ * Complete-attempt executor work crosses its own service boundary.
+ */
 export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
     AcquireTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
-    ReconcileTaskWorktreeOperation,
-    EstablishTaskWorkSessionOperation,
-    ExecuteTaskWorkOperation,
-    SealImplementationEvidenceOperation,
-    ReviewImplementationOperation,
-    HandBackReviewFindingsOperation,
-    RecordImplementationDispositionOperation
+    ReconcileTaskWorktreeOperation
   ]),
   {
     cases: {
       AcquireTaskClaim: AcquireTaskClaimOperation,
-      EstablishTaskWorkSession: EstablishTaskWorkSessionOperation,
-      ExecuteTaskWork: ExecuteTaskWorkOperation,
-      HandBackReviewFindings: HandBackReviewFindingsOperation,
-      ReviewImplementation: ReviewImplementationOperation,
-      RecordImplementationDisposition: RecordImplementationDispositionOperation,
-      SealImplementationEvidence: SealImplementationEvidenceOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation
@@ -237,42 +91,28 @@ export const WorkflowOperation = Object.assign(
 )
 export type WorkflowOperation = typeof WorkflowOperation.Type
 
-/** One operation and its immutable direct edges in the causal graph. */
 interface CausalGraphEntry {
-  readonly operationId: OperationId
-  readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  readonly operationId: typeof OperationId.Type
+  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
 }
 
-export const workflowOperationId = (operation: WorkflowOperation): OperationId =>
-  operation._tag === "ReadTrackerGraph"
-    ? operation.operationId
-    : operation._tag === "AcquireTaskClaim"
+export const workflowOperationId = (
+  operation: WorkflowOperation
+): typeof OperationId.Type =>
+  operation._tag === "AcquireTaskClaim"
     ? operation.acquisition.operationId
-    : operation._tag === "RecordTaskAttemptPlan"
-    ? operation.operationId
-    : operation._tag === "ReconcileTaskWorktree"
-    ? operation.operationId
-    : operation._tag === "ExecuteTaskWork"
-    ? operation.request.operationId
-    : operation._tag === "SealImplementationEvidence"
-    ? operation.operationId
-    : operation._tag === "ReviewImplementation"
-    ? operation.request.operationId
-    : operation._tag === "HandBackReviewFindings"
-    ? operation.request.operationId
-    : operation._tag === "RecordImplementationDisposition"
-    ? operation.request.operationId
-    : operation.request.operationId
+    : operation.operationId
 
 const orderedBefore = -1
 const orderedSame = 0
 const orderedAfter = 1
 
 /** Canonical code-unit order; independent of host locale and presentation rules. */
-export const compareOperationIds = (left: OperationId, right: OperationId): number =>
-  left < right ? orderedBefore : left > right ? orderedAfter : orderedSame
+const compareOperationIds = (
+  left: typeof OperationId.Type,
+  right: typeof OperationId.Type
+): number => left < right ? orderedBefore : left > right ? orderedAfter : orderedSame
 
-/** Projects causality independently of the journal order used to observe it. */
 export const causalGraphProjection = (
   operations: ReadonlyArray<WorkflowOperation>
 ): ReadonlyArray<CausalGraphEntry> =>
@@ -281,15 +121,19 @@ export const causalGraphProjection = (
     predecessorOperationIds: operation.predecessorOperationIds
   })).toSorted((left, right) => compareOperationIds(left.operationId, right.operationId))
 
+const canonicalPredecessors = (
+  predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+) => [...new Set(predecessorOperationIds)].sort(compareOperationIds)
+
 export const makeTrackerGraphObservationOperation = (
-  operationId: OperationId,
+  operationId: typeof OperationId.Type,
   target: TrackerTarget,
-  predecessorOperationIds: ReadonlyArray<OperationId> = [],
+  predecessorOperationIds: ReadonlyArray<typeof OperationId.Type> = [],
   explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []
 ): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
   WorkflowOperation.cases.ReadTrackerGraph.make({
     operationId,
-    predecessorOperationIds: [...new Set(predecessorOperationIds)].sort(compareOperationIds),
+    predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
     readShape: TaskGraphReadShape.cases.TargetClosureMembership.make({
       explicitlyCoveredTaskIds: [...new Set(explicitlyCoveredTaskIds)].sort()
     }),
@@ -299,105 +143,40 @@ export const makeTrackerGraphObservationOperation = (
 export const makeTaskClaimAcquisitionOperation = (
   fields: {
     readonly acquisition: TaskClaimAcquisition
-    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+    readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
   }
 ): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
   WorkflowOperation.cases.AcquireTaskClaim.make({
     acquisition: fields.acquisition,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
-      compareOperationIds
+    predecessorOperationIds: canonicalPredecessors(
+      fields.predecessorOperationIds
     )
   })
 
 export const makeTaskAttemptPlanOperation = (
   fields: {
-    readonly operationId: OperationId
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+    readonly operationId: typeof OperationId.Type
+    readonly plannedAttempt: typeof PlannedTaskAttempt.Type
+    readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
   }
 ): typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type =>
   WorkflowOperation.cases.RecordTaskAttemptPlan.make({
     ...fields,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
-      compareOperationIds
+    predecessorOperationIds: canonicalPredecessors(
+      fields.predecessorOperationIds
     )
-  })
-
-export const makeTaskWorkSessionEstablishmentOperation = (
-  fields: {
-    readonly predecessorOperationIds: ReadonlyArray<OperationId>
-    readonly request: TaskWorkStartRequest
-  }
-): typeof WorkflowOperation.cases.EstablishTaskWorkSession.Type =>
-  WorkflowOperation.cases.EstablishTaskWorkSession.make({
-    ...fields,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
   })
 
 export const makeTaskWorktreeReconciliationOperation = (
   fields: {
-    readonly operationId: OperationId
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly predecessorOperationIds: ReadonlyArray<OperationId>
+    readonly operationId: typeof OperationId.Type
+    readonly plannedAttempt: typeof PlannedTaskAttempt.Type
+    readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
   }
 ): typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type =>
   WorkflowOperation.cases.ReconcileTaskWorktree.make({
     ...fields,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(
-      compareOperationIds
+    predecessorOperationIds: canonicalPredecessors(
+      fields.predecessorOperationIds
     )
-  })
-
-export const makeTaskExecutionOperation = (
-  fields: {
-    readonly predecessorOperationIds: ReadonlyArray<OperationId>
-    readonly request: TaskExecutionRequest
-  }
-): typeof WorkflowOperation.cases.ExecuteTaskWork.Type =>
-  WorkflowOperation.cases.ExecuteTaskWork.make({
-    ...fields,
-    predecessorOperationIds: [...new Set(fields.predecessorOperationIds)].sort(compareOperationIds)
-  })
-
-export const makeImplementationEvidenceSealingOperation = (
-  fields: {
-    readonly operationId: OperationId
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly execution:
-      | { readonly _tag: "SuccessfulExecution"; readonly outcome: typeof TaskExecutionOutcome.cases.Succeeded.Type }
-      | { readonly _tag: "SimulatedExecution"; readonly predecessorOperationId: OperationId }
-  }
-): typeof WorkflowOperation.cases.SealImplementationEvidence.Type =>
-  WorkflowOperation.cases.SealImplementationEvidence.make({
-    ...fields,
-    predecessorOperationIds: [
-      fields.execution._tag === "SuccessfulExecution"
-        ? fields.execution.outcome.operationId
-        : fields.execution.predecessorOperationId
-    ]
-  })
-
-export const makeImplementationReviewOperation = (
-  request: ImplementationReviewRequest
-): typeof WorkflowOperation.cases.ReviewImplementation.Type =>
-  WorkflowOperation.cases.ReviewImplementation.make({
-    predecessorOperationIds: [request.evidenceSealingOperationId],
-    request
-  })
-
-export const makeReviewFindingsHandbackOperation = (
-  request: ReviewFindingsHandbackRequest
-): typeof WorkflowOperation.cases.HandBackReviewFindings.Type =>
-  WorkflowOperation.cases.HandBackReviewFindings.make({
-    predecessorOperationIds: [request.reviewOperationId],
-    request
-  })
-
-export const makeImplementationDispositionOperation = (
-  request: ImplementationConvergenceDispositionRequest,
-  predecessorOperationId: OperationId
-): typeof WorkflowOperation.cases.RecordImplementationDisposition.Type =>
-  WorkflowOperation.cases.RecordImplementationDisposition.make({
-    predecessorOperationIds: [predecessorOperationId],
-    request
   })

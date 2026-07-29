@@ -13,7 +13,6 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
 import { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./git-command.js"
@@ -60,7 +59,6 @@ const makePlan = (
     branch: TaskBranchRef.make(`refs/heads/${branch}`),
     executor: TaskExecutorLocator.make("executor:test"),
     runId: RunId.make("run-45"),
-    session: TaskWorkSessionLocator.make("session:45"),
     taskId: TaskId.make("task-45"),
     taskRevision: TaskRevision.make("revision-45"),
     worktree: WorktreeLocator.make(worktree)
@@ -325,6 +323,13 @@ describe("node GitWorktree adapter", () => {
           )
         ).toBeInstanceOf(GitWorktreeCreateFailure)
 
+        expect(
+          yield* withScript(
+            () => Effect.succeed(commandResult(2)),
+            (git) => Effect.flip(git.createPlannedWorktree(plan))
+          )
+        ).toMatchObject({ detail: "git show-ref exited 2" })
+
         let calls = 0
         expect(
           yield* withScript(
@@ -336,6 +341,18 @@ describe("node GitWorktree adapter", () => {
             (git) => Effect.flip(git.createPlannedWorktree(plan))
           )
         ).toBeInstanceOf(GitWorktreeCreateFailure)
+
+        calls = 0
+        expect(
+          yield* withScript(
+            () =>
+              Effect.sync(() => {
+                calls += 1
+                return calls === 1 ? commandResult(1) : commandResult(2)
+              }),
+            (git) => Effect.flip(git.createPlannedWorktree(plan))
+          )
+        ).toMatchObject({ detail: "git worktree add exited 2" })
 
         calls = 0
         expect(

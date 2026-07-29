@@ -1,35 +1,10 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { ControlCommandRecordedEvent } from "./control-command.js"
-import {
-  JournalPosition,
-  JournalRecordKey,
-  JournalSchemaVersion,
-  OperationId,
-  ProviderObservationId,
-  RunId
-} from "./domain.js"
+import { JournalPosition, JournalRecordKey, JournalSchemaVersion, OperationId, RunId } from "./domain.js"
 import { PlannedWorktreeReady } from "./git-worktree.js"
-import { ImplementationConvergenceDispositionRecordedEvent } from "./implementation-convergence-journal.js"
-import { ImplementationEvidenceJournalEvent } from "./implementation-evidence-journal.js"
-import { ImplementationReviewJournalEvent } from "./implementation-review-journal.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import type { JournalScan } from "./journal-recovery-model.js"
-import {
-  TaskExecutionObservationFailure,
-  TaskExecutionReport,
-  TaskExecutionRequest,
-  TaskExecutionRequestAcknowledgement,
-  TaskExecutionRequestFailure
-} from "./task-execution.js"
-import {
-  TaskWorkSessionLookup,
-  TaskWorkSessionLookupFailure,
-  TaskWorkSessionReport,
-  TaskWorkSessionResultReported as TaskWorkSessionResultReport,
-  TaskWorkStartRequest,
-  TaskWorkStartRequestAcknowledgement,
-  TaskWorkStartRequestFailure
-} from "./task-work-start.js"
+import { PlannedAttemptExecutorJournalEvent } from "./planned-attempt-executor-journal.js"
 import { ActiveTaskClaim } from "./tracker-mutation.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./workflow-operation.js"
 import { WorkflowOutcome as WorkflowOutcomeSchema } from "./workflow-outcome.js"
@@ -99,160 +74,6 @@ export const TaskWorktreeReadyEvent = Schema.TaggedStruct(
   }
 )
 
-/** Records the immutable intent before a task-work start request can cross its boundary. */
-export const TaskWorkSessionEstablishmentIntentRecorded = Schema.TaggedStruct(
-  "TaskWorkSessionEstablishmentIntentRecorded",
-  {
-    operation: WorkflowOperationSchema.cases.EstablishTaskWorkSession,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records one exact task-work start request that crossed the provider boundary. */
-export const TaskWorkStartRequested = Schema.TaggedStruct(
-  "TaskWorkStartRequested",
-  {
-    observationId: ProviderObservationId,
-    request: TaskWorkStartRequest,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records the provider acknowledgement without treating it as session evidence. */
-export const TaskWorkStartRequestAcknowledged = Schema.TaggedStruct(
-  "TaskWorkStartRequestAcknowledged",
-  {
-    acknowledgement: TaskWorkStartRequestAcknowledgement,
-    operationId: OperationId,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records an uncertain start-request return; recovery still requires a fresh lookup. */
-export const TaskWorkStartRequestFailed = Schema.TaggedStruct(
-  "TaskWorkStartRequestFailed",
-  {
-    failure: TaskWorkStartRequestFailure,
-    request: TaskWorkStartRequest,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records one completed read-only task-work session lookup request. */
-export const TaskWorkSessionLookupRequested = Schema.TaggedStruct(
-  "TaskWorkSessionLookupRequested",
-  {
-    lookup: TaskWorkSessionLookup,
-    observationId: ProviderObservationId,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records an unreadable provider lookup without inventing a session report. */
-export const TaskWorkSessionLookupFailed = Schema.TaggedStruct(
-  "TaskWorkSessionLookupFailed",
-  {
-    failure: TaskWorkSessionLookupFailure,
-    operationId: OperationId,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records the provider's authoritative task-work session report. */
-export const TaskWorkSessionReported = Schema.TaggedStruct(
-  "TaskWorkSessionReported",
-  {
-    operationId: OperationId,
-    report: TaskWorkSessionReport,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records that exactly one matching task-work session establishes the operation. */
-export const TaskWorkSessionEstablishedEvent = Schema.TaggedStruct(
-  "TaskWorkSessionEstablished",
-  {
-    outcome: WorkflowOutcomeSchema.cases.TaskWorkSessionEstablished,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/**
- * Records a terminal provider result without deciding task-tracker success.
- * Issue #29 owns connecting this later result-observation operation end to end.
- */
-const TaskWorkSessionResultReportedEvent = Schema.TaggedStruct(
-  "TaskWorkSessionResultReported",
-  {
-    report: TaskWorkSessionResultReport,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records immutable execution intent before a worker-process request can cross its boundary. */
-export const TaskExecutionIntentRecorded = Schema.TaggedStruct(
-  "TaskExecutionIntentRecorded",
-  { operation: WorkflowOperationSchema.cases.ExecuteTaskWork, version: Schema.Literal(workflowJournalEventVersion) }
-)
-
-/** Records the exact request immediately before it may cross the adapter boundary. */
-export const TaskExecutionRequestAttemptRecorded = Schema.TaggedStruct(
-  "TaskExecutionRequestAttemptRecorded",
-  {
-    request: TaskExecutionRequest,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records an execution request acknowledgement without treating it as process-start evidence. */
-export const TaskExecutionRequestReturned = Schema.TaggedStruct(
-  "TaskExecutionRequestReturned",
-  {
-    acknowledgement: TaskExecutionRequestAcknowledgement,
-    operationId: OperationId,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records a request whose adapter return cannot prove whether a process started. */
-export const TaskExecutionRequestFailed = Schema.TaggedStruct(
-  "TaskExecutionRequestFailed",
-  {
-    failure: TaskExecutionRequestFailure,
-    request: TaskExecutionRequest,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records an unreadable process observation without inventing an outcome. */
-export const TaskExecutionObservationFailed = Schema.TaggedStruct(
-  "TaskExecutionObservationFailed",
-  {
-    failure: TaskExecutionObservationFailure,
-    operationId: OperationId,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records fresh execution-substrate evidence for one exact operation and session. */
-export const TaskExecutionReported = Schema.TaggedStruct(
-  "TaskExecutionReported",
-  {
-    operationId: OperationId,
-    report: TaskExecutionReport,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
-/** Records the discriminated process outcome without deciding task success. */
-export const TaskExecutionOutcomeObservedEvent = Schema.TaggedStruct(
-  "TaskExecutionOutcomeObserved",
-  {
-    outcome: WorkflowOutcomeSchema.cases.TaskExecutionObserved,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-)
-
 export const WorkflowJournalEvent = Schema.Union([
   ControlCommandRecordedEvent,
   TrackerGraphObservationIntentRecorded,
@@ -262,25 +83,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskAttemptPlannedEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,
-  TaskWorkSessionEstablishmentIntentRecorded,
-  TaskWorkStartRequested,
-  TaskWorkStartRequestAcknowledged,
-  TaskWorkStartRequestFailed,
-  TaskWorkSessionLookupRequested,
-  TaskWorkSessionLookupFailed,
-  TaskWorkSessionReported,
-  TaskWorkSessionEstablishedEvent,
-  TaskWorkSessionResultReportedEvent,
-  TaskExecutionIntentRecorded,
-  TaskExecutionRequestAttemptRecorded,
-  TaskExecutionRequestReturned,
-  TaskExecutionRequestFailed,
-  TaskExecutionObservationFailed,
-  TaskExecutionReported,
-  TaskExecutionOutcomeObservedEvent,
-  ImplementationConvergenceDispositionRecordedEvent,
-  ImplementationEvidenceJournalEvent,
-  ImplementationReviewJournalEvent
+  PlannedAttemptExecutorJournalEvent
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
@@ -381,7 +184,7 @@ export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalSt
   }
 ) {}
 
-export interface JournalStoreService {
+interface JournalStoreService {
   readonly append: (
     runId: RunId,
     key: JournalRecordKey,

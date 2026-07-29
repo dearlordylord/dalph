@@ -15,11 +15,7 @@ import {
   JournalSchemaVersion,
   RunId
 } from "./domain.js"
-import {
-  decodeAndUpcastJournalEvent,
-  encodeJournalEvent,
-  semanticallyEqualJournalEvents
-} from "./journal-event-codec.js"
+import { decodeJournalEvent, encodeJournalEvent, equalJournalEvents } from "./journal-event-codec.js"
 import { JournalBoundaryDecodeIssue } from "./journal-recovery-model.js"
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Effect service tags and typed errors require runtime identities.
 import {
@@ -62,10 +58,9 @@ const MigrationVersionRows = Schema.Tuple([
   Schema.Struct({ schema_version: JournalSchemaVersion })
 ])
 
-const currentJournalSchemaVersionValue = 2
+const currentJournalSchemaVersionValue = 1
 const journalSchemaVersion = JournalSchemaVersion.make(currentJournalSchemaVersionValue)
-const initialJournalMigrationId = 1
-const normalizedJournalMigrationId = 2
+const journalMigrationId = 1
 const sqliteResultCodeModulus = 256
 const sqliteResultCode = {
   accessDenied: 3,
@@ -139,7 +134,7 @@ const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,
   operation: JournalDataCorruption["operation"]
 ): Effect.Effect<WorkflowJournalEvent, JournalDataCorruption> =>
-  decodeAndUpcastJournalEvent({
+  decodeJournalEvent({
     kind: row.event_kind,
     payloadJson: row.payload_json,
     version: row.event_version
@@ -169,23 +164,10 @@ const migrate = Effect.fn("JournalStore.Sqlite.migrate")(function*(
   yield* sql`PRAGMA locking_mode = EXCLUSIVE`.pipe(
     Effect.mapError(classifyJournalStorageFailure.bind(undefined, "JournalStore.migrate"))
   )
-  const migrationOne = Effect.gen(function*() {
+  const createCurrentJournal = Effect.gen(function*() {
     const migrationSql = yield* SqlClient.SqlClient
     yield* migrationSql`
       CREATE TABLE IF NOT EXISTS journal_records (
-        run_id TEXT NOT NULL,
-        position INTEGER NOT NULL CHECK (position >= 1),
-        record_key TEXT NOT NULL,
-        event_json TEXT NOT NULL,
-        PRIMARY KEY (run_id, position),
-        UNIQUE (run_id, record_key)
-      ) STRICT
-    `
-  })
-  const migrationTwo = Effect.gen(function*() {
-    const migrationSql = yield* SqlClient.SqlClient
-    yield* migrationSql`
-      CREATE TABLE journal_records_v2 (
         run_id TEXT NOT NULL,
         position INTEGER NOT NULL CHECK (position >= 1),
         record_key TEXT NOT NULL,
@@ -196,38 +178,11 @@ const migrate = Effect.fn("JournalStore.Sqlite.migrate")(function*(
         UNIQUE (run_id, record_key)
       ) STRICT
     `
-    yield* migrationSql`
-      INSERT INTO journal_records_v2 (
-        run_id, position, record_key, event_kind, event_version, payload_json
-      )
-      SELECT
-        run_id,
-        position,
-        record_key,
-        CASE WHEN json_valid(event_json)
-          THEN COALESCE(json_extract(event_json, '$._tag'), '__invalid_event_kind__')
-          ELSE '__invalid_event_kind__'
-        END,
-        CASE WHEN json_valid(event_json)
-          AND json_type(event_json, '$.version') = 'integer'
-          AND json_extract(event_json, '$.version') >= 1
-          THEN json_extract(event_json, '$.version')
-          ELSE 1
-        END,
-        CASE WHEN json_valid(event_json)
-          THEN json_remove(event_json, '$._tag', '$.version')
-          ELSE event_json
-        END
-      FROM journal_records
-    `
-    yield* migrationSql`DROP TABLE journal_records`
-    yield* migrationSql`ALTER TABLE journal_records_v2 RENAME TO journal_records`
     yield* migrationSql`PRAGMA user_version = ${migrationSql.literal(String(currentJournalSchemaVersionValue))}`
   })
   yield* SqliteMigrator.run({
     loader: Effect.succeed([
-      [initialJournalMigrationId, "create_journal_records", Effect.succeed(migrationOne)],
-      [normalizedJournalMigrationId, "normalize_versioned_journal_envelopes", Effect.succeed(migrationTwo)]
+      [journalMigrationId, "create_current_journal_records", Effect.succeed(createCurrentJournal)]
     ]),
     table: "effect_sql_migrations"
   }).pipe(
@@ -309,7 +264,7 @@ export const sqliteJournalStoreLayer = (
           const existing = existingRows[0]
           if (existing !== undefined) {
             const existingEvent = yield* parseEvent(existing, "JournalStore.append")
-            if (semanticallyEqualJournalEvents(existingEvent, event)) {
+            if (equalJournalEvents(existingEvent, event)) {
               return {
                 event,
                 key,

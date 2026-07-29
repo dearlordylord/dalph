@@ -1,7 +1,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Cause, Effect, FileSystem, Layer, Path } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
@@ -20,7 +20,6 @@ import {
   RunId,
   sqliteJournalStoreLayer,
   trackerGraphObservationIntent,
-  WorkflowJournalEvent,
   WorkflowOperation
 } from "./index.js"
 import { classifyJournalStorageFailure } from "./sqlite-journal-store.js"
@@ -208,45 +207,11 @@ durableJournalStoreContract(
             const migrations = yield* sql`
               SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
             `
-            expect(schemaVersion).toEqual([{ user_version: 2 }])
+            expect(schemaVersion).toEqual([{ user_version: 1 }])
             expect(migrations).toEqual([
-              { migration_id: 1, name: "create_journal_records" },
-              { migration_id: 2, name: "normalize_versioned_journal_envelopes" }
+              { migration_id: 1, name: "create_current_journal_records" }
             ])
           }).pipe(Effect.provide(Reactivity.layer))
-        )
-      ))
-
-    it.effect("adopts immutable version-1 rows and compares re-appends after semantic upcast", () =>
-      Effect.scoped(
-        withTemporaryDatabase((filename) =>
-          Effect.gen(function*() {
-            const runId = RunId.make("legacy-run")
-            const key = JournalRecordKey.make("operation:legacy:intent")
-            const current = intent("legacy", "legacy-task")
-            const encoded = Schema.encodeUnknownSync(WorkflowJournalEvent)(current)
-            const { version: _version, ...legacy } = encoded
-            yield* withSqliteClient(filename, (sql) =>
-              Effect.gen(function*() {
-                yield* sql`CREATE TABLE journal_records (
-                run_id TEXT NOT NULL,
-                position INTEGER NOT NULL CHECK (position >= 1),
-                record_key TEXT NOT NULL,
-                event_json TEXT NOT NULL,
-                PRIMARY KEY (run_id, position),
-                UNIQUE (run_id, record_key)
-              ) STRICT`
-                yield* sql`PRAGMA user_version = 1`
-                yield* sql`INSERT INTO journal_records (run_id, position, record_key, event_json)
-                VALUES (${runId}, 1, ${key}, ${JSON.stringify(legacy)})`
-              }))
-
-            yield* Effect.gen(function*() {
-              const journal = yield* JournalStore
-              expect((yield* journal.read(runId))[0]?.event).toEqual(current)
-              expect((yield* journal.append(runId, key, current)).position).toBe(1)
-            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-          })
         )
       ))
 
@@ -371,29 +336,7 @@ durableJournalStoreContract(
             expect(failure).toMatchObject({
               _tag: "JournalSchemaIncompatible",
               found: 3,
-              supported: 2
-            })
-          })
-        )
-      ))
-
-    it.effect("reports a failed schema migration through the journal boundary", () =>
-      Effect.scoped(
-        withTemporaryDatabase((filename) =>
-          Effect.gen(function*() {
-            yield* withSqliteClient(
-              filename,
-              (sql) => Effect.asVoid(sql`CREATE TABLE journal_records (wrong TEXT) STRICT`)
-            )
-            const failure = yield* Effect.flip(
-              Effect.gen(function*() {
-                yield* JournalStore
-              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
-            )
-
-            expect(failure).toMatchObject({
-              _tag: "JournalDataCorruption",
-              operation: "JournalStore.migrate"
+              supported: 1
             })
           })
         )

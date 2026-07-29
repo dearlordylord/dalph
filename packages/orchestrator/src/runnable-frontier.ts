@@ -1,15 +1,20 @@
 import { Data, Match, Option } from "effect"
-import type { OperationId, TaskId, TaskRevision } from "./domain.js"
-import type {
-  ExecutorOuterInvocation,
-  ExecutorOuterInvocationOutcome,
-  ExecutorOuterInvocationWait
-} from "./executor-boundary.js"
+import type { OperationId, PlannedTaskAttempt, TaskId, TaskRevision } from "./domain.js"
+import {
+  type PlannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelationKey,
+  type PlannedAttemptExecutorReport
+} from "./planned-attempt-executor.js"
 import {
   type WorkflowResponsibilityEntry,
+  workflowResponsibilityKey,
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "./reconstructed-managed-run-state.js"
+import type { ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
+
+export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./responsibility-fresh-facts.js"
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: {
@@ -24,15 +29,14 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly operationId: OperationId
     readonly taskId: TaskId
   }
-  StartExecutorInvocation: {
-    readonly invocation: ExecutorOuterInvocation
+  StartPlannedAttemptExecutorWork: {
+    readonly plannedAttempt: PlannedTaskAttempt
   }
-  ContinueExecutorInvocation: {
-    readonly invocation: ExecutorOuterInvocation
+  ContinuePlannedAttemptExecutorWork: {
+    readonly plannedAttempt: PlannedTaskAttempt
   }
-  CheckTaskWorkSession: {
-    readonly operationId: OperationId
-    readonly taskId: TaskId
+  SuspendPlannedAttemptExecutorWork: {
+    readonly plannedAttempt: PlannedTaskAttempt
   }
   ReconcileTaskClaim: {
     readonly operationId: OperationId
@@ -49,50 +53,18 @@ export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransi
 export const runnableTransitionTaskId = (
   transition: RunnableFrontierTransition
 ): TaskId =>
-  transition._tag === "ContinueExecutorInvocation"
-    || transition._tag === "StartExecutorInvocation"
-    ? transition.invocation.correlation.taskId
+  transition._tag === "ContinuePlannedAttemptExecutorWork"
+    || transition._tag === "SuspendPlannedAttemptExecutorWork"
+    || transition._tag === "StartPlannedAttemptExecutorWork"
+    ? transition.plannedAttempt.taskId
     : transition.taskId
 
 export const runnableTransitionOperationId = (
   transition: RunnableFrontierTransition
 ): OperationId | undefined =>
-  transition._tag === "ContinueExecutorInvocation"
-    || transition._tag === "StartExecutorInvocation"
-    ? transition.invocation.correlation.invocationId
-    : "operationId" in transition
+  "operationId" in transition
     ? transition.operationId
     : undefined
-
-export type ResponsibilityDisposition = Data.TaggedEnum<{
-  DependencyWait: {
-    readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
-  }
-  FinalOutcome: {
-    readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed"
-  }
-  ExecutorInvocationWait: {
-    readonly wait: ExecutorOuterInvocationWait
-  }
-  ExecutorInvocationSettled: {
-    readonly outcome: ExecutorOuterInvocationOutcome
-  }
-  ForeignClaimIsolation: Record<never, never>
-  MissingClaim: Record<never, never>
-  Paused: Record<never, never>
-  Ready: Record<never, never>
-  Relinquished: {
-    readonly reason: "AuthorizedHandoff" | "FreshAuthorityRevocation"
-  }
-  Settled: {
-    readonly outcome: "ResponsibilityCompleted" | "TrackerCompleted"
-  }
-  UnreadableFactWait: {
-    readonly boundary: "Executor" | "Git" | "TaskTracker" | "TaskWorkProvider"
-  }
-}>
-
-export const ResponsibilityDisposition = Data.taggedEnum<ResponsibilityDisposition>()
 
 export type FrontierExplanation = Data.TaggedEnum<{
   CapacityWait: {
@@ -109,15 +81,20 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "TaskGraphFactsUpdated"
   }
-  ExecutorInvocationWait: {
+  PlannedAttemptExecutorWorkSafelySuspended: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
-    readonly wait: ExecutorOuterInvocationWait
-    readonly wakeCondition: "ExecutorRetryDeadlineReached"
   }
-  ExecutorInvocationSettlement: {
-    readonly operationId: OperationId
-    readonly outcome: ExecutorOuterInvocationOutcome
+  PlannedAttemptExecutorWorkTerminal: {
+    readonly report: Extract<
+      PlannedAttemptExecutorReport,
+      { readonly _tag: "Terminal" }
+    >
     readonly taskId: TaskId
+  }
+  PlannedAttemptExecutorWorkTypedIssue: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts"
   }
   FinalOutcome: {
     readonly operationId: OperationId
@@ -148,7 +125,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts"
   }
   UnreadableFactWait: {
-    readonly boundary: "Executor" | "Git" | "TaskTracker" | "TaskWorkProvider"
+    readonly boundary: "Executor" | "Git" | "TaskTracker"
     readonly operationId: OperationId
     readonly taskId: TaskId
     readonly wakeCondition: "BoundaryRereadSucceeded"
@@ -156,11 +133,6 @@ export type FrontierExplanation = Data.TaggedEnum<{
 }>
 
 export const FrontierExplanation = Data.taggedEnum<FrontierExplanation>()
-
-export interface ResponsibilityFreshFacts {
-  readonly disposition: ResponsibilityDisposition
-  readonly responsibility: WorkflowResponsibilityEntry
-}
 
 export interface RunnableFrontierInput {
   readonly freshEligibleTasks: ReadonlyArray<{
@@ -191,8 +163,8 @@ export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
 const workflowResponsibilityTaskId = (
   responsibility: WorkflowResponsibilityEntry
 ): TaskId =>
-  responsibility._tag === "ExecutorInvocationResponsibility"
-    ? responsibility.invocation.correlation.taskId
+  responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
+    ? responsibility.plannedAttempt.taskId
     : responsibility.taskId
 
 /** Run termination requires tracker settlement and no runnable or unsettled responsibility. */
@@ -207,15 +179,33 @@ export const deriveRunFinalityDecision = (
   const terminalOperationIds = new Set(
     frontier.explanations.flatMap((explanation) =>
       explanation._tag === "FinalOutcome"
-        || explanation._tag === "ExecutorInvocationSettlement"
         || explanation._tag === "Relinquishment"
         || explanation._tag === "Settlement"
         ? [explanation.operationId]
         : []
     )
   )
+  const terminalPlannedAttempts = new Set(
+    frontier.explanations.flatMap((explanation) =>
+      explanation._tag === "PlannedAttemptExecutorWorkTerminal"
+        ? [
+          plannedAttemptExecutorCorrelationKey(
+            explanation.report.correlation
+          )
+        ]
+        : []
+    )
+  )
   if (
-    responsibility.entries.some((entry) => !terminalOperationIds.has(workflowResponsibilityOperationId(entry)))
+    responsibility.entries.some((entry) =>
+      entry._tag === "PlannedAttemptExecutorWorkResponsibility"
+        ? !terminalPlannedAttempts.has(
+          plannedAttemptExecutorCorrelationKey(
+            plannedAttemptExecutorCorrelation(entry.plannedAttempt)
+          )
+        )
+        : !terminalOperationIds.has(workflowResponsibilityOperationId(entry))
+    )
   ) {
     return RunFinalityDecision.RunMustRemainActive({
       reason: "UnsettledResponsibility"
@@ -227,22 +217,16 @@ export const deriveRunFinalityDecision = (
 }
 
 const readyTransition = (
-  facts: ResponsibilityFreshFacts
+  facts: Extract<
+    ResponsibilityFreshFacts,
+    { readonly _tag: "WorkflowOperationFreshFacts" }
+  >
 ): RunnableFrontierTransition =>
   Match.value(facts.responsibility).pipe(
     Match.tags({
-      ExecutorInvocationResponsibility: ({ invocation }) =>
-        RunnableFrontierTransition.ContinueExecutorInvocation({
-          invocation
-        }),
       TaskClaimResponsibility: ({ acquisition }) =>
         RunnableFrontierTransition.CheckTaskClaim({
           operationId: acquisition.operationId,
-          taskId: workflowResponsibilityTaskId(facts.responsibility)
-        }),
-      TaskWorkSessionResponsibility: ({ operation }) =>
-        RunnableFrontierTransition.CheckTaskWorkSession({
-          operationId: operation.request.operationId,
           taskId: workflowResponsibilityTaskId(facts.responsibility)
         }),
       TaskWorktreeResponsibility: ({ operation }) =>
@@ -254,85 +238,126 @@ const readyTransition = (
     Match.exhaustive
   )
 
+const executorDecisionFor = (
+  facts: Extract<
+    ResponsibilityFreshFacts,
+    { readonly _tag: "PlannedAttemptExecutorFreshFacts" }
+  >
+): {
+  readonly explanation?: FrontierExplanation
+  readonly transition?: RunnableFrontierTransition
+} =>
+  Match.value(facts.disposition).pipe(
+    Match.tags({
+      PlannedAttemptExecutorWorkSafelySuspended: ({ correlation }) => ({
+        explanation: FrontierExplanation.PlannedAttemptExecutorWorkSafelySuspended({
+          correlation,
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      PlannedAttemptExecutorWorkTerminal: ({ report }) => ({
+        explanation: FrontierExplanation.PlannedAttemptExecutorWorkTerminal({
+          report,
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      PlannedAttemptExecutorSuspensionRequested: () => ({
+        transition: RunnableFrontierTransition
+          .SuspendPlannedAttemptExecutorWork({
+            plannedAttempt: facts.responsibility.plannedAttempt
+          })
+      }),
+      Ready: () => ({
+        transition: RunnableFrontierTransition
+          .ContinuePlannedAttemptExecutorWork({
+            plannedAttempt: facts.responsibility.plannedAttempt
+          })
+      })
+    }),
+    Match.exhaustive
+  )
+
+const operationDecisionFor = (
+  facts: Extract<
+    ResponsibilityFreshFacts,
+    { readonly _tag: "WorkflowOperationFreshFacts" }
+  >
+): {
+  readonly explanation?: FrontierExplanation
+  readonly transition?: RunnableFrontierTransition
+} =>
+  Match.value(facts.disposition).pipe(
+    Match.tags({
+      DependencyWait: ({ prerequisiteTaskIds }) => ({
+        explanation: FrontierExplanation.DependencyWait({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
+          taskId: workflowResponsibilityTaskId(facts.responsibility),
+          wakeCondition: "TaskGraphFactsUpdated"
+        })
+      }),
+      FinalOutcome: ({ outcome }) => ({
+        explanation: FrontierExplanation.FinalOutcome({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          outcome,
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      ForeignClaimIsolation: () => ({
+        explanation: FrontierExplanation.Isolation({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          reason: "ForeignClaim",
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      MissingClaim: () => ({
+        transition: RunnableFrontierTransition.ReconcileTaskClaim({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      Paused: () => ({
+        explanation: FrontierExplanation.Pause({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      Ready: () => ({ transition: readyTransition(facts) }),
+      Relinquished: ({ reason }) => ({
+        explanation: FrontierExplanation.Relinquishment({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          reason,
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      Settled: ({ outcome }) => ({
+        explanation: FrontierExplanation.Settlement({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          outcome,
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      UnreadableFactWait: ({ boundary }) => ({
+        explanation: FrontierExplanation.UnreadableFactWait({
+          boundary,
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility),
+          wakeCondition: "BoundaryRereadSucceeded"
+        })
+      })
+    }),
+    Match.exhaustive
+  )
+
 const decisionFor = (
   facts: ResponsibilityFreshFacts
 ): {
   readonly explanation?: FrontierExplanation
   readonly transition?: RunnableFrontierTransition
 } =>
-  ResponsibilityDisposition.$match(facts.disposition, {
-    DependencyWait: ({ prerequisiteTaskIds }) => ({
-      explanation: FrontierExplanation.DependencyWait({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
-        taskId: workflowResponsibilityTaskId(facts.responsibility),
-        wakeCondition: "TaskGraphFactsUpdated"
-      })
-    }),
-    FinalOutcome: ({ outcome }) => ({
-      explanation: FrontierExplanation.FinalOutcome({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        outcome,
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    ExecutorInvocationWait: ({ wait }) => ({
-      explanation: FrontierExplanation.ExecutorInvocationWait({
-        taskId: workflowResponsibilityTaskId(facts.responsibility),
-        wait,
-        wakeCondition: "ExecutorRetryDeadlineReached"
-      })
-    }),
-    ExecutorInvocationSettled: ({ outcome }) => ({
-      explanation: FrontierExplanation.ExecutorInvocationSettlement({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        outcome,
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    ForeignClaimIsolation: () => ({
-      explanation: FrontierExplanation.Isolation({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        reason: "ForeignClaim",
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    MissingClaim: () => ({
-      transition: RunnableFrontierTransition.ReconcileTaskClaim({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    Paused: () => ({
-      explanation: FrontierExplanation.Pause({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    Ready: () => ({ transition: readyTransition(facts) }),
-    Relinquished: ({ reason }) => ({
-      explanation: FrontierExplanation.Relinquishment({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        reason,
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    Settled: ({ outcome }) => ({
-      explanation: FrontierExplanation.Settlement({
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        outcome,
-        taskId: workflowResponsibilityTaskId(facts.responsibility)
-      })
-    }),
-    UnreadableFactWait: ({ boundary }) => ({
-      explanation: FrontierExplanation.UnreadableFactWait({
-        boundary,
-        operationId: workflowResponsibilityOperationId(facts.responsibility),
-        taskId: workflowResponsibilityTaskId(facts.responsibility),
-        wakeCondition: "BoundaryRereadSucceeded"
-      })
-    })
-  })
+  facts._tag === "PlannedAttemptExecutorFreshFacts"
+    ? executorDecisionFor(facts)
+    : operationDecisionFor(facts)
 
 /** Derives process-local choices in responsibility-first, canonical task order. */
 export const deriveRunnableFrontier = (
@@ -340,15 +365,29 @@ export const deriveRunnableFrontier = (
 ): RunnableFrontier => {
   const responsibleDecisions = input.responsibility.entries
     .map((responsibility) => {
-      const operationId = workflowResponsibilityOperationId(responsibility)
+      const responsibilityKey = workflowResponsibilityKey(responsibility)
       const matchingFacts = input.responsibilityFacts.filter((facts) =>
-        workflowResponsibilityOperationId(facts.responsibility) === operationId
+        workflowResponsibilityKey(facts.responsibility)
+          === responsibilityKey
       )
       const decision = matchingFacts.length === 1
         ? decisionFor(Option.getOrThrow(Option.fromUndefinedOr(matchingFacts[0])))
+        : responsibility._tag
+            === "PlannedAttemptExecutorWorkResponsibility"
+        ? {
+          explanation: FrontierExplanation.PlannedAttemptExecutorWorkTypedIssue({
+            correlation: {
+              attemptId: responsibility.plannedAttempt.attemptId,
+              runId: responsibility.plannedAttempt.runId
+            },
+            reason: matchingFacts.length === 0
+              ? "MissingFreshFacts"
+              : "DuplicateFreshFacts"
+          })
+        }
         : {
           explanation: FrontierExplanation.TypedIssue({
-            operationId,
+            operationId: workflowResponsibilityOperationId(responsibility),
             reason: matchingFacts.length === 0
               ? "MissingFreshFacts"
               : "DuplicateFreshFacts"

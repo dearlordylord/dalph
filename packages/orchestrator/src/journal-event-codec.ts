@@ -2,39 +2,8 @@ import { Effect, Schema } from "effect"
 import { JournalEventKind, JournalEventVersion } from "./domain.js"
 import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { WorkflowJournalEvent } from "./journal-store.js"
-import { upcastLegacyTaskRevisionFingerprint } from "./task-revision-fingerprint.js"
-import { technicalRetryEventKinds } from "./technical-retry-event-kind.js"
 
 const CurrentPayload = Schema.Record(Schema.String, Schema.Unknown)
-const normalizedJournalEventVersion = 2
-const taskRevisionFingerprintJournalEventVersion = 4
-const technicalRetryJournalEventVersion = 3
-const technicalRetryKinds = new Set<string>(technicalRetryEventKinds)
-
-const upcastTaskRevisionFingerprints = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(upcastTaskRevisionFingerprints)
-  if (value === null || typeof value !== "object") return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, nested]) => [
-      key,
-      key === "taskRevision"
-        ? upcastLegacyTaskRevisionFingerprint(nested)
-        : upcastTaskRevisionFingerprints(nested)
-    ])
-  )
-}
-
-const upcastPayloadTaskRevisionFingerprints = (
-  payload: Record<string, unknown>
-): Record<string, unknown> =>
-  Object.fromEntries(
-    Object.entries(payload).map(([key, nested]) => [
-      key,
-      key === "taskRevision"
-        ? upcastLegacyTaskRevisionFingerprint(nested)
-        : upcastTaskRevisionFingerprints(nested)
-    ])
-  )
 
 /** One normalized journal envelope prepared for immutable persistence. */
 export const EncodedJournalEvent = Schema.Struct({
@@ -44,7 +13,7 @@ export const EncodedJournalEvent = Schema.Struct({
 })
 export type EncodedJournalEvent = Schema.Schema.Type<typeof EncodedJournalEvent>
 
-/** A versioned payload cannot be decoded and upcast into Dalph's current event vocabulary. */
+/** A current-version payload cannot be decoded into Dalph's event vocabulary. */
 export class JournalEventDecodeIssue extends Schema.TaggedErrorClass<JournalEventDecodeIssue>()(
   "JournalEventDecodeIssue",
   {
@@ -72,26 +41,13 @@ const decodePayload = (
   )
 
 /**
- * Converts an immutable historical payload to the current semantic event.
- * Version 1 stored the discriminator in its JSON object; later versions store
- * only variant fields because kind and version belong to the normalized envelope.
+ * Decodes one current immutable payload into the current semantic event.
  */
-export const decodeAndUpcastJournalEvent = Effect.fn("WorkflowJournal.decodeAndUpcastEvent")(
+export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(
   function*(encoded: EncodedJournalEvent) {
     const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
-    const unsupportedTechnicalRetryVersion = technicalRetryKinds.has(encoded.kind)
-      && encoded.version < technicalRetryJournalEventVersion
-    const upcastPayload = encoded.version < taskRevisionFingerprintJournalEventVersion
-      ? upcastPayloadTaskRevisionFingerprints(payload)
-      : payload
-    const candidate: unknown = unsupportedTechnicalRetryVersion
-      ? undefined
-      : encoded.version === 1
-      ? { ...upcastPayload, _tag: encoded.kind, version: workflowJournalEventVersion }
-      : encoded.version === normalizedJournalEventVersion
-          || encoded.version === technicalRetryJournalEventVersion
-          || encoded.version === workflowJournalEventVersion
-      ? { ...upcastPayload, _tag: encoded.kind, version: workflowJournalEventVersion }
+    const candidate: unknown = encoded.version === workflowJournalEventVersion
+      ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
       : undefined
     if (candidate === undefined) {
       return yield* new JournalEventDecodeIssue({
@@ -123,8 +79,8 @@ export const encodeJournalEvent = (event: WorkflowJournalEvent): EncodedJournalE
   })
 }
 
-/** Compares decoded/upcast meanings, never historical JSON representation. */
-export const semanticallyEqualJournalEvents = (
+/** Compares decoded event meanings, never JSON representation. */
+export const equalJournalEvents = (
   left: WorkflowJournalEvent,
   right: WorkflowJournalEvent
 ): boolean =>

@@ -1,113 +1,74 @@
-/* eslint-disable functional/immutable-data -- Startup collects preserved run issues before failing closed. */
 import { NodeServices } from "@effect/platform-node"
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { CoordinatorOwnership } from "./coordinator-lock.js"
-import {
-  defaultTaskWorkCapacity,
-  EvidenceStoreLocator,
-  type GitCommonDirectoryTarget,
-  type OperationId,
-  type RunId,
-  type TaskWorkCapacity
-} from "./domain.js"
+import { type GitCommonDirectoryTarget, RunId } from "./domain.js"
 import { nodeGitCommandLayer } from "./git-command.js"
 import { GitWorktree, runGitWorktreeReconciliation } from "./git-worktree.js"
-import { nodeImplementationEvidenceSourceLayer } from "./implementation-evidence.js"
-import type { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
-import { unavailableImplementationReviewLayer } from "./implementation-review.js"
-import { workflowJournalEventVersion } from "./journal-event-version.js"
 import { JournalBoundaryDecodeIssue } from "./journal-recovery-model.js"
-import { JournalStore, TaskExecutionReported, taskExecutionReportedRecordKey } from "./journal-store.js"
+import { JournalStore } from "./journal-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-workflow-interpreter.js"
 import {
-  coordinatorOwnedEvidenceStoreLayer,
   coordinatorOwnedGitWorktreeLayer,
-  coordinatorOwnedImplementationReviewLayer,
-  coordinatorOwnedTaskExecutorLayer,
-  coordinatorOwnedTaskRunnerLayer,
   coordinatorOwnedTrackerMutationLayer,
   productionCoordinatorOwnershipLayer
 } from "./live-task-work-start.js"
 import {
+  hasUnfinishedManagedRunResponsibility,
   makeManagedRecoveryActivation,
-  ManagedRecoveryActivation,
-  type RecoveredAdmissionCapacityEvidence
+  ManagedRecoveryActivation
 } from "./managed-activation.js"
-import { ManagedHistoryIdentityIssue, ManagedHistorySemanticIssue, reduceManagedHistory } from "./managed-history.js"
-import { nodeEvidenceStoreLayer } from "./node-evidence-store.js"
-import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
-import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
-import type { TaskExecutionReport, TaskExecutor } from "./task-execution.js"
-import type { TaskRunner } from "./task-work-start.js"
-import type { TrackerMutation } from "./tracker-mutation.js"
-import { makeTaskRunnerWorkflowInterpreterLayer } from "./workflow-interpreters.js"
 import {
-  observeManagedRunAuthoritiesWithCapacityEvidence,
-  recoverExactRunAfterCoordinatorDeath,
-  RecoveryAuthorityContradictionIssue,
-  RecoveryOwnershipIssue,
-  RecoveryProgressIssue,
-  RecoveryReconciliationIssue,
-  validateManagedRunContinuation
-} from "./workflow-recovery.js"
-import { RecoveryTaskEligibilityIssue } from "./workflow-stage-recovery.js"
-import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter } from "./workflow.js"
+  DuplicateUnfinishedTaskAttemptIssue,
+  ManagedHistoryIdentityIssue,
+  ManagedHistorySemanticIssue
+} from "./managed-history-result.js"
+import { reduceManagedHistory } from "./managed-history.js"
+import { nodeGitWorktreeLayer } from "./node-git-worktree.js"
+import { controlledFakePlannedAttemptExecutorLayer, PlannedAttemptExecutor } from "./planned-attempt-executor.js"
+import {
+  livePlannedAttemptRecoveryAuthorityLayer,
+  PlannedAttemptRecoveryAuthority
+} from "./planned-attempt-recovery-authority.js"
+import { productionJournalStoreLayer } from "./sqlite-journal-store.js"
+import type { TrackerMutation } from "./tracker-mutation.js"
+import { makeLiveWorkflowInterpreterLayer } from "./workflow-interpreters.js"
+import { AuthoritativeTaskWorktreeReady, WorkflowInterpreter, WorkflowTrace } from "./workflow.js"
 
-/** Startup found preserved history or resources that cannot be resumed safely. */
 export const StartupRecoveryIssue = Schema.Union([
+  DuplicateUnfinishedTaskAttemptIssue,
   JournalBoundaryDecodeIssue,
   ManagedHistoryIdentityIssue,
   ManagedHistorySemanticIssue,
-  RecoveryAuthorityContradictionIssue,
-  RecoveryOwnershipIssue,
-  RecoveryProgressIssue,
-  RecoveryTaskEligibilityIssue,
-  RecoveryReconciliationIssue
+  Schema.TaggedStruct("OtherUnfinishedManagedRunIssue", {
+    requestedRunId: RunId,
+    unfinishedRunId: RunId
+  })
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
 
+/** Startup found preserved history that cannot be reconstructed safely. */
 export class StartupRecoveryBlocked extends Schema.TaggedErrorClass<StartupRecoveryBlocked>()(
   "StartupRecoveryBlocked",
   { issues: Schema.Array(StartupRecoveryIssue) }
 ) {}
 
 /**
- * Composes one scoped production coordinator: OS ownership, configured SQLite,
- * the guarded task runner, and the recovering workflow interpreter.
+ * Composes the production-shaped milestone with live tracker/Git boundaries
+ * and one same-process coarse fake executor.
  */
 export const productionWorkflowInterpreterLayer = <
-  ExecutorError,
-  ExecutorRequirements,
-  RunnerError,
-  RunnerRequirements,
   TrackerError,
-  TrackerRequirements,
-  ReviewError = never,
-  ReviewRequirements = never
+  TrackerRequirements
 >(
   runId: RunId,
   target: GitCommonDirectoryTarget,
-  taskExecutorAdapterLayer: Layer.Layer<TaskExecutor, ExecutorError, ExecutorRequirements>,
-  taskRunnerAdapterLayer: Layer.Layer<TaskRunner, RunnerError, RunnerRequirements>,
   trackerMutationAdapterLayer: Layer.Layer<
     TrackerMutation,
     TrackerError,
     TrackerRequirements
-  >,
-  reviewAdapterLayer?: Layer.Layer<
-    ImplementationReviewer | ReviewFindingsHandback,
-    ReviewError,
-    ReviewRequirements
-  >,
-  capacity: TaskWorkCapacity = defaultTaskWorkCapacity
+  >
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
-  const taskRunnerLayer = coordinatorOwnedTaskRunnerLayer(
-    taskRunnerAdapterLayer
-  ).pipe(Layer.provide(ownershipLayer))
-  const taskExecutorLayer = coordinatorOwnedTaskExecutorLayer(
-    taskExecutorAdapterLayer
-  ).pipe(Layer.provide(ownershipLayer))
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(
     trackerMutationAdapterLayer
   ).pipe(Layer.provide(ownershipLayer))
@@ -120,170 +81,88 @@ export const productionWorkflowInterpreterLayer = <
   const journalLayer = productionJournalStoreLayer.pipe(
     Layer.provide(ownershipLayer)
   )
-  const evidenceStoreLayer = coordinatorOwnedEvidenceStoreLayer(
-    nodeEvidenceStoreLayer(
-      EvidenceStoreLocator.make(`${target}/dalph-evidence`)
-    ).pipe(Layer.provide(NodeServices.layer))
-  ).pipe(Layer.provide(ownershipLayer))
-  const evidenceSourceLayer = nodeImplementationEvidenceSourceLayer().pipe(
-    Layer.provide(nodeGitCommandLayer),
-    Layer.provide(NodeServices.layer)
-  )
-  const reviewLayer = coordinatorOwnedImplementationReviewLayer(
-    reviewAdapterLayer ?? unavailableImplementationReviewLayer
-  ).pipe(Layer.provide(ownershipLayer))
-  const taskRunnerInterpreterLayer = makeTaskRunnerWorkflowInterpreterLayer(
-    "TaskRunner"
-  ).pipe(
-    Layer.provide(taskRunnerLayer),
-    Layer.provide(taskExecutorLayer),
-    Layer.provide(trackerMutationLayer)
-  )
+  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer(
+    "ProductionBase"
+  ).pipe(Layer.provide(trackerMutationLayer))
   const baseInterpreterLayer = Layer.effect(
     WorkflowInterpreter,
     Effect.gen(function*() {
       const interpreter = yield* WorkflowInterpreter
       const gitWorktree = yield* GitWorktree
-      const reconcileTaskWorktree = Effect.fn(
-        "WorkflowInterpreter.ProductionBase.reconcileTaskWorktree"
-      )(function*(operation) {
-        const proof = yield* runGitWorktreeReconciliation(
-          gitWorktree,
-          operation.plannedAttempt
-        )
-        return AuthoritativeTaskWorktreeReady.make({ proof })
-      })
       return WorkflowInterpreter.of({
         ...interpreter,
-        reconcileTaskWorktree
+        reconcileTaskWorktree: (operation) =>
+          runGitWorktreeReconciliation(
+            gitWorktree,
+            operation.plannedAttempt
+          ).pipe(
+            Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
+          )
       })
     })
   ).pipe(
-    Layer.provide(taskRunnerInterpreterLayer),
+    Layer.provide(liveInterpreterLayer),
     Layer.provide(gitWorktreeLayer)
   )
-
-  const interpreterLayerFor = (journalRunId: RunId) =>
-    journaledWorkflowInterpreterLayer(
-      journalRunId,
-      baseInterpreterLayer,
-      taskExecutorLayer,
-      Layer.merge(evidenceStoreLayer, evidenceSourceLayer),
-      reviewLayer
-    ).pipe(
-      Layer.provide(taskRunnerLayer),
-      Layer.provide(journalLayer)
-    )
-  const interpreterLayer = interpreterLayerFor(runId)
-  const recoveryAuthorityLayer = Layer.mergeAll(
-    taskRunnerLayer,
-    taskExecutorLayer,
-    trackerMutationLayer,
-    gitWorktreeLayer,
-    evidenceStoreLayer
+  const interpreterLayer = journaledWorkflowInterpreterLayer(
+    runId,
+    baseInterpreterLayer
+  ).pipe(Layer.provide(journalLayer))
+  const recoveryAuthorityLayer = livePlannedAttemptRecoveryAuthorityLayer.pipe(
+    Layer.provide(gitWorktreeLayer),
+    Layer.provide(trackerMutationLayer),
+    Layer.provide(journalLayer)
   )
+
   return Layer.effectContext(
     Effect.gen(function*() {
       yield* CoordinatorOwnership
       const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
-      const recordExecutionReports = Effect.fn(
-        "ProductionApplication.recordStartupExecutionReports"
-      )(function*(
-        reportRunId: RunId,
-        reports: ReadonlyArray<{
-          readonly operationId: OperationId
-          readonly report: TaskExecutionReport
-        }>
-      ) {
-        for (const { operationId, report } of reports) {
-          yield* journal.append(
-            reportRunId,
-            taskExecutionReportedRecordKey(
-              operationId,
-              report.observationId
-            ),
-            TaskExecutionReported.make({
-              operationId,
-              report,
-              version: workflowJournalEventVersion
-            })
-          )
-        }
-      })
+      const executor = yield* PlannedAttemptExecutor
+      const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
+      const trace = yield* WorkflowTrace
       const scan = yield* journal.scan()
-      const issues = new Array<StartupRecoveryIssue>(...scan.issues)
-      const currentCapacityEvidence = yield* Ref.make<
-        RecoveredAdmissionCapacityEvidence
-      >({
-        freshOccupiedInvocations: [],
-        freshlyReleasedOperationIds: new Set()
-      })
-      const currentExecutionReports = yield* Ref.make<
-        ReadonlyArray<{
-          readonly operationId: OperationId
-          readonly report: TaskExecutionReport
-        }>
-      >([])
-      for (const history of scan.runs) {
-        const reduction = reduceManagedHistory(history.runId, history.records)
-        if (reduction._tag === "InvalidManagedHistory") issues.push(...reduction.issues)
-        const observation = yield* observeManagedRunAuthoritiesWithCapacityEvidence(
-          history.runId,
-          history.records
-        )
-        const observationIssues = observation.issues
-        issues.push(...observationIssues)
-        if (
-          reduction._tag === "InvalidManagedHistory"
-          || observationIssues.length > 0
-          || scan.issues.some((issue) => issue.runId === history.runId)
-        ) continue
-        if (history.runId === runId) {
-          const continuationIssues = yield* validateManagedRunContinuation(
-            history.runId,
-            history.records
-          )
-          issues.push(...continuationIssues)
-          yield* Ref.set(
-            currentCapacityEvidence,
-            observation.capacityEvidence
-          )
-          yield* Ref.set(
-            currentExecutionReports,
-            observation.unresolvedExecutionReports
-          )
-          continue
-        }
-        yield* recordExecutionReports(
-          history.runId,
-          observation.unresolvedExecutionReports
-        )
-        const runIssues = yield* recoverExactRunAfterCoordinatorDeath(
-          history.runId,
-          history.records,
-          capacity,
-          observation.capacityEvidence
-        ).pipe(Effect.provide(interpreterLayerFor(history.runId)))
-        issues.push(...runIssues)
+      const reductions = scan.runs.map((history) => reduceManagedHistory(history.runId, history.records))
+      const issues = [
+        ...scan.issues,
+        ...reductions.flatMap((reduction) => {
+          return reduction._tag === "InvalidManagedHistory" ? reduction.issues : []
+        })
+      ]
+      if (issues.length > 0) {
+        return yield* new StartupRecoveryBlocked({ issues })
       }
-      if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
-      yield* recordExecutionReports(
-        runId,
-        yield* Ref.get(currentExecutionReports)
+      const otherUnfinishedRun = reductions.find((reduction) =>
+        reduction._tag === "ValidManagedHistory"
+        && reduction.runId !== runId
+        && hasUnfinishedManagedRunResponsibility(reduction.managedRun)
       )
-      const recovery = yield* makeManagedRecoveryActivation(
-        runId,
-        yield* Ref.get(currentCapacityEvidence)
-      )
+      if (
+        otherUnfinishedRun?._tag === "ValidManagedHistory"
+      ) {
+        return yield* new StartupRecoveryBlocked({
+          issues: [{
+            _tag: "OtherUnfinishedManagedRunIssue",
+            requestedRunId: runId,
+            unfinishedRunId: otherUnfinishedRun.runId
+          }]
+        })
+      }
+      const recovery = yield* makeManagedRecoveryActivation(runId)
       return Context.empty().pipe(
         Context.add(WorkflowInterpreter, interpreter),
-        Context.add(ManagedRecoveryActivation, recovery)
+        Context.add(ManagedRecoveryActivation, recovery),
+        Context.add(PlannedAttemptExecutor, executor),
+        Context.add(JournalStore, journal),
+        Context.add(PlannedAttemptRecoveryAuthority, recoveryAuthority),
+        Context.add(WorkflowTrace, trace)
       )
     })
   ).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(recoveryAuthorityLayer),
+    Layer.provide(controlledFakePlannedAttemptExecutorLayer),
     Layer.provide(journalLayer),
     Layer.provide(ownershipLayer)
   )

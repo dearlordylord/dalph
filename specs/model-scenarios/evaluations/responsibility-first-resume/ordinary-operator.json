@@ -1,7 +1,0 @@
-{
-  "evaluator": "ordinary-operator",
-  "scenarioId": "responsibility-first-resume",
-  "verdict": "acceptable",
-  "confidence": "high",
-  "reason": "Owned paused work resumes first after a provider-proved release, while unrelated eligible work remains available."
-}

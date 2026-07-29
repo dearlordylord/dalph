@@ -69,7 +69,7 @@ event in plain language.
 Effect's `Context.Service` is an implementation mechanism for an injected
 interface. It does not imply a separately deployed service or microservice and
 does not justify putting “service” in the domain name. Domain prose names the
-role—such as task tracker or task runner—while TypeScript may implement that
+role—such as task tracker or executor—while TypeScript may implement that
 role with an Effect service tag and Layer.
 
 ## Workspace shape

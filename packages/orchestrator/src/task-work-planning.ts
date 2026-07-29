@@ -1,13 +1,6 @@
 import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
 import type { GitCommitSha, RunId, Task, TaskExecutorLocator } from "./domain.js"
-import {
-  AttemptId,
-  OperationId,
-  PlannedTaskAttempt,
-  TaskBranchRef,
-  TaskWorkSessionLocator,
-  WorktreeLocator
-} from "./domain.js"
+import { AttemptId, OperationId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "./domain.js"
 import { taskRevisionFor } from "./task-dag.js"
 
 export interface OperationIdAllocatorService {
@@ -69,7 +62,6 @@ interface DeterministicPlannedTaskAttemptOptions {
   readonly baseSha: GitCommitSha
   readonly executor: TaskExecutorLocator
   readonly runId: RunId
-  readonly sessionRoot: TaskWorkSessionLocator
   readonly worktreeRoot: WorktreeLocator
 }
 
@@ -91,7 +83,6 @@ export const deterministicPlannedTaskAttemptLayer = (
             branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
             executor: options.executor,
             runId: options.runId,
-            session: TaskWorkSessionLocator.make(`${options.sessionRoot}/${resourceSegment}`),
             taskId: task.id,
             taskRevision: taskRevisionFor(task),
             worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)

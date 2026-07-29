@@ -14,7 +14,6 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  TaskWorkSessionLocator,
   TrackerRevision,
   WorktreeLocator
 } from "./domain.js"
@@ -47,7 +46,6 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
       branch: TaskBranchRef.make(`refs/heads/${segment}`),
       executor: TaskExecutorLocator.make(`executor:${segment}`),
       runId,
-      session: TaskWorkSessionLocator.make(`session:${segment}`),
       taskId: TaskId.make(`task-${segment}`),
       taskRevision: TaskRevision.make(`revision-${segment}`),
       worktree: WorktreeLocator.make(`/tmp/${segment}`)

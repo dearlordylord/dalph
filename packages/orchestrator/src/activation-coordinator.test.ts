@@ -26,9 +26,7 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
     const runnerStarted = yield* Deferred.make<void>()
     const runnerCount = yield* Ref.make(0)
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -67,9 +65,7 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
     const started = yield* Queue.unbounded<TaskId>()
     const releaseRunners = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(2)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -98,9 +94,7 @@ it.effect("keeps the immutable selection correlation after intent", () =>
     const releaseRunner = yield* Deferred.make<void>()
     const runnerCount = yield* Ref.make(0)
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -128,7 +122,7 @@ it.effect("keeps the immutable selection correlation after intent", () =>
     yield* Deferred.succeed(releaseRunner, undefined)
   })))
 
-it.effect("releases a pre-intent position but retains a post-intent position on runner exit", () =>
+it.effect("releases generic selected-transition positions on runner exit", () =>
   Effect.scoped(Effect.gen(function*() {
     const preIntentTask = TaskId.make("exit-before-intent")
     const postIntentTask = TaskId.make("exit-after-intent")
@@ -138,9 +132,7 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
     ])
     const exits = yield* Queue.unbounded<TaskId>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(2)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -175,9 +167,7 @@ it.effect("releases a pre-intent position but retains a post-intent position on 
     )
     yield* Effect.yieldNow
 
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([
-      postIntentTask
-    ])
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([])
   })))
 
 it.effect("rederives while pre-intent and post-intent owners remain live without readmitting either", () =>
@@ -188,9 +178,7 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
     const started = yield* Queue.unbounded<TaskId>()
     const runnerCounts = yield* Ref.make(new Map<TaskId, number>())
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(2),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(2)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -231,8 +219,8 @@ it.effect("rederives while pre-intent and post-intent owners remain live without
       new Map([[preIntentTask, 1], [postIntentTask, 1]])
     )
     const positions = (yield* controller.snapshot()).reservedPositions
-    expect(positions.map(({ correlation }) => correlation._tag).sort()).toEqual([
-      "OperationReservation",
+    expect(positions.map(({ correlation }) => correlation._tag)).toEqual([
+      "SelectedTransitionReservation",
       "SelectedTransitionReservation"
     ])
 
@@ -247,9 +235,7 @@ it.effect("records a result, releases its exact position, and rederives the next
     const started = yield* Queue.unbounded<TaskId>()
     const releaseC = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -294,9 +280,7 @@ it.effect("finishes an owned non-capacity operation without releasing an absent 
     })
     const remaining = yield* Ref.make([transition])
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -359,9 +343,7 @@ it.effect("rolls back the exact partial handoff when a controlled boundary inter
         >([])
         const runnerCount = yield* Ref.make(0)
         const controller = yield* makeTaskAdmissionController({
-          capacity: TaskWorkCapacity.make(1),
-          freshOccupiedInvocations: [],
-          reconstructedReservedPositions: []
+          capacity: TaskWorkCapacity.make(1)
         })
         const control: ActivationCoordinatorControl = {
           checkpoint: (checkpoint) =>
@@ -411,9 +393,7 @@ it.effect("isolates the exact duplicate result while preserving its original own
     const releaseRunner = yield* Deferred.make<void>()
     const runnerStarted = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const competingAttempts = yield* Ref.make(0)
     const ownershipSnapshots = yield* Ref.make<
@@ -469,9 +449,7 @@ it.effect("isolates a duplicate ownership checkpoint without rolling back its po
     const releaseRunner = yield* Deferred.make<void>()
     const runnerStarted = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const ownershipSnapshots = yield* Ref.make<
       ReadonlyArray<{ readonly isolated: number; readonly owners: number }>
@@ -524,9 +502,7 @@ it.effect("atomically rejects or drains signals when the coordinator closes", ()
   Effect.scoped(Effect.gen(function*() {
     const failFrontier = yield* Deferred.make<void>()
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinator = yield* makeActivationCoordinator({
       admissionController: controller,
@@ -558,9 +534,7 @@ it.effect("atomically rejects or drains signals when the coordinator closes", ()
 it.effect("rejects a signal submitted after its exact coordinator scope closes", () =>
   Effect.gen(function*() {
     const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      freshOccupiedInvocations: [],
-      reconstructedReservedPositions: []
+      capacity: TaskWorkCapacity.make(1)
     })
     const coordinatorScope = yield* Scope.make()
     const coordinator = yield* makeActivationCoordinator({

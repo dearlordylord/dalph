@@ -1,36 +1,18 @@
 import { Effect } from "effect"
-import { type OperationId, SemanticReviewRound, type Task } from "./domain.js"
-import { makeExecutorOuterInvocation, oneTaskWorkCapacityPosition } from "./executor-boundary.js"
-import { makeFreshImplementationConvergenceStage } from "./fresh-implementation-convergence-stages.js"
+import type { OperationId, PlannedTaskAttempt, Task } from "./domain.js"
 import type { FreshWorkflowStage } from "./fresh-workflow-stage.js"
-import type { FreshImplementationConvergenceStage } from "./implementation-convergence-stage.js"
-import type { runLiveImplementationConvergence } from "./implementation-convergence-workflow.js"
-import { defaultImplementationReviewRoundLimit } from "./implementation-convergence.js"
-import { RunnableFrontierTransition as FrontierTransition } from "./runnable-frontier.js"
-import {
-  makeSimulatedImplementationConvergenceStage,
-  type SimulatedImplementationConvergenceStage
-} from "./simulated-implementation-convergence-stages.js"
+import type { ManagedRecoveryActivationError } from "./managed-activation.js"
+import { plannedAttemptExecutorCorrelation } from "./planned-attempt-executor.js"
+import type { PlannedAttemptExecutorReport } from "./planned-attempt-executor.js"
+import { RunnableFrontierTransition } from "./runnable-frontier.js"
 import { TaskAttemptPlanAcknowledged, TaskAttemptPlanRecordingSimulated } from "./task-attempt-plan-recording.js"
-import {
-  TaskExecutionAdmitted,
-  TaskExecutionOutcomeObserved,
-  TaskExecutionSimulated,
-  TaskWorkSessionEstablishmentSimulatedTrace
-} from "./task-execution-trace.js"
-import { TaskExecutionRequest, TaskExecutionSessionBinding } from "./task-execution.js"
 import type { OperationIdAllocatorService, PlannedTaskAttemptPlannerService } from "./task-work-planning.js"
-import { TaskWorkStartRequest } from "./task-work-start.js"
-import { TaskWorktreeExecutionModeContradiction } from "./task-worktree-reconciliation.js"
 import type { TraceOutputError } from "./trace-output.js"
 import type { ActiveTaskClaim } from "./tracker-mutation.js"
 import {
   makeTaskAttemptPlanOperation,
-  makeTaskExecutionOperation,
-  makeTaskWorkSessionEstablishmentOperation,
   makeTaskWorktreeReconciliationOperation,
   OperationSelected,
-  TaskWorkSessionEstablishedTrace,
   TaskWorktreeReadyTrace,
   TaskWorktreeReconciliationSimulatedTrace,
   type TraceItem,
@@ -43,302 +25,126 @@ interface FreshTaskAttemptStageOptions {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
   readonly interpreter: WorkflowInterpreterService
   readonly planner: PlannedTaskAttemptPlannerService
+  readonly continuePlannedAttemptExecutorWork: (
+    plannedAttempt: PlannedTaskAttempt
+  ) => Effect.Effect<
+    PlannedAttemptExecutorReport,
+    ManagedRecoveryActivationError
+  >
 }
-
-const freshExecutorTransition = (
-  operationId: OperationId,
-  task: Task
-) =>
-  FrontierTransition.StartExecutorInvocation({
-    invocation: makeExecutorOuterInvocation(
-      operationId,
-      task.id,
-      oneTaskWorkCapacityPosition
-    )
-  })
 
 const freshWorkflowTransition = (
   operationId: OperationId,
   task: Task
 ) =>
-  FrontierTransition.ContinueFreshWorkflowOperation({
+  RunnableFrontierTransition.ContinueFreshWorkflowOperation({
     operationId,
     taskId: task.id
   })
 
-const adaptLiveStage = (
-  stage: FreshImplementationConvergenceStage
-): FreshWorkflowStage => ({
-  transition: stage.transition,
-  run: (recordActivationIntent) =>
-    stage.run(recordActivationIntent).pipe(
-      Effect.map((next) => next === undefined ? undefined : adaptLiveStage(next))
-    )
-})
+const makeExecutorStage = (
+  plannedAttempt: PlannedTaskAttempt,
+  resumed: boolean,
+  services: Pick<
+    FreshTaskAttemptStageOptions,
+    "continuePlannedAttemptExecutorWork"
+  >
+): FreshWorkflowStage => {
+  const transition = resumed
+    ? RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      plannedAttempt
+    })
+    : RunnableFrontierTransition.StartPlannedAttemptExecutorWork({
+      plannedAttempt
+    })
+  return {
+    transition,
+    run: (execution) =>
+      Effect.gen(function*() {
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        yield* execution.bindPlannedAttemptExecutorPosition(correlation)
+        const report = yield* services.continuePlannedAttemptExecutorWork(
+          plannedAttempt
+        )
+        if (
+          report._tag === "SafelySuspended"
+          || report._tag === "Terminal"
+        ) {
+          yield* execution.releasePlannedAttemptExecutorWorkPosition(
+            correlation
+          )
+          return undefined
+        }
+        return makeExecutorStage(plannedAttempt, true, services)
+      })
+  }
+}
 
-const adaptSimulatedStage = (
-  stage: SimulatedImplementationConvergenceStage
-): FreshWorkflowStage => ({
-  transition: stage.transition,
-  run: () =>
-    stage.run().pipe(
-      Effect.map((next) => next === undefined ? undefined : adaptSimulatedStage(next))
-    )
-})
-
-/** Selects the plan operation that begins one staged fresh task attempt. */
+/** Plans the attempt, proves its worktree ready, then hands the whole attempt to the executor. */
 export const makeFreshTaskAttemptStage = Effect.fn(
   "Workflow.makeFreshTaskAttemptStage"
 )(function*(
   options: FreshTaskAttemptStageOptions,
   task: Task,
-  activeClaim: ActiveTaskClaim | undefined,
+  _activeClaim: ActiveTaskClaim | undefined,
   predecessorOperationId: OperationId
 ): Effect.fn.Return<
   FreshWorkflowStage,
   Effect.Error<ReturnType<PlannedTaskAttemptPlannerService["plan"]>>
 > {
-  const makeExecutionStage = Effect.fn("Workflow.makeExecutionStage")(
-    function*(
-      operation: ReturnType<typeof makeTaskExecutionOperation>,
-      liveOptions:
-        | Omit<
-          Parameters<typeof runLiveImplementationConvergence>[0],
-          "admissionController" | "initialExecutionOutcome" | "start"
-        >
-        | undefined
-    ): Effect.fn.Return<FreshWorkflowStage> {
-      return {
-        transition: freshExecutorTransition(
-          operation.request.operationId,
-          task
-        ),
-        run: (recordActivationIntent) =>
-          Effect.gen(function*() {
-            yield* options.emit(OperationSelected.make({ operation }))
-            yield* options.emit(TaskExecutionAdmitted.make({ operation }))
-            if (liveOptions === undefined) {
-              yield* recordActivationIntent(
-                operation.request.operationId
-              )
-              const outcome = yield* options.interpreter.simulateTaskExecution(
-                operation
-              )
-              yield* options.emit(TaskExecutionSimulated.make({
-                operation,
-                outcome
-              }))
-              return adaptSimulatedStage(
-                yield* makeSimulatedImplementationConvergenceStage({
-                  allocator: options.allocator,
-                  emit: options.emit,
-                  interpreter: options.interpreter,
-                  plannedAttempt: operation.request.plannedAttempt,
-                  predecessorOperationId: operation.request.operationId,
-                  task
-                })
-              )
-            }
-            const outcome = yield* options.interpreter.executeTaskWork(
-              operation,
-              recordActivationIntent(operation.request.operationId)
-            )
-            yield* options.emit(TaskExecutionOutcomeObserved.make({
-              operation,
-              outcome
-            }))
-            return adaptLiveStage(
-              yield* makeFreshImplementationConvergenceStage(
-                {
-                  ...liveOptions,
-                  start: {
-                    _tag: "ExecutionOutcome",
-                    round: SemanticReviewRound.make(1)
-                  }
-                },
-                outcome.outcome
-              )
-            )
-          })
-      }
-    }
-  )
-
-  const makeSessionStage = Effect.fn("Workflow.makeSessionStage")(
-    function*(
-      plannedAttempt: Parameters<typeof makeTaskAttemptPlanOperation>[0]["plannedAttempt"],
-      planOperationId: OperationId,
-      planResult: Effect.Success<
-        ReturnType<WorkflowInterpreterService["recordTaskAttemptPlan"]>
-      >,
-      worktreeOperation: ReturnType<typeof makeTaskWorktreeReconciliationOperation>,
-      worktreeResult: Effect.Success<
-        ReturnType<WorkflowInterpreterService["reconcileTaskWorktree"]>
-      >
-    ): Effect.fn.Return<FreshWorkflowStage> {
-      const operation = makeTaskWorkSessionEstablishmentOperation({
-        predecessorOperationIds: [
-          planOperationId,
-          worktreeOperation.operationId
-        ],
-        request: TaskWorkStartRequest.make({
-          operationId: yield* options.allocator.allocate(),
-          plannedAttempt,
-          task
-        })
-      })
-      return {
-        transition: freshWorkflowTransition(
-          operation.request.operationId,
-          task
-        ),
-        run: () =>
-          Effect.gen(function*() {
-            yield* options.emit(OperationSelected.make({ operation }))
-            if (
-              planResult._tag === "TaskAttemptPlanRecordAcknowledged"
-              && worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
-            ) {
-              if (activeClaim === undefined) {
-                return yield* new TaskWorktreeExecutionModeContradiction({
-                  operationId: operation.request.operationId
-                })
-              }
-              const outcome = yield* options.interpreter.establishTaskWorkSession(
-                operation
-              )
-              yield* options.emit(TaskWorkSessionEstablishedTrace.make({
-                operation,
-                outcome
-              }))
-              return yield* makeExecutionStage(
-                makeTaskExecutionOperation({
-                  predecessorOperationIds: [operation.request.operationId],
-                  request: TaskExecutionRequest.make({
-                    operationId: yield* options.allocator.allocate(),
-                    plannedAttempt,
-                    session: TaskExecutionSessionBinding.cases.EstablishedSession.make({
-                      sessionId: outcome.sessionId
-                    }),
-                    task
-                  })
-                }),
-                {
-                  allocator: options.allocator,
-                  emit: options.emit,
-                  interpreter: options.interpreter,
-                  roundLimit: defaultImplementationReviewRoundLimit,
-                  subject: {
-                    claim: activeClaim,
-                    plannedAttempt,
-                    sessionEstablishmentOperationId: operation.request.operationId,
-                    sessionId: outcome.sessionId,
-                    worktreeOperationId: worktreeOperation.operationId,
-                    worktreeProof: worktreeResult.proof
-                  },
-                  task
-                }
-              )
-            }
-            if (
-              planResult._tag === "TaskAttemptPlanRecordingSimulated"
-              && worktreeResult._tag === "TaskWorktreeReconciliationSimulated"
-            ) {
-              const outcome = yield* options.interpreter.simulateTaskWorkSession(
-                operation
-              )
-              yield* options.emit(
-                TaskWorkSessionEstablishmentSimulatedTrace.make({
-                  operation,
-                  outcome
-                })
-              )
-              return yield* makeExecutionStage(
-                makeTaskExecutionOperation({
-                  predecessorOperationIds: [operation.request.operationId],
-                  request: TaskExecutionRequest.make({
-                    operationId: yield* options.allocator.allocate(),
-                    plannedAttempt,
-                    session: TaskExecutionSessionBinding.cases.PlannedSession.make({
-                      session: outcome.session
-                    }),
-                    task
-                  })
-                }),
-                undefined
-              )
-            }
-            return yield* new TaskWorktreeExecutionModeContradiction({
-              operationId: worktreeOperation.operationId
-            })
-          })
-      }
-    }
-  )
-
-  const makeWorktreeStage = Effect.fn("Workflow.makeWorktreeStage")(
-    function*(
-      plannedAttempt: Parameters<typeof makeTaskAttemptPlanOperation>[0]["plannedAttempt"],
-      planOperationId: OperationId,
-      planResult: Effect.Success<
-        ReturnType<WorkflowInterpreterService["recordTaskAttemptPlan"]>
-      >
-    ): Effect.fn.Return<FreshWorkflowStage> {
-      const operation = makeTaskWorktreeReconciliationOperation({
-        operationId: yield* options.allocator.allocate(),
-        plannedAttempt,
-        predecessorOperationIds: [planOperationId]
-      })
-      return {
-        transition: freshWorkflowTransition(operation.operationId, task),
-        run: () =>
-          Effect.gen(function*() {
-            yield* options.emit(OperationSelected.make({ operation }))
-            const result = yield* options.interpreter.reconcileTaskWorktree(
-              operation
-            )
-            yield* options.emit(
-              result._tag === "AuthoritativeTaskWorktreeReady"
-                ? TaskWorktreeReadyTrace.make({
-                  operation,
-                  proof: result.proof
-                })
-                : TaskWorktreeReconciliationSimulatedTrace.make({ operation })
-            )
-            return yield* makeSessionStage(
-              plannedAttempt,
-              planOperationId,
-              planResult,
-              operation,
-              result
-            )
-          })
-      }
-    }
-  )
-
   const plannedAttempt = yield* options.planner.plan(task)
-  const operation = makeTaskAttemptPlanOperation({
+  const planOperation = makeTaskAttemptPlanOperation({
     operationId: yield* options.allocator.allocate(),
     plannedAttempt,
     predecessorOperationIds: [predecessorOperationId]
   })
   return {
-    transition: freshWorkflowTransition(operation.operationId, task),
+    transition: freshWorkflowTransition(planOperation.operationId, task),
     run: () =>
       Effect.gen(function*() {
-        yield* options.emit(OperationSelected.make({ operation }))
-        const result = yield* options.interpreter.recordTaskAttemptPlan(operation)
+        yield* options.emit(OperationSelected.make({
+          operation: planOperation
+        }))
+        const planResult = yield* options.interpreter
+          .recordTaskAttemptPlan(planOperation)
         yield* options.emit(
-          result._tag === "TaskAttemptPlanRecordAcknowledged"
-            ? TaskAttemptPlanAcknowledged.make({ operation })
-            : TaskAttemptPlanRecordingSimulated.make({ operation })
+          planResult._tag === "TaskAttemptPlanRecordAcknowledged"
+            ? TaskAttemptPlanAcknowledged.make({ operation: planOperation })
+            : TaskAttemptPlanRecordingSimulated.make({
+              operation: planOperation
+            })
         )
-        return yield* makeWorktreeStage(
+
+        const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+          operationId: yield* options.allocator.allocate(),
           plannedAttempt,
-          operation.operationId,
-          result
-        )
+          predecessorOperationIds: [planOperation.operationId]
+        })
+        return {
+          transition: freshWorkflowTransition(
+            worktreeOperation.operationId,
+            task
+          ),
+          run: () =>
+            Effect.gen(function*() {
+              yield* options.emit(OperationSelected.make({
+                operation: worktreeOperation
+              }))
+              const worktreeResult = yield* options.interpreter
+                .reconcileTaskWorktree(worktreeOperation)
+              yield* options.emit(
+                worktreeResult._tag === "AuthoritativeTaskWorktreeReady"
+                  ? TaskWorktreeReadyTrace.make({
+                    operation: worktreeOperation,
+                    proof: worktreeResult.proof
+                  })
+                  : TaskWorktreeReconciliationSimulatedTrace.make({
+                    operation: worktreeOperation
+                  })
+              )
+              return makeExecutorStage(plannedAttempt, false, options)
+            })
+        } satisfies FreshWorkflowStage
       })
   }
 })

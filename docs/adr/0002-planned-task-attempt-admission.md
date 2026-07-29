@@ -130,10 +130,10 @@ Only durable outcomes are workflow evidence:
   eligibility-observation operation and freshly verifies the claim and graph
   before planning.
 - If Dalph already recorded `TaskAttemptPlanned`, recovery preserves that exact
-  attempt identity, Base SHA, branch, worktree, executor, session locator,
-  `TaskId`, and task revision fingerprint. If fresh task-tracker, Git, or
-  task-work-provider reads contradict those recorded identities or locators,
-  recovery returns a typed contradiction; it never silently replans.
+  attempt identity, Base SHA, branch, worktree, executor, `TaskId`, and task
+  revision fingerprint. If fresh task-tracker or Git reads contradict those
+  recorded identities or locators, recovery returns a typed contradiction; it
+  never silently replans.
 - A missing, replaced, foreign, or unreadable current claim produces a precise
   typed recovery result. Durable claim history does not substitute for the
   fresh task-tracker read.
@@ -145,9 +145,8 @@ No current outcome authorizes a replacement planned task attempt. Recovery
 continues an acknowledged attempt, recognizes its terminal disposition, or
 returns a typed recovery result. A future replacement-attempt capability
 requires a separately specified authorization phenomenon and durable event.
-Technical retry exhaustion, semantic non-convergence, loss of a planned Git
-worktree or task-work session, coordinator process death, and a new operation
-identity do not imply replacement authorization.
+An executor failure, loss of a planned Git worktree, coordinator process death,
+and a new operation identity do not imply replacement authorization.
 
 ## Layer composition
 
@@ -195,7 +194,7 @@ identity.
 The workflow algebra, journal schema, managed-history reducer, and recovery
 model must represent the eligibility-observation intent, its authoritative and
 simulated outcomes, and the causal validation described above. Journal schema
-evolution must preserve readable prior history without treating a legacy
+evolution must preserve readable supported history without treating a prior
 generic graph observation as eligibility evidence.
 
 The canonical glossary uses **claimed task eligibility observed**. The accepted

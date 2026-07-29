@@ -4,7 +4,7 @@ Status: Accepted
 
 Dalph reconstructs graph knowledge, workflow history, resource responsibility,
 and pause state with distinct pure reducers composed behind one managed-run
-reduction boundary. The reconstruction workflow reads, decodes, and upcasts
+reduction boundary. The reconstruction workflow reads and decodes
 journal rows once; the composed reducer processes those event values in
 canonical order, updates the component states, validates their cross-component
 invariants, and returns one validated reconstructed managed-run state.

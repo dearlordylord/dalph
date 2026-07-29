@@ -8,14 +8,10 @@ import {
 } from "./coordinator-lock.js"
 import type { GitCommonDirectoryTarget } from "./domain.js"
 import { GitWorktree } from "./git-worktree.js"
-import { EvidenceStore } from "./implementation-evidence.js"
-import { ImplementationReviewer, ReviewFindingsHandback } from "./implementation-review.js"
 import { nodeCoordinatorLockLayer } from "./node-coordinator-lock.js"
-import { TaskExecutor } from "./task-execution.js"
-import { TaskRunner } from "./task-work-start.js"
 import { TrackerMutation } from "./tracker-mutation.js"
 
-/** Acquires one scoped ownership capability for all live state-changing adapters. */
+/** Acquires one scoped ownership capability for generic live mutations. */
 export const coordinatorOwnershipLayer = (
   target: GitCommonDirectoryTarget
 ): Layer.Layer<
@@ -27,55 +23,11 @@ export const coordinatorOwnershipLayer = (
     CoordinatorOwnership,
     Effect.gen(function*() {
       const coordinatorLock = yield* CoordinatorLock
-      return CoordinatorOwnership.of(yield* coordinatorLock.acquire(target))
+      return CoordinatorOwnership.of(
+        yield* coordinatorLock.acquire(target)
+      )
     })
   )
-
-/** Guards only the state-changing start request; provider lookup stays read-only. */
-export const coordinatorOwnedTaskRunnerLayer = <E, R>(
-  taskRunnerLayer: Layer.Layer<TaskRunner, E, R>
-) =>
-  Layer.effect(
-    TaskRunner,
-    Effect.gen(function*() {
-      const ownership = yield* CoordinatorOwnership
-      const taskRunner = yield* TaskRunner
-      const requestTaskWorkStart = Effect.fn(
-        "TaskRunner.CoordinatorOwned.requestTaskWorkStart"
-      )(function*(request) {
-        return yield* ownership.runMutation(
-          taskRunner.requestTaskWorkStart(request)
-        )
-      })
-
-      return TaskRunner.of({
-        lookupTaskWorkSession: taskRunner.lookupTaskWorkSession,
-        requestTaskWorkStart
-      })
-    })
-  ).pipe(Layer.provide(taskRunnerLayer))
-
-/** Guards only process start/resume; execution observations remain read-only. */
-export const coordinatorOwnedTaskExecutorLayer = <E, R>(
-  taskExecutorLayer: Layer.Layer<TaskExecutor, E, R>
-) =>
-  Layer.effect(
-    TaskExecutor,
-    Effect.gen(function*() {
-      const ownership = yield* CoordinatorOwnership
-      const executor = yield* TaskExecutor
-      return TaskExecutor.of({
-        observeTaskExecution: executor.observeTaskExecution,
-        requestTaskExecution: Effect.fn(
-          "TaskExecutor.CoordinatorOwned.requestTaskExecution"
-        )(function*(request) {
-          return yield* ownership.runMutation(
-            executor.requestTaskExecution(request)
-          )
-        })
-      })
-    })
-  ).pipe(Layer.provide(taskExecutorLayer))
 
 /** Guards claim acquisition and release while leaving claim observation read-only. */
 export const coordinatorOwnedTrackerMutationLayer = <E, R>(
@@ -128,55 +80,6 @@ export const coordinatorOwnedGitWorktreeLayer = <E, R>(
     })
   ).pipe(Layer.provide(gitWorktreeLayer))
 
-/** Guards evidence publication while content verification remains read-only. */
-export const coordinatorOwnedEvidenceStoreLayer = <E, R>(
-  evidenceStoreLayer: Layer.Layer<EvidenceStore, E, R>
-) =>
-  Layer.effect(
-    EvidenceStore,
-    Effect.gen(function*() {
-      const ownership = yield* CoordinatorOwnership
-      const store = yield* EvidenceStore
-      return EvidenceStore.of({
-        put: Effect.fn("EvidenceStore.CoordinatorOwned.put")(function*(bytes) {
-          return yield* ownership.runMutation(store.put(bytes))
-        }),
-        read: store.read
-      })
-    })
-  ).pipe(Layer.provide(evidenceStoreLayer))
-
-/** Guards reviewer invocation and findings delivery under one coordinator owner. */
-export const coordinatorOwnedImplementationReviewLayer = <E, R>(
-  reviewLayer: Layer.Layer<ImplementationReviewer | ReviewFindingsHandback, E, R>
-) =>
-  Layer.merge(
-    Layer.effect(
-      ImplementationReviewer,
-      Effect.gen(function*() {
-        const ownership = yield* CoordinatorOwnership
-        const reviewer = yield* ImplementationReviewer
-        return ImplementationReviewer.of({
-          createOrResume: Effect.fn("ImplementationReviewer.CoordinatorOwned.invoke")(function*(request) {
-            return yield* ownership.runMutation(reviewer.createOrResume(request))
-          })
-        })
-      })
-    ),
-    Layer.effect(
-      ReviewFindingsHandback,
-      Effect.gen(function*() {
-        const ownership = yield* CoordinatorOwnership
-        const handback = yield* ReviewFindingsHandback
-        return ReviewFindingsHandback.of({
-          deliverOrResume: Effect.fn("ReviewFindingsHandback.CoordinatorOwned.handBack")(function*(request) {
-            return yield* ownership.runMutation(handback.deliverOrResume(request))
-          })
-        })
-      })
-    )
-  ).pipe(Layer.provide(reviewLayer))
-
 /** Production ownership acquisition using the OS-backed coordinator lock. */
 export const productionCoordinatorOwnershipLayer = (
   target: GitCommonDirectoryTarget
@@ -184,4 +87,7 @@ export const productionCoordinatorOwnershipLayer = (
   CoordinatorOwnership,
   CoordinatorLockHeld | CoordinatorLockUnavailable,
   FileSystem.FileSystem
-> => coordinatorOwnershipLayer(target).pipe(Layer.provide(nodeCoordinatorLockLayer))
+> =>
+  coordinatorOwnershipLayer(target).pipe(
+    Layer.provide(nodeCoordinatorLockLayer)
+  )

@@ -10,7 +10,6 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  TaskWorkSessionLocator,
   WorktreeLocator
 } from "./domain.js"
 import {
@@ -34,7 +33,6 @@ const plan = PlannedTaskAttempt.make({
   branch: TaskBranchRef.make("refs/heads/dalph/attempt-45"),
   executor: TaskExecutorLocator.make("executor:test"),
   runId: RunId.make("run-45"),
-  session: TaskWorkSessionLocator.make("session:45"),
   taskId: TaskId.make("task-45"),
   taskRevision: TaskRevision.make("revision-45"),
   worktree: WorktreeLocator.make("/worktrees/attempt-45")

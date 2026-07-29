@@ -16,7 +16,7 @@ Dalph has planned `(run R, attempt attempt-A-3)` for Task A and recorded that
 it is starting executor work for that exact pair. Task A therefore occupies
 one position. Task B may use the other position.
 
-The fake-provider milestone does not model a coding agent, reviewer, handback,
+The fake-executor milestone does not model a coding agent, reviewer, handback,
 retry, or restoration step inside the executor.
 
 ### Trigger and ordered actions

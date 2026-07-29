@@ -13,7 +13,6 @@ import {
   runCli,
   RunId,
   TaskExecutorLocator,
-  TaskWorkSessionLocator,
   TraceOutput,
   TraceOutputError,
   trackerGraphReaderFileLayer,
@@ -27,7 +26,6 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
   executor: TaskExecutorLocator.make("executor:cli-test"),
   runId: RunId.make("cli-test"),
-  sessionRoot: TaskWorkSessionLocator.make("session:cli-test"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-cli-test")
 })
 const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
@@ -53,7 +51,7 @@ const runArguments = (
 const runWithOutput = (target: string, outputLayer: Layer.Layer<TraceOutput>) =>
   runArguments(["run", target, "--dry"], outputLayer)
 
-it.effect("runs the dry CLI through the task-work session workflow", () =>
+it.effect("runs the dry CLI through the planned-attempt workflow", () =>
   Effect.gen(function*() {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     yield* runWithOutput(
@@ -76,18 +74,7 @@ it.effect("runs the dry CLI through the task-work session workflow", () =>
       "OperationSelected",
       "TaskAttemptPlanRecordingSimulated",
       "OperationSelected",
-      "TaskWorktreeReconciliationSimulated",
-      "OperationSelected",
-      "TaskWorkSessionEstablishmentSimulated",
-      "OperationSelected",
-      "TaskExecutionAdmitted",
-      "TaskExecutionSimulated",
-      "OperationSelected",
-      "ImplementationEvidenceSealingSimulated",
-      "OperationSelected",
-      "ImplementationReviewSimulated",
-      "OperationSelected",
-      "ImplementationConvergenceSimulated"
+      "TaskWorktreeReconciliationSimulated"
     ])
   }))
 

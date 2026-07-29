@@ -38,7 +38,7 @@ operational explanation.
   “managed,” “controlled,”
   “mutation,” “substrate,” “authority,” “ambiguity,” and generic “operation”
   require replacement or an immediate concrete definition and example.
-- Data received from task trackers, task-work providers, Git commands,
+- Data received from task trackers, executors, Git commands,
   configuration, and journal storage is parsed with Effect Schema; parsed and
   branded values flow inward instead of raw primitives being revalidated.
 - Expected failures remain precise typed Effect failures. Throws represent
@@ -61,7 +61,7 @@ operational explanation.
 - Dalph domain types do not admit impossible field combinations. Tagged variants
   replace sentinel values and bags of conditionally related optional fields.
 - Current task state is read through the task tracker, Git state from Git,
-  task-work session and worker-process state through the task runner, and
+  planned-attempt execution observations through the execution substrate, and
   Dalph-recorded workflow history from the Dalph workflow journal. Derived
   frontier, resource, and presentation state is not stored as a substitute.
 - If two code locations must agree on the same literal, parser rule, event
@@ -79,8 +79,8 @@ operational explanation.
   or store requires concrete evidence and a narrowly scoped suppression.
 - For an uncertain request outcome, recovery preserves the recorded intent and
   rereads the request's destination: the task tracker for a claim, Git for a ref
-  or worktree, or the task runner for a task-work session. Cleanup follows the
-  same fail-closed rule.
+  or worktree, or the execution substrate for a planned-attempt report. Cleanup
+  follows the same fail-closed rule.
 
 Before handoff, run `pnpm check:all` and perform three reviews:
 
