@@ -47,7 +47,7 @@ import {
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../protocols/task-attempt-planning/plan.js"
 import { makeTaskWorkSpecificationObservationOperation, makeTrackerGraphObservationOperation } from "./operation.js"
-import { runWorkflow } from "../../coordination/run/run.js"
+import { runRecoveredWorkflow } from "../../coordination/run/run.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
 import {
   AppliedControlDirection,
@@ -557,7 +557,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("no eligible startup task") })
         )
       )
-      yield* runWorkflow(
+      yield* runRecoveredWorkflow(
         FixtureTarget.make("occurrence-fixture"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       ).pipe(Effect.provide(workflowLayer))

@@ -1,9 +1,10 @@
-import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
+import { Crypto, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "../activation/coordinator.js"
 import { type PlannedTaskAttempt, RunId, type TaskId } from "@dalph/contracts"
 import { type OperationId } from "../../workflow/identity.js"
 import { type InitialControlPolicy } from "../../control/policy.js"
 import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-activation.js"
 import { RunRecoveryActivation, type RunRecoveryActivationError } from "./recovery-activation.js"
@@ -37,9 +38,14 @@ import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workfl
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
 
-/** Dalph's fresh-run identity rule; authored cassettes never supply this value. */
-export const freshWorkflowRunId = (target: TrackerTarget): RunId =>
-  RunId.make(`workflow:${typeof target === "string" ? target : Object.prototype.toString.call(target)}`)
+const AllocatedFreshWorkflowRunId = RunId.pipe(Schema.brand("AllocatedFreshWorkflowRunId"))
+export type AllocatedFreshWorkflowRunId = typeof AllocatedFreshWorkflowRunId.Type
+
+/** Allocates the only identity accepted by Dalph's production fresh-run path. */
+export const freshWorkflowRunId = Effect.fn("Workflow.freshRunId")(function* (target: TrackerTarget) {
+  const crypto = yield* Crypto.Crypto
+  return AllocatedFreshWorkflowRunId.make(`workflow:${taskTrackerTargetKey(target)}:${yield* crypto.randomUUIDv7}`)
+})
 
 /** Journal reconstruction exclusively owns every task it has rediscovered. */
 export const discardFreshStagesOwnedByRecovery = (
@@ -48,9 +54,13 @@ export const discardFreshStagesOwnedByRecovery = (
 ): ReadonlyArray<FreshWorkflowStage> =>
   stages.filter(({ transition }) => !recoveredTaskIds.has(runnableTransitionTaskId(transition)))
 
-export const runWorkflow = Effect.fn("Workflow.run")(function* (
+const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy
+  initialControlPolicy: InitialControlPolicy,
+  startup:
+    | { readonly _tag: "Fresh"; readonly runId: AllocatedFreshWorkflowRunId }
+    | { readonly _tag: "Recovered" }
+    | { readonly _tag: "Synthetic"; readonly runId: RunId }
 ) {
   const allocator = yield* OperationIdAllocator
   const interpreter = yield* WorkflowInterpreter
@@ -58,6 +68,13 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (
   const planner = yield* PlannedTaskAttemptPlanner
   const trace = yield* WorkflowTrace
   const recovery = yield* RunRecoveryActivation
+  const runId =
+    recovery._tag === "AuthoritativeRunRecoveryActivation"
+      ? recovery.runId
+      : /* v8 ignore next -- Recovered entry points require authoritative recovery composition. */
+        startup._tag === "Recovered"
+        ? yield* Effect.die("a recovered workflow requires authoritative recovered activation")
+        : startup.runId
   const graphOperation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
   yield* trace.emit(OperationSelected.make({ operation: graphOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(graphOperation)
@@ -247,7 +264,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (
       const coordinator = yield* makeActivationCoordinator({
         admissionController,
         readFrontier: readFrontier(),
-        runId: recovery._tag === "AuthoritativeRunRecoveryActivation" ? recovery.runId : freshWorkflowRunId(target),
+        runId,
         runTransition: (transition, execution) =>
           Effect.gen(function* () {
             const stage = (yield* Ref.get(stages)).find((candidate) => candidate.transition === transition)
@@ -302,3 +319,18 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (
     })
   )
 })
+
+/** Runs a production fresh workflow only with an identity minted by `freshWorkflowRunId`. */
+export const runWorkflow = (
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  runId: AllocatedFreshWorkflowRunId
+) => runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
+
+/** Runs the exact reconstructed identity owned by authoritative recovery. */
+export const runRecoveredWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy) =>
+  runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
+
+/** Explicit non-durable path for dry-run and deterministic workflow tests. */
+export const runSyntheticWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy, runId: RunId) =>
+  runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Synthetic", runId })

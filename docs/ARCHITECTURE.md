@@ -427,6 +427,12 @@ process-local admission controller. There is no production live-capacity
 change in this slice; a cassette cannot mutate the controller on production's
 behalf.
 
+The production fresh-workflow entry point accepts only an
+`AllocatedFreshWorkflowRunId` minted by the cryptographic fresh-run allocator.
+Recovered activation derives its existing `RunId` from journal authority.
+Dry-run and deterministic tests use a separately named synthetic entry point,
+so a reused fixture identity cannot enter the durable fresh-run path.
+
 A task position is reserved before Dalph starts executor work for one planned
 attempt. After start, the position is correlated by that attempt's `RunId` and
 `AttemptId` and remains occupied until the executor returns a terminal result

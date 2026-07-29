@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -24,13 +25,15 @@ import {
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
-  runAuthoredScenarioCassette,
+  runAuthoredScenarioCassette as runAuthoredScenarioCassetteWithCrypto,
   singletonTaskCompletesAuthoredCassette,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 
 const singleton = singletonTaskCompletesAuthoredCassette
+const runAuthoredScenarioCassette = (input: unknown) =>
+  runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
 
 it.effect("runs the maintained singleton through production activation and stops at terminal executor work", () =>
   Effect.gen(function* () {
@@ -40,10 +43,10 @@ it.effect("runs the maintained singleton through production activation and stops
     const lastEvent = run.records.at(-1)?.event
 
     expect(JSON.stringify(encoded)).not.toContain("runId")
-    expect(run.runId).toBe("workflow:cassette-target")
+    expect(run.runId).toMatch(/^workflow:"cassette-target":/)
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
-    expect(run.terminalOutcomes).toEqual(
-      terminalAssertions?._tag === "ExpectedTerminalOutcomes" ? terminalAssertions.expected : []
+    expect(run.observedOutcomes).toEqual(
+      terminalAssertions?._tag === "ExpectedObservedOutcomes" ? terminalAssertions.expected : []
     )
     expect(run.records.at(-1)?.event._tag).toBe("PlannedAttemptExecutorWorkReported")
     expect(lastEvent?._tag === "PlannedAttemptExecutorWorkReported" ? lastEvent.report._tag : undefined).toBe(
@@ -53,11 +56,38 @@ it.effect("runs the maintained singleton through production activation and stops
   })
 )
 
+it.effect("assigns a fresh exact run identity each time the same tracker target starts", () =>
+  Effect.gen(function* () {
+    const first = yield* runAuthoredScenarioCassette(singleton)
+    const second = yield* runAuthoredScenarioCassette(singleton)
+
+    expect(first.runId).not.toBe(second.runId)
+    expect(first.runId).toMatch(/^workflow:"cassette-target":/)
+    expect(second.runId).toMatch(/^workflow:"cassette-target":/)
+  })
+)
+
+it.effect("runs another story with a different initial task-execution capacity", () =>
+  Effect.gen(function* () {
+    const capacityTwo = {
+      ...singleton,
+      name: "the singleton starts with two task-work positions",
+      story: singleton.story.map((item) =>
+        item._tag === "InitialControlPolicy" ? { ...item, policy: { taskExecutionCapacity: 2 } } : item
+      )
+    }
+    const run = yield* runAuthoredScenarioCassette(capacityTwo)
+
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+    expect(run.cassette.story[0]).toEqual({ _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 2 } })
+  })
+)
+
 it.effect("requires one terminal assertion group and one owner for every decoded story item", () =>
   Effect.gen(function* () {
     const withoutAssertions = {
       ...singleton,
-      story: singleton.story.filter((item) => item._tag !== "ExpectedTerminalOutcomes")
+      story: singleton.story.filter((item) => item._tag !== "ExpectedObservedOutcomes")
     }
     expect((yield* runAuthoredScenarioCassette(withoutAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
 
@@ -69,6 +99,33 @@ it.effect("requires one terminal assertion group and one owner for every decoded
       story: [...singleton.story.slice(0, -2), singleton.story.at(-1), singleton.story.at(-2)]
     }
     expect((yield* runAuthoredScenarioCassette(nonTerminalAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
+
+    const assertions = singleton.story.at(-1)
+    if (assertions?._tag !== "ExpectedObservedOutcomes") return yield* Effect.die("missing singleton assertions")
+    const duplicateExpected = {
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, -1),
+        { ...assertions, expected: [...assertions.expected, assertions.expected[0]] }
+      ]
+    }
+    expect((yield* runAuthoredScenarioCassette(duplicateExpected).pipe(Effect.flip))._tag).toBe("SchemaError")
+    const duplicateForbidden = {
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, -1),
+        { ...assertions, forbidden: [...assertions.forbidden, assertions.forbidden[0]] }
+      ]
+    }
+    expect((yield* runAuthoredScenarioCassette(duplicateForbidden).pipe(Effect.flip))._tag).toBe("SchemaError")
+    const contradictory = {
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, -1),
+        { ...assertions, forbidden: [...assertions.forbidden, assertions.expected[0]] }
+      ]
+    }
+    expect((yield* runAuthoredScenarioCassette(contradictory).pipe(Effect.flip))._tag).toBe("SchemaError")
 
     const noOwner = yield* assertExactlyOneAuthoredCassetteStoryItemOwner("UnknownTag").pipe(Effect.flip)
     expect(noOwner).toMatchObject({ _tag: "AuthoredCassetteStoryItemOwnerContradiction", registrations: [] })
@@ -146,7 +203,7 @@ it.effect("reports mismatches through the surface that owns the current story it
       ...singleton,
       story: singleton.story.map((item, index) =>
         index === 2 && item._tag === "DalphSelects"
-          ? { ...item, action: { _tag: "ReadTrackerGraph", target: "wrong-target" } }
+          ? { ...item, operation: { _tag: "ReadTrackerGraph", target: "wrong-target" } }
           : item
       )
     }
@@ -157,7 +214,9 @@ it.effect("reports mismatches through the surface that owns the current story it
     const wrongTrackerItem = {
       ...singleton,
       story: singleton.story.map((item, index) =>
-        index === 3 ? { _tag: "DalphSelects", action: { _tag: "ReadTrackerGraph", target: "cassette-target" } } : item
+        index === 3
+          ? { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }
+          : item
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongTrackerItem).pipe(Effect.flip))._tag).toBe(
@@ -168,7 +227,7 @@ it.effect("reports mismatches through the surface that owns the current story it
       ...singleton,
       story: singleton.story.map((item) =>
         item._tag === "TaskWorkSpecificationReadReturned"
-          ? { _tag: "DalphSelects", action: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }
+          ? { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }
           : item
       )
     }
@@ -194,7 +253,7 @@ it.effect("reports mismatches through the surface that owns the current story it
     const wrongExecutorItem = {
       ...singleton,
       story: singleton.story.map((item, index) =>
-        index === 13 ? { _tag: "DalphSelects", action: { _tag: "AcquireTaskClaim", taskId: "A" } } : item
+        index === 13 ? { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } } : item
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongExecutorItem).pipe(Effect.flip))._tag).toBe(
@@ -223,7 +282,7 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") {
           return { ...item, report: { ...item.report, result: { _tag: "Failed" } } }
         }
-        if (item._tag === "ExpectedTerminalOutcomes") {
+        if (item._tag === "ExpectedObservedOutcomes") {
           return {
             ...item,
             expected: item.expected.map((outcome) =>
@@ -237,7 +296,7 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
       })
     }
     const failedRun = yield* runAuthoredScenarioCassette(failed)
-    expect(failedRun.terminalOutcomes).toContainEqual({
+    expect(failedRun.observedOutcomes).toContainEqual({
       _tag: "ExecutorReported",
       attemptId: "attempt:A:0",
       report: "TerminalFailed"
@@ -250,7 +309,7 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
           return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
-        if (item._tag === "ExpectedTerminalOutcomes") {
+        if (item._tag === "ExpectedObservedOutcomes") {
           return [
             ...story,
             {
@@ -266,7 +325,7 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
       }, [])
     }
     const suspendedRun = yield* runAuthoredScenarioCassette(safelySuspended)
-    expect(suspendedRun.terminalOutcomes).toContainEqual({
+    expect(suspendedRun.observedOutcomes).toContainEqual({
       _tag: "ExecutorReported",
       attemptId: "attempt:A:0",
       report: "SafelySuspended"
@@ -274,12 +333,12 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
   })
 )
 
-it.effect("fails typed terminal outcome assertions and renders the unsupported capacity item", () =>
+it.effect("fails typed observed-outcome assertions and renders the unsupported capacity item", () =>
   Effect.gen(function* () {
     const wrongOutcomes = {
       ...singleton,
       story: singleton.story.map((item) =>
-        item._tag === "ExpectedTerminalOutcomes" ? { ...item, expected: [] } : item
+        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: [] } : item
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongOutcomes).pipe(Effect.flip))._tag).toBe(
@@ -332,25 +391,38 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(singleton)
-      const recorded = yield* projectRecordedCassette(run.records)
+      const command = ControlCommand.cases.RequestRunPause.make({
+        commandId: ControlCommandId.make("rename-command"),
+        operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+        runId: run.runId
+      })
+      const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
+      const records = [
+        ...run.records,
+        {
+          event: commandEvent,
+          key: describeJournalEvent(commandEvent).expectedKey,
+          position: JournalPosition.make(run.records.length + 1),
+          runId: run.runId
+        }
+      ]
+      const recorded = yield* projectRecordedCassette(records)
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
-        claimTokens: [
-          { from: "cassette-claim:A:cassette:workflow:cassette-target:operation:2", to: "renamed-claim-token-A" }
-        ],
+        claimTokens: [{ from: `cassette-claim:A:cassette:${run.runId}:operation:2`, to: "renamed-claim-token-A" }],
         controlCommandIds: [{ from: "rename-command", to: "renamed-command" }],
         operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
-          from: `cassette:workflow:cassette-target:operation:${ordinal}`,
+          from: `cassette:${run.runId}:operation:${ordinal}`,
           to: `renamed-operation:${ordinal}`
         })),
-        runIds: [{ from: "workflow:cassette-target", to: "renamed-run" }],
+        runIds: [{ from: run.runId, to: "renamed-run" }],
         taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
       })
       const renamed = yield* renameRecordedCassette(recorded, renaming)
       const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
-        run.records,
+        records,
         renamed,
         invertCassetteIdentityRenaming(renaming)
       )
@@ -359,6 +431,9 @@ it.effect(
       expect(checkpoints.every((checkpoint) => checkpoint.workflowHistoryEquivalent)).toBe(true)
       expect(encodedAfter).toContain("renamed-run")
       expect(encodedAfter).toContain("renamed-attempt-A")
+      expect(encodedAfter).toContain("renamed-command")
+      expect(encodedAfter).toContain("renamed-claim-token-A")
+      expect(encodedAfter).toContain("renamed-operation:0")
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
       expect(encodedAfter).toContain("singleton-revision")
       expect(encodedBefore).toContain("singleton-revision")
@@ -477,19 +552,23 @@ it.effect("labels the 100-task three-read encoding experiment as a baseline", ()
         if (item._tag === "TaskWorkSpecificationReadReturned") {
           return { ...item, body: "Measure the maintained encoding.", taskId: activeTaskId, title: "Measure encoding" }
         }
-        if (item._tag === "DalphSelects" && "taskId" in item.action) {
-          if (item.action._tag === "AcquireTaskClaim" || item.action._tag === "ReadTaskWorkSpecification") {
-            return { ...item, action: { ...item.action, taskId: replaceTask(item.action.taskId) } }
+        if (item._tag === "DalphSelects" && "taskId" in item.operation) {
+          if (item.operation._tag === "AcquireTaskClaim" || item.operation._tag === "ReadTaskWorkSpecification") {
+            return { ...item, operation: { ...item.operation, taskId: replaceTask(item.operation.taskId) } }
           }
           return {
             ...item,
-            action: { ...item.action, attemptId: `attempt:${activeTaskId}:0`, taskId: replaceTask(item.action.taskId) }
+            operation: {
+              ...item.operation,
+              attemptId: `attempt:${activeTaskId}:0`,
+              taskId: replaceTask(item.operation.taskId)
+            }
           }
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported") {
           return { ...item, report: { ...item.report, attemptId: `attempt:${activeTaskId}:0` } }
         }
-        if (item._tag === "ExpectedTerminalOutcomes") {
+        if (item._tag === "ExpectedObservedOutcomes") {
           return {
             ...item,
             expected: item.expected.map((outcome) => {

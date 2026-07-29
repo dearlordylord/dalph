@@ -1,4 +1,5 @@
 import { it as effectIt } from "@effect/vitest"
+import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Option, Ref } from "effect"
 import { expect, it } from "vitest"
 import {
@@ -16,6 +17,12 @@ import {
 } from "@dalph/contracts"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import {
+  GithubIssueNumber,
+  GithubIssueTarget,
+  GithubRepositoryName,
+  GithubRepositoryOwner
+} from "../../authorities/task-tracker/github/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -28,7 +35,12 @@ import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
-import { discardFreshStagesOwnedByRecovery, runWorkflow } from "./run.js"
+import {
+  discardFreshStagesOwnedByRecovery,
+  freshWorkflowRunId,
+  runRecoveredWorkflow,
+  runSyntheticWorkflow
+} from "./run.js"
 import {
   AuthoritativeTaskClaimAcquired,
   WorkflowInterpreter,
@@ -50,6 +62,24 @@ it("drops a stale process-local stage when journal reconstruction owns its task"
 
   expect(discardFreshStagesOwnedByRecovery([stale, independent], new Set([TaskId.make("A")]))).toEqual([independent])
 })
+
+effectIt.effect("assigns fresh run identities that retain the exact structured tracker target", () =>
+  Effect.gen(function* () {
+    const target = GithubIssueTarget.make({
+      issueNumber: GithubIssueNumber.make(170),
+      owner: GithubRepositoryOwner.make("dalph"),
+      repository: GithubRepositoryName.make("orchestrator")
+    })
+    const first = yield* freshWorkflowRunId(target)
+    const second = yield* freshWorkflowRunId(target)
+
+    expect(first).not.toBe(second)
+    expect(first).toContain('"issueNumber":170')
+    expect(first).toContain('"owner":"dalph"')
+    expect(first).toContain('"repository":"orchestrator"')
+    expect(first).not.toContain("[object Object]")
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 effectIt.effect("runs an authoritative recovered transition in the shared activation loop", () =>
   Effect.gen(function* () {
@@ -95,7 +125,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
       recordTaskAttemptPlan: () => Effect.die("unused")
     })
 
-    yield* runWorkflow(
+    yield* runRecoveredWorkflow(
       FixtureTarget.make("workflow-recovered-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     ).pipe(
@@ -206,9 +236,10 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
       waitForNextExecutorWake: Effect.void
     })
 
-    yield* runWorkflow(
+    yield* runSyntheticWorkflow(
       FixtureTarget.make("workflow-fresh-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      runId
     ).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),

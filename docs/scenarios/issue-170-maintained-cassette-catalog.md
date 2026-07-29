@@ -17,19 +17,22 @@ fresh-run identity rule. The cassette runner supplies the ordinary tracker,
 claim, Git worktree, executor, trace, and journal implementations and invokes
 the production coordinator activation program.
 
+Starting the same tracker target again creates a different `RunId`; each ID
+contains the exact encoded target rather than a generic object rendering.
+
 Each registered cassette surface may consume only the current story item. A
-Dalph-selected action must match the current expected action before the story
-advances, and a tracker or executor response is returned only when its tag and
-attempt match the current production interaction. The runner cannot search
-ahead, append a journal row, invoke a reducer, assign reconstructed state, or
-select work.
+Dalph-selected operation must match the current expected operation before the
+story advances, and a tracker or executor response is returned only when its
+tag and attempt match the current production interaction. The runner cannot
+search ahead, append a journal row, invoke a reducer, assign reconstructed
+state, or select work.
 
 After Dalph records the terminal coarse executor report, the story reaches its
-one final cassette-only assertion group. The group requires the typed outcomes
-that A was claimed, one attempt for A was prepared, its worktree became ready,
-and the executor reported Running then Terminal Completed. It forbids an
-attempt for B. Provider input alone cannot satisfy those outcomes: the runner
-derives them from Dalph's recorded handling.
+one final cassette-only assertion group. The group requires the typed observed
+outcomes that A was claimed, one attempt for A was prepared, its worktree
+became ready, and the executor reported Running then Terminal Completed. It
+forbids an attempt for B. Provider input alone cannot satisfy those outcomes:
+the runner derives them from Dalph's recorded handling.
 
 There is no real GitHub, Git process, executor process, SQLite, network loss,
 crash, or retry in this deterministic story. Rerunning creates fresh controlled
@@ -41,6 +44,8 @@ Acceptance tests:
 
 - `runs the maintained singleton through production activation and stops at
   terminal executor work`
+- `runs another story with a different initial task-execution capacity`
+- `assigns a fresh exact run identity each time the same tracker target starts`
 - `requires one terminal assertion group and one owner for every decoded story
   item`
 - `rejects cassette-local contradictions and leaves an authority mismatch to

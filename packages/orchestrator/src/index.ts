@@ -213,7 +213,13 @@ export {
   makeDryRunWorkflowInterpreterLayer,
   makeLiveWorkflowInterpreterLayer
 } from "./workflow/interpretation/layers.js"
-export { freshWorkflowRunId, runWorkflow } from "./coordination/run/run.js"
+export {
+  type AllocatedFreshWorkflowRunId,
+  freshWorkflowRunId,
+  runRecoveredWorkflow,
+  runSyntheticWorkflow,
+  runWorkflow
+} from "./coordination/run/run.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,

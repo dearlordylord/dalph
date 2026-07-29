@@ -35,22 +35,22 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       target: "cassette-target",
       worktreeRoot: "/dalph/cassettes"
     },
-    { _tag: "DalphSelects", action: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", action: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", action: { _tag: "AcquireTaskClaim", taskId: "A" } },
-    { _tag: "DalphSelects", action: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", action: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
       body: "Implement the accepted singleton behavior.",
       taskId: "A",
       title: "Implement singleton"
     },
-    { _tag: "DalphSelects", action: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
-    { _tag: "DalphSelects", action: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
@@ -62,7 +62,7 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       request: "StartOrContinue"
     },
     {
-      _tag: "ExpectedTerminalOutcomes",
+      _tag: "ExpectedObservedOutcomes",
       expected: [
         { _tag: "TaskClaimed", taskId: "A" },
         { _tag: "TaskAttemptPrepared", attemptId: "attempt:A:0", taskId: "A" },

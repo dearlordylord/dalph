@@ -10,6 +10,7 @@ import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedTaskAttempt,
+  type RunId,
   TaskExecutorLocator,
   TaskId,
   WorktreeLocator
@@ -95,8 +96,8 @@ export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
 
-/** Cassette-only domain outcomes; these values are neither journal events nor provider inputs. */
-export const AuthoredTerminalOutcome = Schema.TaggedUnion({
+/** Cassette-only observed outcomes; these values are neither journal events nor provider inputs. */
+export const AuthoredObservedOutcome = Schema.TaggedUnion({
   ExecutorReported: {
     attemptId: AttemptId,
     report: Schema.Literals(["Running", "SafelySuspended", "TerminalCompleted", "TerminalFailed"])
@@ -105,7 +106,7 @@ export const AuthoredTerminalOutcome = Schema.TaggedUnion({
   TaskClaimed: { taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
-export type AuthoredTerminalOutcome = typeof AuthoredTerminalOutcome.Type
+export type AuthoredObservedOutcome = typeof AuthoredObservedOutcome.Type
 
 const RunCoordinatorFields = {
   baseSha: GitCommitSha,
@@ -122,10 +123,10 @@ const RunCoordinatorFields = {
  * released compatibility promise.
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
-  DalphSelects: { action: AuthoredCassetteDecision },
-  ExpectedTerminalOutcomes: {
-    expected: Schema.Array(AuthoredTerminalOutcome),
-    forbidden: Schema.Array(AuthoredTerminalOutcome)
+  DalphSelects: { operation: AuthoredCassetteDecision },
+  ExpectedObservedOutcomes: {
+    expected: Schema.Array(AuthoredObservedOutcome),
+    forbidden: Schema.Array(AuthoredObservedOutcome)
   },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
@@ -141,10 +142,10 @@ export type AuthoredCassetteStoryItem = typeof AuthoredCassetteStoryItem.Type
 
 export const authoredCassetteStoryItemOwners = {
   CassetteControl: ["InitialControlPolicy", "RunCoordinator", "SetTaskExecutionCapacity"],
-  DalphActionTrace: ["DalphSelects"],
+  DalphOperationTrace: ["DalphSelects"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadReturned"],
-  TerminalAssertion: ["ExpectedTerminalOutcomes"]
+  TerminalAssertion: ["ExpectedObservedOutcomes"]
 } as const
 
 export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedErrorClass<AuthoredCassetteStoryItemOwnerContradiction>()(
@@ -226,18 +227,36 @@ const startingFactsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredS
     : "authored starting facts must agree with their first controlled returns and name claims/specifications once"
 })
 
+const observedOutcomeKey = (outcome: AuthoredObservedOutcome): string =>
+  JSON.stringify(Schema.encodeUnknownSync(AuthoredObservedOutcome)(outcome))
+
+const outcomeAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const assertions = cassette.story.find((item) => item._tag === "ExpectedObservedOutcomes")
+  if (assertions?._tag !== "ExpectedObservedOutcomes") return undefined
+  const expected = assertions.expected.map(observedOutcomeKey)
+  const forbidden = assertions.forbidden.map(observedOutcomeKey)
+  return new Set(expected).size !== expected.length
+    ? "each expected observed outcome must be asserted once"
+    : new Set(forbidden).size !== forbidden.length
+      ? "each forbidden observed outcome must be asserted once"
+      : expected.some((outcome) => forbidden.includes(outcome))
+        ? "one observed outcome cannot be both expected and forbidden"
+        : undefined
+})
+
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
   .check(exactlyOneAt("RunCoordinator", () => 1, "one RunCoordinator must follow InitialControlPolicy"))
   .check(
     exactlyOneAt(
-      "ExpectedTerminalOutcomes",
+      "ExpectedObservedOutcomes",
       (length) => length - 1,
-      "one expected-and-forbidden outcome group must be the terminal story item"
+      "one expected-and-forbidden observed-outcome group must be the terminal story item"
     )
   )
   .check(startingFactsAreConsistent)
+  .check(outcomeAssertionsAreConsistent)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type
 
 export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteInteractionMismatch>()(
@@ -252,7 +271,7 @@ export class UnsupportedAuthoredCapacityChange extends Schema.TaggedErrorClass<U
 
 export class AuthoredCassetteOutcomeMismatch extends Schema.TaggedErrorClass<AuthoredCassetteOutcomeMismatch>()(
   "AuthoredCassetteOutcomeMismatch",
-  { actual: Schema.Array(AuthoredTerminalOutcome), expected: Schema.Array(AuthoredTerminalOutcome) }
+  { actual: Schema.Array(AuthoredObservedOutcome), expected: Schema.Array(AuthoredObservedOutcome) }
 ) {}
 
 interface StoryCursor {
@@ -277,7 +296,7 @@ interface StoryCursor {
     AuthoredCassetteInteractionMismatch | UnsupportedAuthoredCapacityChange
   >
   readonly consumeTerminalAssertions: Effect.Effect<
-    typeof AuthoredCassetteStoryItem.cases.ExpectedTerminalOutcomes.Type,
+    typeof AuthoredCassetteStoryItem.cases.ExpectedObservedOutcomes.Type,
     AuthoredCassetteInteractionMismatch | UnsupportedAuthoredCapacityChange
   >
   readonly consumeTrackerGraph: Effect.Effect<
@@ -338,9 +357,9 @@ const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* 
       )
     )
   )
-  const consumeTerminalAssertions = consume("ExpectedTerminalOutcomes").pipe(
+  const consumeTerminalAssertions = consume("ExpectedObservedOutcomes").pipe(
     Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedTerminalOutcomes)(item).pipe(Effect.orDie)
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedObservedOutcomes)(item).pipe(Effect.orDie)
     )
   )
   const consumeTrackerGraph = consume("TrackerGraphReadReturned").pipe(
@@ -435,9 +454,9 @@ const controlledTrace = (cursor: StoryCursor) =>
           (failure) => new TraceOutputError({ detail: `${failure._tag} at story position ${failure.storyPosition}` })
         )
       )
-      if (encodedDecision(actual) !== encodedDecision(expected.action)) {
+      if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
         return yield* new TraceOutputError({
-          detail: `expected ${encodedDecision(expected.action)}, received ${encodedDecision(actual)}`
+          detail: `expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
         })
       }
     })
@@ -445,7 +464,7 @@ const controlledTrace = (cursor: StoryCursor) =>
 
 const executorReport = (
   item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "PlannedAttemptExecutorWorkReported" }>,
-  runId: ReturnType<typeof freshWorkflowRunId>
+  runId: RunId
 ): PlannedAttemptExecutorReport => {
   const correlation = { attemptId: item.report.attemptId, runId }
   switch (item.report._tag) {
@@ -458,7 +477,7 @@ const executorReport = (
   }
 }
 
-const controlledExecutorLayer = (cursor: StoryCursor, runId: ReturnType<typeof freshWorkflowRunId>) =>
+const controlledExecutorLayer = (cursor: StoryCursor, runId: RunId) =>
   Layer.effect(
     PlannedAttemptExecutor,
     Effect.gen(function* () {
@@ -505,7 +524,7 @@ const controlledExecutorLayer = (cursor: StoryCursor, runId: ReturnType<typeof f
 
 const reportOutcome = (
   report: PlannedAttemptExecutorReport
-): Extract<AuthoredTerminalOutcome, { readonly _tag: "ExecutorReported" }> => ({
+): Extract<AuthoredObservedOutcome, { readonly _tag: "ExecutorReported" }> => ({
   _tag: "ExecutorReported",
   attemptId: report.correlation.attemptId,
   report:
@@ -519,7 +538,7 @@ const reportOutcome = (
 const worktreeOutcome = (
   event: Extract<JournalRecord["event"], { readonly _tag: "TaskWorktreeReady" }>,
   worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
-): ReadonlyArray<AuthoredTerminalOutcome> => {
+): ReadonlyArray<AuthoredObservedOutcome> => {
   const plannedAttempt = Option.getOrThrow(Option.fromUndefinedOr(worktreeAttemptByOperation.get(event.operationId)))
   return [{ _tag: "TaskWorktreeReady", attemptId: plannedAttempt.attemptId, taskId: plannedAttempt.taskId }]
 }
@@ -527,7 +546,7 @@ const worktreeOutcome = (
 const observedOutcomeFor = (
   event: JournalRecord["event"],
   worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
-): ReadonlyArray<AuthoredTerminalOutcome> => {
+): ReadonlyArray<AuthoredObservedOutcome> => {
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimed", taskId: event.claim.taskId }]
   if (event._tag === "TaskAttemptPlanned") {
     return [
@@ -545,7 +564,7 @@ const observedOutcomeFor = (
   return []
 }
 
-const observedOutcomes = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<AuthoredTerminalOutcome> => {
+const observedOutcomes = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<AuthoredObservedOutcome> => {
   const worktreeAttemptByOperation = new Map(
     records.flatMap(({ event }) =>
       event._tag === "TaskWorktreeReconciliationIntended"
@@ -556,15 +575,15 @@ const observedOutcomes = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<
   return records.flatMap(({ event }) => observedOutcomeFor(event, worktreeAttemptByOperation))
 }
 
-const encodedOutcomes = (outcomes: ReadonlyArray<AuthoredTerminalOutcome>): string =>
-  JSON.stringify(Schema.encodeUnknownSync(Schema.Array(AuthoredTerminalOutcome))(outcomes))
+const encodedOutcomes = (outcomes: ReadonlyArray<AuthoredObservedOutcome>): string =>
+  JSON.stringify(Schema.encodeUnknownSync(Schema.Array(AuthoredObservedOutcome))(outcomes))
 
 export interface AuthoredScenarioCassetteRun {
   readonly cassette: AuthoredScenarioCassette
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly records: ReadonlyArray<JournalRecord>
-  readonly runId: ReturnType<typeof freshWorkflowRunId>
-  readonly terminalOutcomes: ReadonlyArray<AuthoredTerminalOutcome>
+  readonly runId: RunId
+  readonly observedOutcomes: ReadonlyArray<AuthoredObservedOutcome>
 }
 
 /** Decodes and drives one story through the production coordinator activation program. */
@@ -576,7 +595,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
   const cursor = yield* makeStoryCursor(cassette.story)
   const initial = yield* cursor.consumeInitialPolicy
   const command = yield* cursor.consumeRunCoordinator
-  const runId = freshWorkflowRunId(command.target)
+  const runId = yield* freshWorkflowRunId(command.target)
   const trace = controlledTrace(cursor)
   const journalLayer = memoryJournalStoreLayer
   const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
@@ -615,25 +634,25 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
   ).pipe(Layer.provideMerge(journalLayer))
 
   const records = yield* Effect.gen(function* () {
-    yield* runWorkflow(command.target, initial.policy).pipe(Effect.provideService(WorkflowTrace, trace))
+    yield* runWorkflow(command.target, initial.policy, runId).pipe(Effect.provideService(WorkflowTrace, trace))
     return yield* (yield* JournalStore).read(runId)
   }).pipe(Effect.provide(workflowLayer))
   const assertions = yield* cursor.consumeTerminalAssertions
-  const terminalOutcomes = observedOutcomes(records)
+  const cassetteOutcomes = observedOutcomes(records)
   if (
-    encodedOutcomes(assertions.expected) !== encodedOutcomes(terminalOutcomes) ||
+    encodedOutcomes(assertions.expected) !== encodedOutcomes(cassetteOutcomes) ||
     assertions.forbidden.some((forbidden) =>
-      terminalOutcomes.some((actual) => encodedOutcomes([actual]) === encodedOutcomes([forbidden]))
+      cassetteOutcomes.some((actual) => encodedOutcomes([actual]) === encodedOutcomes([forbidden]))
     )
   ) {
-    return yield* new AuthoredCassetteOutcomeMismatch({ actual: terminalOutcomes, expected: assertions.expected })
+    return yield* new AuthoredCassetteOutcomeMismatch({ actual: cassetteOutcomes, expected: assertions.expected })
   }
   return {
     cassette,
     history: reduceWorkflowJournalHistory(runId, records),
     records,
     runId,
-    terminalOutcomes
+    observedOutcomes: cassetteOutcomes
   } satisfies AuthoredScenarioCassetteRun
 })
 
@@ -643,14 +662,14 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string =>
     : item._tag === "RunCoordinator"
       ? `The maintainer asks Dalph to coordinate ${JSON.stringify(item.target)}.`
       : item._tag === "DalphSelects"
-        ? `Dalph selects ${item.action._tag}.`
+        ? `Dalph selects ${item.operation._tag}.`
         : item._tag === "TrackerGraphReadReturned"
           ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
           : item._tag === "TaskWorkSpecificationReadReturned"
             ? `The task tracker returns "${item.title}" for task ${item.taskId}.`
             : item._tag === "PlannedAttemptExecutorWorkReported"
               ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
-              : item._tag === "ExpectedTerminalOutcomes"
+              : item._tag === "ExpectedObservedOutcomes"
                 ? `The story requires ${item.expected.length} outcomes and forbids ${item.forbidden.length}.`
                 : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
 
