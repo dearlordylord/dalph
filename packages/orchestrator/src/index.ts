@@ -24,6 +24,7 @@ export {
   TrackerTask
 } from "./authorities/task-tracker/task.js"
 export { AuthenticatedOperatorIdentity, ControlCommandId } from "./control/identity.js"
+export { InitialControlPolicy } from "./control/policy.js"
 export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
 export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"
 export {
@@ -212,7 +213,7 @@ export {
   makeDryRunWorkflowInterpreterLayer,
   makeLiveWorkflowInterpreterLayer
 } from "./workflow/interpretation/layers.js"
-export { runWorkflow } from "./coordination/run/run.js"
+export { freshWorkflowRunId, runWorkflow } from "./coordination/run/run.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,

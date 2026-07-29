@@ -421,6 +421,12 @@ zero or one position; the executor does not request, declare, acquire, or
 release it. For example, continuing task A through the executor requires one
 position, while reading task A from GitHub requires none.
 
+Fresh coordinator creation receives one schema-decoded `InitialControlPolicy`.
+The current policy contains task-execution capacity and is passed to the one
+process-local admission controller. There is no production live-capacity
+change in this slice; a cassette cannot mutate the controller on production's
+behalf.
+
 A task position is reserved before Dalph starts executor work for one planned
 attempt. After start, the position is correlated by that attempt's `RunId` and
 `AttemptId` and remains occupied until the executor returns a terminal result

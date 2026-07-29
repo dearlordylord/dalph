@@ -2,7 +2,7 @@ import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "../activation/coordinator.js"
 import { type PlannedTaskAttempt, RunId, type TaskId } from "@dalph/contracts"
 import { type OperationId } from "../../workflow/identity.js"
-import { type TaskWorkCapacity } from "../admission/capacity.js"
+import { type InitialControlPolicy } from "../../control/policy.js"
 import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-activation.js"
@@ -37,6 +37,10 @@ import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workfl
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
 
+/** Dalph's fresh-run identity rule; authored cassettes never supply this value. */
+export const freshWorkflowRunId = (target: TrackerTarget): RunId =>
+  RunId.make(`workflow:${typeof target === "string" ? target : Object.prototype.toString.call(target)}`)
+
 /** Journal reconstruction exclusively owns every task it has rediscovered. */
 export const discardFreshStagesOwnedByRecovery = (
   stages: ReadonlyArray<FreshWorkflowStage>,
@@ -44,7 +48,10 @@ export const discardFreshStagesOwnedByRecovery = (
 ): ReadonlyArray<FreshWorkflowStage> =>
   stages.filter(({ transition }) => !recoveredTaskIds.has(runnableTransitionTaskId(transition)))
 
-export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerTarget, capacity: TaskWorkCapacity) {
+export const runWorkflow = Effect.fn("Workflow.run")(function* (
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy
+) {
   const allocator = yield* OperationIdAllocator
   const interpreter = yield* WorkflowInterpreter
   const claimPlanner = yield* TaskClaimAcquisitionPlanner
@@ -64,7 +71,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
   const traceEmission = yield* Semaphore.make(1)
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
-    capacity,
+    capacity: initialControlPolicy.taskExecutionCapacity,
     reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
@@ -240,10 +247,7 @@ export const runWorkflow = Effect.fn("Workflow.run")(function* (target: TrackerT
       const coordinator = yield* makeActivationCoordinator({
         admissionController,
         readFrontier: readFrontier(),
-        runId:
-          recovery._tag === "AuthoritativeRunRecoveryActivation"
-            ? recovery.runId
-            : RunId.make(`workflow:${typeof target === "string" ? target : Object.prototype.toString.call(target)}`),
+        runId: recovery._tag === "AuthoritativeRunRecoveryActivation" ? recovery.runId : freshWorkflowRunId(target),
         runTransition: (transition, execution) =>
           Effect.gen(function* () {
             const stage = (yield* Ref.get(stages)).find((candidate) => candidate.transition === transition)

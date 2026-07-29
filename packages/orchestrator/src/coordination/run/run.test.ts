@@ -18,6 +18,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { InitialControlPolicy } from "../../control/policy.js"
 import type { FreshWorkflowStage } from "./fresh-activation.js"
 import { RunRecoveryActivation } from "./recovery-activation.js"
 import { FrontierExplanation, RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -94,7 +95,10 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
       recordTaskAttemptPlan: () => Effect.die("unused")
     })
 
-    yield* runWorkflow(FixtureTarget.make("workflow-recovered-target"), TaskWorkCapacity.make(1)).pipe(
+    yield* runWorkflow(
+      FixtureTarget.make("workflow-recovered-target"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -202,7 +206,10 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
       waitForNextExecutorWake: Effect.void
     })
 
-    yield* runWorkflow(FixtureTarget.make("workflow-fresh-target"), TaskWorkCapacity.make(1)).pipe(
+    yield* runWorkflow(
+      FixtureTarget.make("workflow-fresh-target"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),

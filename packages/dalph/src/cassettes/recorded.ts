@@ -262,15 +262,16 @@ const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>)
 const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
-    : {
-        appliedThroughOccurrenceCount: history.runState.workflowHistory.records.length,
-        workflowHistory: history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
-      }
+    : history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
+
+const appliedOccurrencePosition = (history: ReturnType<typeof reduceWorkflowJournalHistory>): number =>
+  history._tag === "InvalidWorkflowJournalHistory" ? 0 : history.runState.workflowHistory.records.length
 
 export interface RecordedCassetteCheckpoint {
+  readonly appliedOccurrencePositionEquivalent: boolean
   readonly checkpoint: number
-  readonly decisionsEquivalent: boolean
-  readonly stateEquivalent: boolean
+  readonly operationalStateEquivalent: boolean
+  readonly pureSelectionEquivalent: boolean
   readonly workflowHistoryEquivalent: boolean
 }
 
@@ -279,12 +280,13 @@ const checkpointComparison = (
   expected: ReturnType<typeof reduceWorkflowJournalHistory>,
   actual: ReturnType<typeof reduceWorkflowJournalHistory>
 ): RecordedCassetteCheckpoint => ({
+  appliedOccurrencePositionEquivalent: appliedOccurrencePosition(expected) === appliedOccurrencePosition(actual),
   checkpoint,
-  decisionsEquivalent:
+  pureSelectionEquivalent:
     expected._tag === "ValidWorkflowJournalHistory" &&
     actual._tag === "ValidWorkflowJournalHistory" &&
     semanticJson(expected.recoveryFrontier) === semanticJson(actual.recoveryFrontier),
-  stateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
+  operationalStateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
   workflowHistoryEquivalent:
     semanticJson(semanticWorkflowHistory(expected)) === semanticJson(semanticWorkflowHistory(actual))
 })

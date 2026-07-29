@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
-import { defaultTaskWorkCapacity, FixtureTarget, runWorkflow } from "@dalph/orchestrator"
+import { defaultTaskWorkCapacity, FixtureTarget, InitialControlPolicy, runWorkflow } from "@dalph/orchestrator"
 
 export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()("Cli.CliUsageError", {
   usage: Schema.String,
@@ -8,7 +8,7 @@ export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()("Cli
 }) {}
 
 const executeDryRun = Effect.fn("Cli.executeDryRun")(function* (target: FixtureTarget) {
-  yield* runWorkflow(target, defaultTaskWorkCapacity)
+  yield* runWorkflow(target, InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }))
 })
 
 const runCommand = Command.make(

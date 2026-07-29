@@ -124,6 +124,13 @@ position. For example, Dalph may require one position before it asks the
 executor to continue task A, while a tracker-only read requires none.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
+**Initial control policy**:
+The schema-decoded values Dalph uses when it creates a fresh coordinator. The
+current production slice contains task-execution capacity only. Supplying this
+startup value does not authorize a live policy change or override recovered
+policy; those behaviors require their own accepted protocol.
+_Avoid_: Mutable coordinator settings, live capacity command, recovered policy
+
 **Planned-attempt executor-work suspension**:
 The executor's proof that its complete work for one exact planned task attempt
 is safely stopped, has preserved what it needs to resume the same attempt, and

@@ -11,362 +11,124 @@ import {
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
+  assertExactlyOneAuthoredCassetteStoryItemOwner,
+  AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   compareRecordedCassetteCheckpoints,
   foldRecordedCassette,
+  invertCassetteIdentityRenaming,
+  maintainedAuthoredCassetteCatalog,
   measureTrackerObservationEncoding,
   projectRecordedCassette,
   RecordedCassette,
-  invertCassetteIdentityRenaming,
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
   runAuthoredScenarioCassette,
+  singletonTaskCompletesAuthoredCassette,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 
-const graph = {
-  revision: "singleton-revision",
-  tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-}
-const correlation = { attemptId: "attempt:A:0", runId: "cassette-singleton" }
-const singletonCassette = {
-  _tag: "AuthoredScenarioCassette",
-  actorCommands: [
-    {
-      _tag: "RunCoordinator",
-      baseSha: "1111111111111111111111111111111111111111",
-      capacity: 1,
-      claimOwner: "cassette-owner",
-      claimTokenPrefix: "cassette-claim",
-      executor: "executor:controlled-fake",
-      runId: "cassette-singleton",
-      target: "cassette-target",
-      worktreeRoot: "/dalph/cassettes"
-    }
-  ],
-  expectedDecisions: [
-    { _tag: "ReadTrackerGraph", target: "cassette-target" },
-    { _tag: "ReadTrackerGraph", target: "cassette-target" },
-    { _tag: "AcquireTaskClaim", taskId: "A" },
-    { _tag: "ReadTrackerGraph", target: "cassette-target" },
-    { _tag: "ReadTaskWorkSpecification", taskId: "A" },
-    { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
-  ],
-  expectedVisibleBehavior: {
-    forbiddenJournalOccurrenceTags: ["ControlCommandRecorded"],
-    journalHistory: "ValidWorkflowJournalHistory",
-    plannedAttemptExecutorReports: [
-      { _tag: "Running", correlation },
-      { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
-    ]
-  },
-  name: "one open task completes its executor work",
-  outsideOccurrences: [
-    { _tag: "TrackerGraphReadReturned", graph },
-    { _tag: "TrackerGraphReadReturned", graph },
-    { _tag: "TrackerGraphReadReturned", graph },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the accepted singleton behavior.",
-      taskId: "A",
-      title: "Implement singleton"
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", correlation },
-      request: "StartOrContinue"
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", correlation, result: { _tag: "Completed" } },
-      request: "StartOrContinue"
-    }
-  ],
-  schemaVersion: 1,
-  startingFacts: {
-    executorWork: "NoPriorReport",
-    journal: "Empty",
-    taskClaims: [],
-    taskWorkSpecifications: [
-      { body: "Implement the accepted singleton behavior.", taskId: "A", title: "Implement singleton" }
-    ],
-    trackerGraph: graph,
-    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
-  }
-}
+const singleton = singletonTaskCompletesAuthoredCassette
 
-const representativeTaskCount = 100
-const representativeTaskIds = Array.from(
-  { length: representativeTaskCount },
-  (_unused, index) => `task-${index.toString().padStart(3, "0")}`
-)
-const representativeActiveTaskId = representativeTaskIds.at(-1) ?? "task-099"
-const representativeGraph = {
-  revision: "representative-graph-revision",
-  tasks: representativeTaskIds.map((id, index) => ({
-    id,
-    lifecycle: { _tag: id === representativeActiveTaskId ? "Open" : "CompletedSuccessfully" },
-    parentTaskId: null,
-    prerequisiteIds: index === 0 ? [] : [representativeTaskIds[index - 1]]
-  }))
-}
-const representativeCorrelation = {
-  attemptId: `attempt:${representativeActiveTaskId}:0`,
-  runId: "cassette-representative-graph"
-}
-const representativeCassette = {
-  ...singletonCassette,
-  actorCommands: [
-    {
-      ...singletonCassette.actorCommands[0],
-      runId: representativeCorrelation.runId,
-      target: "representative-cassette-target"
-    }
-  ],
-  expectedDecisions: singletonCassette.expectedDecisions.map((decision) => {
-    if (decision._tag === "ReadTrackerGraph") return { ...decision, target: "representative-cassette-target" }
-    if (decision._tag === "AcquireTaskClaim" || decision._tag === "ReadTaskWorkSpecification") {
-      return { ...decision, taskId: representativeActiveTaskId }
-    }
-    return { ...decision, attemptId: representativeCorrelation.attemptId, taskId: representativeActiveTaskId }
-  }),
-  expectedVisibleBehavior: {
-    ...singletonCassette.expectedVisibleBehavior,
-    plannedAttemptExecutorReports: [
-      { _tag: "Running", correlation: representativeCorrelation },
-      { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } }
-    ]
-  },
-  name: "one open task in a representative repeatedly refreshed graph",
-  outsideOccurrences: [
-    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
-    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
-    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the active task in the representative graph.",
-      taskId: representativeActiveTaskId,
-      title: "Implement representative active task"
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", correlation: representativeCorrelation },
-      request: "StartOrContinue"
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } },
-      request: "StartOrContinue"
-    }
-  ],
-  startingFacts: {
-    ...singletonCassette.startingFacts,
-    taskWorkSpecifications: [
-      {
-        body: "Implement the active task in the representative graph.",
-        taskId: representativeActiveTaskId,
-        title: "Implement representative active task"
-      }
-    ],
-    trackerGraph: representativeGraph
-  }
-}
-
-it.effect("runs an authored cassette through the production loop and matches its declared decisions", () =>
+it.effect("runs the maintained singleton through production activation and stops at terminal executor work", () =>
   Effect.gen(function* () {
-    const result = yield* runAuthoredScenarioCassette(singletonCassette)
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.singletonTaskCompletes)
+    const encoded = yield* Schema.encodeUnknownEffect(AuthoredScenarioCassette)(run.cassette)
+    const terminalAssertions = run.cassette.story.at(-1)
+    const lastEvent = run.records.at(-1)?.event
 
-    expect(result.decisions).toEqual(result.cassette.expectedDecisions)
-    expect(result.history._tag).toBe("ValidWorkflowJournalHistory")
-    expect(result.visibleBehavior.plannedAttemptExecutorReports).toEqual(
-      result.cassette.expectedVisibleBehavior.plannedAttemptExecutorReports
+    expect(JSON.stringify(encoded)).not.toContain("runId")
+    expect(run.runId).toBe("workflow:cassette-target")
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+    expect(run.terminalOutcomes).toEqual(
+      terminalAssertions?._tag === "ExpectedTerminalOutcomes" ? terminalAssertions.expected : []
     )
-    expect(renderAuthoredCassetteLyrics(result.cassette)).toContain(
-      "The journal must not contain ControlCommandRecorded."
+    expect(run.records.at(-1)?.event._tag).toBe("PlannedAttemptExecutorWorkReported")
+    expect(lastEvent?._tag === "PlannedAttemptExecutorWorkReported" ? lastEvent.report._tag : undefined).toBe(
+      "Terminal"
     )
-    expect(result.records.map(({ event }) => event._tag)).toContain("PlannedAttemptExecutorWorkResponsibilityBegan")
-    expect(result.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("The story requires 5 outcomes and forbids 1.")
   })
 )
 
-it.effect("accepts generated identities only through one consistent renaming", () =>
+it.effect("requires one terminal assertion group and one owner for every decoded story item", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
-    const recorded = yield* projectRecordedCassette(run.records)
-    const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
-      attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
-      claimTokens: [{ from: "cassette-claim:A:cassette:cassette-singleton:operation:2", to: "renamed-claim-token-A" }],
-      controlCommandIds: [{ from: "rename-command", to: "renamed-command" }],
-      operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
-        from: `cassette:cassette-singleton:operation:${ordinal}`,
-        to: `renamed-operation:${ordinal}`
-      })),
-      runIds: [{ from: "cassette-singleton", to: "renamed-run" }],
-      taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
-      worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
-    })
-    const renamed = yield* renameRecordedCassette(recorded, renaming)
-    const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
-      run.records,
-      renamed,
-      invertCassetteIdentityRenaming(renaming)
-    )
-
-    expect(renamed.runId).toBe("renamed-run")
-    expect(
-      checkpoints.every(
-        ({ decisionsEquivalent, stateEquivalent, workflowHistoryEquivalent }) =>
-          decisionsEquivalent && stateEquivalent && workflowHistoryEquivalent
-      )
-    ).toBe(true)
-    const command = ControlCommand.cases.RequestRunPause.make({
-      commandId: ControlCommandId.make("rename-command"),
-      operatorId: AuthenticatedOperatorIdentity.make("rename-operator"),
-      runId: recorded.runId
-    })
-    const renamedWithCommand = yield* renameRecordedCassette(
-      RecordedCassette.make({
-        ...recorded,
-        entries: [{ _tag: "ControlCommandRecorded", command }, ...recorded.entries]
-      }),
-      renaming
-    )
-    const renamedCommand = renamedWithCommand.entries[0]
-    expect(renamedCommand?._tag).toBe("ControlCommandRecorded")
-    if (renamedCommand?._tag === "ControlCommandRecorded") {
-      expect(renamedCommand.command.commandId).toBe("renamed-command")
+    const withoutAssertions = {
+      ...singleton,
+      story: singleton.story.filter((item) => item._tag !== "ExpectedTerminalOutcomes")
     }
-    const inconsistent = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
-      ...renaming,
-      operationIds: [
-        { from: "operation-a", to: "same-operation" },
-        { from: "operation-b", to: "same-operation" }
+    expect((yield* runAuthoredScenarioCassette(withoutAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
+
+    const duplicateAssertions = { ...singleton, story: [...singleton.story, singleton.story.at(-1)] }
+    expect((yield* runAuthoredScenarioCassette(duplicateAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
+
+    const nonTerminalAssertions = {
+      ...singleton,
+      story: [...singleton.story.slice(0, -2), singleton.story.at(-1), singleton.story.at(-2)]
+    }
+    expect((yield* runAuthoredScenarioCassette(nonTerminalAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
+
+    const noOwner = yield* assertExactlyOneAuthoredCassetteStoryItemOwner("UnknownTag").pipe(Effect.flip)
+    expect(noOwner).toMatchObject({ _tag: "AuthoredCassetteStoryItemOwnerContradiction", registrations: [] })
+    const duplicateOwner = yield* assertExactlyOneAuthoredCassetteStoryItemOwner("DalphSelects", {
+      First: ["DalphSelects"],
+      Second: ["DalphSelects"]
+    }).pipe(Effect.flip)
+    expect(duplicateOwner).toMatchObject({
+      _tag: "AuthoredCassetteStoryItemOwnerContradiction",
+      registrations: ["First", "Second"],
+      tag: "DalphSelects"
+    })
+  })
+)
+
+it.effect("fails at an unsupported chronological capacity change without changing production admission", () =>
+  Effect.gen(function* () {
+    const withUnsupportedChange = {
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, 2),
+        { _tag: "SetTaskExecutionCapacity", capacity: 2 },
+        ...singleton.story.slice(2)
       ]
-    }).pipe(Effect.flip)
-    expect(inconsistent._tag).toBe("SchemaError")
-  })
-)
-
-it.effect("reports encoded journal and cassette sizes for changed and unchanged graph observations", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(representativeCassette)
-    const recorded = yield* projectRecordedCassette(run.records)
-
-    expect(measureTrackerObservationEncoding(run.records, recorded)).toMatchInlineSnapshot(`
-      {
-        "changedGraphObservations": {
-          "journalBytes": 24586,
-          "occurrenceCount": 1,
-          "recordedCassetteBytes": 24593,
-        },
-        "unchangedGraphReconfirmations": {
-          "journalBytes": 11829,
-          "occurrenceCount": 2,
-          "recordedCassetteBytes": 11747,
-        },
-      }
-    `)
-  })
-)
-
-it.effect("round-trips every journaled occurrence and preserves state and decisions after every prefix", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
-    const recorded = yield* projectRecordedCassette(run.records)
-    const encoded = yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded)
-    const decoded = yield* Schema.decodeUnknownEffect(RecordedCassette)(encoded)
-    const encodedEntries = Reflect.get(encoded, "entries")
-
-    expect(decoded.entries).toHaveLength(run.records.length)
-    expect(JSON.stringify(encodedEntries)).not.toMatch(/"key"|"position"|"version"/)
-    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
-    expect(verifyRecordedCassetteRoundTrip(run.records, recorded)).toEqual(
-      run.records.map((_record, index) => ({
-        checkpoint: index + 1,
-        decisionsEquivalent: true,
-        stateEquivalent: true,
-        workflowHistoryEquivalent: true
-      }))
-    )
-    expect(renderRecordedCassetteLyrics(recorded)).toContain(
-      "Dalph coordinator began executor-work responsibility for task A, attempt attempt:A:0."
-    )
-  })
-)
-
-it.effect("does not invent an authored outside occurrence that Dalph never observes", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: [
-        ...singletonCassette.outsideOccurrences,
-        {
-          _tag: "TaskWorkSpecificationEditedWithoutDalphObservation",
-          body: "This edit happens after Dalph's final read.",
-          taskId: "A",
-          title: "Unobserved edit"
-        }
-      ]
-    })
-    const recorded = yield* projectRecordedCassette(run.records)
-
-    expect(run.cassette.outsideOccurrences.map(({ _tag }) => _tag)).toContain(
-      "TaskWorkSpecificationEditedWithoutDalphObservation"
-    )
-    expect(recorded.entries.map(({ _tag }) => _tag)).not.toContain("TaskWorkSpecificationEditedWithoutDalphObservation")
-    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
-      "Another person edits task A, but Dalph never observes that edit."
-    )
-  })
-)
-
-it.effect("rejects an executor entry for a different planned attempt", () =>
-  Effect.gen(function* () {
-    const mismatched = {
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
-        occurrence._tag === "PlannedAttemptExecutorWorkReported" && "report" in occurrence
-          ? {
-              ...occurrence,
-              report: {
-                ...occurrence.report,
-                correlation: { ...occurrence.report.correlation, attemptId: "another-attempt" }
-              }
-            }
-          : occurrence
-      )
     }
-    const failure = yield* runAuthoredScenarioCassette(mismatched).pipe(Effect.flip)
-    expect(failure._tag).toBe("ControlledFakeExecutorMismatch")
+    const failure = yield* runAuthoredScenarioCassette(withUnsupportedChange).pipe(Effect.flip)
+    expect(failure._tag).toBe("TraceOutput.TraceOutputError")
+    expect("detail" in failure ? failure.detail : "").toContain("UnsupportedAuthoredCapacityChange")
   })
 )
 
-it.effect("fails typed authored boundaries and declared behavior mismatches", () =>
+it.effect("rejects cassette-local contradictions and leaves an authority mismatch to its ordinary boundary", () =>
   Effect.gen(function* () {
-    const inconsistentStartingFacts = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
+    const inconsistentGraph = {
+      ...singleton,
       startingFacts: {
-        ...singletonCassette.startingFacts,
-        trackerGraph: { ...graph, revision: "not-the-first-return" }
+        ...singleton.startingFacts,
+        trackerGraph: { ...singleton.startingFacts.trackerGraph, revision: "not-the-first-return" }
       }
-    }).pipe(Effect.flip)
-    expect(inconsistentStartingFacts._tag).toBe("SchemaError")
+    }
+    expect((yield* runAuthoredScenarioCassette(inconsistentGraph).pipe(Effect.flip))._tag).toBe("SchemaError")
 
-    const duplicateStartingSpecification = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
+    const authorityMismatch = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "TaskWorkSpecificationReadReturned" ? { ...item, taskId: "B" } : item
+      ),
       startingFacts: {
-        ...singletonCassette.startingFacts,
-        taskWorkSpecifications: [
-          ...singletonCassette.startingFacts.taskWorkSpecifications,
-          ...singletonCassette.startingFacts.taskWorkSpecifications
-        ]
+        ...singleton.startingFacts,
+        taskWorkSpecifications: [{ ...singleton.startingFacts.taskWorkSpecifications[0], taskId: "B" }]
       }
-    }).pipe(Effect.flip)
-    expect(duplicateStartingSpecification._tag).toBe("SchemaError")
+    }
+    expect((yield* runAuthoredScenarioCassette(authorityMismatch).pipe(Effect.flip))._tag).toBe(
+      "TrackerGraphReader.AdapterReadError"
+    )
+  })
+)
 
+it.effect("reports mismatches through the surface that owns the current story item", () =>
+  Effect.gen(function* () {
     const existingClaim = {
       _tag: "ActiveTaskClaim",
       operationId: "existing-claim-operation",
@@ -374,167 +136,385 @@ it.effect("fails typed authored boundaries and declared behavior mismatches", ()
       taskId: "A",
       token: "existing-claim-token"
     }
-    const duplicateStartingClaim = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      startingFacts: { ...singletonCassette.startingFacts, taskClaims: [existingClaim, existingClaim] }
-    }).pipe(Effect.flip)
-    expect(duplicateStartingClaim._tag).toBe("SchemaError")
+    const duplicateClaims = {
+      ...singleton,
+      startingFacts: { ...singleton.startingFacts, taskClaims: [existingClaim, existingClaim] }
+    }
+    expect((yield* runAuthoredScenarioCassette(duplicateClaims).pipe(Effect.flip))._tag).toBe("SchemaError")
 
-    const claimConflict = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      startingFacts: { ...singletonCassette.startingFacts, taskClaims: [existingClaim] }
-    }).pipe(Effect.flip)
-    expect(claimConflict._tag).toBe("TrackerMutation.TaskClaimConflict")
-
-    const onlyOneGraphReturn = {
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.filter(
-        (occurrence, index) => occurrence._tag !== "TrackerGraphReadReturned" || index === 0
+    const wrongExpectedAction = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === 2 && item._tag === "DalphSelects"
+          ? { ...item, action: { _tag: "ReadTrackerGraph", target: "wrong-target" } }
+          : item
       )
     }
-    const noGraphReturn = yield* runAuthoredScenarioCassette(onlyOneGraphReturn).pipe(Effect.flip)
-    expect(noGraphReturn._tag).toBe("TrackerGraphReader.AdapterReadError")
-
-    const invalidGraph = { revision: "invalid-duplicate-task", tasks: [graph.tasks[0], graph.tasks[0]] }
-    const invalidGraphReturn = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
-        occurrence._tag === "TrackerGraphReadReturned" ? { ...occurrence, graph: invalidGraph } : occurrence
-      ),
-      startingFacts: { ...singletonCassette.startingFacts, trackerGraph: invalidGraph }
-    }).pipe(Effect.flip)
-    expect(invalidGraphReturn._tag).toBe("TrackerGraphReader.AdapterReadError")
-
-    const withoutSpecification = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.filter(
-        (occurrence) => occurrence._tag !== "TaskWorkSpecificationReadReturned"
-      )
-    }).pipe(Effect.flip)
-    expect(withoutSpecification._tag).toBe("TrackerGraphReader.AdapterReadError")
-
-    const wrongSpecification = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
-        occurrence._tag === "TaskWorkSpecificationReadReturned" ? { ...occurrence, taskId: "B" } : occurrence
-      )
-    }).pipe(Effect.flip)
-    expect(wrongSpecification._tag).toBe("SchemaError")
-
-    const wrongRuntimeSpecification = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
-        occurrence._tag === "TaskWorkSpecificationReadReturned" ? { ...occurrence, taskId: "B" } : occurrence
-      ),
-      startingFacts: {
-        ...singletonCassette.startingFacts,
-        taskWorkSpecifications: [{ ...singletonCassette.startingFacts.taskWorkSpecifications[0], taskId: "B" }]
-      }
-    }).pipe(Effect.flip)
-    expect(wrongRuntimeSpecification._tag).toBe("TrackerGraphReader.AdapterReadError")
-
-    const decisionMismatch = yield* runAuthoredScenarioCassette({ ...singletonCassette, expectedDecisions: [] }).pipe(
-      Effect.flip
+    expect((yield* runAuthoredScenarioCassette(wrongExpectedAction).pipe(Effect.flip))._tag).toBe(
+      "TraceOutput.TraceOutputError"
     )
-    expect(decisionMismatch._tag).toBe("AuthoredCassetteDecisionMismatch")
 
-    const visibleBehaviorMismatch = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      expectedVisibleBehavior: { ...singletonCassette.expectedVisibleBehavior, plannedAttemptExecutorReports: [] }
-    }).pipe(Effect.flip)
-    expect(visibleBehaviorMismatch._tag).toBe("AuthoredCassetteVisibleBehaviorMismatch")
-
-    const suspendStep = yield* runAuthoredScenarioCassette({
-      ...singletonCassette,
-      outsideOccurrences: singletonCassette.outsideOccurrences.map((occurrence) =>
-        occurrence._tag === "PlannedAttemptExecutorWorkReported" ? { ...occurrence, request: "Suspend" } : occurrence
+    const wrongTrackerItem = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === 3 ? { _tag: "DalphSelects", action: { _tag: "ReadTrackerGraph", target: "cassette-target" } } : item
       )
-    }).pipe(Effect.flip)
-    expect(suspendStep._tag).toBe("ControlledFakeExecutorMismatch")
+    }
+    expect((yield* runAuthoredScenarioCassette(wrongTrackerItem).pipe(Effect.flip))._tag).toBe(
+      "TrackerGraphReader.AdapterReadError"
+    )
+
+    const wrongSpecificationItem = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "TaskWorkSpecificationReadReturned"
+          ? { _tag: "DalphSelects", action: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }
+          : item
+      )
+    }
+    expect((yield* runAuthoredScenarioCassette(wrongSpecificationItem).pipe(Effect.flip))._tag).toBe(
+      "TrackerGraphReader.AdapterReadError"
+    )
+
+    const invalidGraph = {
+      revision: "invalid-duplicate-task",
+      tasks: [singleton.startingFacts.trackerGraph.tasks[0], singleton.startingFacts.trackerGraph.tasks[0]]
+    }
+    const invalidGraphStory = {
+      ...singleton,
+      startingFacts: { ...singleton.startingFacts, trackerGraph: invalidGraph },
+      story: singleton.story.map((item) =>
+        item._tag === "TrackerGraphReadReturned" ? { ...item, graph: invalidGraph } : item
+      )
+    }
+    expect((yield* runAuthoredScenarioCassette(invalidGraphStory).pipe(Effect.flip))._tag).toBe(
+      "TrackerGraphReader.AdapterReadError"
+    )
+
+    const wrongExecutorItem = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === 13 ? { _tag: "DalphSelects", action: { _tag: "AcquireTaskClaim", taskId: "A" } } : item
+      )
+    }
+    expect((yield* runAuthoredScenarioCassette(wrongExecutorItem).pipe(Effect.flip))._tag).toBe(
+      "ControlledFakeExecutorMismatch"
+    )
+
+    const wrongAttempt = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported"
+          ? { ...item, report: { ...item.report, attemptId: "another-attempt" } }
+          : item
+      )
+    }
+    expect((yield* runAuthoredScenarioCassette(wrongAttempt).pipe(Effect.flip))._tag).toBe(
+      "ControlledFakeExecutorMismatch"
+    )
   })
 )
 
-it.effect("rejects empty and invalid journals without exposing a partial recording", () =>
+it.effect("derives failed and safely-suspended executor outcomes only from recorded handling", () =>
+  Effect.gen(function* () {
+    const failed = {
+      ...singleton,
+      story: singleton.story.map((item) => {
+        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") {
+          return { ...item, report: { ...item.report, result: { _tag: "Failed" } } }
+        }
+        if (item._tag === "ExpectedTerminalOutcomes") {
+          return {
+            ...item,
+            expected: item.expected.map((outcome) =>
+              outcome._tag === "ExecutorReported" && outcome.report === "TerminalCompleted"
+                ? { ...outcome, report: "TerminalFailed" }
+                : outcome
+            )
+          }
+        }
+        return item
+      })
+    }
+    const failedRun = yield* runAuthoredScenarioCassette(failed)
+    expect(failedRun.terminalOutcomes).toContainEqual({
+      _tag: "ExecutorReported",
+      attemptId: "attempt:A:0",
+      report: "TerminalFailed"
+    })
+
+    const safelySuspended = {
+      ...singleton,
+      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item) => {
+        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
+          return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
+        }
+        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
+        if (item._tag === "ExpectedTerminalOutcomes") {
+          return [
+            ...story,
+            {
+              ...item,
+              expected: [
+                ...item.expected.filter((outcome) => outcome._tag !== "ExecutorReported"),
+                { _tag: "ExecutorReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+              ]
+            }
+          ]
+        }
+        return [...story, item]
+      }, [])
+    }
+    const suspendedRun = yield* runAuthoredScenarioCassette(safelySuspended)
+    expect(suspendedRun.terminalOutcomes).toContainEqual({
+      _tag: "ExecutorReported",
+      attemptId: "attempt:A:0",
+      report: "SafelySuspended"
+    })
+  })
+)
+
+it.effect("fails typed terminal outcome assertions and renders the unsupported capacity item", () =>
+  Effect.gen(function* () {
+    const wrongOutcomes = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "ExpectedTerminalOutcomes" ? { ...item, expected: [] } : item
+      )
+    }
+    expect((yield* runAuthoredScenarioCassette(wrongOutcomes).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteOutcomeMismatch"
+    )
+
+    const decoded = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, 2),
+        { _tag: "SetTaskExecutionCapacity", capacity: 2 },
+        ...singleton.story.slice(2)
+      ]
+    })
+    expect(renderAuthoredCassetteLyrics(decoded)).toContain(
+      "The unsupported story asks Dalph to change task-execution capacity to 2."
+    )
+  })
+)
+
+it.effect(
+  "projects every occurrence and checks state, history, position, and selection after every non-empty prefix",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(singleton)
+      const recorded = yield* projectRecordedCassette(run.records)
+      const checkpoints = verifyRecordedCassetteRoundTrip(run.records, recorded)
+      const encoded = yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded)
+
+      expect(recorded.entries).toHaveLength(run.records.length)
+      expect(JSON.stringify(Reflect.get(encoded, "entries"))).not.toMatch(/"key"|"position"|"version"/)
+      expect(checkpoints).toHaveLength(run.records.length)
+      expect(
+        checkpoints.every(
+          (checkpoint) =>
+            checkpoint.operationalStateEquivalent &&
+            checkpoint.workflowHistoryEquivalent &&
+            checkpoint.appliedOccurrencePositionEquivalent &&
+            checkpoint.pureSelectionEquivalent
+        )
+      ).toBe(true)
+      expect(renderRecordedCassetteLyrics(recorded)).toContain(
+        "Dalph coordinator began executor-work responsibility for task A, attempt attempt:A:0."
+      )
+    })
+)
+
+it.effect(
+  "alpha-renames every Dalph-generated identity and preserves tracker revisions, task revisions, and Git SHAs",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(singleton)
+      const recorded = yield* projectRecordedCassette(run.records)
+      const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
+      const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+        attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
+        claimTokens: [
+          { from: "cassette-claim:A:cassette:workflow:cassette-target:operation:2", to: "renamed-claim-token-A" }
+        ],
+        controlCommandIds: [{ from: "rename-command", to: "renamed-command" }],
+        operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
+          from: `cassette:workflow:cassette-target:operation:${ordinal}`,
+          to: `renamed-operation:${ordinal}`
+        })),
+        runIds: [{ from: "workflow:cassette-target", to: "renamed-run" }],
+        taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
+        worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
+      })
+      const renamed = yield* renameRecordedCassette(recorded, renaming)
+      const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
+        run.records,
+        renamed,
+        invertCassetteIdentityRenaming(renaming)
+      )
+      const encodedAfter = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamed))
+
+      expect(checkpoints.every((checkpoint) => checkpoint.workflowHistoryEquivalent)).toBe(true)
+      expect(encodedAfter).toContain("renamed-run")
+      expect(encodedAfter).toContain("renamed-attempt-A")
+      expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
+      expect(encodedAfter).toContain("singleton-revision")
+      expect(encodedBefore).toContain("singleton-revision")
+    })
+)
+
+it.effect("has no recording for an empty unidentified journal", () =>
   Effect.gen(function* () {
     const empty = yield* projectRecordedCassette([]).pipe(Effect.flip)
     expect(empty._tag).toBe("EmptyJournalCannotBeRecorded")
 
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
-    const withoutExecutorResponsibility = run.records.filter(
-      ({ event }) => event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"
-    )
-    const invalid = yield* projectRecordedCassette(withoutExecutorResponsibility).pipe(Effect.flip)
-    expect(invalid._tag).toBe("InvalidWorkflowJournalHistory")
-
+    const run = yield* runAuthoredScenarioCassette(singleton)
     const recorded = yield* projectRecordedCassette(run.records)
     const malformed = RecordedCassette.make({
       ...recorded,
       entries: recorded.entries.filter((entry) => entry._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan")
     })
     expect(
-      verifyRecordedCassetteRoundTrip(run.records, malformed).some(({ stateEquivalent }) => !stateEquivalent)
+      verifyRecordedCassetteRoundTrip(run.records, malformed).some(
+        (checkpoint) =>
+          !checkpoint.operationalStateEquivalent &&
+          !checkpoint.workflowHistoryEquivalent &&
+          !checkpoint.appliedOccurrencePositionEquivalent
+      )
     ).toBe(true)
   })
 )
 
-it.effect("renders recorded operator commands from their structured entry", () =>
+it.effect(
+  "detects responsibility and Running before worktree readiness even when final operational state converges",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(singleton)
+      const expected = yield* projectRecordedCassette(run.records)
+      const responsibility = expected.entries.find(
+        (entry) => entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+      )
+      const running = expected.entries.find(
+        (entry) => entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "Running"
+      )
+      expect(responsibility?._tag).toBe("PlannedAttemptExecutorWorkResponsibilityBegan")
+      expect(running?._tag).toBe("PlannedAttemptExecutorWorkReported")
+      if (
+        responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+        running?._tag !== "PlannedAttemptExecutorWorkReported"
+      )
+        return
+
+      const remaining = expected.entries.filter((entry) => entry !== responsibility && entry !== running)
+      const planIndex = remaining.findIndex((entry) => entry._tag === "TaskAttemptPlanned")
+      const actual = RecordedCassette.make({
+        ...expected,
+        entries: [...remaining.slice(0, planIndex + 1), responsibility, running, ...remaining.slice(planIndex + 1)]
+      })
+      const checkpoints = compareRecordedCassetteCheckpoints(expected, actual)
+
+      expect(foldRecordedCassette(expected)._tag).toBe("ValidWorkflowJournalHistory")
+      expect(foldRecordedCassette(actual)._tag).toBe("ValidWorkflowJournalHistory")
+      expect(checkpoints.at(-1)?.operationalStateEquivalent).toBe(true)
+      expect(checkpoints.at(-1)?.workflowHistoryEquivalent).toBe(false)
+      expect(checkpoints.some((checkpoint) => !checkpoint.pureSelectionEquivalent)).toBe(true)
+    })
+)
+
+it.effect("renders a recorded operator command from its structured occurrence", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
-    const recorded = yield* projectRecordedCassette(run.records)
+    const run = yield* runAuthoredScenarioCassette(singleton)
     const command = ControlCommand.cases.RequestRunPause.make({
       commandId: ControlCommandId.make("cassette-pause"),
       operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-      runId: recorded.runId
+      runId: run.runId
     })
-    const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-    const commandRecord = {
-      event: commandEvent,
-      key: describeJournalEvent(commandEvent).expectedKey,
-      position: JournalPosition.make(1),
-      runId: recorded.runId
-    }
-    const withCommand = yield* projectRecordedCassette(
-      [...run.records, commandRecord].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
-    )
-
+    const event = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
+    const withCommand = yield* projectRecordedCassette([
+      ...run.records,
+      {
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(run.records.length + 1),
+        runId: run.runId
+      }
+    ])
     expect(renderRecordedCassetteLyrics(withCommand)).toContain(
       "Dalph recorded the operator's RequestRunPause command."
-    )
-    expect(renderRecordedCassetteLyrics(withCommand)).toContain(
-      "Git showed worktree /dalph/cassettes/attempt-A-0 ready"
     )
     expect(foldRecordedCassette(withCommand)._tag).toBe("ValidWorkflowJournalHistory")
   })
 )
 
-it.effect("rejects an illegal early start even when the final semantic state agrees", () =>
+it.effect("labels the 100-task three-read encoding experiment as a baseline", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
-    const expected = yield* projectRecordedCassette(run.records)
-    const responsibility = expected.entries.find(
-      (entry) => entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-    )
-    expect(responsibility?._tag).toBe("PlannedAttemptExecutorWorkResponsibilityBegan")
-    if (responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return
+    const taskIds = Array.from({ length: 100 }, (_unused, index) => `task-${index.toString().padStart(3, "0")}`)
+    const activeTaskId = taskIds[99] ?? "task-099"
+    const graph = {
+      revision: "size-baseline-revision",
+      tasks: taskIds.map((id, index) => ({
+        id,
+        lifecycle: { _tag: id === activeTaskId ? "Open" : "CompletedSuccessfully" },
+        parentTaskId: null,
+        prerequisiteIds: index === 0 ? [] : [taskIds[index - 1]]
+      }))
+    }
+    const replaceTask = (value: string) => (value === "A" ? activeTaskId : value)
+    const input = {
+      ...singleton,
+      name: "100-task three-read encoded-size baseline",
+      startingFacts: {
+        ...singleton.startingFacts,
+        taskWorkSpecifications: [
+          { body: "Measure the maintained encoding.", taskId: activeTaskId, title: "Measure encoding" }
+        ],
+        trackerGraph: graph
+      },
+      story: singleton.story.map((item) => {
+        if (item._tag === "TrackerGraphReadReturned") return { ...item, graph }
+        if (item._tag === "TaskWorkSpecificationReadReturned") {
+          return { ...item, body: "Measure the maintained encoding.", taskId: activeTaskId, title: "Measure encoding" }
+        }
+        if (item._tag === "DalphSelects" && "taskId" in item.action) {
+          if (item.action._tag === "AcquireTaskClaim" || item.action._tag === "ReadTaskWorkSpecification") {
+            return { ...item, action: { ...item.action, taskId: replaceTask(item.action.taskId) } }
+          }
+          return {
+            ...item,
+            action: { ...item.action, attemptId: `attempt:${activeTaskId}:0`, taskId: replaceTask(item.action.taskId) }
+          }
+        }
+        if (item._tag === "PlannedAttemptExecutorWorkReported") {
+          return { ...item, report: { ...item.report, attemptId: `attempt:${activeTaskId}:0` } }
+        }
+        if (item._tag === "ExpectedTerminalOutcomes") {
+          return {
+            ...item,
+            expected: item.expected.map((outcome) => {
+              switch (outcome._tag) {
+                case "TaskClaimed":
+                  return { ...outcome, taskId: replaceTask(outcome.taskId) }
+                case "ExecutorReported":
+                  return { ...outcome, attemptId: `attempt:${activeTaskId}:0` }
+                case "TaskAttemptPrepared":
+                case "TaskWorktreeReady":
+                  return { ...outcome, attemptId: `attempt:${activeTaskId}:0`, taskId: replaceTask(outcome.taskId) }
+              }
+            }),
+            forbidden: []
+          }
+        }
+        return item
+      })
+    }
+    const run = yield* runAuthoredScenarioCassette(input)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const measurement = measureTrackerObservationEncoding(run.records, recorded)
 
-    const withoutResponsibility = expected.entries.filter((entry) => entry !== responsibility)
-    const planIndex = withoutResponsibility.findIndex((entry) => entry._tag === "TaskAttemptPlanned")
-    const actual = RecordedCassette.make({
-      ...expected,
-      entries: [
-        ...withoutResponsibility.slice(0, planIndex + 1),
-        responsibility,
-        ...withoutResponsibility.slice(planIndex + 1)
-      ]
-    })
-    const expectedFinal = foldRecordedCassette(expected)
-    const actualFinal = foldRecordedCassette(actual)
-    const checkpoints = compareRecordedCassetteCheckpoints(expected, actual)
-
-    expect(expectedFinal._tag).toBe("ValidWorkflowJournalHistory")
-    expect(actualFinal._tag).toBe("ValidWorkflowJournalHistory")
-    expect(checkpoints.at(-1)?.stateEquivalent).toBe(true)
-    expect(checkpoints.at(-1)?.workflowHistoryEquivalent).toBe(false)
-    expect(checkpoints.some(({ decisionsEquivalent }) => !decisionsEquivalent)).toBe(true)
+    expect(measurement.changedGraphObservations.occurrenceCount).toBe(1)
+    expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(2)
+    expect(measurement.changedGraphObservations.journalBytes).toBeGreaterThan(0)
   })
 )

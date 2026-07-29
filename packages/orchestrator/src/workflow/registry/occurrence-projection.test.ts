@@ -20,6 +20,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../control/policy.js"
 import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import { taskTrackerReadIntent, WorkflowJournalEvent } from "./event.js"
@@ -556,9 +557,10 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("no eligible startup task") })
         )
       )
-      yield* runWorkflow(FixtureTarget.make("occurrence-fixture"), TaskWorkCapacity.make(1)).pipe(
-        Effect.provide(workflowLayer)
-      )
+      yield* runWorkflow(
+        FixtureTarget.make("occurrence-fixture"),
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      ).pipe(Effect.provide(workflowLayer))
       expect(yield* Ref.get(trackerReads)).toBe(1)
     }
 
