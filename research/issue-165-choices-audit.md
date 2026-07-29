@@ -135,37 +135,16 @@ concerns are omitted as well.
 - Risk: The issue may remain operationally stale, or a reusable architectural decision may not be recalled.
 - Verify: Confirm the repository’s post-implementation workflow before commenting/closing; search OptMem for an existing equivalent note before adding one.
 
-## 19. One coordinator death per cassette
+## 19. Continuation authorization before executor contact
 
-- Choice: Limited an authored cassette to at most one `CoordinatorProcessDies` event and therefore exactly two coordinator activations.
-- Limited confidence: The accepted scenario contains one death, but the issue update says a recovery cassette may span multiple coordinator activations, which could also be read as permitting repeated deaths and restarts.
-- Risk: A maintainer cannot author recovery stories that crash more than once or verify convergence across repeated ambiguous interruptions.
-- Verify: Ask whether “multiple” currently means the specified fresh activation plus one startup-recovery activation. If repeated deaths are intended, add a three-activation scenario before generalizing the runner.
+- Choice: Tentatively require one durable, non-recovery-specific action that authorizes continuation of the existing executor-work responsibility from fresh active-task continuation and exact-worktree observations.
+- Limited confidence: The action closes the causal gap between current facts and executor contact without adding another executor-work identity, but its exact reducer shape has not yet been exercised in Reducer Lab.
+- Risk: Too little durable evidence permits executor contact from stale facts; too much per-call identity leaks the milestone fake's method calls into the coarse `(RunId, AttemptId)` domain.
+- Verify: After the cassette tickets land, model crash prefixes before and after authorization in Reducer Lab and confirm that Running and Terminal reports remain facts about one coarse responsibility.
 
-## 20. Lifecycle checkpoint encoded only by the event meaning
+## 20. Non-returning production before the next story item
 
-- Choice: Removed the event’s `after: PlannedAttemptExecutorWorkResponsibilityBegan` field and defined that checkpoint as the sole meaning of `CoordinatorProcessDies`.
-- Limited confidence: This removed duplicated connascence, but the checkpoint is no longer separately inspectable in decoded cassette data.
-- Risk: A generic renderer, validator, or future lifecycle scheduler cannot discover the semantic checkpoint without knowing this event variant’s implementation.
-- Verify: Identify whether anything besides this runner must inspect lifecycle checkpoints. If so, introduce one canonical typed lifecycle-event definition that drives schema, execution, and lyrics without independently repeated literals.
-
-## 21. Recovery authority ordering evidence
-
-- Choice: Recorded successful composite recovery-authority verifications and executor reports separately, then asserted that the expected attempt appears in both.
-- Limited confidence: The production startup layer currently verifies authority before continuing the executor, but the test result does not retain one unified call order across those boundaries.
-- Risk: A regression that contacts the executor before checking the claim and worktree could still satisfy the cassette assertions if both checks eventually occur.
-- Verify: Make the controlled executor fail unless a shared ordered probe shows the claim and worktree verification completed first, or retain one typed recovery boundary-call trace and assert its exact order.
-
-## 22. No-op coordinator ownership during recovery
-
-- Choice: Supplied startup recovery with a `CoordinatorOwnership` capability whose `runMutation` returns the mutation unchanged.
-- Limited confidence: Real operating-system process qualification is explicitly out of scope, but the accepted scenario still says the complete coordinator scope dies and a new coordinator starts.
-- Risk: The cassette can pass even if startup recovery accidentally depends on stale ownership or fails to acquire a new scoped ownership capability.
-- Verify: Replace the no-op with the controlled coordinator-lock composition and assert that the first scope releases ownership and the recovery scope acquires a distinct capability.
-
-## 23. Replacement planners remain available after restart
-
-- Choice: Rebuilt deterministic operation, claim, and planned-attempt planners for startup recovery, even though journal reconstruction should continue the existing attempt without planning a replacement.
-- Limited confidence: Rebuilding them proves their mutable state does not survive, but the planned-attempt planner restarts at ordinal zero and could regenerate the same attempt identity if a recovery regression calls it.
-- Risk: Accidental replanning could be masked by deterministic identity equality, weakening the “same attempt was reconstructed” evidence.
-- Verify: Provide startup recovery with fail-on-call claim and planned-attempt planners, while retaining only the fresh operation-ID allocator needed for genuinely new recovery operations.
+- Choice: Keep normal cassette interpretation on one Effect fiber with no polling, timeout, queue, or driver fiber. A genuine non-returning defect initially relies on the test runner's outer timeout.
+- Limited confidence: This keeps time out of cassette vocabulary but gives a deadlock slower diagnostics than an ordinary head-entry mismatch.
+- Risk: A regression to `Effect.never` can consume the full test timeout.
+- Verify: Add a deterministic watchdog only if an observed slow or hanging test demonstrates the need; do not add one to normal cassette semantics preemptively.

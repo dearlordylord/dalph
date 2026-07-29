@@ -3,6 +3,33 @@
 These scenarios specialize the accepted fake-provider cassette behavior in
 issue #163 for the maintained cassette library delivered by issue #165.
 
+## Authored story contract
+
+An authored cassette contains metadata, structured starting facts, and one
+ordered story. Running the cassette is the trigger, so the story contains no
+runner command. The cassette schema contains no task-work capacity field;
+the maintained cassette runner always supplies one position.
+
+Story items remain distinct typed groups even when their lyrics read as one
+case. Production surfaces own the domain schemas for their real actions,
+requests, results, and observations. A cassette story item may reuse, extend,
+wrap, or map those values when its authored role requires a different meaning.
+The cassette activation harness alone owns lifecycle controls such as
+`CoordinatorProcessDies`; they share no union or base event type with workflow-
+journal events.
+
+The composed interpreter derives routing from the registered schemas and tags.
+Every decoded machine-contract item has exactly one owner. Zero or multiple
+owners is a fast programming defect with diagnostics naming the tag and
+registrations. A production interaction consumes only the current item and
+never searches later items for a convenient match.
+
+One required cassette-only outcome-assertion group ends the story. Its expected
+and forbidden assertions are checked against the complete observed production
+meaning after the coordination loop returns. Schema decoding rejects a missing,
+duplicate, or non-terminal assertion group. No accepted #165 case needs an
+intermediate assertion; a later scenario may change that contract explicitly.
+
 ## A maintainer runs an authored singleton-task cassette
 
 A Dalph maintainer has an authored cassette for run `cassette-singleton`. Its
@@ -13,12 +40,23 @@ this milestone uses the controlled worktree boundary. Its executor starting
 fact says there is no prior report, and its journal starting fact says the
 in-memory Dalph journal is empty.
 
-The maintainer asks the cassette runner to run the scenario. The cassette
-runner decodes the structured cassette, supplies its tracker facts through the
+The maintainer asks the cassette runner to run the scenario. The cassette has
+structured starting facts and one ordered story. Calling the runner starts the
+scenario; the cassette contains no synthetic `RunCoordinator` command and no
+capacity setting. Authored cassette execution always permits one task-work
+position. The story contains typed expected Dalph actions, controlled outside
+results, cassette lifecycle facts, and one final cassette-only outcome-
+assertion group.
+
+The runner decodes the structured cassette, supplies its tracker facts through the
 production `TrackerGraphReader` interface, supplies claim and worktree behavior
 through the existing controlled provider composition, and supplies executor
 reports for the one planned `(RunId, AttemptId)`. It invokes `runWorkflow`; it
 does not append journal events, assign reducer state, or select work itself.
+Each production interaction consumes only the current story item; a provider
+cannot search ahead in its own queue. Every decoded machine-contract item has
+exactly one owning interpreter. Missing or duplicate ownership is a programming
+defect rather than an authored mismatch.
 
 Dalph reads and records the tracker graph, rereads A before crossing the claim
 boundary, records and creates A's controlled claim, rereads A after the claim,
@@ -71,16 +109,17 @@ Acceptance tests:
 A Dalph maintainer has an authored recovery cassette for one open task A. The
 cassette starts with an empty in-memory journal, no prior executor report, no
 task claim, and no planned worktree. Its controlled tracker reports A open and
-supplies A's exact work specification. Its story says that the coordinator
-process dies after Dalph records responsibility for A's planned attempt but
-before a terminal executor report is journaled.
+supplies A's exact work specification. Its ordered story places the
+cassette-only `CoordinatorProcessDies` item after Dalph records responsibility
+for A's planned attempt and before the controlled executor result.
 
 The maintainer runs the cassette. During the first activation, Dalph observes
 the graph, claims A, records its immutable planned attempt, prepares its exact
 worktree, and records that it has accepted responsibility for the executor
-work. At that semantic checkpoint, the cassette's
-`CoordinatorProcessDies` lifecycle event disposes the complete coordinator
-scope. The event belongs to the authored cassette and its execution harness; it
+work. When the production action advances interpretation to that exact story
+position, the cassette's `CoordinatorProcessDies` lifecycle event immediately
+disposes the complete coordinator scope on the same Effect fiber. The event
+belongs to the authored cassette and its execution harness; it
 is not appended to Dalph's workflow journal and is not supplied to a reducer as
 production history.
 
@@ -89,10 +128,15 @@ survive into the next cassette activation. Because the milestone fake executor
 shares the coordinator process lifetime, no unjournaled executor report
 survives as evidence. The cassette constructs a new coordinator for the same
 run through the authoritative journal-backed startup-recovery composition.
-Dalph reconstructs the same planned attempt, rereads and verifies its exact
-current tracker claim and Git worktree, and asks the controlled executor to
-continue that same `(RunId, AttemptId)`. The executor reports for that attempt,
-and Dalph records the report through the production workflow.
+Dalph reconstructs the same planned attempt. It records and performs the
+ordinary `ActiveTaskContinuationRead`, including the current exact tracker
+claim and sufficiently fresh task control facts. A comparable unchanged graph
+read uses #164's compact reconfirmation. Dalph separately records and performs
+the ordinary fresh Git read proving the exact planned worktree. It records that
+the existing executor-work responsibility may continue from those observations
+and asks the controlled executor to continue the same `(RunId, AttemptId)`.
+The executor reports for that attempt, and Dalph records the report through the
+production workflow. None of these durable facts is named after recovery.
 
 The coordinator death is harness-controlled, so real operating-system process
 qualification and an independently surviving executor do not apply. Pause and
@@ -113,7 +157,8 @@ Acceptance-test seams:
 
 - `runs one authored recovery cassette across coordinator death and startup recovery`
 - `does not journal the cassette coordinator-death lifecycle event`
-- `continues the same planned attempt only after current claim and worktree checks`
+- `records fresh continuation and worktree observations before continuing the same planned attempt`
+- `rejects continuation history whose current-fact witnesses are absent, later, or name another attempt`
 
 The authored-cassette conformance law for every cassette A is:
 

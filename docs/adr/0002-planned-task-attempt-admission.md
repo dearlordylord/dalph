@@ -131,9 +131,13 @@ Only durable outcomes are workflow evidence:
   before planning.
 - If Dalph already recorded `TaskAttemptPlanned`, recovery preserves that exact
   attempt identity, Base SHA, branch, worktree, executor, `TaskId`, and task
-  revision fingerprint. If fresh task-tracker or Git reads contradict those
-  recorded identities or locators, recovery returns a typed contradiction; it
-  never silently replans.
+  revision fingerprint. It does not repeat this initial claimed-task
+  eligibility decision. Before another long-running executor invocation, the
+  later accepted `ActiveTaskContinuationRead` protocol records sufficiently
+  fresh task instructions, lifecycle, exact claim, target-membership, and
+  blocker facts. A separate fresh Git observation verifies the exact planned
+  worktree. Contradictory observations activate their accepted continuation
+  constraint or typed result; they never silently replan.
 - A missing, replaced, foreign, or unreadable current claim produces a precise
   typed recovery result. Durable claim history does not substitute for the
   fresh task-tracker read.
@@ -147,6 +151,12 @@ returns a typed recovery result. A future replacement-attempt capability
 requires a separately specified authorization phenomenon and durable event.
 An executor failure, loss of a planned Git worktree, coordinator process death,
 and a new operation identity do not imply replacement authorization.
+
+This distinction preserves the reason for this ADR: claimed-task eligibility
+authorizes one immutable planning decision. Reusing that name after planning
+would falsely imply that Dalph is deciding whether to create the attempt again.
+Issues #119 and #120 instead name the later question—whether current facts
+permit another forward-progress action—as active-task continuation.
 
 ## Layer composition
 
