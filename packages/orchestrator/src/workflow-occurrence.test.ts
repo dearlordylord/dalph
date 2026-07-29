@@ -1,5 +1,7 @@
 import { it } from "@effect/vitest"
 import {
+  AuthenticatedOperatorIdentity,
+  ControlCommandId,
   FixtureTarget,
   JournalPosition,
   JournalRecordKey,
@@ -8,6 +10,7 @@ import {
   TaskId,
   TrackerRevision
 } from "./domain.js"
+import { ControlCommand, ControlCommandRecordedEvent } from "./control-command.js"
 import {
   trackerGraphObservationIntent,
   trackerGraphOutcomeObserved,
@@ -178,6 +181,15 @@ it.effect("rejects operator identity and command receipt as occurrence classific
 
     expect((yield* decodeWorkflowOccurrence(appliedDirection).pipe(Effect.flip))._tag).toBe("SchemaError")
     expect((yield* decodeWorkflowOccurrence(commandReceipt).pipe(Effect.flip))._tag).toBe("SchemaError")
+    const receiptEvent = ControlCommandRecordedEvent.make({
+      command: ControlCommand.cases.RequestRunPause.make({
+        commandId: ControlCommandId.make("receipt-is-not-occurrence"),
+        operatorId: AuthenticatedOperatorIdentity.make("transitional-operator"),
+        runId
+      }),
+      version: workflowJournalEventVersion
+    })
+    expect(projectWorkflowOccurrences([record(1, receiptEvent)]).occurrences).toEqual([])
   })
 )
 
