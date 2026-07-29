@@ -3,6 +3,7 @@ module plannedAttemptExecutorTest {
 
   run runningThenTerminal = {
     init
+      .then(beginResponsibility)
       .then(startOrContinueRunning)
       .then(finishTerminal)
       .expect(terminalReached and terminalReleasesPosition)
@@ -10,6 +11,7 @@ module plannedAttemptExecutorTest {
 
   run safelySuspendAndResumeSameAttempt = {
     init
+      .then(beginResponsibility)
       .then(startOrContinueRunning)
       .then(requestSafeSuspension)
       .then(reportSafelySuspended)
@@ -19,8 +21,15 @@ module plannedAttemptExecutorTest {
 
   run suspensionRequestKeepsPosition = {
     init
+      .then(beginResponsibility)
       .then(startOrContinueRunning)
       .then(requestSafeSuspension)
       .expect(suspensionRequestedReached and suspensionRequestRetainsPosition)
+  }
+
+  run responsibilityPrecedesFirstExecutorReport = {
+    init
+      .then(beginResponsibility)
+      .expect(responsibilityBeganReached and positionHeldUntilSuspensionResult)
   }
 }

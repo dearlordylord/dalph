@@ -3,6 +3,7 @@
 module plannedAttemptExecutor {
   type Status =
     | NoReport
+    | ResponsibilityBegan
     | Running
     | SuspensionRequested
     | SafelySuspended
@@ -29,7 +30,11 @@ module plannedAttemptExecutor {
 
   val positionHeldUntilSuspensionResult: bool =
     state.positionHeld
-      == (state.status == Running or state.status == SuspensionRequested)
+      == or {
+        state.status == ResponsibilityBegan,
+        state.status == Running,
+        state.status == SuspensionRequested,
+      }
 
   val safeSuspensionReleasesPosition: bool =
     state.status != SafelySuspended or not(state.positionHeld)
@@ -40,6 +45,7 @@ module plannedAttemptExecutor {
   val suspensionRequestRetainsPosition: bool =
     state.status != SuspensionRequested or state.positionHeld
 
+  val responsibilityBeganReached: bool = state.status == ResponsibilityBegan
   val runningReached: bool = state.status == Running
   val suspensionRequestedReached: bool = state.status == SuspensionRequested
   val safelySuspendedReached: bool = state.status == SafelySuspended
@@ -55,10 +61,23 @@ module plannedAttemptExecutor {
   }
 
   action startOrContinueRunning: bool = all {
-    state.status != Terminal,
-    state.status != SuspensionRequested,
+    or {
+      state.status == ResponsibilityBegan,
+      state.status == Running,
+      state.status == SafelySuspended,
+    },
     state' = {
       status: Running,
+      correlationRunId: RUN_ID,
+      correlationAttemptId: ATTEMPT_ID,
+      positionHeld: true,
+    },
+  }
+
+  action beginResponsibility: bool = all {
+    state.status == NoReport,
+    state' = {
+      status: ResponsibilityBegan,
       correlationRunId: RUN_ID,
       correlationAttemptId: ATTEMPT_ID,
       positionHeld: true,
@@ -86,6 +105,7 @@ module plannedAttemptExecutor {
   }
 
   action finishTerminal: bool = all {
+    state.status != NoReport,
     state.status != Terminal,
     state' = {
       status: Terminal,
@@ -96,6 +116,7 @@ module plannedAttemptExecutor {
   }
 
   action step: bool = any {
+    beginResponsibility,
     startOrContinueRunning,
     requestSafeSuspension,
     reportSafelySuspended,

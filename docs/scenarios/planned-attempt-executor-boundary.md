@@ -59,8 +59,10 @@ executor response survives to retry.
 - `rejects an executor report without its responsibility-began occurrence`
   proves the occurrence boundary never fabricates the missing action.
 - `replays the planned-attempt model through the executor boundary` proves
-  generated Quint actions and states conform to the TypeScript executor
-  service.
+  generated Quint actions and states conform to the TypeScript journal and
+  executor workflow.
+- Quint scenario `responsibilityPrecedesFirstExecutorReport` proves no first
+  executor report can occur before Dalph records responsibility-began.
 - A source and emitted-type check proves generic code contains no separate
   outer identity or experimental review-loop stage.
 

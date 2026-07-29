@@ -1,10 +1,11 @@
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { Deferred, Effect, Fiber, Option, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
+  JournalPosition,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -14,11 +15,16 @@ import {
   TaskWorkCapacity,
   WorktreeLocator
 } from "../src/domain.js"
+import { type JournalRecord, JournalStore } from "../src/journal-store.js"
 import {
   PlannedAttemptExecutor,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport
 } from "../src/planned-attempt-executor.js"
+import {
+  continuePlannedAttemptExecutorWork,
+  requestPlannedAttemptExecutorSuspension
+} from "../src/planned-attempt-executor-workflow.js"
 import { RunnableFrontierTransition } from "../src/runnable-frontier.js"
 import { makeTaskAdmissionController, type TaskAdmissionController } from "../src/task-admission-controller.js"
 
@@ -48,15 +54,26 @@ const variantTag = (value: unknown): string =>
   typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
 
 const executorConformanceDriver = defineDriver(
-  { finishTerminal: {}, init: {}, reportSafelySuspended: {}, requestSafeSuspension: {}, startOrContinueRunning: {} },
+  {
+    beginResponsibility: {},
+    finishTerminal: {},
+    init: {},
+    reportSafelySuspended: {},
+    requestSafeSuspension: {},
+    startOrContinueRunning: {}
+  },
   () => {
     let latestReport: typeof PlannedAttemptExecutorReport.Type | undefined
     let nextStartReport: typeof PlannedAttemptExecutorReport.Type = PlannedAttemptExecutorReport.cases.Running.make({
       correlation
     })
     let pendingSuspension: Fiber.Fiber<typeof PlannedAttemptExecutorReport.Type> | undefined
+    let pendingStart: Fiber.Fiber<typeof PlannedAttemptExecutorReport.Type> | undefined
     let controller: TaskAdmissionController | undefined
+    let records: ReadonlyArray<JournalRecord> = []
     let status = "NoReport"
+    let responsibilityRecorded = Deferred.makeUnsafe<void>()
+    let startResponse: Deferred.Deferred<typeof PlannedAttemptExecutorReport.Type> | undefined
     let suspensionResponse = Deferred.makeUnsafe<typeof PlannedAttemptExecutorReport.Type>()
     const executor = PlannedAttemptExecutor.of({
       project: () => Effect.succeed(Option.fromUndefinedOr(latestReport)),
@@ -68,12 +85,48 @@ const executorConformanceDriver = defineDriver(
             })
           )
         ),
-      startOrContinue: () =>
-        Effect.sync(() => {
-          latestReport = nextStartReport
-          return nextStartReport
-        })
+      startOrContinue: () => {
+        const response = startResponse
+        return response === undefined
+          ? Effect.sync(() => {
+              latestReport = nextStartReport
+              return nextStartReport
+            })
+          : Deferred.await(response).pipe(
+              Effect.tap((report) =>
+                Effect.sync(() => {
+                  latestReport = report
+                })
+              )
+            )
+      }
     })
+    const journal = JournalStore.of({
+      append: (eventRunId, key, event) =>
+        Effect.gen(function* () {
+          const record = {
+            event,
+            key,
+            position: JournalPosition.make(records.filter(({ runId }) => runId === eventRunId).length + 1),
+            runId: eventRunId
+          } satisfies JournalRecord
+          records = [...records, record]
+          if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+            yield* Deferred.succeed(responsibilityRecorded, undefined)
+          }
+          return record
+        }),
+      read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
+      scan: () => Effect.die("executor conformance never scans the journal")
+    })
+    const workflowLayer = Layer.merge(
+      Layer.succeed(JournalStore, journal),
+      Layer.succeed(PlannedAttemptExecutor, executor)
+    )
+    const continueExecutorWorkflow = () =>
+      continuePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
+    const suspendExecutorWorkflow = () =>
+      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
     const requireController = (): Effect.Effect<TaskAdmissionController> =>
       controller === undefined ? Effect.die("admission controller must be initialized") : Effect.succeed(controller)
     const releasePositionIfHeld = Effect.fn("PlannedAttemptExecutorConformance.releasePositionIfHeld")(function* () {
@@ -90,6 +143,15 @@ const executorConformanceDriver = defineDriver(
         yield* admission.releasePlannedAttemptPosition(correlation)
       }
     })
+    const reservePositionIfAvailable = Effect.fn("PlannedAttemptExecutorConformance.reservePositionIfAvailable")(
+      function* () {
+        const admission = yield* requireController()
+        const decision = yield* admission.admit({ explanations: [], transitions: [continuation] }, plannedAttempt.runId)
+        if (Option.isNone(decision.transition)) {
+          return yield* Effect.die("planned attempt must be admitted")
+        }
+      }
+    )
     const completePendingSuspension = (report: typeof PlannedAttemptExecutorReport.Type) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(suspensionResponse, report)
@@ -103,21 +165,55 @@ const executorConformanceDriver = defineDriver(
           yield* releasePositionIfHeld()
         }
       })
+    const completePendingStart = (report: typeof PlannedAttemptExecutorReport.Type) =>
+      Effect.gen(function* () {
+        const start = pendingStart
+        const response = startResponse
+        if (start === undefined || response === undefined) {
+          return yield* Effect.die("executor start must be pending after responsibility begins")
+        }
+        yield* Deferred.succeed(response, report)
+        const result = yield* Fiber.join(start)
+        pendingStart = undefined
+        startResponse = undefined
+        return result
+      })
     const invokeStart = (report: typeof PlannedAttemptExecutorReport.Type) =>
       Effect.gen(function* () {
         const admission = yield* requireController()
-        const decision = yield* admission.admit({ explanations: [], transitions: [continuation] }, plannedAttempt.runId)
-        if (Option.isNone(decision.transition)) {
-          return yield* Effect.die("planned attempt must be admitted")
+        const snapshot = yield* admission.snapshot()
+        if (
+          !snapshot.reservedPositions.some(
+            ({ correlation: reserved }) =>
+              reserved._tag === "PlannedAttemptReservation" &&
+              reserved.attemptId === correlation.attemptId &&
+              reserved.runId === correlation.runId
+          )
+        ) {
+          yield* reservePositionIfAvailable()
         }
-        nextStartReport = report
-        const observed = yield* executor.startOrContinue(plannedAttempt)
+        const observed =
+          pendingStart === undefined
+            ? yield* Effect.suspend(() => {
+                nextStartReport = report
+                return continueExecutorWorkflow()
+              })
+            : yield* completePendingStart(report)
         status = observed._tag
         if (observed._tag === "Terminal") {
           yield* releasePositionIfHeld()
         }
       })
     return {
+      beginResponsibility: () =>
+        Effect.gen(function* () {
+          yield* reservePositionIfAvailable()
+          responsibilityRecorded = Deferred.makeUnsafe()
+          startResponse = Deferred.makeUnsafe()
+          pendingStart = yield* continueExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
+          yield* Deferred.await(responsibilityRecorded)
+          status = "ResponsibilityBegan"
+        }),
       finishTerminal: () =>
         pendingSuspension === undefined
           ? invokeStart(
@@ -146,18 +242,23 @@ const executorConformanceDriver = defineDriver(
           if (pendingSuspension !== undefined) {
             yield* Fiber.interrupt(pendingSuspension)
           }
+          if (pendingStart !== undefined) {
+            yield* Fiber.interrupt(pendingStart)
+          }
           controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
           latestReport = undefined
           pendingSuspension = undefined
+          pendingStart = undefined
+          records = []
           status = "NoReport"
+          responsibilityRecorded = Deferred.makeUnsafe()
+          startResponse = undefined
           suspensionResponse = Deferred.makeUnsafe()
         }),
       requestSafeSuspension: () =>
         Effect.gen(function* () {
           suspensionResponse = Deferred.makeUnsafe()
-          pendingSuspension = yield* executor
-            .requestSuspension(plannedAttempt)
-            .pipe(Effect.orDie, Effect.forkDetach({ startImmediately: true }))
+          pendingSuspension = yield* suspendExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
           status = "SuspensionRequested"
         }),
       reportSafelySuspended: () =>

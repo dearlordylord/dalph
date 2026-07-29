@@ -41,6 +41,7 @@ await run("planned-attempt executor sampled model", [
   "suspensionRequestRetainsPosition",
   "terminalReleasesPosition",
   "--witnesses",
+  "responsibilityBeganReached",
   "runningReached",
   "suspensionRequestedReached",
   "safelySuspendedReached",

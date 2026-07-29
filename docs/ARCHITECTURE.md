@@ -713,6 +713,11 @@ causally later exact worktree-reconciliation result. Missing, duplicate,
 non-causal, unreadable, and mismatched evidence fail with distinct typed
 results before the executor is called.
 
+The planned-attempt executor Quint model keeps durable responsibility-began
+distinct from the first executor report. Its executable conformance driver
+crosses the production journal workflow, pauses after the responsibility row,
+and permits a running or terminal report only afterward.
+
 ## Exact Git Worktree Reconciliation
 
 After the journal acknowledges one immutable planned task attempt and before
