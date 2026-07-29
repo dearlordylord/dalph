@@ -118,6 +118,7 @@ const singletonCassette = {
   ],
   expectedOutcomes: singletonExpectedOutcomes,
   forbiddenOutcomes: singletonForbiddenOutcomes,
+  lifecycleEvents: [],
   name: "one open task completes its executor work",
   outsideOccurrences: [
     { _tag: "TrackerGraphReadReturned", graph },
@@ -144,6 +145,17 @@ const singletonCassette = {
     trackerGraph: graph,
     worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
   }
+}
+
+const recoveryCassette = {
+  ...singletonCassette,
+  expectedDecisions: [...singletonCassette.expectedDecisions, { _tag: "ReadTrackerGraph", target: "cassette-target" }],
+  expectedOutcomes: singletonCassette.expectedOutcomes.map((outcome) =>
+    outcome._tag === "DalphObservesTaskTrackerGraph" ? { ...outcome, observationCount: 4 } : outcome
+  ),
+  lifecycleEvents: [{ _tag: "CoordinatorProcessDies" }],
+  name: "one open task survives coordinator death and startup recovery",
+  outsideOccurrences: [...singletonCassette.outsideOccurrences, { _tag: "TrackerGraphReadReturned", graph }]
 }
 
 const representativeTaskCount = 100
@@ -283,6 +295,54 @@ it.effect("runs an authored cassette through the production loop and matches its
     )
     expect(result.records.map(({ event }) => event._tag)).toContain("PlannedAttemptExecutorWorkResponsibilityBegan")
     expect(result.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
+  })
+)
+
+it.effect("runs one authored recovery cassette across coordinator death and startup recovery", () =>
+  Effect.gen(function* () {
+    const result = yield* runAuthoredScenarioCassette(recoveryCassette)
+
+    expect(result.activationKinds).toEqual(["Fresh", "StartupRecovery"])
+    expect(result.completedLifecycleEvents).toEqual(result.cassette.lifecycleEvents)
+    expect(result.history._tag).toBe("ValidWorkflowJournalHistory")
+  })
+)
+
+it.effect("does not journal the cassette coordinator-death lifecycle event", () =>
+  Effect.gen(function* () {
+    const result = yield* runAuthoredScenarioCassette(recoveryCassette)
+    const recorded = yield* projectRecordedCassette(result.records)
+
+    expect(result.records.map(({ event }) => event._tag)).not.toContain("CoordinatorProcessDies")
+    expect(recorded.entries.map(({ _tag }) => _tag)).not.toContain("CoordinatorProcessDies")
+    expect(renderAuthoredCassetteLyrics(result.cassette)).toContain(
+      "The coordinator process dies after Dalph records executor-work responsibility."
+    )
+  })
+)
+
+it.effect("continues the same planned attempt only after current claim and worktree checks", () =>
+  Effect.gen(function* () {
+    const result = yield* runAuthoredScenarioCassette(recoveryCassette)
+    const plannedAttempts = result.records.flatMap(({ event }) =>
+      event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
+    )
+    const executorResponsibilities = result.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? [event.plannedAttempt] : []
+    )
+    const trackerReadOperationIds = result.records.flatMap(({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" ? [event.operation.operationId] : []
+    )
+
+    expect(plannedAttempts).toHaveLength(1)
+    expect(executorResponsibilities.map(({ attemptId }) => attemptId)).toEqual([correlation.attemptId])
+    expect(result.recoveryAuthorityVerifiedAttemptIds).toEqual([correlation.attemptId, correlation.attemptId])
+    expect(trackerReadOperationIds.at(-1)).toBe("cassette:cassette-singleton:startup-recovery:operation:0")
+    expect(
+      result.records
+        .filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+        .map(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId)
+    ).toEqual([correlation.attemptId, correlation.attemptId])
   })
 )
 

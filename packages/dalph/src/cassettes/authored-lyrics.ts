@@ -1,4 +1,4 @@
-import type { AuthoredCassetteDecision, AuthoredOutsideOccurrence } from "./authored.js"
+import type { AuthoredCassetteDecision, AuthoredCassetteLifecycleEvent, AuthoredOutsideOccurrence } from "./authored.js"
 
 export const lyricForExpectedDecision = (decision: AuthoredCassetteDecision): string => {
   switch (decision._tag) {
@@ -27,3 +27,6 @@ export const lyricForOutsideOccurrence = (occurrence: AuthoredOutsideOccurrence)
       return `The task tracker returns ${occurrence.graph.tasks.length} task graph facts at ${occurrence.graph.revision}.`
   }
 }
+
+export const lyricForLifecycleEvent = (_event: AuthoredCassetteLifecycleEvent): string =>
+  "The coordinator process dies after Dalph records executor-work responsibility."

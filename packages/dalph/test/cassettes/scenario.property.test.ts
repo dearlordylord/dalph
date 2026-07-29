@@ -116,6 +116,7 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
       },
       { _tag: "DalphMustNotRecordExecutorReportsForAnyOtherAttempt", allowedAttemptIds: [correlation.attemptId] }
     ],
+    lifecycleEvents: [],
     name: `generated flat graph ${suffix}`,
     outsideOccurrences: [...graphReturns, ...specificationReturns, ...executorReports],
     schemaVersion: 1,

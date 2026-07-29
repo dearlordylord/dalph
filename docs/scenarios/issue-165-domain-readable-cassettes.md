@@ -66,6 +66,76 @@ Acceptance tests:
 - `rejects an executor entry for a different planned attempt`
 - `fails typed authored boundaries and outcome assertion mismatches`
 
+## A maintainer runs one recovery cassette across coordinator death
+
+A Dalph maintainer has an authored recovery cassette for one open task A. The
+cassette starts with an empty in-memory journal, no prior executor report, no
+task claim, and no planned worktree. Its controlled tracker reports A open and
+supplies A's exact work specification. Its story says that the coordinator
+process dies after Dalph records responsibility for A's planned attempt but
+before a terminal executor report is journaled.
+
+The maintainer runs the cassette. During the first activation, Dalph observes
+the graph, claims A, records its immutable planned attempt, prepares its exact
+worktree, and records that it has accepted responsibility for the executor
+work. At that semantic checkpoint, the cassette's
+`CoordinatorProcessDies` lifecycle event disposes the complete coordinator
+scope. The event belongs to the authored cassette and its execution harness; it
+is not appended to Dalph's workflow journal and is not supplied to a reducer as
+production history.
+
+The in-memory journal and the controlled tracker's claim and Git worktree facts
+survive into the next cassette activation. Because the milestone fake executor
+shares the coordinator process lifetime, no unjournaled executor report
+survives as evidence. The cassette constructs a new coordinator for the same
+run through the authoritative journal-backed startup-recovery composition.
+Dalph reconstructs the same planned attempt, rereads and verifies its exact
+current tracker claim and Git worktree, and asks the controlled executor to
+continue that same `(RunId, AttemptId)`. The executor reports for that attempt,
+and Dalph records the report through the production workflow.
+
+The coordinator death is harness-controlled, so real operating-system process
+qualification and an independently surviving executor do not apply. Pause and
+Unpause may appear in later cassette stories only through their separately
+accepted production control protocol. Graceful application Exit does not apply
+because no accepted Exit semantics currently distinguish it from coordinator
+death; a separate issue must specify those semantics before a cassette uses
+them.
+
+The maintainer sees one readable story spanning both activations, the same
+planned attempt before and after restart, and matching recovery checkpoints.
+Dalph must not journal a synthetic coordinator-crash occurrence, allocate a
+replacement attempt, trust pre-crash volatile state, install another synthetic
+fresh-only activation after restart, continue without current claim and
+worktree authority, or treat process death as executor completion.
+
+Acceptance-test seams:
+
+- `runs one authored recovery cassette across coordinator death and startup recovery`
+- `does not journal the cassette coordinator-death lifecycle event`
+- `continues the same planned attempt only after current claim and worktree checks`
+
+The authored-cassette conformance law for every cassette A is:
+
+```text
+meaningExpected(A) ≈ meaningObserved(run(A))
+```
+
+The recorded-cassette laws remain, for every corresponding prefix `n`:
+
+```text
+foldJournal(J prefix n) ≈α foldRecorded(project(J) prefix n)
+
+select(foldJournal(J prefix n))
+  ≈α
+select(foldRecorded(project(J) prefix n))
+```
+
+`≈α` permits only one consistent accepted renaming of generated identities.
+Projection contains only occurrences Dalph actually journaled; it never
+manufactures the cassette's coordinator-death lifecycle event, an unobserved
+outside happening, or a fact inferred only from final fake state.
+
 ## A journal is projected and folded occurrence by occurrence
 
 A completed in-memory run journal contains the singleton scenario's tracker

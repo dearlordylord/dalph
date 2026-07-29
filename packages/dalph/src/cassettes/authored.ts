@@ -1,4 +1,4 @@
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -8,40 +8,17 @@ import {
   TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
-import { ControlledFakeExecutorStep, makeControlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import {
-  ClaimOwner,
   ActiveTaskClaim,
-  controlledTrackerMutationLayerFrom,
-  deterministicOperationIdAllocatorLayer,
-  deterministicPlannedTaskAttemptLayer,
-  deterministicTaskClaimAcquisitionPlannerLayer,
+  ClaimOwner,
   type JournalRecord,
-  JournalStore,
-  journaledFreshRunRecoveryActivationLayer,
-  journaledWorkflowInterpreterLayer,
-  makeLiveWorkflowInterpreterLayer,
-  makeTaskWorkSpecification,
-  memoryJournalStoreLayer,
-  projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
-  runWorkflow,
   TaskWorkCapacity,
-  AuthoritativeTaskWorktreeReady,
-  GitWorktree,
-  gitWorktreeTestLayer,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,
-  runGitWorktreeReconciliation,
-  TrackerAdapterReadContext,
-  TrackerAdapterReadError,
-  TrackerAdapterReadFailureReason,
-  TrackerGraphReader,
   TrackerTarget,
-  type TraceItem,
-  WorkflowInterpreter,
-  WorkflowTrace
+  type TraceItem
 } from "@dalph/orchestrator"
 import {
   AuthoredCassetteOutcomeAssertionMismatch,
@@ -53,7 +30,8 @@ import {
   lyricForExpectedOutcome,
   lyricForForbiddenOutcome
 } from "./authored-outcomes.js"
-import { lyricForExpectedDecision, lyricForOutsideOccurrence } from "./authored-lyrics.js"
+import { lyricForExpectedDecision, lyricForLifecycleEvent, lyricForOutsideOccurrence } from "./authored-lyrics.js"
+import { runAuthoredCassetteActivations } from "./authored-activations.js"
 
 export {
   AuthoredCassetteOutcomeAssertionMismatch,
@@ -112,6 +90,19 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
 })
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 
+/**
+ * Harness-controlled coordinator lifetime changes are authored story facts,
+ * never workflow-journal events.
+ */
+export const AuthoredCassetteLifecycleEvent = Schema.TaggedUnion({ CoordinatorProcessDies: {} })
+export type AuthoredCassetteLifecycleEvent = typeof AuthoredCassetteLifecycleEvent.Type
+
+const AuthoredCassetteLifecycleEvents = Schema.Array(AuthoredCassetteLifecycleEvent).check(
+  Schema.makeFilter((events) =>
+    events.length <= 1 ? undefined : "an authored cassette supports at most one coordinator-death checkpoint"
+  )
+)
+
 // Provisional while cassettes have no users; remove versioning before the first supported format.
 const authoredScenarioCassetteVersion = 1 as const
 
@@ -120,6 +111,7 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   expectedDecisions: Schema.Array(AuthoredCassetteDecision),
   expectedOutcomes: Schema.Array(AuthoredExpectedOutcomeAssertion),
   forbiddenOutcomes: Schema.Array(AuthoredForbiddenOutcomeAssertion),
+  lifecycleEvents: AuthoredCassetteLifecycleEvents,
   name: Schema.NonEmptyString,
   outsideOccurrences: Schema.Array(AuthoredOutsideOccurrence),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
@@ -195,74 +187,6 @@ export class AuthoredCassetteDecisionMismatch extends Schema.TaggedErrorClass<Au
   { actual: Schema.Array(AuthoredCassetteDecision), expected: Schema.Array(AuthoredCassetteDecision) }
 ) {}
 
-const trackerReadFailure = (detail: string) =>
-  new TrackerAdapterReadError({
-    context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
-    detail,
-    reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
-  })
-
-const controlledTrackerGraphReaderLayer = (outsideOccurrences: ReadonlyArray<AuthoredOutsideOccurrence>) =>
-  Layer.effect(
-    TrackerGraphReader,
-    Effect.gen(function* () {
-      const graphReturns = yield* Ref.make(
-        outsideOccurrences.flatMap((occurrence) =>
-          occurrence._tag === "TrackerGraphReadReturned" ? [occurrence.graph] : []
-        )
-      )
-      const specificationReturns = yield* Ref.make(
-        outsideOccurrences.flatMap((occurrence) =>
-          occurrence._tag === "TaskWorkSpecificationReadReturned" ? [occurrence] : []
-        )
-      )
-      return TrackerGraphReader.of({
-        read: Effect.fn("ScenarioCassette.TrackerGraphReader.read")(function* () {
-          const graph = yield* Ref.modify(graphReturns, (remaining) => [remaining[0], remaining.slice(1)] as const)
-          if (graph === undefined) {
-            return yield* trackerReadFailure("authored cassette has no tracker graph return for this logical read")
-          }
-          const projection = projectTrackerSnapshot(graph)
-          return projection._tag === "Valid"
-            ? projection.snapshot
-            : yield* trackerReadFailure(
-                `authored cassette tracker graph is invalid: ${projection.issues.map(({ _tag }) => _tag).join(", ")}`
-              )
-        }),
-        readTaskWorkSpecification: Effect.fn("ScenarioCassette.TrackerGraphReader.readTaskWorkSpecification")(
-          function* (_target, taskId) {
-            const specification = yield* Ref.modify(
-              specificationReturns,
-              (remaining) => [remaining[0], remaining.slice(1)] as const
-            )
-            if (specification === undefined) {
-              return yield* trackerReadFailure(`authored cassette has no task-work specification return for ${taskId}`)
-            }
-            if (specification.taskId !== taskId) {
-              return yield* trackerReadFailure(
-                `authored cassette returned task-work specification ${specification.taskId} for ${taskId}`
-              )
-            }
-            return makeTaskWorkSpecification(specification)
-          }
-        )
-      })
-    })
-  )
-
-const executorSteps = (
-  outsideOccurrences: ReadonlyArray<AuthoredOutsideOccurrence>
-): ReadonlyArray<ControlledFakeExecutorStep> =>
-  outsideOccurrences.flatMap((occurrence) => {
-    if (occurrence._tag !== "PlannedAttemptExecutorWorkReported") return []
-    const fields = { correlation: occurrence.report.correlation, report: occurrence.report }
-    const step: ControlledFakeExecutorStep =
-      occurrence.request === "StartOrContinue"
-        ? ControlledFakeExecutorStep.cases.StartOrContinue.make(fields)
-        : ControlledFakeExecutorStep.cases.Suspend.make(fields)
-    return [step]
-  })
-
 const decisionFromTraceItem = (item: TraceItem): ReadonlyArray<AuthoredCassetteDecision> => {
   if (item._tag !== "OperationSelected") return []
   const operation = item.operation
@@ -302,6 +226,9 @@ export interface AuthoredScenarioCassetteRun {
   readonly decisions: ReadonlyArray<AuthoredCassetteDecision>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly records: ReadonlyArray<JournalRecord>
+  readonly activationKinds: ReadonlyArray<"Fresh" | "StartupRecovery">
+  readonly completedLifecycleEvents: ReadonlyArray<AuthoredCassetteLifecycleEvent>
+  readonly recoveryAuthorityVerifiedAttemptIds: ReadonlyArray<AttemptId>
   readonly verifiedExpectedOutcomes: ReadonlyArray<AuthoredExpectedOutcomeAssertion>
   readonly verifiedForbiddenOutcomes: ReadonlyArray<AuthoredForbiddenOutcomeAssertion>
 }
@@ -310,54 +237,9 @@ export interface AuthoredScenarioCassetteRun {
 export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthored")(function* (input: unknown) {
   const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
   const command = cassette.actorCommands[0]
-
-  const traceItems = yield* Ref.make<ReadonlyArray<TraceItem>>([])
-  const trace = WorkflowTrace.of({
-    emit: Effect.fn("ScenarioCassette.WorkflowTrace.emit")(function* (item) {
-      yield* Ref.update(traceItems, (current) => [...current, item])
-    })
-  })
-  const journalLayer = memoryJournalStoreLayer
-  const trackerLayer = controlledTrackerGraphReaderLayer(cassette.outsideOccurrences)
-  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
-    Layer.provide(Layer.merge(trackerLayer, controlledTrackerMutationLayerFrom(cassette.startingFacts.taskClaims)))
-  )
-  const gitWorktreeLayer = gitWorktreeTestLayer(cassette.startingFacts.worktreeObservation)
-  const authoritativeInterpreterLayer = Layer.effect(
-    WorkflowInterpreter,
-    Effect.gen(function* () {
-      const interpreter = yield* WorkflowInterpreter
-      const gitWorktree = yield* GitWorktree
-      return WorkflowInterpreter.of({
-        ...interpreter,
-        reconcileTaskWorktree: (operation) =>
-          runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
-            Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
-          )
-      })
-    })
-  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
-  const interpreterLayer = journaledWorkflowInterpreterLayer(command.runId, authoritativeInterpreterLayer)
-  const executorLayer = makeControlledFakePlannedAttemptExecutorLayer(executorSteps(cassette.outsideOccurrences))
-  const recoveryLayer = journaledFreshRunRecoveryActivationLayer.pipe(Layer.provide(executorLayer))
-  const workflowLayer = Layer.mergeAll(
-    interpreterLayer,
-    recoveryLayer,
-    deterministicOperationIdAllocatorLayer(`cassette:${command.runId}:operation`),
-    deterministicTaskClaimAcquisitionPlannerLayer({ owner: command.claimOwner, tokenPrefix: command.claimTokenPrefix }),
-    deterministicPlannedTaskAttemptLayer({
-      baseSha: command.baseSha,
-      executor: command.executor,
-      runId: command.runId,
-      worktreeRoot: command.worktreeRoot
-    })
-  ).pipe(Layer.provideMerge(journalLayer))
-
-  const records = yield* Effect.gen(function* () {
-    yield* runWorkflow(command.target, command.capacity).pipe(Effect.provideService(WorkflowTrace, trace))
-    return yield* (yield* JournalStore).read(command.runId)
-  }).pipe(Effect.provide(workflowLayer))
-  const observedTraceItems = yield* Ref.get(traceItems)
+  const activationRun = yield* runAuthoredCassetteActivations(cassette)
+  const records = activationRun.records
+  const observedTraceItems = activationRun.traceItems
   const decisions = observedTraceItems.flatMap(decisionFromTraceItem)
   if (!decisionsMatch(cassette.expectedDecisions, decisions)) {
     return yield* new AuthoredCassetteDecisionMismatch({ actual: decisions, expected: cassette.expectedDecisions })
@@ -382,9 +264,12 @@ export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthor
   }
   return {
     cassette,
+    activationKinds: activationRun.activationKinds,
+    completedLifecycleEvents: activationRun.completedLifecycleEvents,
     decisions,
     history,
     records,
+    recoveryAuthorityVerifiedAttemptIds: activationRun.recoveryAuthorityVerifiedAttemptIds,
     verifiedExpectedOutcomes: cassette.expectedOutcomes,
     verifiedForbiddenOutcomes: cassette.forbiddenOutcomes
   } satisfies AuthoredScenarioCassetteRun
@@ -401,5 +286,6 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
     ...cassette.expectedDecisions.map(lyricForExpectedDecision),
     ...cassette.expectedOutcomes.map(lyricForExpectedOutcome),
     ...cassette.forbiddenOutcomes.map(lyricForForbiddenOutcome),
+    ...cassette.lifecycleEvents.map(lyricForLifecycleEvent),
     ...cassette.outsideOccurrences.map(lyricForOutsideOccurrence)
   ].join("\n")
