@@ -56,7 +56,7 @@ const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number)
   ]
 }
 
-it("rejects duplicate unfinished planned-attempt executor work before frontier derivation or an executor call", () => {
+it("lower reducer identifies duplicate unfinished planned-attempt executor work", () => {
   const first = attempt("attempt-A-3")
   const second = attempt("attempt-A-4")
   const reduction = reduceManagedHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
