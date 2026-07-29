@@ -25,7 +25,10 @@ reads and records A's exact task-work specification, records the immutable
 attempt, reconciles the controlled worktree, and asks the executor to do the
 complete attempt work. The executor first reports Running and then Terminal
 Completed. The runner compares the domain decisions declared by the cassette
-with the decisions emitted while the production loop runs.
+with the decisions emitted while the production loop runs. It also compares
+the declared valid-history result and exact coarse executor reports with the
+visible production result, and verifies that none of the cassette's forbidden
+journal occurrence kinds appeared.
 
 There is no real GitHub, Git, SQLite, process, or operating-system boundary in
 this scenario, so network loss, an external process crash, and provider retry
@@ -42,6 +45,7 @@ Acceptance tests:
 
 - `runs an authored cassette through the production loop and matches its declared decisions`
 - `rejects an executor entry for a different planned attempt`
+- `fails typed authored boundaries and declared behavior mismatches`
 
 ## A journal is projected and folded occurrence by occurrence
 
@@ -54,9 +58,11 @@ payload versions, and storage encoding concerns.
 The maintainer projects that valid journal into a recorded cassette. The
 projection emits exactly one structured domain entry for every journaled
 occurrence in original order. It retains the task, operation, attempt,
-evidence, actor, and report meanings required by reconstruction, but it does
-not copy journal keys, journal positions, event versions, or database encoding.
-Readable lyrics are rendered from those entries.
+evidence, and report meanings required by reconstruction. Tracker and executor
+entries reuse #160's accepted actor and occurrence classifications; the other
+entries do not invent classifications that #160 has not established. The
+cassette does not copy journal keys, journal positions, event versions, or
+database encoding. Readable lyrics are rendered from those entries.
 
 For each corresponding prefix, Dalph folds the source journal and folds the
 recorded cassette as history. It compares reconstructed domain state and runs
@@ -75,7 +81,7 @@ world script, or treat physical storage fields as cassette-domain facts.
 Acceptance tests:
 
 - `round-trips every journaled occurrence and preserves state and decisions after every prefix`
-- `renders readable lyrics from structured recorded entries`
+- `renders recorded operator commands from their structured entry`
 - `rejects an illegal early start even when the final semantic state agrees`
 
 ## An authored outside occurrence is never observed
@@ -123,10 +129,10 @@ Acceptance test:
 
 ## Changed and unchanged observations are measured before compression work
 
-A maintainer runs representative journals containing a complete changed graph
-observation and a comparable unchanged reconfirmation. Dalph encodes the
-journal records and recorded cassette with their maintained schemas and
-measures their UTF-8 byte sizes.
+A maintainer runs a 100-task chain through three complete graph reads. The
+first is a complete changed observation and the next two are comparable
+unchanged reconfirmations. Dalph encodes the journal records and recorded
+cassette with their maintained schemas and measures their UTF-8 byte sizes.
 
 This is a pure measurement; no person-visible runtime behavior, outside
 boundary, crash recovery, or retry changes. The report records both sizes and

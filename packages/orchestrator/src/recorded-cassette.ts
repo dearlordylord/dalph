@@ -90,35 +90,15 @@ const recordTaskBoundaryEntry = (
 ): RecordedCassetteEntry => {
   switch (event._tag) {
     case "TaskAttemptPlanned":
-      return {
-        _tag: "TaskAttemptPlanned",
-        initiatedBy: coordinator(),
-        occurrenceClassification: "InitiatedAction",
-        operation: event.operation
-      }
+      return { _tag: "TaskAttemptPlanned", operation: event.operation }
     case "TaskClaimAcquired":
-      return { _tag: "TaskClaimAcquired", claim: event.claim, occurrenceClassification: "NonActionOccurrence" }
+      return { _tag: "TaskClaimAcquired", claim: event.claim }
     case "TaskClaimAcquisitionIntended":
-      return {
-        _tag: "TaskClaimAcquisitionIntended",
-        initiatedBy: coordinator(),
-        occurrenceClassification: "InitiatedAction",
-        operation: event.operation
-      }
+      return { _tag: "TaskClaimAcquisitionIntended", operation: event.operation }
     case "TaskWorktreeReady":
-      return {
-        _tag: "TaskWorktreeReady",
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: event.operationId,
-        proof: event.proof
-      }
+      return { _tag: "TaskWorktreeReady", operationId: event.operationId, proof: event.proof }
     case "TaskWorktreeReconciliationIntended":
-      return {
-        _tag: "TaskWorktreeReconciliationInitiated",
-        initiatedBy: coordinator(),
-        occurrenceClassification: "InitiatedAction",
-        operation: event.operation
-      }
+      return { _tag: "TaskWorktreeReconciliationInitiated", operation: event.operation }
   }
 }
 
@@ -278,7 +258,7 @@ const semanticResponsibility = (
       return leftJson < rightJson ? orderedBefore : leftJson > rightJson ? orderedAfter : orderedSame
     })
 
-const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
+const semanticOutcomeState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
     : {
@@ -288,10 +268,23 @@ const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>)
         runId: history.runId
       }
 
+const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
+  history._tag === "InvalidWorkflowJournalHistory"
+    ? semanticOutcomeState(history)
+    : {
+        appliedThroughOccurrenceCount: history.runState.workflowHistory.records.length,
+        graphKnowledge: history.runState.graphKnowledge,
+        pause: history.runState.pause,
+        responsibility: semanticResponsibility(history),
+        runId: history.runId,
+        workflowHistory: history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
+      }
+
 export interface RecordedCassetteCheckpoint {
   readonly checkpoint: number
   readonly decisionsEquivalent: boolean
   readonly stateEquivalent: boolean
+  readonly visibleOutcomeEquivalent: boolean
 }
 
 const checkpointComparison = (
@@ -304,7 +297,8 @@ const checkpointComparison = (
     expected._tag === "ValidWorkflowJournalHistory" &&
     actual._tag === "ValidWorkflowJournalHistory" &&
     semanticJson(expected.recoveryFrontier) === semanticJson(actual.recoveryFrontier),
-  stateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual))
+  stateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
+  visibleOutcomeEquivalent: semanticJson(semanticOutcomeState(expected)) === semanticJson(semanticOutcomeState(actual))
 })
 
 /** Compares source and recorded folds after every corresponding occurrence. */

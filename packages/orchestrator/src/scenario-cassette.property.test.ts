@@ -68,6 +68,11 @@ const generatedCassette = (unsortedTaskIds: ReadonlyArray<string>, suffix: strin
       { _tag: "RecordTaskAttemptPlan", attemptId: `attempt:${activeTaskId}:0`, taskId: activeTaskId },
       { _tag: "ReconcileTaskWorktree", attemptId: `attempt:${activeTaskId}:0`, taskId: activeTaskId }
     ],
+    expectedVisibleBehavior: {
+      forbiddenJournalOccurrenceTags: ["ControlCommandRecorded", "TaskWorktreeReady"],
+      journalHistory: "ValidWorkflowJournalHistory",
+      plannedAttemptExecutorReports: executorReports.map(({ report }) => report)
+    },
     name: `generated flat graph ${suffix}`,
     outsideOccurrences: [...graphReturns, ...specificationReturns, ...executorReports],
     schemaVersion: 1,

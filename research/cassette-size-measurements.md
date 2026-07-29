@@ -2,7 +2,10 @@
 
 Measured by
 `reports encoded journal and cassette sizes for changed and unchanged graph observations`
-for the maintained singleton authored cassette.
+for a maintained 100-task chain. Ninety-nine tasks are tracker-complete, the
+last task is open, and the production loop reads the same complete graph three
+times: one changed observation followed by two compact unchanged
+reconfirmations.
 
 The measurement encodes values with their maintained Effect Schema, serializes
 the encoded value as JSON, and counts UTF-8 bytes. Journal measurements include
@@ -13,10 +16,8 @@ database encoding.
 
 | Observation representation | Occurrences | Journal bytes | Recorded cassette bytes |
 | --- | ---: | ---: | ---: |
-| Complete changed graph observation | 1 | 2,377 | 2,395 |
-| Compact unchanged graph reconfirmation | 2 | 4,648 | 4,599 |
+| Complete changed graph observation | 1 | 24,586 | 24,593 |
+| Compact unchanged graph reconfirmation | 2 | 11,829 | 11,747 |
 
 These numbers are a regression-visible baseline, not evidence for a delta,
-compression, or content-addressing design. The singleton graph is intentionally
-representative of the maintained cassette seam rather than a claim about large
-production graphs.
+compression, or content-addressing design.

@@ -101,11 +101,40 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
 })
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 
+const AuthoredJournalOccurrenceTag = Schema.Literals([
+  "ControlCommandRecorded",
+  "PlannedAttemptExecutorWorkReported",
+  "PlannedAttemptExecutorWorkResponsibilityBegan",
+  "TaskAttemptPlanned",
+  "TaskClaimAcquired",
+  "TaskClaimAcquisitionIntended",
+  "TaskTrackerFactsObserved",
+  "TaskTrackerReadIntentRecorded",
+  "TaskWorktreeReady",
+  "TaskWorktreeReconciliationIntended"
+])
+
+/** Visible production outcomes and explicitly forbidden journal results. */
+export const AuthoredVisibleBehaviorExpectation = Schema.Struct({
+  forbiddenJournalOccurrenceTags: Schema.Array(AuthoredJournalOccurrenceTag),
+  journalHistory: Schema.Literal("ValidWorkflowJournalHistory"),
+  plannedAttemptExecutorReports: Schema.Array(PlannedAttemptExecutorReport)
+})
+export type AuthoredVisibleBehaviorExpectation = typeof AuthoredVisibleBehaviorExpectation.Type
+
+export const AuthoredVisibleBehavior = Schema.Struct({
+  journalHistory: Schema.Literals(["InvalidWorkflowJournalHistory", "ValidWorkflowJournalHistory"]),
+  journalOccurrenceTags: Schema.Array(AuthoredJournalOccurrenceTag),
+  plannedAttemptExecutorReports: Schema.Array(PlannedAttemptExecutorReport)
+})
+export type AuthoredVisibleBehavior = typeof AuthoredVisibleBehavior.Type
+
 const authoredScenarioCassetteVersion = 1 as const
 
-export const AuthoredScenarioCassette = Schema.TaggedStruct("AuthoredScenarioCassette", {
+const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
   actorCommands: Schema.Array(AuthoredCassetteCommand).check(Schema.isLengthBetween(1, 1)),
   expectedDecisions: Schema.Array(AuthoredCassetteDecision),
+  expectedVisibleBehavior: AuthoredVisibleBehaviorExpectation,
   name: Schema.NonEmptyString,
   outsideOccurrences: Schema.Array(AuthoredOutsideOccurrence),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
@@ -113,23 +142,64 @@ export const AuthoredScenarioCassette = Schema.TaggedStruct("AuthoredScenarioCas
     taskWorkSpecifications: Schema.Array(AuthoredTaskWorkSpecification),
     trackerGraph: AuthoredTrackerGraph
   })
-}).check(
-  Schema.makeFilter((cassette) => {
-    const firstGraph = cassette.outsideOccurrences.find((occurrence) => occurrence._tag === "TrackerGraphReadReturned")
-    if (
-      firstGraph?._tag !== "TrackerGraphReadReturned" ||
-      JSON.stringify(firstGraph.graph) !== JSON.stringify(cassette.startingFacts.trackerGraph)
-    ) {
-      return "the first controlled tracker return must expose the authored starting graph"
-    }
-    return undefined
-  })
+})
+
+const startingGraphMatchesFirstReturn = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const firstGraph = cassette.outsideOccurrences.find((occurrence) => occurrence._tag === "TrackerGraphReadReturned")
+  return firstGraph?._tag === "TrackerGraphReadReturned" &&
+    JSON.stringify(firstGraph.graph) === JSON.stringify(cassette.startingFacts.trackerGraph)
+    ? undefined
+    : "the first controlled tracker return must expose the authored starting graph"
+})
+
+const startingSpecificationTaskIdsAreUnique = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+    new Set(cassette.startingFacts.taskWorkSpecifications.map(({ taskId }) => taskId)).size ===
+    cassette.startingFacts.taskWorkSpecifications.length
+      ? undefined
+      : "authored starting task-work specifications must name each task at most once"
 )
+
+const firstReturnedSpecificationsMatchStartingFacts = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const firstReturns = cassette.outsideOccurrences.filter(
+      (occurrence, index, occurrences) =>
+        occurrence._tag === "TaskWorkSpecificationReadReturned" &&
+        occurrences.findIndex(
+          (candidate) =>
+            candidate._tag === "TaskWorkSpecificationReadReturned" && candidate.taskId === occurrence.taskId
+        ) === index
+    )
+    const mismatch = firstReturns.find((occurrence) => {
+      if (occurrence._tag !== "TaskWorkSpecificationReadReturned") return false
+      const startingSpecification = cassette.startingFacts.taskWorkSpecifications.find(
+        ({ taskId }) => taskId === occurrence.taskId
+      )
+      return (
+        startingSpecification === undefined ||
+        JSON.stringify(startingSpecification) !==
+          JSON.stringify({ body: occurrence.body, taskId: occurrence.taskId, title: occurrence.title })
+      )
+    })
+    return mismatch?._tag === "TaskWorkSpecificationReadReturned"
+      ? `the first task-work specification return for ${mismatch.taskId} must expose its authored starting facts`
+      : undefined
+  }
+)
+
+export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(startingGraphMatchesFirstReturn)
+  .check(startingSpecificationTaskIdsAreUnique)
+  .check(firstReturnedSpecificationsMatchStartingFacts)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type
 
 export class AuthoredCassetteDecisionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteDecisionMismatch>()(
   "AuthoredCassetteDecisionMismatch",
   { actual: Schema.Array(AuthoredCassetteDecision), expected: Schema.Array(AuthoredCassetteDecision) }
+) {}
+
+export class AuthoredCassetteVisibleBehaviorMismatch extends Schema.TaggedErrorClass<AuthoredCassetteVisibleBehaviorMismatch>()(
+  "AuthoredCassetteVisibleBehaviorMismatch",
+  { actual: AuthoredVisibleBehavior, expected: AuthoredVisibleBehaviorExpectation }
 ) {}
 
 const trackerReadFailure = (detail: string) =>
@@ -234,11 +304,25 @@ const decisionsMatch = (
   JSON.stringify(Schema.encodeUnknownSync(Schema.Array(AuthoredCassetteDecision))(expected)) ===
   JSON.stringify(Schema.encodeUnknownSync(Schema.Array(AuthoredCassetteDecision))(actual))
 
+const visibleBehaviorMatches = (
+  expected: AuthoredVisibleBehaviorExpectation,
+  actual: AuthoredVisibleBehavior
+): boolean =>
+  expected.journalHistory === actual.journalHistory &&
+  JSON.stringify(
+    Schema.encodeUnknownSync(Schema.Array(PlannedAttemptExecutorReport))(expected.plannedAttemptExecutorReports)
+  ) ===
+    JSON.stringify(
+      Schema.encodeUnknownSync(Schema.Array(PlannedAttemptExecutorReport))(actual.plannedAttemptExecutorReports)
+    ) &&
+  expected.forbiddenJournalOccurrenceTags.every((tag) => !actual.journalOccurrenceTags.includes(tag))
+
 export interface AuthoredScenarioCassetteRun {
   readonly cassette: AuthoredScenarioCassette
   readonly decisions: ReadonlyArray<AuthoredCassetteDecision>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly records: ReadonlyArray<JournalRecord>
+  readonly visibleBehavior: AuthoredVisibleBehavior
 }
 
 /** Decodes and drives one authored cassette through the production workflow loop. */
@@ -282,12 +366,21 @@ export const runAuthoredScenarioCassette = Effect.fn("ScenarioCassette.runAuthor
   if (!decisionsMatch(cassette.expectedDecisions, decisions)) {
     return yield* new AuthoredCassetteDecisionMismatch({ actual: decisions, expected: cassette.expectedDecisions })
   }
-  return {
-    cassette,
-    decisions,
-    history: reduceWorkflowJournalHistory(command.runId, records),
-    records
-  } satisfies AuthoredScenarioCassetteRun
+  const history = reduceWorkflowJournalHistory(command.runId, records)
+  const visibleBehavior = AuthoredVisibleBehavior.make({
+    journalHistory: history._tag,
+    journalOccurrenceTags: records.map(({ event }) => event._tag),
+    plannedAttemptExecutorReports: records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report] : []
+    )
+  })
+  if (!visibleBehaviorMatches(cassette.expectedVisibleBehavior, visibleBehavior)) {
+    return yield* new AuthoredCassetteVisibleBehaviorMismatch({
+      actual: visibleBehavior,
+      expected: cassette.expectedVisibleBehavior
+    })
+  }
+  return { cassette, decisions, history, records, visibleBehavior } satisfies AuthoredScenarioCassetteRun
 })
 
 const lyricForOutsideOccurrence = (occurrence: AuthoredOutsideOccurrence): string => {
@@ -308,5 +401,9 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
   [
     `Scenario: ${cassette.name}.`,
     `The maintainer starts run ${cassette.actorCommands[0]?.runId ?? "without a decoded command"}.`,
+    `The expected journal result is ${cassette.expectedVisibleBehavior.journalHistory}.`,
+    ...cassette.expectedVisibleBehavior.forbiddenJournalOccurrenceTags.map(
+      (tag) => `The journal must not contain ${tag}.`
+    ),
     ...cassette.outsideOccurrences.map(lyricForOutsideOccurrence)
   ].join("\n")

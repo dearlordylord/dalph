@@ -36,9 +36,9 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { ...initiatedByCoordinator, plannedAttempt: PlannedTaskAttempt },
-  TaskAttemptPlanned: { ...initiatedByCoordinator, operation: WorkflowOperation.cases.RecordTaskAttemptPlan },
-  TaskClaimAcquired: { ...nonActionOccurrence, claim: ActiveTaskClaim },
-  TaskClaimAcquisitionIntended: { ...initiatedByCoordinator, operation: WorkflowOperation.cases.AcquireTaskClaim },
+  TaskAttemptPlanned: { operation: WorkflowOperation.cases.RecordTaskAttemptPlan },
+  TaskClaimAcquired: { claim: ActiveTaskClaim },
+  TaskClaimAcquisitionIntended: { operation: WorkflowOperation.cases.AcquireTaskClaim },
   TaskTrackerFactsObserved: {
     evidence: TaskTrackerFactsObservation,
     ...nonActionOccurrence,
@@ -51,11 +51,8 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
       WorkflowOperation.cases.ReadTaskWorkSpecification
     ])
   },
-  TaskWorktreeReady: { ...nonActionOccurrence, operationId: OperationId, proof: PlannedWorktreeReady },
-  TaskWorktreeReconciliationInitiated: {
-    ...initiatedByCoordinator,
-    operation: WorkflowOperation.cases.ReconcileTaskWorktree
-  }
+  TaskWorktreeReady: { operationId: OperationId, proof: PlannedWorktreeReady },
+  TaskWorktreeReconciliationInitiated: { operation: WorkflowOperation.cases.ReconcileTaskWorktree }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 

@@ -52,6 +52,14 @@ const singletonCassette = {
     { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
   ],
+  expectedVisibleBehavior: {
+    forbiddenJournalOccurrenceTags: ["ControlCommandRecorded", "TaskWorktreeReady"],
+    journalHistory: "ValidWorkflowJournalHistory",
+    plannedAttemptExecutorReports: [
+      { _tag: "Running", correlation },
+      { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
+    ]
+  },
   name: "one open task completes its executor work",
   outsideOccurrences: [
     { _tag: "TrackerGraphReadReturned", graph },
@@ -83,12 +91,94 @@ const singletonCassette = {
   }
 }
 
+const representativeTaskCount = 100
+const representativeTaskIds = Array.from(
+  { length: representativeTaskCount },
+  (_unused, index) => `task-${index.toString().padStart(3, "0")}`
+)
+const representativeActiveTaskId = representativeTaskIds.at(-1) ?? "task-099"
+const representativeGraph = {
+  revision: "representative-graph-revision",
+  tasks: representativeTaskIds.map((id, index) => ({
+    id,
+    lifecycle: { _tag: id === representativeActiveTaskId ? "Open" : "CompletedSuccessfully" },
+    parentTaskId: null,
+    prerequisiteIds: index === 0 ? [] : [representativeTaskIds[index - 1]]
+  }))
+}
+const representativeCorrelation = {
+  attemptId: `attempt:${representativeActiveTaskId}:0`,
+  runId: "cassette-representative-graph"
+}
+const representativeCassette = {
+  ...singletonCassette,
+  actorCommands: [
+    {
+      ...singletonCassette.actorCommands[0],
+      runId: representativeCorrelation.runId,
+      target: "representative-cassette-target"
+    }
+  ],
+  expectedDecisions: singletonCassette.expectedDecisions.map((decision) => {
+    if (decision._tag === "ReadTrackerGraph") return { ...decision, target: "representative-cassette-target" }
+    if (decision._tag === "AcquireTaskClaim" || decision._tag === "ReadTaskWorkSpecification") {
+      return { ...decision, taskId: representativeActiveTaskId }
+    }
+    return { ...decision, attemptId: representativeCorrelation.attemptId, taskId: representativeActiveTaskId }
+  }),
+  expectedVisibleBehavior: {
+    ...singletonCassette.expectedVisibleBehavior,
+    plannedAttemptExecutorReports: [
+      { _tag: "Running", correlation: representativeCorrelation },
+      { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } }
+    ]
+  },
+  name: "one open task in a representative repeatedly refreshed graph",
+  outsideOccurrences: [
+    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
+    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
+    { _tag: "TrackerGraphReadReturned", graph: representativeGraph },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the active task in the representative graph.",
+      taskId: representativeActiveTaskId,
+      title: "Implement representative active task"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", correlation: representativeCorrelation },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", correlation: representativeCorrelation, result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    }
+  ],
+  startingFacts: {
+    taskWorkSpecifications: [
+      {
+        body: "Implement the active task in the representative graph.",
+        taskId: representativeActiveTaskId,
+        title: "Implement representative active task"
+      }
+    ],
+    trackerGraph: representativeGraph
+  }
+}
+
 it.effect("runs an authored cassette through the production loop and matches its declared decisions", () =>
   Effect.gen(function* () {
     const result = yield* runAuthoredScenarioCassette(singletonCassette)
 
     expect(result.decisions).toEqual(result.cassette.expectedDecisions)
     expect(result.history._tag).toBe("ValidWorkflowJournalHistory")
+    expect(result.visibleBehavior.plannedAttemptExecutorReports).toEqual(
+      result.cassette.expectedVisibleBehavior.plannedAttemptExecutorReports
+    )
+    expect(renderAuthoredCassetteLyrics(result.cassette)).toContain(
+      "The journal must not contain ControlCommandRecorded."
+    )
     expect(result.records.map(({ event }) => event._tag)).toContain("PlannedAttemptExecutorWorkResponsibilityBegan")
     expect(result.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
   })
@@ -133,20 +223,20 @@ it.effect("accepts generated identities only through one consistent renaming", (
 
 it.effect("reports encoded journal and cassette sizes for changed and unchanged graph observations", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singletonCassette)
+    const run = yield* runAuthoredScenarioCassette(representativeCassette)
     const recorded = yield* projectRecordedCassette(run.records)
 
     expect(measureTrackerObservationEncoding(run.records, recorded)).toMatchInlineSnapshot(`
       {
         "changedGraphObservations": {
-          "journalBytes": 2377,
+          "journalBytes": 24586,
           "occurrenceCount": 1,
-          "recordedCassetteBytes": 2395,
+          "recordedCassetteBytes": 24593,
         },
         "unchangedGraphReconfirmations": {
-          "journalBytes": 4648,
+          "journalBytes": 11829,
           "occurrenceCount": 2,
-          "recordedCassetteBytes": 4599,
+          "recordedCassetteBytes": 11747,
         },
       }
     `)
@@ -165,7 +255,12 @@ it.effect("round-trips every journaled occurrence and preserves state and decisi
     expect(JSON.stringify(encodedEntries)).not.toMatch(/"key"|"position"|"version"/)
     expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
     expect(verifyRecordedCassetteRoundTrip(run.records, recorded)).toEqual(
-      run.records.map((_record, index) => ({ checkpoint: index + 1, decisionsEquivalent: true, stateEquivalent: true }))
+      run.records.map((_record, index) => ({
+        checkpoint: index + 1,
+        decisionsEquivalent: true,
+        stateEquivalent: true,
+        visibleOutcomeEquivalent: true
+      }))
     )
     expect(renderRecordedCassetteLyrics(recorded)).toContain(
       "Dalph coordinator began executor-work responsibility for task A, attempt attempt:A:0."
@@ -220,7 +315,7 @@ it.effect("rejects an executor entry for a different planned attempt", () =>
   })
 )
 
-it.effect("fails typed authored boundaries and declared-decision mismatches", () =>
+it.effect("fails typed authored boundaries and declared behavior mismatches", () =>
   Effect.gen(function* () {
     const inconsistentStartingFacts = yield* runAuthoredScenarioCassette({
       ...singletonCassette,
@@ -264,12 +359,18 @@ it.effect("fails typed authored boundaries and declared-decision mismatches", ()
         occurrence._tag === "TaskWorkSpecificationReadReturned" ? { ...occurrence, taskId: "B" } : occurrence
       )
     }).pipe(Effect.flip)
-    expect(wrongSpecification._tag).toBe("TrackerGraphReader.AdapterReadError")
+    expect(wrongSpecification._tag).toBe("SchemaError")
 
     const decisionMismatch = yield* runAuthoredScenarioCassette({ ...singletonCassette, expectedDecisions: [] }).pipe(
       Effect.flip
     )
     expect(decisionMismatch._tag).toBe("AuthoredCassetteDecisionMismatch")
+
+    const visibleBehaviorMismatch = yield* runAuthoredScenarioCassette({
+      ...singletonCassette,
+      expectedVisibleBehavior: { ...singletonCassette.expectedVisibleBehavior, plannedAttemptExecutorReports: [] }
+    }).pipe(Effect.flip)
+    expect(visibleBehaviorMismatch._tag).toBe("AuthoredCassetteVisibleBehaviorMismatch")
 
     const suspendStep = yield* runAuthoredScenarioCassette({
       ...singletonCassette,
@@ -382,7 +483,8 @@ it.effect("rejects an illegal early start even when the final semantic state agr
 
     expect(expectedFinal._tag).toBe("ValidWorkflowJournalHistory")
     expect(actualFinal._tag).toBe("ValidWorkflowJournalHistory")
-    expect(checkpoints.at(-1)?.stateEquivalent).toBe(true)
+    expect(checkpoints.at(-1)?.stateEquivalent).toBe(false)
+    expect(checkpoints.at(-1)?.visibleOutcomeEquivalent).toBe(true)
     expect(checkpoints.some(({ decisionsEquivalent }) => !decisionsEquivalent)).toBe(true)
   })
 )
