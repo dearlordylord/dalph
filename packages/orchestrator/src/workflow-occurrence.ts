@@ -125,39 +125,51 @@ export const WorkflowOccurrenceProjection = Schema.Struct({
 }).check(Schema.makeFilter(missingOriginatingAction))
 export type WorkflowOccurrenceProjection = typeof WorkflowOccurrenceProjection.Type
 
-const noOccurrence = (_event: WorkflowJournalEvent): ReadonlyArray<WorkflowOccurrence> => []
+type ProjectedJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "TrackerGraphObservationIntentRecorded" | "TrackerGraphOutcomeObserved" }
+>
+type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
+
+const nonProjectedJournalEventKinds = {
+  ControlCommandRecorded: true,
+  PlannedAttemptExecutorWorkReported: true,
+  PlannedAttemptExecutorWorkStarted: true,
+  TaskAttemptPlanned: true,
+  TaskClaimAcquired: true,
+  TaskClaimAcquisitionIntended: true,
+  TaskWorktreeReady: true,
+  TaskWorktreeReconciliationIntended: true
+} satisfies Record<NonProjectedJournalEvent["_tag"], true>
+
+const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOccurrence> => {
+  void nonProjectedJournalEventKinds[event._tag]
+  return []
+}
 
 const projectRecord = (record: JournalRecord): ReadonlyArray<WorkflowOccurrence> => {
   const event = record.event
-  switch (event._tag) {
-    case "TrackerGraphObservationIntentRecorded":
-      return [
-        TrackerGraphReadInitiated.make({
-          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-          occurrenceClassification: "InitiatedAction",
-          operation: event.operation,
-          runId: record.runId
-        })
-      ]
-    case "TrackerGraphOutcomeObserved":
-      return [
-        TaskTrackerFactsObserved.make({
-          occurrenceClassification: "NonActionOccurrence",
-          originatingActionOperationId: event.operationId,
-          outcome: event.outcome,
-          runId: record.runId
-        })
-      ]
-    case "ControlCommandRecorded":
-    case "PlannedAttemptExecutorWorkReported":
-    case "PlannedAttemptExecutorWorkStarted":
-    case "TaskAttemptPlanned":
-    case "TaskClaimAcquired":
-    case "TaskClaimAcquisitionIntended":
-    case "TaskWorktreeReady":
-    case "TaskWorktreeReconciliationIntended":
-      return noOccurrence(event)
+  if (event._tag === "TrackerGraphObservationIntentRecorded") {
+    return [
+      TrackerGraphReadInitiated.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operation: event.operation,
+        runId: record.runId
+      })
+    ]
   }
+  if (event._tag === "TrackerGraphOutcomeObserved") {
+    return [
+      TaskTrackerFactsObserved.make({
+        occurrenceClassification: "NonActionOccurrence",
+        originatingActionOperationId: event.operationId,
+        outcome: event.outcome,
+        runId: record.runId
+      })
+    ]
+  }
+  return noOccurrence(event)
 }
 
 export const projectWorkflowOccurrences = (records: ReadonlyArray<JournalRecord>): WorkflowOccurrenceProjection =>
