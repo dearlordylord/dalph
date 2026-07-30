@@ -90,7 +90,7 @@ export const AuthoredProtocolEvidence = Schema.TaggedUnion({
 })
 export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
 
-export const AuthoredExpectedBehavior = Schema.Struct({
+const AuthoredExpectedBehaviorShape = Schema.Struct({
   orchestration: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
   protocol: Schema.NullOr(Schema.Array(AuthoredProtocolEvidence)),
   taskWork: Schema.Struct({
@@ -98,6 +98,22 @@ export const AuthoredExpectedBehavior = Schema.Struct({
     results: Schema.Array(AuthoredTaskWorkResult)
   })
 })
+
+const expectedBehaviorIssue = (assertions: typeof AuthoredExpectedBehaviorShape.Type): string | undefined => {
+  const absentTasks = assertions.taskWork.absences.map(({ taskId }) => taskId)
+  if (new Set(absentTasks).size !== absentTasks.length) {
+    return "each no-planned-work-undertaken assertion must name a task once"
+  }
+  if (assertions.taskWork.results.some(({ taskId }) => absentTasks.includes(taskId))) {
+    return "one task cannot have a planned-work result and no planned work undertaken"
+  }
+  const resultTasks = assertions.taskWork.results.map(({ taskId }) => taskId)
+  return assertions.orchestration === null && new Set(resultTasks).size !== resultTasks.length
+    ? "multiple planned-work results for one task require orchestration evidence"
+    : undefined
+}
+
+export const AuthoredExpectedBehavior = AuthoredExpectedBehaviorShape
 export type AuthoredExpectedBehavior = typeof AuthoredExpectedBehavior.Type
 
 export const AuthoredObservedBehavior = Schema.Struct({
@@ -233,21 +249,11 @@ const startingFactsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredS
     : "authored starting facts must agree with their first controlled returns and name claims/specifications once"
 })
 
-const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
-  const assertions = cassette.story.find((item) => item._tag === "ExpectedBehavior")
-  if (assertions?._tag !== "ExpectedBehavior") return undefined
-  const absentTasks = assertions.taskWork.absences.map(({ taskId }) => taskId)
-  if (new Set(absentTasks).size !== absentTasks.length) {
-    return "each no-planned-work-undertaken assertion must name a task once"
-  }
-  if (assertions.taskWork.results.some(({ taskId }) => absentTasks.includes(taskId))) {
-    return "one task cannot have a planned-work result and no planned work undertaken"
-  }
-  const resultTasks = assertions.taskWork.results.map(({ taskId }) => taskId)
-  return assertions.orchestration === null && new Set(resultTasks).size !== resultTasks.length
-    ? "multiple planned-work results for one task require orchestration evidence"
-    : undefined
-})
+const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story
+    .flatMap((item) => (item._tag === "ExpectedBehavior" ? [expectedBehaviorIssue(item)] : []))
+    .find((issue) => issue !== undefined)
+)
 
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")

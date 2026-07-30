@@ -358,6 +358,9 @@ it.effect("derives failed task-work results and safely suspended orchestration e
     }
     const failedRun = yield* runAuthoredScenarioCassette(failed)
     expect(failedRun.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskFailed", taskId: "A" }])
+    expect(renderAuthoredCassetteLyrics(failedRun.cassette)).toContain(
+      "The story expects the planned work for task A to fail."
+    )
 
     const safelySuspended = {
       ...singleton,
