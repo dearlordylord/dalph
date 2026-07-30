@@ -1,7 +1,7 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
-import { Effect, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -34,7 +34,12 @@ import {
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { activateRecoveredResponsibilities, makeRunRecoveryActivation } from "../run/recovery-activation.js"
+import {
+  activateRecoveredResponsibilities,
+  journaledFreshRunRecoveryActivationLayer,
+  makeRunRecoveryActivation,
+  RunRecoveryActivation
+} from "../run/recovery-activation.js"
 import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../run/recovery-authority.js"
 import { RunnableFrontierTransition } from "./frontier.js"
 import { recoverRunnableTransition } from "./recovery.js"
@@ -202,6 +207,60 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
 )
+
+it.effect("fresh-run journal facts expose membership constraints without recovered transitions", () => {
+  const runId = RunId.make("fresh-membership-constraint-run")
+  const target = FixtureTarget.make("fresh-membership-constraint-target")
+  const taskId = TaskId.make("fresh-removed-responsible-task")
+  const claim = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("fresh-removed-task-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("fresh-removed-task-token")
+    },
+    predecessorOperationIds: []
+  })
+  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("fresh-membership-removal-read"), target)
+
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target)
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerGraphFactsObserved(graphRead, {
+        revision: TrackerRevision.make("fresh-task-removed-from-target"),
+        taskIds: []
+      })
+    )
+
+    const recovery = yield* RunRecoveryActivation
+    expect((yield* recovery.readResponsibility).entries).toHaveLength(1)
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        {
+          _tag: "WorkflowOperationTaskMembershipConstraint",
+          operationId: claim.acquisition.operationId,
+          taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        }
+      ],
+      transitions: []
+    })
+  }).pipe(
+    Effect.provide(
+      journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
+    ),
+    Effect.provide(memoryJournalStoreLayer)
+  )
+})
 
 it.effect("an executor responsibility leaving complete membership becomes an executor-local constraint", () =>
   Effect.gen(function* () {

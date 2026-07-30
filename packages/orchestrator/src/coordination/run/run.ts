@@ -328,7 +328,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
               .taskIds()
               .every((taskId) => Option.getOrThrow(refreshed.lifecycleOf(taskId))._tag === "CompletedSuccessfully")
             return deriveRunFinalityDecision(
-              refreshedFrontier,
+              yield* recovery.readFinalityFrontier,
               yield* recovery.readResponsibility,
               trackerTargetSettled
             )

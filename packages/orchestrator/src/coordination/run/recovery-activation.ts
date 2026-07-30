@@ -131,11 +131,25 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   })
 })
 
+const readRecoveredMembershipConstraintFrontier = Effect.fn(
+  "RunRecoveryActivation.readRecoveredMembershipConstraintFrontier"
+)(function* (runId: RunId) {
+  const frontier = yield* readRecoveredFrontier(runId)
+  return {
+    explanations: frontier.explanations.filter(
+      ({ _tag }) =>
+        _tag === "PlannedAttemptTaskMembershipConstraint" || _tag === "WorkflowOperationTaskMembershipConstraint"
+    ),
+    transitions: []
+  }
+})
+
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction with its executor capability.
 interface RunRecoveryActivationSource {
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
+  readonly readFinalityFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
@@ -180,6 +194,7 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
       RunRecoveryActivation.of({
         _tag: "SyntheticFreshOnlyActivation",
         continuePlannedAttemptExecutorWork: (plannedAttempt) => executor.startOrContinue(plannedAttempt),
+        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
@@ -193,25 +208,31 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
  * Fresh-run composition that records coarse executor responsibility and
  * reports while exposing no recovered transitions.
  */
-export const journaledFreshRunRecoveryActivationLayer = Layer.effect(
-  RunRecoveryActivation,
-  Effect.gen(function* () {
-    const executor = yield* PlannedAttemptExecutor
-    const journal = yield* JournalStore
-    return RunRecoveryActivation.of({
-      _tag: "SyntheticFreshOnlyActivation",
-      continuePlannedAttemptExecutorWork: (plannedAttempt) =>
-        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-          Effect.provideService(PlannedAttemptExecutor, executor),
-          Effect.provideService(JournalStore, journal)
+export const journaledFreshRunRecoveryActivationLayer = (runId: RunId) =>
+  Layer.effect(
+    RunRecoveryActivation,
+    Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      const journal = yield* JournalStore
+      const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
+        Effect.provideService(effect, JournalStore, journal)
+      return RunRecoveryActivation.of({
+        _tag: "SyntheticFreshOnlyActivation",
+        continuePlannedAttemptExecutorWork: (plannedAttempt) =>
+          continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+            Effect.provideService(PlannedAttemptExecutor, executor),
+            Effect.provideService(JournalStore, journal)
+          ),
+        readFinalityFrontier: provideJournal(readRecoveredFrontier(runId)),
+        readFrontier: provideJournal(readRecoveredMembershipConstraintFrontier(runId)),
+        readResponsibility: provideJournal(
+          readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
         ),
-      readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-      readResponsibility: Effect.succeed({ entries: [] }),
-      reconstructedPlannedAttemptPositions: [],
-      waitForNextExecutorWake: Effect.void
+        reconstructedPlannedAttemptPositions: [],
+        waitForNextExecutorWake: Effect.void
+      })
     })
-  })
-)
+  )
 
 export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
   runId: RunId
@@ -293,6 +314,7 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
           )
       ),
     readFrontier: provideDependencies(readFrontier()),
+    readFinalityFrontier: provideDependencies(readFrontier()),
     readResponsibility: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
     ),

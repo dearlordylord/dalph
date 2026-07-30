@@ -75,7 +75,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
   const executorLayer = controlledExecutorLayer(cursor, runId)
   const workflowLayer = Layer.mergeAll(
     journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer),
-    journaledFreshRunRecoveryActivationLayer.pipe(Layer.provide(executorLayer)),
+    journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(executorLayer)),
     deterministicOperationIdAllocatorLayer(`cassette:${runId}:operation`),
     deterministicTaskClaimAcquisitionPlannerLayer({ owner: command.claimOwner, tokenPrefix: command.claimTokenPrefix }),
     deterministicPlannedTaskAttemptLayer({

@@ -97,6 +97,8 @@ Acceptance tests:
   responsibility`;
 - `a responsible task leaving complete membership becomes a task-local
   constraint`;
+- `fresh-run journal facts expose membership constraints without recovered
+  transitions`;
 - `an executor responsibility leaving complete membership becomes an
   executor-local constraint`;
 - `keeps a membership-constrained recovered Run active after a quiescent

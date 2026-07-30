@@ -75,6 +75,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
       Effect.provideService(RunRecoveryActivation, {
         _tag: "SyntheticFreshOnlyActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
@@ -133,6 +134,7 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
       Effect.provideService(RunRecoveryActivation, {
         _tag: "SyntheticFreshOnlyActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
@@ -188,6 +190,7 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
       Effect.provideService(RunRecoveryActivation, {
         _tag: "AuthoritativeRunRecoveryActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
@@ -244,6 +247,7 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
       Effect.provideService(RunRecoveryActivation, {
         _tag: "AuthoritativeRunRecoveryActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
@@ -315,6 +319,16 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
     const recovery = RunRecoveryActivation.of({
       _tag: "AuthoritativeRunRecoveryActivation",
       continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+      readFinalityFrontier: Effect.succeed({
+        explanations: [
+          FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
+            operationId,
+            taskId,
+            wakeCondition: "TaskTrackerFactsObserved"
+          })
+        ],
+        transitions: []
+      }),
       readFrontier: Effect.succeed({
         explanations: [
           FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
@@ -388,6 +402,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     const recovery = RunRecoveryActivation.of({
       _tag: "AuthoritativeRunRecoveryActivation",
       continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+      readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
       readFrontier: Ref.get(active).pipe(
         Effect.map((isActive) => ({ explanations: [], transitions: isActive ? [transition] : [] }))
       ),
@@ -506,6 +521,7 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
             result: { _tag: "Completed" }
           })
         ),
+      readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
       readFrontier: Ref.getAndUpdate(frontierReads, (count) => count + 1).pipe(
         Effect.map((count) =>
           count === 0
