@@ -429,9 +429,25 @@ behalf.
 
 The production fresh-workflow entry point accepts only an
 `AllocatedFreshWorkflowRunId` minted by the cryptographic fresh-run allocator.
-Recovered activation derives its existing `RunId` from journal authority.
-Dry-run and deterministic tests use a separately named synthetic entry point,
-so a reused fixture identity cannot enter the durable fresh-run path.
+The brand proves where the value came from; the workflow journal proves whether
+the Run has already begun. Before reading the task tracker or selecting any
+workflow operation, the fresh entry point atomically records
+`WorkflowRunBegan` at position one. A second fresh request for that `RunId`
+fails with `WorkflowRunAlreadyBegan`, including after the first coordinator
+released ownership.
+
+Recovered activation derives its existing `RunId` from journal authority and
+rereads the matching `WorkflowRunBegan` for the exact tracker target. It never
+records another beginning. `WorkflowRunTerminated` is the last record after a
+normal no-more-runnable-work result; recovery of that identity fails with
+`WorkflowRunAlreadyTerminated`, and the journal rejects every later append. A
+crash leaves the begun Run unterminated and therefore recoverable, including a
+crash before the first task-tracker read.
+
+Dry-run and deterministic workflow tests use a separately named synthetic
+entry point that records no durable Run lifecycle. Maintained authored
+cassettes intentionally exercise the fresh durable entry point and therefore
+include the beginning and termination facts in their recorded projection.
 
 A task position is reserved before Dalph starts executor work for one planned
 attempt. After start, the position is correlated by that attempt's `RunId` and

@@ -21,6 +21,11 @@ import {
   OperationId,
   sqliteJournalStoreLayer,
   taskTrackerReadIntent,
+  WorkflowRunAlreadyBegan,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunIdentityAlreadyUsed,
+  WorkflowRunNotBegan,
+  WorkflowRunTargetMismatch,
   WorkflowOperation
 } from "../index.js"
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
@@ -64,6 +69,87 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
   const secondKey = JournalRecordKey.make("operation:two:intent")
 
   describe(`${name} JournalStore contract`, () => {
+    it.effect("atomically rejects a second beginning for one Run identity", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("single-start-target")
+        const began = yield* journal.beginRun(runId, target)
+        const repeated = yield* Effect.flip(journal.beginRun(runId, target))
+
+        expect(began).toMatchObject({ event: { _tag: "WorkflowRunBegan", target }, position: 1, runId })
+        expect(repeated).toBeInstanceOf(WorkflowRunAlreadyBegan)
+        expect(repeated).toMatchObject({ beganAt: 1, runId })
+        expect(yield* journal.read(runId)).toEqual([began])
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects every workflow record after Run termination", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(runId, FixtureTarget.make("terminated-target"))
+        const terminated = yield* journal.terminateRun(runId)
+        const failure = yield* Effect.flip(journal.append(runId, firstKey, intent("one", "task-1")))
+
+        expect(terminated).toMatchObject({
+          event: { _tag: "WorkflowRunTerminated", disposition: "Completed" },
+          position: 2,
+          runId
+        })
+        expect(failure).toBeInstanceOf(WorkflowRunAlreadyTerminated)
+        expect(failure).toMatchObject({ runId, terminatedAt: 2 })
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rereads the exact begun target before recovering a Run", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("recoverable-target")
+        const began = yield* journal.beginRun(runId, target)
+
+        expect(yield* journal.readRunForRecovery(runId, target)).toEqual(began)
+        const mismatch = yield* Effect.flip(journal.readRunForRecovery(runId, FixtureTarget.make("different-target")))
+        expect(mismatch).toBeInstanceOf(WorkflowRunTargetMismatch)
+        expect(mismatch).toMatchObject({ recordedTarget: target, requestedTarget: "different-target", runId })
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects recovery and termination when no Run beginning exists", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("never-began-target")
+
+        expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toBeInstanceOf(WorkflowRunNotBegan)
+        expect(yield* Effect.flip(journal.terminateRun(runId))).toBeInstanceOf(WorkflowRunNotBegan)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects recovery and another termination after Run termination", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("already-terminated-target")
+        yield* journal.beginRun(runId, target)
+        const terminated = yield* journal.terminateRun(runId)
+
+        expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toMatchObject({
+          _tag: "WorkflowRunAlreadyTerminated",
+          runId,
+          terminatedAt: terminated.position
+        })
+        expect(yield* Effect.flip(journal.terminateRun(runId))).toBeInstanceOf(WorkflowRunAlreadyTerminated)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects promoting an existing synthetic history to a fresh Run", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const existing = yield* journal.append(runId, firstKey, intent("one", "task-1"))
+        const failure = yield* Effect.flip(journal.beginRun(runId, FixtureTarget.make("late-beginning-target")))
+
+        expect(failure).toBeInstanceOf(WorkflowRunIdentityAlreadyUsed)
+        expect(failure).toMatchObject({ firstRecordAt: existing.position, runId })
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
     it.effect("returns empty workflow-journal history for an unknown run", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore

@@ -15,16 +15,109 @@ import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  workflowRunBeganRecordKey,
+  workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
-import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  WorkflowRunBeganEvent,
+  WorkflowRunTerminatedEvent
+} from "../../workflow/registry/event.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 
 const runId = RunId.make("duplicate-attempt-run")
 const taskId = TaskId.make("A")
+
+it("rejects workflow records after Run termination", () => {
+  const target = FixtureTarget.make("terminated-history-target")
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: WorkflowRunBeganEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: WorkflowRunTerminatedEvent.make({
+        disposition: "Completed",
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunTerminatedRecordKey,
+      position: JournalPosition.make(2),
+      runId
+    },
+    ...planAndStart(attempt("after-termination"), 3)
+  ]
+
+  const reduction = reduceWorkflowJournalHistory(runId, records)
+
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({
+      _tag: "WorkflowJournalHistorySemanticIssue",
+      detail: "WorkflowRunTerminated must be the final record",
+      position: 2,
+      runId
+    })
+  )
+})
+
+it("rejects Run termination without a prior beginning", () => {
+  const reduction = reduceWorkflowJournalHistory(runId, [
+    {
+      event: WorkflowRunTerminatedEvent.make({
+        disposition: "Completed",
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunTerminatedRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    }
+  ])
+
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({ detail: "WorkflowRunTerminated requires prior WorkflowRunBegan", position: 1, runId })
+  )
+})
+
+it("rejects a Run beginning that follows workflow records", () => {
+  const target = FixtureTarget.make("late-beginning-target")
+  const reduction = reduceWorkflowJournalHistory(runId, [
+    ...planAndStart(attempt("before-beginning"), 1),
+    {
+      event: WorkflowRunBeganEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(3),
+      runId
+    }
+  ])
+
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({ detail: "WorkflowRunBegan must be the first record", position: 3, runId })
+  )
+})
 
 const attempt = (attemptId: string) =>
   PlannedTaskAttempt.make({

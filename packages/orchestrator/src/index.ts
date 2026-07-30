@@ -91,6 +91,7 @@ export * from "./workflow-journal/record-key.js"
 export * from "./workflow-journal/recovery-model.js"
 export {
   JournalDataCorruption,
+  type JournalAppendError,
   JournalSchemaIncompatible,
   JournalStorageAccessDenied,
   JournalStorageCapacityExhausted,
@@ -99,7 +100,12 @@ export {
   JournalStore,
   JournalStoreContradiction,
   type JournalStoreError,
-  JournalRecord
+  JournalRecord,
+  WorkflowRunAlreadyBegan,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunIdentityAlreadyUsed,
+  WorkflowRunNotBegan,
+  WorkflowRunTargetMismatch
 } from "./workflow-journal/store.js"
 export {
   TaskAttemptPlannedEvent,
@@ -108,7 +114,9 @@ export {
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent,
-  WorkflowJournalEvent
+  WorkflowJournalEvent,
+  WorkflowRunBeganEvent,
+  WorkflowRunTerminatedEvent
 } from "./workflow/registry/event.js"
 export { memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
 export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"

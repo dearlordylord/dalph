@@ -1,7 +1,7 @@
 import { Context, Effect, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
 import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "../../authorities/git/worktree.js"
-import type { JournalStoreContradiction, JournalStoreError } from "../../workflow-journal/store.js"
+import type { JournalAppendError } from "../../workflow-journal/store.js"
 import * as TaskAttemptPlan from "../protocols/task-attempt-planning/record.js"
 import {
   runTaskClaimAcquisitionProtocol,
@@ -28,10 +28,7 @@ import {
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowOperation } from "../registry/operation.js"
 
-type TaskAttemptPlanRecordingError =
-  | JournalStoreContradiction
-  | JournalStoreError
-  | TaskAttemptPlan.TaskAttemptPlanRunContradiction
+type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
 /** The generic operation handlers used before complete-attempt executor work. */
 export interface WorkflowInterpreterService {
@@ -41,8 +38,7 @@ export interface WorkflowInterpreterService {
   ) => Effect.Effect<
     TaskClaimAcquisitionResult,
     | CoordinatorOwnershipError
-    | JournalStoreContradiction
-    | JournalStoreError
+    | JournalAppendError
     | TaskClaimAcquisitionDidNotConverge
     | TaskClaimConflict
     | TaskClaimOwnershipConflict
@@ -55,8 +51,7 @@ export interface WorkflowInterpreterService {
     TaskDagSnapshot,
     | FixtureReadError
     | GraphProjectionError
-    | JournalStoreContradiction
-    | JournalStoreError
+    | JournalAppendError
     | TaskTrackerKnowledgeUnavailable
     | TrackerAdapterReadError
     | TrackerReadError
@@ -65,12 +60,7 @@ export interface WorkflowInterpreterService {
     operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
   ) => Effect.Effect<
     TaskWorkSpecification,
-    | FixtureReadError
-    | JournalStoreContradiction
-    | JournalStoreError
-    | TaskTrackerKnowledgeUnavailable
-    | TrackerAdapterReadError
-    | TrackerReadError
+    FixtureReadError | JournalAppendError | TaskTrackerKnowledgeUnavailable | TrackerAdapterReadError | TrackerReadError
   >
   readonly reconcileTaskWorktree: (
     operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type
@@ -79,8 +69,7 @@ export interface WorkflowInterpreterService {
     | CoordinatorOwnershipError
     | GitWorktreeCreateFailure
     | GitWorktreeObservationError
-    | JournalStoreContradiction
-    | JournalStoreError
+    | JournalAppendError
     | TaskAttemptPlan.TaskAttemptPlanHistoryContradiction
     | TaskAttemptPlan.TaskAttemptPlanRunContradiction
     | TaskWorktree.TaskWorktreeHistoryContradiction

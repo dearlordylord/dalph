@@ -110,8 +110,11 @@ describe("ControlService", () => {
       JournalStore,
       JournalStore.of({
         append: () => Effect.fail(unavailable),
+        beginRun: () => Effect.die("control recording never begins a Run"),
         read: () => Effect.succeed([]),
-        scan: () => Effect.succeed({ issues: [], runs: [] })
+        readRunForRecovery: () => Effect.die("control recording never recovers a Run"),
+        scan: () => Effect.succeed({ issues: [], runs: [] }),
+        terminateRun: () => Effect.die("control recording never terminates a Run")
       })
     )
     return Effect.gen(function* () {

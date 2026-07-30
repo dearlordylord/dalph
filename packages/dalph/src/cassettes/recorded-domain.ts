@@ -15,6 +15,7 @@ import {
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
+  TrackerTarget,
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation
@@ -55,7 +56,9 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ])
   },
   TaskWorktreeReady: { operationId: OperationId, proof: PlannedWorktreeReady },
-  TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree }
+  TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree },
+  WorkflowRunBegan: { ...initiatedByCoordinator, target: TrackerTarget },
+  WorkflowRunTerminated: { ...nonActionOccurrence, disposition: Schema.Literal("Completed") }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 

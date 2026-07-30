@@ -9,13 +9,8 @@ import { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attemp
 import { TaskTrackerFactsObservation } from "../task-tracker-facts/observation.js"
 import { taskTrackerObservationMatchesRead } from "../task-tracker-facts/observation-match.js"
 import { WorkflowOperation } from "./operation.js"
-
-/**
- * An actor variant is present only after an accepted production action earns
- * it. V1 has one human Operator and the Dalph coordinator.
- */
-export const WorkflowActor = Schema.TaggedUnion({ DalphCoordinator: {}, Operator: {} })
-export type WorkflowActor = typeof WorkflowActor.Type
+import { WorkflowActor } from "./actor.js"
+export { WorkflowActor } from "./actor.js"
 
 const initiatedActionFields = {
   initiatedBy: WorkflowActor,
@@ -280,7 +275,9 @@ const nonProjectedJournalEventKinds = {
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
   TaskWorktreeReady: true,
-  TaskWorktreeReconciliationIntended: true
+  TaskWorktreeReconciliationIntended: true,
+  WorkflowRunBegan: true,
+  WorkflowRunTerminated: true
 } satisfies Record<NonProjectedJournalEvent["_tag"], true>
 
 const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOccurrence> => {

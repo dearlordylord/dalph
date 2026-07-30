@@ -1,4 +1,5 @@
 import { it as effectIt } from "@effect/vitest"
+import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Option, Ref } from "effect"
 import { expect, it } from "vitest"
 import {
@@ -28,13 +29,16 @@ import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
-import { discardFreshStagesOwnedByRecovery, runRecoveredWorkflow, runSyntheticWorkflow } from "./run.js"
+import { discardFreshStagesOwnedByRecovery, runRecoveredWorkflow, runWorkflow, runSyntheticWorkflow } from "./run.js"
+import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import {
   AuthoritativeTaskClaimAcquired,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
+import { JournalStore, WorkflowRunAlreadyBegan, WorkflowRunAlreadyTerminated } from "../../workflow-journal/store.js"
+import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 
 const stage = (taskId: string): FreshWorkflowStage => ({
   run: () => Effect.die("projection test does not run stages"),
@@ -51,9 +55,235 @@ it("drops a stale process-local stage when journal reconstruction owns its task"
   expect(discardFreshStagesOwnedByRecovery([stale, independent], new Set([TaskId.make("A")]))).toEqual([independent])
 })
 
+effectIt.effect("starts a production Run by recording its identity before reading the task tracker", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("first-record-target")
+    const runId = yield* freshWorkflowRunId(target)
+    const trackerReads = yield* Ref.make(0)
+    const projected = projectTrackerSnapshot({ revision: "first-record-snapshot", tasks: [] })
+    const snapshot = Option.getOrThrow(
+      Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+    )
+
+    yield* runWorkflow(
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      runId
+    ).pipe(
+      Effect.provideService(RunRecoveryActivation, {
+        _tag: "SyntheticFreshOnlyActivation",
+        continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+        reconstructedPlannedAttemptPositions: [],
+        waitForNextExecutorWake: Effect.void
+      }),
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: () => Effect.die("unused"),
+          readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("unused"),
+          reconcileTaskWorktree: () => Effect.die("unused"),
+          recordTaskAttemptPlan: () => Effect.die("unused")
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("first-record-read")) })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused") })
+      )
+    )
+
+    expect(yield* Ref.get(trackerReads)).toBe(1)
+    expect((yield* (yield* JournalStore).read(runId)).map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "WorkflowRunTerminated"
+    ])
+  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(NodeCrypto.layer))
+)
+
+effectIt.effect("rejects a second fresh start for the same Run before any tracker read", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("duplicate-fresh-target")
+    const runId = yield* freshWorkflowRunId(target)
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target)
+    const trackerReads = yield* Ref.make(0)
+    const projected = projectTrackerSnapshot({ revision: "duplicate-fresh-snapshot", tasks: [] })
+    const snapshot = Option.getOrThrow(
+      Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+    )
+
+    const failure = yield* runWorkflow(
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      runId
+    ).pipe(
+      Effect.provideService(RunRecoveryActivation, {
+        _tag: "SyntheticFreshOnlyActivation",
+        continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+        reconstructedPlannedAttemptPositions: [],
+        waitForNextExecutorWake: Effect.void
+      }),
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: () => Effect.die("unused"),
+          readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("unused"),
+          reconcileTaskWorktree: () => Effect.die("unused"),
+          recordTaskAttemptPlan: () => Effect.die("unused")
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("duplicate-fresh-read")) })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(WorkflowRunAlreadyBegan)
+    expect(yield* Ref.get(trackerReads)).toBe(0)
+  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(NodeCrypto.layer))
+)
+
+effectIt.effect("recovers a Run that crashed immediately after its beginning was recorded", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("beginning-only-target")
+    const runId = RunId.make("beginning-only-run")
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target)
+    const projected = projectTrackerSnapshot({ revision: "beginning-only-snapshot", tasks: [] })
+    const snapshot = Option.getOrThrow(
+      Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+    )
+    const trackerReads = yield* Ref.make(0)
+
+    yield* runRecoveredWorkflow(
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ).pipe(
+      Effect.provideService(RunRecoveryActivation, {
+        _tag: "AuthoritativeRunRecoveryActivation",
+        continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+        reconstructedPlannedAttemptPositions: [],
+        runId,
+        runTransition: () => Effect.die("unused"),
+        waitForNextExecutorWake: Effect.void
+      }),
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: () => Effect.die("unused"),
+          readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("unused"),
+          reconcileTaskWorktree: () => Effect.die("unused"),
+          recordTaskAttemptPlan: () => Effect.die("unused")
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("beginning-only-read")) })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused") })
+      )
+    )
+
+    expect(yield* Ref.get(trackerReads)).toBe(1)
+    expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "WorkflowRunTerminated"
+    ])
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+effectIt.effect("rejects recovery of a terminated Run before any tracker read", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("terminated-recovery-target")
+    const runId = RunId.make("terminated-recovery-run")
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target)
+    yield* journal.terminateRun(runId)
+    const trackerReads = yield* Ref.make(0)
+
+    const failure = yield* runRecoveredWorkflow(
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ).pipe(
+      Effect.provideService(RunRecoveryActivation, {
+        _tag: "AuthoritativeRunRecoveryActivation",
+        continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
+        readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+        reconstructedPlannedAttemptPositions: [],
+        runId,
+        runTransition: () => Effect.die("unused"),
+        waitForNextExecutorWake: Effect.void
+      }),
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: () => Effect.die("unused"),
+          readTrackerGraph: () =>
+            Ref.update(trackerReads, (count) => count + 1).pipe(
+              Effect.andThen(Effect.die("tracker read occurred after Run termination"))
+            ),
+          readTaskWorkSpecification: () => Effect.die("unused"),
+          reconcileTaskWorktree: () => Effect.die("unused"),
+          recordTaskAttemptPlan: () => Effect.die("unused")
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("terminated-recovery-read")) })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused") })
+      ),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(WorkflowRunAlreadyTerminated)
+    expect(yield* Ref.get(trackerReads)).toBe(0)
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
 effectIt.effect("runs an authoritative recovered transition in the shared activation loop", () =>
   Effect.gen(function* () {
     const runId = RunId.make("workflow-recovered-run")
+    const target = FixtureTarget.make("workflow-recovered-target")
+    yield* (yield* JournalStore).beginRun(runId, target)
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("workflow-recovered-attempt"),
       baseSha: GitCommitSha.make("4".repeat(40)),
@@ -96,7 +326,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     })
 
     yield* runRecoveredWorkflow(
-      FixtureTarget.make("workflow-recovered-target"),
+      target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     ).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
@@ -116,7 +346,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
       )
     )
     expect(yield* Ref.get(ran)).toBe(1)
-  })
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
 effectIt.effect("runs the authoritative fresh claim path through one complete attempt", () =>

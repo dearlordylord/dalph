@@ -34,6 +34,7 @@ import {
   TaskTrackerFactsObservedTrace
 } from "../../presentation/tracker-workflow-trace.js"
 import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import { JournalStore } from "../../workflow-journal/store.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
@@ -316,11 +317,28 @@ export const runWorkflow = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
   runId: AllocatedFreshWorkflowRunId
-) => runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
+) =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target)
+    const result = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
+    yield* journal.terminateRun(runId)
+    return result
+  })
 
 /** Runs the exact reconstructed identity owned by authoritative recovery. */
 export const runRecoveredWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy) =>
-  runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
+  Effect.gen(function* () {
+    const recovery = yield* RunRecoveryActivation
+    if (recovery._tag !== "AuthoritativeRunRecoveryActivation") {
+      return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
+    }
+    const journal = yield* JournalStore
+    yield* journal.readRunForRecovery(recovery.runId, target)
+    const result = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
+    yield* journal.terminateRun(recovery.runId)
+    return result
+  })
 
 /** Explicit non-durable path for dry-run and deterministic workflow tests. */
 export const runSyntheticWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy, runId: RunId) =>

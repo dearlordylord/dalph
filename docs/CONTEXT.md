@@ -181,6 +181,17 @@ One durable Dalph coordination instance for one task-tracker target. It begins
 when Dalph records a fresh `RunId` and ends with one run termination record.
 _Avoid_: Process, task, historical harness run
 
+**Workflow Run beginning**:
+The first durable workflow-journal fact for one Run. It associates a freshly
+allocated Run identity with one exact task-tracker target and distinguishes a
+fresh start from recovery.
+_Avoid_: UUID allocation, process start, recovery start
+
+**Workflow Run termination**:
+The final durable workflow-journal fact for one normally completed Run. It
+closes that Run's history; a crash leaves the Run unterminated.
+_Avoid_: Executor terminal report, process exit, safe suspension
+
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
 It contains only facts Dalph recorded about its workflow; Git history,

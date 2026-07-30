@@ -393,6 +393,19 @@ const renameRecordedCassetteEntry = (
             headSha: preserveCassetteValue(worktreeEntry.proof.headSha),
             worktree: renamed(worktreeEntry.proof.worktree, maps.worktreeLocators)
           })
+        }),
+      WorkflowRunBegan: (beginningEntry) =>
+        completeFields<typeof beginningEntry>({
+          _tag: "WorkflowRunBegan",
+          initiatedBy: preserveCassetteValue(beginningEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(beginningEntry.occurrenceClassification),
+          target: preserveCassetteValue(beginningEntry.target)
+        }),
+      WorkflowRunTerminated: (terminationEntry) =>
+        completeFields<typeof terminationEntry>({
+          _tag: "WorkflowRunTerminated",
+          disposition: preserveCassetteValue(terminationEntry.disposition),
+          occurrenceClassification: preserveCassetteValue(terminationEntry.occurrenceClassification)
         })
     }),
     Match.exhaustive

@@ -8,7 +8,9 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  workflowRunBeganRecordKey,
+  workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
@@ -39,10 +41,16 @@ interface PlannedAttemptExecutorEventDescriptor {
   readonly plannedAttempt: PlannedTaskAttempt | undefined
 }
 
+interface WorkflowRunLifecycleEventDescriptor {
+  readonly _tag: "WorkflowRunLifecycleEventDescriptor"
+  readonly expectedKey: JournalRecordKey
+}
+
 type JournalEventDescriptor =
   | ControlCommandEventDescriptor
   | OperationEventDescriptor
   | PlannedAttemptExecutorEventDescriptor
+  | WorkflowRunLifecycleEventDescriptor
 
 type PlannedAttemptFact =
   | { readonly _tag: "NoPlannedAttempt" }
@@ -95,6 +103,10 @@ const plannedAttemptExecutorEvent = (
 /** Derives canonical storage identity and causal facts from one generic event. */
 export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventDescriptor => {
   switch (event._tag) {
+    case "WorkflowRunBegan":
+      return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunBeganRecordKey }
+    case "WorkflowRunTerminated":
+      return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunTerminatedRecordKey }
     case "ControlCommandRecorded":
       return {
         _tag: "ControlCommandEventDescriptor",
