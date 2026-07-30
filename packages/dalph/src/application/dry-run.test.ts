@@ -34,7 +34,7 @@ it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
     yield* dryRunCliApplication.pipe(Effect.provide(stdioLayer))
 
     expect(dryApplicationEnvironmentIsNarrow).toBe(true)
-    expect(yield* Ref.get(chunks)).toHaveLength(11)
+    expect(yield* Ref.get(chunks)).toHaveLength(13)
   })
 )
 
@@ -55,7 +55,7 @@ it.effect("replaces fixture reads at the complete dry CLI boundary", () =>
 
     yield* makeDryRunCliApplication(fixtureReaderLayer).pipe(Effect.provide(stdioLayer))
 
-    expect(yield* Ref.get(requestedTargets)).toEqual([target])
+    expect(yield* Ref.get(requestedTargets)).toEqual([target, target])
   })
 )
 

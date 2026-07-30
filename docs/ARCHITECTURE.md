@@ -188,6 +188,15 @@ process-local optimization: it is discarded on process loss, never persisted
 as journal authority, and never substitutes for reading and validating the
 complete history during restart.
 
+When the shared activation loop has no current transition, the coordinator
+records and performs one more complete task-tracker read before normal
+termination. It reconstructs the returned graph from the journal before adding
+newly eligible fresh work. Before an unstarted task advances, its existing
+process-local stage also rereads the complete graph and drops itself when that
+task is no longer eligible. An unchanged reconfirmation with no new transition
+ends the refresh pass instead of polling indefinitely. An incomplete or
+contradictory read remains a typed failure and cannot authorize work.
+
 For each valid run, reduction preserves graph knowledge, workflow history,
 pause state, and every exact outstanding responsibility. A pure selector derives
 one non-persisted runnable frontier from those facts. The

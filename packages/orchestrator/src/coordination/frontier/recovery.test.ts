@@ -19,11 +19,18 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../workflow-journal/record-key.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import {
+  TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -33,6 +40,8 @@ import { RunnableFrontierTransition } from "./frontier.js"
 import { recoverRunnableTransition } from "./recovery.js"
 import {
   makeTaskClaimAcquisitionOperation,
+  makeTaskAttemptPlanOperation,
+  makeTrackerGraphObservationOperation,
   makeTaskWorktreeReconciliationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -40,6 +49,10 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
 
@@ -124,6 +137,143 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer)
     )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("a responsible task leaving complete membership becomes a task-local constraint", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("membership-constraint-run")
+    const taskId = TaskId.make("removed-responsible-task")
+    const claim = makeTaskClaimAcquisitionOperation({
+      acquisition: {
+        operationId: OperationId.make("removed-task-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("removed-task-token")
+      },
+      predecessorOperationIds: []
+    })
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("membership-removal-read"),
+      FixtureTarget.make("membership-constraint-target")
+    )
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerGraphFactsObserved(graphRead, {
+        revision: TrackerRevision.make("task-removed-from-target"),
+        taskIds: []
+      })
+    )
+
+    const recovery = yield* makeRunRecoveryActivation(runId)
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        {
+          _tag: "WorkflowOperationTaskMembershipConstraint",
+          operationId: claim.acquisition.operationId,
+          taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        }
+      ],
+      transitions: []
+    })
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused
+      })
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
+)
+
+it.effect("an executor responsibility leaving complete membership becomes an executor-local constraint", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("executor-membership-constraint-run")
+    const taskId = TaskId.make("removed-executor-task")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("removed-executor-attempt"),
+      baseSha: GitCommitSha.make("4".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/removed-executor-attempt"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make("removed-executor-revision"),
+      worktree: WorktreeLocator.make("/worktrees/removed-executor-attempt")
+    })
+    const plan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("removed-executor-plan"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("executor-membership-removal-read"),
+      FixtureTarget.make("executor-membership-constraint-target")
+    )
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerGraphFactsObserved(graphRead, {
+        revision: TrackerRevision.make("executor-task-removed-from-target"),
+        taskIds: []
+      })
+    )
+
+    const recovery = yield* makeRunRecoveryActivation(runId)
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        {
+          _tag: "PlannedAttemptTaskMembershipConstraint",
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        }
+      ],
+      transitions: []
+    })
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused
+      })
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
 )
 
 it.effect("replays the exact durable claim and worktree intents", () => {

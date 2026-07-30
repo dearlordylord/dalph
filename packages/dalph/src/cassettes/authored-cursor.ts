@@ -1,5 +1,9 @@
 import { Effect, Ref, Schema } from "effect"
-import { AuthoredCassetteStoryItem, type AuthoredCassetteStoryItem as StoryItem } from "./authored-domain.js"
+import {
+  AuthoredCassetteStoryItem,
+  type AuthoredCassetteStoryItem as StoryItem,
+  AuthoredTrackerGraphReadResult
+} from "./authored-domain.js"
 
 export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteInteractionMismatch>()(
   "AuthoredCassetteInteractionMismatch",
@@ -35,10 +39,7 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type,
     CursorFailure
   >
-  readonly consumeTrackerGraph: Effect.Effect<
-    typeof AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.Type,
-    CursorFailure
-  >
+  readonly consumeTrackerGraph: Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
 }
 
 export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
@@ -97,11 +98,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
     )
   )
-  const consumeTrackerGraph = consume("TrackerGraphReadReturned").pipe(
-    Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned)(item).pipe(Effect.orDie)
-    )
-  )
+  const consumeTrackerGraph = Effect.gen(function* () {
+    const index = yield* Ref.get(position)
+    const item = story[index]
+    if (item?._tag !== "TrackerGraphReadFailed" && item?._tag !== "TrackerGraphReadReturned") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "TrackerGraphReadFailed | TrackerGraphReadReturned",
+        /* v8 ignore next -- A decoded story retains its terminal assertion after any graph interaction. */
+        expected: item?._tag ?? "EndOfStory",
+        storyPosition: index
+      })
+    }
+    yield* Ref.set(position, index + 1)
+    return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(item).pipe(Effect.orDie)
+  })
   return {
     consumeDalphSelection,
     consumeExecutorReport,

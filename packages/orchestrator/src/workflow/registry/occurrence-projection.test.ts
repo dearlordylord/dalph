@@ -592,7 +592,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       ).pipe(Effect.provide(workflowLayer))
-      expect(yield* Ref.get(trackerReads)).toBe(1)
+      expect(yield* Ref.get(trackerReads)).toBe(2)
     }
 
     const projection = yield* projectWorkflowOccurrences([retainedIntent])

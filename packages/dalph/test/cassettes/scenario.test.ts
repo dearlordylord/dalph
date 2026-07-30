@@ -22,6 +22,7 @@ import {
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   compareRecordedCassetteCheckpoints,
+  dependentTasksCompleteInOneRunAuthoredCassette,
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
   maintainedAuthoredCassetteCatalog,
@@ -41,6 +42,202 @@ import {
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+
+it.effect("continues the same run with B only after a recorded refresh reports A completed", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
+    const executorResponsibilities = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? [event.plannedAttempt.taskId] : []
+    )
+
+    expect(run.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+    ])
+    expect(executorResponsibilities).toEqual(["A", "B"])
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies[1].lifecycles.some(
+            ({ lifecycle, taskId }) => taskId === TaskId.make("A") && lifecycle._tag === "CompletedSuccessfully"
+          )
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("stops after one unchanged quiescent refresh and records a compact reconfirmation", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(singleton)
+    const graphObservations = run.records.flatMap(({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+    )
+
+    expect(graphObservations.at(-1)?._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
+    expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+  })
+)
+
+it.effect("an invalid quiescent refresh authorizes no new work", () =>
+  Effect.gen(function* () {
+    const lastGraphReturn = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const invalidRefresh = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === lastGraphReturn && item._tag === "TrackerGraphReadReturned"
+          ? {
+              ...item,
+              graph: {
+                revision: "contradictory-quiescent-refresh",
+                tasks: [
+                  { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+                  { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+                ]
+              }
+            }
+          : item
+      )
+    }
+
+    expect((yield* runAuthoredScenarioCassette(invalidRefresh).pipe(Effect.flip))._tag).toBe(
+      "TrackerGraphReader.AdapterReadError"
+    )
+  })
+)
+
+it.effect("an incomplete quiescent refresh authorizes no new work", () =>
+  Effect.gen(function* () {
+    const lastGraphReturn = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const incompleteRefresh = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === lastGraphReturn ? { _tag: "TrackerGraphReadFailed", reason: "IncompleteSnapshot" } : item
+      )
+    }
+
+    const failure = yield* runAuthoredScenarioCassette(incompleteRefresh).pipe(Effect.flip)
+    expect(failure._tag).toBe("TrackerGraphReader.AdapterReadError")
+    expect("detail" in failure ? failure.detail : "").toContain("IncompleteSnapshot")
+    expect(
+      renderAuthoredCassetteLyrics(yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(incompleteRefresh))
+    ).toContain("The task tracker fails the logical graph read because IncompleteSnapshot.")
+  })
+)
+
+it.effect("later complete reads add newly selected D and keep removed unstarted C from responsibility", () =>
+  Effect.gen(function* () {
+    const target = "changed-membership-cassette-target"
+    const initialGraph = {
+      revision: "changed-membership-before",
+      tasks: [
+        { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ]
+    }
+    const changedGraph = {
+      revision: "changed-membership-after",
+      tasks: [
+        { id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: "D", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ]
+    }
+    const membershipChangedGraph = {
+      revision: "changed-membership-before-A-completes",
+      tasks: [
+        { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: "D", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ]
+    }
+    const read = (graph: typeof initialGraph) => [
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+      { _tag: "TrackerGraphReadReturned", graph }
+    ]
+    const changedMembership = {
+      _tag: "AuthoredScenarioCassette",
+      name: "a complete refresh removes unstarted C and adds D",
+      schemaVersion: 1,
+      startingFacts: {
+        executorWork: "NoPriorReport",
+        journal: "Empty",
+        taskClaims: [],
+        taskWorkSpecifications: [
+          { body: "Complete A.", taskId: "A", title: "Complete A" },
+          { body: "Complete D.", taskId: "D", title: "Complete D" }
+        ],
+        trackerGraph: initialGraph,
+        worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+      },
+      story: [
+        { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 1 } },
+        {
+          _tag: "RunCoordinator",
+          baseSha: "3333333333333333333333333333333333333333",
+          claimOwner: "changed-membership-owner",
+          claimTokenPrefix: "changed-membership-claim",
+          executor: "executor:controlled-fake",
+          target,
+          worktreeRoot: "/dalph/cassettes/changed-membership"
+        },
+        ...read(initialGraph),
+        ...read(initialGraph),
+        ...read(membershipChangedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        ...read(membershipChangedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        { _tag: "TaskWorkSpecificationReadReturned", body: "Complete A.", taskId: "A", title: "Complete A" },
+        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Running", attemptId: "attempt:A:0" },
+          request: "StartOrContinue"
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        ...read(changedGraph),
+        ...read(changedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "D" } },
+        ...read(changedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+        { _tag: "TaskWorkSpecificationReadReturned", body: "Complete D.", taskId: "D", title: "Complete D" },
+        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Running", attemptId: "attempt:D:1" },
+          request: "StartOrContinue"
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        ...read(changedGraph),
+        {
+          _tag: "ExpectedBehavior",
+          orchestration: null,
+          protocol: null,
+          taskWork: {
+            absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "C" }],
+            results: [
+              { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+              { _tag: "PlannedWorkForTaskCompleted", taskId: "D" }
+            ]
+          }
+        }
+      ]
+    }
+
+    const run = yield* runAuthoredScenarioCassette(changedMembership)
+    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A", "D"])
+  })
+)
 
 const insertBeforeRunTermination = (
   records: ReadonlyArray<JournalRecord>,
@@ -836,7 +1033,7 @@ it.effect("renders a recorded operator command from its structured occurrence", 
   })
 )
 
-it.effect("labels the 100-task three-read encoding experiment as a baseline", () =>
+it.effect("labels the 100-task four-read encoding experiment as a baseline", () =>
   Effect.gen(function* () {
     const taskIds = Array.from({ length: 100 }, (_unused, index) => `task-${index.toString().padStart(3, "0")}`)
     const activeTaskId = taskIds[99] ?? "task-099"
@@ -852,7 +1049,7 @@ it.effect("labels the 100-task three-read encoding experiment as a baseline", ()
     const replaceTask = (value: string) => (value === "A" ? activeTaskId : value)
     const input = {
       ...singleton,
-      name: "100-task three-read encoded-size baseline",
+      name: "100-task four-read encoded-size baseline",
       startingFacts: {
         ...singleton.startingFacts,
         taskWorkSpecifications: [
@@ -898,7 +1095,7 @@ it.effect("labels the 100-task three-read encoding experiment as a baseline", ()
     const measurement = measureTrackerObservationEncoding(run.records, recorded)
 
     expect(measurement.changedGraphObservations.occurrenceCount).toBe(1)
-    expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(2)
+    expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(3)
     expect(measurement.changedGraphObservations.journalBytes).toBeGreaterThan(0)
   })
 )

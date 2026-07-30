@@ -400,6 +400,33 @@ it("reports missing and duplicate fresh facts for operation and executor respons
   }
 })
 
+it("keeps a removed task's executor responsibility behind a task-membership constraint", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  expect(
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+      responsibilityFacts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: ResponsibilityDisposition.TaskMembershipConstraint(),
+          responsibility
+        }
+      ]
+    })
+  ).toEqual({
+    explanations: [
+      {
+        _tag: "PlannedAttemptTaskMembershipConstraint",
+        correlation: { attemptId: responsibility.plannedAttempt.attemptId, runId: responsibility.plannedAttempt.runId },
+        taskId: taskA,
+        wakeCondition: "TaskTrackerFactsObserved"
+      }
+    ],
+    transitions: []
+  })
+})
+
 it.effect("rejects binding, cancellation, and release for positions it does not own", () =>
   Effect.gen(function* () {
     const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })

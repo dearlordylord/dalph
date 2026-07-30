@@ -63,6 +63,11 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts"
   }
+  PlannedAttemptTaskMembershipConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
   FinalOutcome: {
     readonly operationId: OperationId
     readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed"
@@ -81,6 +86,11 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   TypedIssue: { readonly operationId: OperationId; readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts" }
+  WorkflowOperationTaskMembershipConstraint: {
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
   UnreadableFactWait: {
     readonly boundary: "Executor" | "Git" | "TaskTracker"
     readonly operationId: OperationId
@@ -194,6 +204,13 @@ const executorDecisionFor = (
           plannedAttempt: facts.responsibility.plannedAttempt
         })
       }),
+      TaskMembershipConstraint: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskMembershipConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        })
+      }),
       Ready: () => ({
         transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
           plannedAttempt: facts.responsibility.plannedAttempt
@@ -255,6 +272,13 @@ const operationDecisionFor = (
           operationId: workflowResponsibilityOperationId(facts.responsibility),
           outcome,
           taskId: workflowResponsibilityTaskId(facts.responsibility)
+        })
+      }),
+      TaskMembershipConstraint: () => ({
+        explanation: FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility),
+          wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
       UnreadableFactWait: ({ boundary }) => ({

@@ -15,6 +15,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
+  TaskMembershipConstraint: Record<never, never>
   ForeignClaimIsolation: Record<never, never>
   MissingClaim: Record<never, never>
   Paused: Record<never, never>
@@ -33,6 +34,7 @@ type PlannedAttemptExecutorDisposition = Extract<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "TaskMembershipConstraint"
       | "Ready"
   }
 >

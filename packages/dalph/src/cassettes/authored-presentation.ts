@@ -38,22 +38,35 @@ const expectedBehaviorLyric = (item: Extract<AuthoredCassetteStoryItem, { readon
     ...(item.protocol === null ? [] : item.protocol.map(protocolEvidenceLyric))
   ].join("\n")
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string =>
-  item._tag === "InitialControlPolicy"
+type AuthoredTrackerGraphStoryItem = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "TrackerGraphReadFailed" | "TrackerGraphReadReturned" }
+>
+
+const isTrackerGraphStoryItem = (item: AuthoredCassetteStoryItem): item is AuthoredTrackerGraphStoryItem =>
+  item._tag === "TrackerGraphReadReturned" || item._tag === "TrackerGraphReadFailed"
+
+const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
+  item._tag === "TrackerGraphReadReturned"
+    ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
+    : `The task tracker fails the logical graph read because ${item.reason}.`
+
+const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+  if (isTrackerGraphStoryItem(item)) return trackerGraphLyric(item)
+  return item._tag === "InitialControlPolicy"
     ? `Dalph starts with task-execution capacity ${item.policy.taskExecutionCapacity}.`
     : item._tag === "RunCoordinator"
       ? `The maintainer asks Dalph to coordinate ${JSON.stringify(item.target)}.`
       : item._tag === "DalphSelects"
         ? `Dalph selects ${item.operation._tag}.`
-        : item._tag === "TrackerGraphReadReturned"
-          ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
-          : item._tag === "TaskWorkSpecificationReadReturned"
-            ? `The task tracker returns "${item.title}" for task ${item.taskId}.`
-            : item._tag === "PlannedAttemptExecutorWorkReported"
-              ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
-              : item._tag === "ExpectedBehavior"
-                ? expectedBehaviorLyric(item)
-                : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
+        : item._tag === "TaskWorkSpecificationReadReturned"
+          ? `The task tracker returns "${item.title}" for task ${item.taskId}.`
+          : item._tag === "PlannedAttemptExecutorWorkReported"
+            ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
+            : item._tag === "ExpectedBehavior"
+              ? expectedBehaviorLyric(item)
+              : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
+}
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>

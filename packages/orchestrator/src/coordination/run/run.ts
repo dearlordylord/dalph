@@ -225,6 +225,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
       const initialTasks = snapshot.eligibleTasks().filter(({ id }) => !recoveredTaskIds.has(id))
       const initialStages = yield* Effect.forEach(initialTasks, makeCurrentGraphStage)
       const stages = yield* Ref.make<ReadonlyArray<WorkflowStage>>(initialStages)
+      const currentSnapshot = yield* Ref.make(snapshot)
       const scheduledFreshTaskIds = yield* Ref.make<ReadonlySet<Task["id"]>>(new Set(initialTasks.map(({ id }) => id)))
       const readFrontier = Effect.fn("Workflow.readActivationFrontier")(function* () {
         const recovered = yield* recovery.readFrontier
@@ -233,7 +234,8 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
           ...recovered.transitions.map(runnableTransitionTaskId)
         ])
         const alreadyScheduled = yield* Ref.get(scheduledFreshTaskIds)
-        const newlyFresh = snapshot
+        const latestSnapshot = yield* Ref.get(currentSnapshot)
+        const newlyFresh = latestSnapshot
           .eligibleTasks()
           .filter(({ id }) => !alreadyScheduled.has(id) && !recoveredTaskIds.has(id))
         if (newlyFresh.length > 0) {
@@ -252,6 +254,18 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
           explanations: recovered.explanations,
           transitions: [...recovered.transitions, ...current.map(({ transition }) => transition)]
         }
+      })
+      const refreshCurrentGraph = Effect.fn("Workflow.refreshCurrentGraph")(function* () {
+        const operation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
+        yield* emit(OperationSelected.make({ operation }))
+        const refreshed = yield* interpreter.readTrackerGraph(operation)
+        yield* emit(
+          TaskTrackerFactsObservedTrace.make({
+            operation,
+            observation: makeCompleteTaskTrackerFactsObserved(operation, refreshed)
+          })
+        )
+        yield* Ref.set(currentSnapshot, refreshed)
       })
       const coordinator = yield* makeActivationCoordinator({
         admissionController,
@@ -304,7 +318,11 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
           continue
         }
         const currentFrontier = yield* readFrontier()
-        if (currentFrontier.transitions.length === 0) return
+        if (currentFrontier.transitions.length === 0) {
+          yield* refreshCurrentGraph()
+          if ((yield* readFrontier()).transitions.length === 0) return
+          continue
+        }
         const awaitedCompletion = yield* Queue.take(completions)
         yield* applyCompletion(awaitedCompletion)
       }

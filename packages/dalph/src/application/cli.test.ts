@@ -65,7 +65,9 @@ it.effect("runs the dry CLI through the planned-attempt workflow", () =>
       "OperationSelected",
       "TaskAttemptPlanRecordingSimulated",
       "OperationSelected",
-      "TaskWorktreeReconciliationSimulated"
+      "TaskWorktreeReconciliationSimulated",
+      "OperationSelected",
+      "TaskTrackerFactsObserved"
     ])
   })
 )

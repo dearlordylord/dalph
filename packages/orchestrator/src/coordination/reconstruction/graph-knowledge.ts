@@ -77,6 +77,14 @@ export const reconstructedTaskGraphFor = (
   return projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none()
 }
 
+/** Reconstructs the latest complete graph regardless of its one Run's provider-neutral target shape. */
+export const latestReconstructedTaskGraph = (knowledge: {
+  readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation>
+}): Option.Option<TaskDagSnapshot> => {
+  const latest = knowledge.taskTrackerFacts.findLast(isGraphFactsObservation)
+  return latest === undefined ? Option.none() : reconstructedTaskGraphFor(knowledge, latest.target)
+}
+
 /** Selects exact authored instructions only from a focused journaled observation. */
 export const reconstructedTaskWorkSpecificationFor = (
   knowledge: { readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation> },

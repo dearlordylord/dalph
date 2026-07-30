@@ -6,6 +6,22 @@ const singletonGraph = {
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 
+const blockedPipelineGraph = {
+  revision: "pipeline-before-A-completes",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
+  ]
+}
+
+const releasedPipelineGraph = {
+  revision: "pipeline-after-A-completes",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
+  ]
+}
+
 /**
  * The maintained manually authored singleton story. Its schema version is
  * provisional; this catalog intentionally makes no released-data promise yet.
@@ -61,6 +77,8 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       _tag: "ExpectedBehavior",
       orchestration: null,
@@ -73,7 +91,94 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
   ]
 })
 
+/** The maintained dependency story proving one Run consumes a later complete graph observation. */
+export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  _tag: "AuthoredScenarioCassette",
+  name: "a later recorded tracker observation releases the dependant in the same run",
+  schemaVersion: 1,
+  startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
+    taskWorkSpecifications: [
+      { body: "Complete task A.", taskId: "A", title: "Complete A" },
+      { body: "Complete task B after A.", taskId: "B", title: "Complete B" }
+    ],
+    trackerGraph: blockedPipelineGraph,
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+  },
+  story: [
+    { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 1 } },
+    {
+      _tag: "RunCoordinator",
+      baseSha: "2222222222222222222222222222222222222222",
+      claimOwner: "pipeline-cassette-owner",
+      claimTokenPrefix: "pipeline-cassette-claim",
+      executor: "executor:controlled-fake",
+      target: "pipeline-cassette-target",
+      worktreeRoot: "/dalph/cassettes/pipeline"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: blockedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: blockedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: blockedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Complete task A.", taskId: "A", title: "Complete A" },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Complete task B after A.", taskId: "B", title: "Complete B" },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:B:1" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: {
+        absences: [],
+        results: [
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+        ]
+      }
+    }
+  ]
+})
+
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
 export const maintainedAuthoredCassetteCatalog = {
+  dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
 } as const

@@ -133,7 +133,7 @@ Acceptance tests:
 
 ## Maintainers retain size and stress baselines
 
-The 100-task/three-read encoding experiment remains a regression-visible
+The 100-task/four-read encoding experiment remains a regression-visible
 baseline only. It makes no production-representativeness, delta, compression,
 or content-addressing claim.
 
@@ -145,6 +145,6 @@ crash, or retry.
 
 Acceptance tests:
 
-- `labels the 100-task three-read encoding experiment as a baseline`
+- `labels the 100-task four-read encoding experiment as a baseline`
 - `projects a large journal without rescanning each retained prefix`
 - `preserves the 10,000-pair non-coverage projection signal`

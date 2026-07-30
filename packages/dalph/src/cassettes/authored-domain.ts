@@ -150,9 +150,16 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
   TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
 })
 export type AuthoredCassetteStoryItem = typeof AuthoredCassetteStoryItem.Type
+
+export const AuthoredTrackerGraphReadResult = Schema.Union([
+  AuthoredCassetteStoryItem.cases.TrackerGraphReadFailed,
+  AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned
+])
+export type AuthoredTrackerGraphReadResult = typeof AuthoredTrackerGraphReadResult.Type
 
 const defineStoryItemOwners = <
   const Registrations extends Readonly<Record<string, ReadonlyArray<AuthoredCassetteStoryItem["_tag"]>>>
@@ -166,7 +173,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: ["InitialControlPolicy", "RunCoordinator", "SetTaskExecutionCapacity"],
   DalphOperationTrace: ["DalphSelects"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
-  TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadReturned"],
+  TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadFailed", "TrackerGraphReadReturned"],
   TerminalAssertion: ["ExpectedBehavior"]
 })
 

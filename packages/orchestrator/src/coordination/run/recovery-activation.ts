@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Queue } from "effect"
+import { Context, Effect, Exit, Layer, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "../activation/coordinator.js"
 import {
   type AttemptId,
@@ -38,6 +38,7 @@ import type {
   WorkflowInterpreterService,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
+import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 
 type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
@@ -58,6 +59,9 @@ export type RunRecoveryActivationError =
 /** Derives which journaled responsibilities are still unfinished. */
 const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): ReadonlyArray<ResponsibilityFreshFacts> => {
   const records = runState.workflowHistory.records
+  const latestTaskGraph = latestReconstructedTaskGraph(runState.graphKnowledge)
+  const taskLeftMembership = (taskId: TaskId): boolean =>
+    Option.isSome(latestTaskGraph) && !latestTaskGraph.value.taskIds().includes(taskId)
   const settledOperationIds = new Set(
     records.flatMap(({ event }) => {
       const transition = workflowJournalTransitionRuleFor(event._tag)
@@ -72,7 +76,9 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
         disposition: !settledOperationIds.has(workflowResponsibilityOperationId(responsibility))
-          ? ResponsibilityDisposition.Ready()
+          ? taskLeftMembership(responsibility.taskId)
+            ? ResponsibilityDisposition.TaskMembershipConstraint()
+            : ResponsibilityDisposition.Ready()
           : ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
         responsibility
       }
@@ -87,13 +93,15 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
     const disposition =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Terminal"
         ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
-        : report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended" && paused
-          ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
-              correlation: report.report.correlation
-            })
-          : paused
-            ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-            : ResponsibilityDisposition.Ready()
+        : taskLeftMembership(responsibility.plannedAttempt.taskId)
+          ? ResponsibilityDisposition.TaskMembershipConstraint()
+          : report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended" && paused
+            ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
+                correlation: report.report.correlation
+              })
+            : paused
+              ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+              : ResponsibilityDisposition.Ready()
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
   })
 }

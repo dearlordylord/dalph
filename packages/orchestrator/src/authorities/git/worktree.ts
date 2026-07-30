@@ -116,30 +116,36 @@ export const gitWorktreeTestLayer = (
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
-      const observation = yield* Ref.make(initialObservation)
+      type Observation = PlannedBranchReady | PlannedWorktreeAbsent | PlannedWorktreeReady
+      const defaultObservation = yield* Ref.make<Observation>(initialObservation)
+      const observationsByWorktree = yield* Ref.make<ReadonlyMap<WorktreeLocator, Observation>>(new Map())
       const requests = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
       const service = GitWorktree.of({
         createPlannedWorktree: Effect.fn("GitWorktree.Test.createPlannedWorktree")(function* (plan) {
           yield* Ref.update(requests, (current) => [...current, plan])
-          yield* Ref.set(
-            observation,
-            PlannedWorktreeReady.make({
-              baseSha: plan.baseSha,
-              branch: plan.branch,
-              headSha: plan.baseSha,
-              worktree: plan.worktree
-            })
+          yield* Ref.update(observationsByWorktree, (current) =>
+            new Map(current).set(
+              plan.worktree,
+              PlannedWorktreeReady.make({
+                baseSha: plan.baseSha,
+                branch: plan.branch,
+                headSha: plan.baseSha,
+                worktree: plan.worktree
+              })
+            )
           )
         }),
-        readPlannedWorktree: Effect.fn("GitWorktree.Test.readPlannedWorktree")(function* () {
-          return yield* Ref.get(observation)
+        readPlannedWorktree: Effect.fn("GitWorktree.Test.readPlannedWorktree")(function* (plan) {
+          const observations = yield* Ref.get(observationsByWorktree)
+          return observations.get(plan.worktree) ?? (yield* Ref.get(defaultObservation))
         })
       })
       return Context.empty().pipe(
         Context.add(GitWorktree, service),
         Context.add(TestGitWorktree, {
           createRequests: () => Ref.get(requests),
-          setObservation: (value) => Ref.set(observation, value)
+          setObservation: (value) =>
+            Ref.set(defaultObservation, value).pipe(Effect.andThen(Ref.set(observationsByWorktree, new Map())))
         })
       )
     })

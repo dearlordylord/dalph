@@ -41,6 +41,9 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
         const item = yield* cursor.consumeTrackerGraph.pipe(
           Effect.mapError((failure) => trackerReadFailure(`${failure._tag} at story position ${failure.storyPosition}`))
         )
+        if (item._tag === "TrackerGraphReadFailed") {
+          return yield* trackerReadFailure(`authored cassette tracker graph read failed: ${item.reason}`)
+        }
         const projection = projectTrackerSnapshot(item.graph)
         return projection._tag === "Valid"
           ? projection.snapshot

@@ -102,7 +102,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
       )
     )
 
-    expect(yield* Ref.get(trackerReads)).toBe(1)
+    expect(yield* Ref.get(trackerReads)).toBe(2)
     expect((yield* (yield* JournalStore).read(runId)).map(({ event }) => event._tag)).toEqual([
       "WorkflowRunBegan",
       "WorkflowRunTerminated"
@@ -215,7 +215,7 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
       )
     )
 
-    expect(yield* Ref.get(trackerReads)).toBe(1)
+    expect(yield* Ref.get(trackerReads)).toBe(2)
     expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toEqual([
       "WorkflowRunBegan",
       "WorkflowRunTerminated"
