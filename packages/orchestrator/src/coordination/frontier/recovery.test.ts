@@ -4,11 +4,12 @@ import {
   controlledFakePlannedAttemptExecutorLayer,
   makeControlledFakePlannedAttemptExecutorLayer
 } from "../../../test/controlled-planned-attempt-executor.js"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -58,6 +59,7 @@ import {
   makeTaskWorktreeReconciliationOperation
 } from "../../workflow/registry/operation.js"
 import {
+  AuthoritativeTaskClaimObserved,
   AuthoritativeTaskClaimAcquired,
   WorkflowInterpreter,
   WorkflowTrace
@@ -82,6 +84,7 @@ import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-w
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
 import { makeOwnedTransitionExecutionFixture, type OwnedTransitionExecution } from "../activation/coordinator.js"
+import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
 
@@ -532,6 +535,219 @@ it.effect("routes journaled fresh fact reads, exact claim release, and suspensio
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
+)
+
+it.effect("rechecks the tracker claim after same-process suspension and blocks continuation when it was replaced", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("same-process-replaced-claim-run")
+    const taskId = TaskId.make("same-process-replaced-claim-task")
+    const target = FixtureTarget.make("same-process-replaced-claim-target")
+    const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("same-process-replaced-claim-attempt"),
+      baseSha: GitCommitSha.make("7".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/same-process-replaced-claim-attempt"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: specification.fingerprint,
+      worktree: WorktreeLocator.make("/worktrees/same-process-replaced-claim-attempt")
+    })
+    const acquiredClaim = makeTaskClaimAcquisitionOperation({
+      acquisition: {
+        operationId: OperationId.make("same-process-acquired-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("same-process-acquired-token")
+      },
+      predecessorOperationIds: []
+    })
+    const replacementClaim = ActiveTaskClaim.make({
+      operationId: OperationId.make("foreign-replacement-claim"),
+      owner: ClaimOwner.make("another-dalph"),
+      taskId,
+      token: ClaimToken.make("foreign-replacement-token")
+    })
+    const plan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("same-process-replaced-claim-plan"),
+      plannedAttempt,
+      predecessorOperationIds: [acquiredClaim.acquisition.operationId]
+    })
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(acquiredClaim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: acquiredClaim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(acquiredClaim.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: { _tag: "ActiveTaskClaim", ...acquiredClaim.acquisition },
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(
+        plannedAttempt.attemptId,
+        PlannedAttemptExecutorReportOrdinal.make(1)
+      ),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: PlannedAttemptExecutorReport.cases.Running.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId }
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const executorStarts = yield* Ref.make(0)
+    const claimReads = yield* Ref.make(0)
+    const currentClaim = yield* Ref.make(ActiveTaskClaim.make(acquiredClaim.acquisition))
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.none()),
+      requestSuspension: () =>
+        Effect.succeed(
+          PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          })
+        ),
+      startOrContinue: () =>
+        Ref.updateAndGet(executorStarts, (count) => count + 1).pipe(
+          Effect.as(
+            PlannedAttemptExecutorReport.cases.Running.make({
+              correlation: { attemptId: plannedAttempt.attemptId, runId }
+            })
+          )
+        )
+    })
+    const provider = Layer.succeed(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTaskClaim: () =>
+          Ref.update(claimReads, (count) => count + 1).pipe(
+            Effect.andThen(Ref.get(currentClaim)),
+            Effect.map((observation) => AuthoritativeTaskClaimObserved.make({ observation }))
+          ),
+        readTaskWorktree: () => Effect.die("a replaced claim must block the worktree read"),
+        readTargetLineage: () => Effect.die("a replaced claim must block the target-lineage read"),
+        readTrackerGraph: () => Effect.die("the test records its complete graph observations directly"),
+        readTaskWorkSpecification: () => Effect.succeed(specification),
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      })
+    )
+    const interpreter = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+      Layer.provide(Layer.succeed(JournalStore, journal))
+    )
+    const execution = makeOwnedTransitionExecutionFixture({
+      bindPlannedAttemptExecutorPosition: () => Effect.void,
+      recordIntent: () => Effect.void,
+      releasePlannedAttemptExecutorWorkPosition: () => Effect.void
+    })
+
+    yield* Effect.gen(function* () {
+      const activation = yield* makeJournaledFreshRunRecoveryActivation(runId)
+      if (activation._tag !== "JournaledFreshRunActivation") {
+        return yield* Effect.die("expected the same-process journaled activation")
+      }
+      const closedRead = makeTrackerGraphObservationOperation(OperationId.make("same-process-closed-read"), target)
+      const closedGraph = projectTrackerSnapshot({
+        revision: "same-process-closed-graph",
+        tasks: [
+          {
+            id: taskId,
+            lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
+      })
+      if (closedGraph._tag !== "Valid") return yield* Effect.die("expected a valid closed graph")
+      yield* journal.append(runId, intentRecordKey(closedRead.operationId), taskTrackerReadIntent(closedRead))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(closedRead.operationId),
+        taskTrackerFactsObservedEvent(
+          closedRead.operationId,
+          makeCompleteTaskTrackerFactsObserved(closedRead, closedGraph.snapshot)
+        )
+      )
+      const suspension = (yield* activation.readFrontier).transitions[0]
+      if (suspension?._tag !== "SuspendPlannedAttemptExecutorWork") {
+        return yield* Effect.die("the closed task must suspend before any continuation")
+      }
+      yield* activation.runTransition(suspension, execution)
+
+      yield* Ref.set(currentClaim, replacementClaim)
+      const reopenedRead = makeTrackerGraphObservationOperation(OperationId.make("same-process-reopened-read"), target)
+      const reopenedGraph = projectTrackerSnapshot({
+        revision: "same-process-reopened-graph",
+        tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (reopenedGraph._tag !== "Valid") return yield* Effect.die("expected a valid reopened graph")
+      yield* journal.append(runId, intentRecordKey(reopenedRead.operationId), taskTrackerReadIntent(reopenedRead))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(reopenedRead.operationId),
+        taskTrackerFactsObservedEvent(
+          reopenedRead.operationId,
+          makeCompleteTaskTrackerFactsObserved(reopenedRead, reopenedGraph.snapshot)
+        )
+      )
+
+      const specificationRead = (yield* activation.readFrontier).transitions[0]
+      if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
+        return yield* Effect.die("continuation must reread the task specification")
+      }
+      yield* activation.runTransition(specificationRead, execution)
+      const claimRead = (yield* activation.readFrontier).transitions[0]
+      if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
+        return yield* Effect.die("continuation must reread the tracker claim")
+      }
+      yield* activation.runTransition(claimRead, execution)
+
+      expect(yield* activation.readFrontier).toEqual({
+        explanations: [
+          {
+            _tag: "PlannedAttemptTaskClaimConstraint",
+            claimState: "Foreign",
+            correlation: { attemptId: plannedAttempt.attemptId, runId },
+            taskId,
+            wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+          }
+        ],
+        transitions: []
+      })
+    }).pipe(Effect.provideService(PlannedAttemptExecutor, executor), Effect.provide(interpreter))
+
+    expect(yield* Ref.get(claimReads)).toBe(1)
+    expect(yield* Ref.get(executorStarts)).toBe(0)
+    expect((yield* journal.read(runId)).map(({ event }) => event)).toContainEqual(
+      expect.objectContaining({
+        _tag: "TaskTrackerReadIntentRecorded",
+        operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
+      })
+    )
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
 it.effect("runs a journaled fresh read when no optional trace output is installed", () =>

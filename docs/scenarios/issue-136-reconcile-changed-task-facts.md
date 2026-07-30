@@ -77,6 +77,11 @@ release a foreign or replaced claim, block C, or infer tracker completion.
 - `explains each task-authority constraint without changing the planned
   attempt` proves the three choices carry F1 and F2 without claiming F2 was
   incorporated. Applying those choices remains mapped to issues #65 and #66.
+- `rechecks the tracker claim after same-process suspension and blocks
+  continuation when it was replaced` proves that a live coordinator records
+  and performs a focused claim read after safe suspension and before asking
+  the executor to continue, then exposes a foreign-claim constraint instead of
+  resuming P1.
 
 ## The tracker closes A without success and later reopens it
 
