@@ -426,3 +426,24 @@ it.effect("rejects binding, cancellation, and release for positions it does not 
     ).toBe("PlannedAttemptPositionReleaseIssue")
   })
 )
+
+it.effect("binds the selected task when another task already names the same planned attempt", () =>
+  Effect.gen(function* () {
+    const correlation = { attemptId: AttemptId.make("shared-attempt"), runId: frontierRunId }
+    const controller = yield* makeTaskAdmissionController({
+      capacity: TaskWorkCapacity.make(2),
+      reconstructedPlannedAttemptPositions: [{ ...correlation, taskId: taskB }]
+    })
+    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId: taskA,
+      taskRevision: TaskRevision.make("task-A-revision")
+    })
+    yield* controller.admit({ explanations: [], transitions: [transition] }, frontierRunId)
+    yield* controller.bindPlannedAttemptPosition(makeSelectedTransitionIdentity(frontierRunId, transition), correlation)
+
+    expect((yield* controller.snapshot()).reservedPositions).toEqual([
+      { correlation: { _tag: "PlannedAttemptReservation", ...correlation }, taskId: taskA },
+      { correlation: { _tag: "PlannedAttemptReservation", ...correlation }, taskId: taskB }
+    ])
+  })
+)

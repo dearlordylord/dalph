@@ -39,10 +39,7 @@ class PlannedAttemptPositionReleaseIssue extends Schema.TaggedErrorClass<Planned
 
 export interface TaskAdmissionControllerSnapshot {
   readonly capacity: TaskWorkCapacity
-  readonly reservedPositions: ReadonlyArray<{
-    readonly correlation: TaskAdmissionReservationCorrelation
-    readonly taskId: TaskId
-  }>
+  readonly reservedPositions: ReadonlyArray<{ readonly correlation: TaskWorkPosition; readonly taskId: TaskId }>
   readonly reservedTaskIds: ReadonlyArray<TaskId>
 }
 
@@ -82,32 +79,23 @@ export const transitionRequiresTaskAdmissionPosition = (transition: RunnableFron
   transition._tag === "ContinuePlannedAttemptExecutorWork" ||
   transition._tag === "StartPlannedAttemptExecutorWork"
 
-type TaskAdmissionReservationCorrelation =
+/** One task's process-local use of task-work capacity before or after its planned attempt is known. */
+type TaskWorkPosition =
   | { readonly _tag: "SelectedTransitionReservation"; readonly selected: SelectedTransitionIdentity }
   | { readonly _tag: "PlannedAttemptReservation"; readonly attemptId: AttemptId; readonly runId: RunId }
 
-interface TaskAdmissionReservation {
-  readonly correlation: TaskAdmissionReservationCorrelation
-  readonly taskId: TaskId
-}
-
 interface TaskAdmissionControllerState {
   readonly capacity: TaskWorkCapacity
-  readonly reservations: ReadonlyArray<TaskAdmissionReservation>
+  readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
 }
 
-const plannedAttemptReservation = (
-  correlation: PlannedAttemptExecutorCorrelation
-): TaskAdmissionReservationCorrelation => ({
+const plannedAttemptReservation = (correlation: PlannedAttemptExecutorCorrelation): TaskWorkPosition => ({
   _tag: "PlannedAttemptReservation",
   attemptId: correlation.attemptId,
   runId: correlation.runId
 })
 
-const transitionReservation = (
-  transition: RunnableFrontierTransition,
-  runId: RunId
-): TaskAdmissionReservationCorrelation =>
+const transitionReservation = (transition: RunnableFrontierTransition, runId: RunId): TaskWorkPosition =>
   transition._tag === "ContinuePlannedAttemptExecutorWork"
     ? plannedAttemptReservation({
         attemptId: transition.plannedAttempt.attemptId,
@@ -116,17 +104,17 @@ const transitionReservation = (
     : { _tag: "SelectedTransitionReservation", selected: makeSelectedTransitionIdentity(runId, transition) }
 
 const sameReservation = (
-  reservation: TaskAdmissionReservation,
+  position: TaskWorkPosition | undefined,
   transition: RunnableFrontierTransition,
   runId: RunId
 ): boolean =>
-  reservation.taskId === runnableTransitionTaskId(transition) &&
+  position !== undefined &&
   (transition._tag === "ContinuePlannedAttemptExecutorWork"
-    ? reservation.correlation._tag === "PlannedAttemptReservation" &&
-      reservation.correlation.attemptId === transition.plannedAttempt.attemptId &&
-      reservation.correlation.runId === transition.plannedAttempt.runId
-    : reservation.correlation._tag === "SelectedTransitionReservation" &&
-      selectedTransitionKey(reservation.correlation.selected) ===
+    ? position._tag === "PlannedAttemptReservation" &&
+      position.attemptId === transition.plannedAttempt.attemptId &&
+      position.runId === transition.plannedAttempt.runId
+    : position._tag === "SelectedTransitionReservation" &&
+      selectedTransitionKey(position.selected) ===
         selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition)))
 
 type AdmissionAttempt =
@@ -141,25 +129,16 @@ const tryAdmitTransition = (
   if (!transitionRequiresTaskAdmissionPosition(transition)) {
     return { _tag: "TransitionAdmitted", state: current }
   }
-  if (current.reservations.some((reservation) => sameReservation(reservation, transition, runId))) {
+  const taskId = runnableTransitionTaskId(transition)
+  if (sameReservation(current.positions.get(taskId), transition, runId)) {
     return { _tag: "TransitionAdmitted", state: current }
   }
-  const taskId = runnableTransitionTaskId(transition)
-  if (
-    current.reservations.some((reservation) => reservation.taskId === taskId) ||
-    current.reservations.length >= current.capacity
-  ) {
+  if (current.positions.has(taskId) || current.positions.size >= current.capacity) {
     return { _tag: "CapacityUnavailable" }
   }
   return {
     _tag: "TransitionAdmitted",
-    state: {
-      ...current,
-      reservations: [
-        ...current.reservations,
-        { correlation: transitionReservation(transition, runId), taskId }
-      ].toSorted((left, right) => left.taskId.localeCompare(right.taskId))
-    }
+    state: { ...current, positions: new Map(current.positions).set(taskId, transitionReservation(transition, runId)) }
   }
 }
 
@@ -172,9 +151,11 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
 ) {
   const state = yield* Ref.make<TaskAdmissionControllerState>({
     capacity: input.capacity,
-    reservations: (input.reconstructedPlannedAttemptPositions ?? [])
-      .map(({ attemptId, runId, taskId }) => ({ correlation: plannedAttemptReservation({ attemptId, runId }), taskId }))
-      .sort((left, right) => left.taskId.localeCompare(right.taskId))
+    positions: new Map(
+      (input.reconstructedPlannedAttemptPositions ?? [])
+        .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+        .map(({ attemptId, runId, taskId }) => [taskId, plannedAttemptReservation({ attemptId, runId })] as const)
+    )
   })
 
   const admit = Effect.fn("TaskAdmissionController.admit")((frontier: RunnableFrontier, runId: RunId) =>
@@ -207,22 +188,20 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
       function* (selected, correlation) {
         const found = yield* Ref.modify(state, (current) => {
           const key = selectedTransitionKey(selected)
-          const matches = (reservation: TaskAdmissionReservation): boolean =>
-            reservation.correlation._tag === "SelectedTransitionReservation"
-              ? selectedTransitionKey(reservation.correlation.selected) === key
-              : reservation.correlation.attemptId === correlation.attemptId &&
-                reservation.correlation.runId === correlation.runId
-          const matched = current.reservations.some(matches)
+          const position = current.positions.get(selected.subjectTaskId)
+          const matched =
+            position !== undefined &&
+            (position._tag === "SelectedTransitionReservation"
+              ? selectedTransitionKey(position.selected) === key
+              : position.attemptId === correlation.attemptId && position.runId === correlation.runId)
           return [
             matched,
             matched
               ? {
                   ...current,
-                  reservations: current.reservations.map((reservation) =>
-                    reservation.correlation._tag === "SelectedTransitionReservation" &&
-                    selectedTransitionKey(reservation.correlation.selected) === key
-                      ? { ...reservation, correlation: plannedAttemptReservation(correlation) }
-                      : reservation
+                  positions: new Map(current.positions).set(
+                    selected.subjectTaskId,
+                    plannedAttemptReservation(correlation)
                   )
                 }
               : current
@@ -236,15 +215,14 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
     cancelReservedPosition: Effect.fn("TaskAdmissionController.cancelReservedPosition")(function* (selected) {
       const key = selectedTransitionKey(selected)
       const removed = yield* Ref.modify(state, (current) => {
-        const nextReservations = current.reservations.filter(
-          (reservation) =>
-            reservation.correlation._tag !== "SelectedTransitionReservation" ||
-            selectedTransitionKey(reservation.correlation.selected) !== key
+        const found = [...current.positions].find(
+          ([, position]) =>
+            position._tag === "SelectedTransitionReservation" && selectedTransitionKey(position.selected) === key
         )
-        return [
-          nextReservations.length < current.reservations.length,
-          { ...current, reservations: nextReservations }
-        ] as const
+        if (found === undefined) return [false, current] as const
+        const nextPositions = new Map(current.positions)
+        nextPositions.delete(found[0])
+        return [true, { ...current, positions: nextPositions }] as const
       })
       if (!removed) {
         return yield* new TaskAdmissionPositionCancellationIssue({ selected })
@@ -254,16 +232,16 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
     releasePlannedAttemptPosition: Effect.fn("TaskAdmissionController.releasePlannedAttemptPosition")(
       function* (correlation) {
         const removed = yield* Ref.modify(state, (current) => {
-          const nextReservations = current.reservations.filter(
-            (reservation) =>
-              reservation.correlation._tag !== "PlannedAttemptReservation" ||
-              reservation.correlation.attemptId !== correlation.attemptId ||
-              reservation.correlation.runId !== correlation.runId
+          const found = [...current.positions].find(
+            ([, position]) =>
+              position._tag === "PlannedAttemptReservation" &&
+              position.attemptId === correlation.attemptId &&
+              position.runId === correlation.runId
           )
-          return [
-            nextReservations.length < current.reservations.length,
-            { ...current, reservations: nextReservations }
-          ] as const
+          if (found === undefined) return [false, current] as const
+          const nextPositions = new Map(current.positions)
+          nextPositions.delete(found[0])
+          return [true, { ...current, positions: nextPositions }] as const
         })
         if (!removed) {
           return yield* new PlannedAttemptPositionReleaseIssue()
@@ -275,8 +253,10 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
       Ref.get(state).pipe(
         Effect.map((current) => ({
           capacity: current.capacity,
-          reservedPositions: current.reservations,
-          reservedTaskIds: current.reservations.map(({ taskId }) => taskId)
+          reservedPositions: [...current.positions]
+            .map(([taskId, correlation]) => ({ correlation, taskId }))
+            .toSorted((left, right) => left.taskId.localeCompare(right.taskId)),
+          reservedTaskIds: [...current.positions.keys()].toSorted((left, right) => left.localeCompare(right))
         }))
       )
   } satisfies TaskAdmissionController
