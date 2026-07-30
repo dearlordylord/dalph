@@ -1,10 +1,10 @@
-import { Crypto, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore } from "effect"
+import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "../activation/coordinator.js"
-import { type PlannedTaskAttempt, RunId, type TaskId } from "@dalph/contracts"
+import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { type OperationId } from "../../workflow/identity.js"
 import { type InitialControlPolicy } from "../../control/policy.js"
 import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
-import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
+import { type AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
 import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-activation.js"
 import { RunRecoveryActivation, type RunRecoveryActivationError } from "./recovery-activation.js"
@@ -37,15 +37,6 @@ import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workfl
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
-
-const AllocatedFreshWorkflowRunId = RunId.pipe(Schema.brand("AllocatedFreshWorkflowRunId"))
-export type AllocatedFreshWorkflowRunId = typeof AllocatedFreshWorkflowRunId.Type
-
-/** Allocates the only identity accepted by Dalph's production fresh-run path. */
-export const freshWorkflowRunId = Effect.fn("Workflow.freshRunId")(function* (target: TrackerTarget) {
-  const crypto = yield* Crypto.Crypto
-  return AllocatedFreshWorkflowRunId.make(`workflow:${taskTrackerTargetKey(target)}:${yield* crypto.randomUUIDv7}`)
-})
 
 /** Journal reconstruction exclusively owns every task it has rediscovered. */
 export const discardFreshStagesOwnedByRecovery = (

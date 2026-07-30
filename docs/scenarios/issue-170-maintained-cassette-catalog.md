@@ -13,12 +13,32 @@ fake executor has no prior report, and the in-memory journal is empty.
 The story begins with production `InitialControlPolicy` at task-execution
 capacity one. The maintainer asks Dalph to coordinate the story's tracker
 target. The story does not provide a `RunId`; Dalph applies its production
-fresh-run identity rule. The cassette runner supplies the ordinary tracker,
-claim, Git worktree, executor, trace, and journal implementations and invokes
-the production coordinator activation program.
+fresh-run identity rule. It schema-encodes the one exact tracker target together
+with fresh UUID material, then puts that payload behind Dalph's versioned,
+reversible Base64URL representation. The representation is deliberately not
+encryption or a security boundary. The cassette runner supplies the ordinary
+tracker, claim, Git worktree, executor, trace, and journal implementations and
+invokes the production coordinator activation program.
 
-Starting the same tracker target again creates a different `RunId`; each ID
-contains the exact encoded target rather than a generic object rendering.
+Starting the same tracker target again creates a different `RunId`. The
+maintainer sees an opaque value that does not expose a fixture locator or
+GitHub owner, repository, and issue number as readable fields. Ordinary
+journal, planner, executor, and activation consumers compare and carry that
+exact value without interpreting its text. When debugging genuinely requires
+the embedded information, the maintainer can pass the value to the fresh-run
+diagnostic decoder and recover the exact structured target and freshness
+material. A foreign, malformed, schema-invalid, or unsupported-version value
+produces one typed diagnostic decode failure instead of guessed target facts.
+Because this representation has no integrity check, changing one valid encoded
+payload into another valid encoded payload is outside its opacity-only
+contract.
+
+There is no outside identity service, network request, or durable append in
+allocation or diagnostic decoding, so an ambiguous boundary outcome and
+reconcile-before-retry do not apply. If allocation is requested again after a
+failure or process loss, Dalph creates a new fresh identity; it does not infer
+that an unrecorded value identifies a durable run. Diagnostic decoding changes
+no state, so retrying it repeats only the same pure validation.
 
 Each registered cassette surface may consume only the current story item. A
 Dalph-selected operation must match the current expected operation before the
@@ -46,6 +66,10 @@ Acceptance tests:
   terminal executor work`
 - `runs another story with a different initial task-execution capacity`
 - `assigns a fresh exact run identity each time the same tracker target starts`
+- `assigns distinct opaque fresh run identities and diagnostically restores the
+  exact target`
+- `rejects malformed fresh run identities through one typed diagnostic
+  failure`
 - `requires one terminal assertion group and one owner for every decoded story
   item`
 - `rejects cassette-local contradictions and leaves an authority mismatch to

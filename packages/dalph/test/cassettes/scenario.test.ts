@@ -7,6 +7,7 @@ import {
   ControlCommand,
   ControlCommandId,
   ControlCommandRecordedEvent,
+  decodeFreshWorkflowRunIdForDiagnostics,
   describeJournalEvent,
   JournalPosition,
   workflowJournalEventVersion
@@ -43,7 +44,7 @@ it.effect("runs the maintained singleton through production activation and stops
     const lastEvent = run.records.at(-1)?.event
 
     expect(JSON.stringify(encoded)).not.toContain("runId")
-    expect(run.runId).toMatch(/^workflow:"cassette-target":/)
+    expect(run.runId).not.toContain("cassette-target")
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     expect(run.observedOutcomes).toEqual(
       terminalAssertions?._tag === "ExpectedObservedOutcomes" ? terminalAssertions.expected : []
@@ -60,10 +61,28 @@ it.effect("assigns a fresh exact run identity each time the same tracker target 
   Effect.gen(function* () {
     const first = yield* runAuthoredScenarioCassette(singleton)
     const second = yield* runAuthoredScenarioCassette(singleton)
+    const command = singleton.story.find((item) => item._tag === "RunCoordinator")
+    if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained story has no coordinator command")
 
     expect(first.runId).not.toBe(second.runId)
-    expect(first.runId).toMatch(/^workflow:"cassette-target":/)
-    expect(second.runId).toMatch(/^workflow:"cassette-target":/)
+    expect(first.runId).not.toContain("cassette-target")
+    expect(second.runId).not.toContain("cassette-target")
+    expect((yield* decodeFreshWorkflowRunIdForDiagnostics(first.runId)).target).toEqual(command.target)
+    expect((yield* decodeFreshWorkflowRunIdForDiagnostics(second.runId)).target).toEqual(command.target)
+
+    const correlatedRunIds = first.records.flatMap(({ event, runId }) => {
+      if (event._tag === "TaskAttemptPlanned" || event._tag === "TaskWorktreeReconciliationIntended") {
+        return [runId, event.operation.plannedAttempt.runId]
+      }
+      if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+        return [runId, event.plannedAttempt.runId]
+      }
+      if (event._tag === "PlannedAttemptExecutorWorkReported") {
+        return [runId, event.report.correlation.runId]
+      }
+      return [runId]
+    })
+    expect(new Set(correlatedRunIds)).toEqual(new Set([first.runId]))
   })
 )
 
