@@ -2,15 +2,26 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
-import { AttemptId, PlannedAttemptExecutorReport, TaskId } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
+  TaskId
+} from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
   ControlCommand,
   ControlCommandId,
   ControlCommandRecordedEvent,
   decodeFreshWorkflowRunIdForDiagnostics,
+  deriveIntegrationFrontier,
   describeJournalEvent,
   JournalPosition,
+  PlannedAttemptExecutorReportOrdinal,
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
@@ -23,6 +34,7 @@ import {
 } from "@dalph/orchestrator"
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
+  acceptedResultRestartsIntoIntegrationAuthoredCassette,
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   compareRecordedCassetteCheckpoints,
@@ -46,6 +58,83 @@ import {
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+
+it.effect("recovers an accepted result in journal order and crosses its integration cutoff once", () =>
+  Effect.gen(function* () {
+    const lyrics = renderAuthoredCassetteLyrics(acceptedResultRestartsIntoIntegrationAuthoredCassette)
+    expect(lyrics).toContain(
+      "The story expects task A to produce accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa."
+    )
+    expect(lyrics).toContain(
+      "The story expects Dalph to queue accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa from attempt attempt:A:0."
+    )
+    expect(lyrics).toContain(
+      "The story expects Dalph to start integrating accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa from attempt attempt:A:0."
+    )
+    const run = yield* runAuthoredScenarioCassette(acceptedResultRestartsIntoIntegrationAuthoredCassette)
+    const integrationRecords = run.records.filter(
+      ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
+    )
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(integrationRecords.map(({ event }) => event._tag)).toEqual([
+      "IntegrationResponsibilityBegan",
+      "IntegrationStarted"
+    ])
+    expect(integrationRecords[0]?.position).toBeLessThan(integrationRecords[1]?.position ?? 0)
+    expect(JSON.stringify(run.records)).not.toContain("queueOrdinal")
+    if (run.history._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die("accepted-result cassette must retain valid journal history")
+    }
+    expect(deriveIntegrationFrontier(run.history.runState).explanations).toContainEqual(
+      expect.objectContaining({
+        _tag: "IntegrationDependencyWait",
+        prerequisiteTaskIds: ["C"],
+        wakeCondition: "TaskTrackerFactsObserved"
+      })
+    )
+    expect(run.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
+    ])
+
+    const withoutAcceptedTerminal = run.records.filter(
+      ({ event }) =>
+        !(
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report._tag === "Terminal" &&
+          event.report.result._tag === "Accepted"
+        )
+    )
+    expect((yield* projectRecordedCassette(withoutAcceptedTerminal).pipe(Effect.flip))._tag).toBe(
+      "InvalidWorkflowJournalHistory"
+    )
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    const withoutIntegrationOrigin = RecordedCassette.make({
+      ...recorded,
+      entries: recorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
+    })
+    expect(foldRecordedCassette(withoutIntegrationOrigin)._tag).toBe("InvalidWorkflowJournalHistory")
+  })
+)
+
+it.effect("starts a queued accepted result in the same live coordinator process", () =>
+  Effect.gen(function* () {
+    const withoutDeath = acceptedResultRestartsIntoIntegrationAuthoredCassette.story.filter(
+      ({ _tag }) => _tag !== "CoordinatorProcessDies"
+    )
+    const uninterrupted = AuthoredScenarioCassette.make({
+      ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
+      name: "accepted result starts without coordinator restart",
+      story: [...withoutDeath.slice(0, -3), ...withoutDeath.slice(-1)]
+    })
+
+    const run = yield* runAuthoredScenarioCassette(uninterrupted)
+
+    expect(run.coordinatorActivations).toEqual(["Fresh"])
+    expect(run.records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+  })
+)
 
 it.effect("continues the same run with B only after a recorded refresh reports A completed", () =>
   Effect.gen(function* () {
@@ -183,6 +272,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           claimOwner: "changed-membership-owner",
           claimTokenPrefix: "changed-membership-claim",
           executor: "executor:controlled-fake",
+          integrationTarget: { repository: "/dalph/cassettes/changed-membership.git", ref: "refs/heads/master" },
           target,
           worktreeRoot: "/dalph/cassettes/changed-membership"
         },
@@ -622,6 +712,7 @@ it.effect("continues independent B while recovered A has a target-membership con
           claimOwner: "localized-constraint-owner",
           claimTokenPrefix: "localized-constraint-claim",
           executor: "executor:controlled-fake",
+          integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
           target,
           worktreeRoot: "/dalph/cassettes/localized-constraint"
         },
@@ -1134,6 +1225,19 @@ it.effect(
       if (executorReportEntry?._tag !== "PlannedAttemptExecutorWorkReported") {
         return yield* Effect.die("missing executor report entry")
       }
+      const executorResponsibilityEntry = projected.entries.find(
+        (entry) => entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+      )
+      if (executorResponsibilityEntry?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
+        return yield* Effect.die("missing executor responsibility entry")
+      }
+      const acceptedResult = AcceptedResult.make({
+        commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+      })
+      const integrationTarget = IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
+        ref: IntegrationTargetRef.make("refs/heads/master")
+      })
       const additionalCommands: ReadonlyArray<RecordedCassetteEntry> = [
         {
           _tag: "ControlCommandRecorded",
@@ -1162,24 +1266,57 @@ it.effect(
           })
         }
       ]
-      const entriesWithSuspension = projected.entries.map((entry) =>
-        entry === executorReportEntry
-          ? {
+      const entriesWithAcceptedResult = projected.entries.flatMap((entry) => {
+        if (entry === executorReportEntry) {
+          return [
+            entry,
+            {
               _tag: "PlannedAttemptExecutorWorkReported" as const,
               occurrenceClassification: "NonActionOccurrence" as const,
-              ordinal: executorReportEntry.ordinal,
+              ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
               report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
                 correlation: executorReportEntry.report.correlation
               })
             }
-          : entry
-      )
-      const terminationIndex = entriesWithSuspension.findIndex((entry) => entry._tag === "WorkflowRunTerminated")
-      const insertionIndex = terminationIndex < 0 ? entriesWithSuspension.length : terminationIndex
+          ]
+        }
+        return [
+          entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "Terminal"
+            ? {
+                ...entry,
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
+                report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                  correlation: entry.report.correlation,
+                  result: { _tag: "Accepted", acceptedResult }
+                })
+              }
+            : entry
+        ]
+      })
+      const terminationIndex = entriesWithAcceptedResult.findIndex((entry) => entry._tag === "WorkflowRunTerminated")
+      const insertionIndex = terminationIndex < 0 ? entriesWithAcceptedResult.length : terminationIndex
+      const integrationEntries = [
+        {
+          _tag: "IntegrationResponsibilityBegan" as const,
+          acceptedResult,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          integrationTarget,
+          occurrenceClassification: "InitiatedAction" as const,
+          plannedAttempt: executorResponsibilityEntry.plannedAttempt
+        },
+        {
+          _tag: "IntegrationStarted" as const,
+          acceptedResult,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          integrationTarget,
+          occurrenceClassification: "InitiatedAction" as const,
+          plannedAttempt: executorResponsibilityEntry.plannedAttempt
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const recorded = RecordedCassette.make({
         ...projected,
         entries: [
-          ...entriesWithSuspension.slice(0, insertionIndex),
+          ...entriesWithAcceptedResult.slice(0, insertionIndex),
           ...additionalCommands,
           {
             _tag: "TaskWorkCapacityChanged",
@@ -1189,7 +1326,8 @@ it.effect(
             previousRevision: RunPolicyRevision.make(1),
             revision: RunPolicyRevision.make(2)
           },
-          ...entriesWithSuspension.slice(insertionIndex)
+          ...integrationEntries,
+          ...entriesWithAcceptedResult.slice(insertionIndex)
         ]
       })
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
@@ -1232,6 +1370,8 @@ it.effect(
       ]
       const entryVariants = {
         ControlCommandRecorded: true,
+        IntegrationResponsibilityBegan: true,
+        IntegrationStarted: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         TaskAttemptPlanned: true,

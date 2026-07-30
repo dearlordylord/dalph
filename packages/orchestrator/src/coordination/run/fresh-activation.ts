@@ -6,6 +6,11 @@ import type { PlannedTaskAttemptError } from "../../workflow/protocols/task-atte
 import type { TaskWorktreeExecutionModeContradiction } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import type { TraceOutputError } from "../../presentation/trace-output.js"
 import type { WorkflowInterpreterService } from "../../workflow/interpretation/interpreter.js"
+import type {
+  IntegrationJournalUnavailable,
+  IntegrationTargetUnavailable,
+  queueAcceptedResultIntegrationResponsibility
+} from "../../workflow/protocols/integration-admission/protocol.js"
 
 type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
@@ -13,6 +18,9 @@ type InterpreterError = {
 
 export type FreshWorkflowStageError =
   | InterpreterError
+  | Effect.Error<ReturnType<typeof queueAcceptedResultIntegrationResponsibility>>
+  | IntegrationJournalUnavailable
+  | IntegrationTargetUnavailable
   | RunRecoveryActivationError
   | PlannedTaskAttemptError
   | PlatformError.PlatformError

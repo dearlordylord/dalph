@@ -3,7 +3,10 @@ import { ControlCommandRecordedEvent } from "../../control/command.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
-import { PlannedAttemptExecutorJournalEvent } from "../protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../protocols/planned-attempt-executor-work/events.js"
 import { TaskTrackerFactsObservedEvent } from "../task-tracker-facts/observation.js"
 import { OperationId } from "../identity.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./operation.js"
@@ -11,6 +14,17 @@ import { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { WorkflowActor } from "./actor.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../protocols/integration-admission/events.js"
+
+const ResponsibilityJournalEvent = Schema.Union([
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorWorkReportedEvent,
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+])
 
 /**
  * Dalph durably began one Run for the exact tracker target. This must be the
@@ -94,7 +108,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskAttemptPlannedEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,
-  PlannedAttemptExecutorJournalEvent
+  ResponsibilityJournalEvent
 ])
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 

@@ -12,6 +12,13 @@ import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { RunPolicyRevision } from "../../control/policy.js"
+import {
+  IntegrationResponsibilityBegan,
+  IntegrationStarted,
+  invalidIntegrationOccurrenceRelationship,
+  projectIntegrationOccurrence
+} from "./integration-occurrence.js"
+export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
 
 const initiatedActionFields = {
@@ -137,6 +144,8 @@ export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 export const WorkflowOccurrence = Schema.Union([
   AppliedControlDirection,
   AppliedTaskWorkCapacity,
+  IntegrationResponsibilityBegan,
+  IntegrationStarted,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
   TaskTrackerReadInitiated,
@@ -166,7 +175,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 3 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 4 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -230,6 +239,22 @@ const invalidExecutorRelationship = (
       }
 }
 
+const invalidOutcomeRelationship = (
+  projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> },
+  occurrence: WorkflowOccurrence,
+  index: number,
+  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  executorResponsibilities: ReadonlyMap<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
+) => {
+  if (occurrence._tag === "TaskTrackerFactsObserved") {
+    return invalidTrackerRelationship(trackerActions, occurrence, index)
+  }
+  if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
+    return invalidExecutorRelationship(executorResponsibilities, occurrence, index)
+  }
+  return invalidIntegrationOccurrenceRelationship(projection.occurrences, occurrence, index)
+}
+
 const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
   const trackerActions = new Map<string, IndexedRelationship<TaskTrackerReadInitiated>>()
   const executorResponsibilities = new Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>()
@@ -251,15 +276,8 @@ const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyAr
       )
       continue
     }
-    if (occurrence._tag === "TaskTrackerFactsObserved") {
-      const invalid = invalidTrackerRelationship(trackerActions, occurrence, index)
-      if (invalid !== undefined) return invalid
-      continue
-    }
-    if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
-      const invalid = invalidExecutorRelationship(executorResponsibilities, occurrence, index)
-      if (invalid !== undefined) return invalid
-    }
+    const invalid = invalidOutcomeRelationship(projection, occurrence, index, trackerActions, executorResponsibilities)
+    if (invalid !== undefined) return invalid
   }
   return undefined
 }
@@ -277,6 +295,8 @@ type ProjectedJournalEvent = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorWorkReported"
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
+      | "IntegrationResponsibilityBegan"
+      | "IntegrationStarted"
       | "TaskWorkCapacityChanged"
       | "TaskTrackerReadIntentRecorded"
       | "TaskTrackerFactsObserved"
@@ -314,11 +334,20 @@ export class ExecutorReportWithoutResponsibilityBegan extends Schema.TaggedError
 
 type DirectlyProjectedJournalEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" | "TaskWorkCapacityChanged" }
+  {
+    readonly _tag:
+      | "IntegrationResponsibilityBegan"
+      | "IntegrationStarted"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+      | "TaskWorkCapacityChanged"
+  }
 >
 
 const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is DirectlyProjectedJournalEvent =>
-  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" || event._tag === "TaskWorkCapacityChanged"
+  event._tag === "IntegrationResponsibilityBegan" ||
+  event._tag === "IntegrationStarted" ||
+  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+  event._tag === "TaskWorkCapacityChanged"
 
 const projectDirectOccurrence = (
   record: JournalRecord,
@@ -337,6 +366,14 @@ const projectDirectOccurrence = (
         runId: record.runId
       })
     )
+    return
+  }
+  if (event._tag === "IntegrationResponsibilityBegan") {
+    occurrences.push(projectIntegrationOccurrence(record, event))
+    return
+  }
+  if (event._tag === "IntegrationStarted") {
+    occurrences.push(projectIntegrationOccurrence(record, event))
     return
   }
   occurrences.push(

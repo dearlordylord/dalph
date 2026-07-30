@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
+  IntegrationTarget,
   PlannedAttemptExecutorResult,
   TaskExecutorLocator,
   TaskId,
@@ -63,6 +64,7 @@ export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttempt
 
 /** Specialist-facing results of one task's planned work; attempt identity is deliberately absent. */
 export const AuthoredTaskWorkResult = Schema.TaggedUnion({
+  PlannedWorkForTaskAccepted: { commit: GitCommitSha, taskId: TaskId },
   PlannedWorkForTaskCompleted: { taskId: TaskId },
   PlannedWorkForTaskFailed: { taskId: TaskId }
 })
@@ -74,9 +76,21 @@ export type AuthoredTaskWorkAbsence = typeof AuthoredTaskWorkAbsence.Type
 
 /** Optional exact-attempt evidence about how Dalph coordinated executor work. */
 export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
+  AcceptedResultIntegrationResponsibilityBegan: {
+    attemptId: AttemptId,
+    commit: GitCommitSha,
+    integrationTarget: IntegrationTarget,
+    taskId: TaskId
+  },
+  AcceptedResultIntegrationStarted: {
+    attemptId: AttemptId,
+    commit: GitCommitSha,
+    integrationTarget: IntegrationTarget,
+    taskId: TaskId
+  },
   PlannedAttemptExecutorWorkReported: {
     attemptId: AttemptId,
-    report: Schema.Literals(["Running", "SafelySuspended", "TerminalCompleted", "TerminalFailed"])
+    report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { attemptId: AttemptId, taskId: TaskId }
 })
@@ -129,6 +143,7 @@ const RunCoordinatorFields = {
   claimOwner: ClaimOwner,
   claimTokenPrefix: Schema.NonEmptyString,
   executor: TaskExecutorLocator,
+  integrationTarget: IntegrationTarget,
   target: TrackerTarget,
   worktreeRoot: WorktreeLocator
 }

@@ -6,15 +6,29 @@ import type {
   AuthoredTaskWorkResult
 } from "./authored-domain.js"
 
-const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string =>
-  result._tag === "PlannedWorkForTaskCompleted"
-    ? `The story expects the planned work for task ${result.taskId} to complete.`
-    : `The story expects the planned work for task ${result.taskId} to fail.`
+const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string => {
+  switch (result._tag) {
+    case "PlannedWorkForTaskAccepted":
+      return `The story expects task ${result.taskId} to produce accepted commit ${result.commit}.`
+    case "PlannedWorkForTaskCompleted":
+      return `The story expects the planned work for task ${result.taskId} to complete.`
+    case "PlannedWorkForTaskFailed":
+      return `The story expects the planned work for task ${result.taskId} to fail.`
+  }
+}
 
-const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string =>
-  evidence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-    ? `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
-    : `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
+const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string => {
+  switch (evidence._tag) {
+    case "AcceptedResultIntegrationResponsibilityBegan":
+      return `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
+    case "AcceptedResultIntegrationStarted":
+      return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
+    case "PlannedAttemptExecutorWorkReported":
+      return `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
+  }
+}
 
 const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
   switch (evidence._tag) {

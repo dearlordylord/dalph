@@ -23,6 +23,7 @@ import {
 } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { validateRunPolicyHistory } from "./run-policy-history.js"
+import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
 
 const finalArrayElementOffset = -1
 
@@ -44,7 +45,7 @@ const semanticIssue = (
   issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
 }
 
-interface FoldIndexes {
+interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly executorReportOrdinals: Map<AttemptId, number>
   readonly executorResponsibilitiesBegan: Map<
     AttemptId,
@@ -60,8 +61,10 @@ interface FoldIndexes {
 }
 
 const emptyIndexes = (): FoldIndexes => ({
+  acceptedExecutorResults: new Map(),
   executorReportOrdinals: new Map(),
   executorResponsibilitiesBegan: new Map(),
+  integrationResponsibilitiesBegan: new Map(),
   plans: new Map(),
   latestRunPolicyRevision: undefined,
   seenEventKindsByOperation: new Map(),
@@ -313,6 +316,9 @@ const validateExecutorEvent = (
   }
   if (event.report._tag === "Terminal") {
     indexes.terminalExecutorAttempts.add(attemptId)
+    if (event.report.result._tag === "Accepted") {
+      indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
+    }
   }
 }
 
@@ -404,6 +410,13 @@ export const reduceWorkflowJournalHistory = (
     validateTrackerObservation(record, runId, records, issues)
     validateReconfirmationReference(record, runId, indexes, issues)
     validateExecutorEvent(record, runId, indexes, issues)
+    validateIntegrationHistoryRecord(
+      record,
+      runId,
+      indexes,
+      (detail) => identityIssue(issues, runId, record.position, detail),
+      (detail) => semanticIssue(issues, runId, record.position, detail)
+    )
     const policyValidation = validateRunPolicyHistory(record, indexes)
     indexes.latestRunPolicyRevision = policyValidation.latestRunPolicyRevision
     for (const detail of policyValidation.details) {

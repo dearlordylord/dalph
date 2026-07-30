@@ -447,6 +447,26 @@ execution resource. Planning it does not prove that an external resource
 exists or that executor work started.
 _Avoid_: Plan, attempt plan, task, task work, retry counter
 
+**Accepted result**:
+The immutable Git commit returned by the executor after its whole bounded
+workflow accepts one planned attempt. It does not select repository policy,
+prove integration lineage, promote a ref, or complete the tracker task.
+_Avoid_: Completed task, integrated commit, promoted result
+
+**Integration responsibility**:
+The durable Dalph responsibility created after the exact accepted terminal
+report is recorded and paired with the coordinator-selected repository/ref
+target. Its workflow-journal position supplies its order; it is not a second
+queue row or an integration-resource lease.
+_Avoid_: Integration queue entry, target lock, accepted executor report
+
+**Integration start**:
+The durable initiated action that crosses one integration responsibility's
+non-cancellable cutoff. It consumes the derived pre-integration cancellation
+capability, but does not prove candidate construction, verification, promotion,
+or tracker completion.
+_Avoid_: Integration completed, target promoted, task completed
+
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording
 operation as the observed reason Dalph may record that immutable decision. Its

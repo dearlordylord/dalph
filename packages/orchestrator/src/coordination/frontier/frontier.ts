@@ -16,6 +16,7 @@ import {
   type WorkflowResponsibilityState
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "./fresh-facts.js"
+import type { QueuedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 
@@ -28,16 +29,19 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   ReconcileTaskWorktree: { readonly operationId: OperationId; readonly taskId: TaskId }
+  StartQueuedIntegration: { readonly responsibility: QueuedIntegrationResponsibility }
 }>
 
 export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransition>()
 
 export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId =>
-  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-  transition._tag === "SuspendPlannedAttemptExecutorWork" ||
-  transition._tag === "StartPlannedAttemptExecutorWork"
-    ? transition.plannedAttempt.taskId
-    : transition.taskId
+  transition._tag === "StartQueuedIntegration"
+    ? transition.responsibility.plannedAttempt.taskId
+    : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+        transition._tag === "SuspendPlannedAttemptExecutorWork" ||
+        transition._tag === "StartPlannedAttemptExecutorWork"
+      ? transition.plannedAttempt.taskId
+      : transition.taskId
 
 export const runnableTransitionOperationId = (transition: RunnableFrontierTransition): OperationId | undefined =>
   "operationId" in transition ? transition.operationId : undefined
@@ -51,6 +55,13 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
+  IntegrationDependencyWait: {
+    readonly plannedAttempt: QueuedIntegrationResponsibility["plannedAttempt"]
+    readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  IntegrationInProgress: { readonly taskId: TaskId }
+  IntegrationTargetWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetReleased" }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
@@ -132,6 +143,14 @@ export const deriveRunFinalityDecision = (
 ): RunFinalityDecision => {
   if (frontier.transitions.length > 0) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
+  }
+  if (
+    frontier.explanations.some(
+      ({ _tag }) =>
+        _tag === "IntegrationDependencyWait" || _tag === "IntegrationInProgress" || _tag === "IntegrationTargetWait"
+    )
+  ) {
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
   const terminalOperationIds = new Set(
     frontier.explanations.flatMap((explanation) =>

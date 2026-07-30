@@ -68,6 +68,57 @@ await run("planned-attempt executor exhaustive model", [
   "1"
 ])
 
+const acceptedResultIntegrationInvariants = [
+  "cancellationExactlyQueued",
+  "queuePositionsAreUnique",
+  "targetHeldExactlyStarted",
+  "atMostOneTargetHolder",
+  "startedPrecedesRemainingQueue",
+  "dependencyWaitPreservesQueueOrder"
+]
+
+await run("accepted-result integration model typecheck", [
+  "typecheck",
+  "specs/acceptedResultIntegration.qnt"
+])
+await run("accepted-result integration deterministic tests", [
+  "test",
+  "specs/acceptedResultIntegration_test.qnt",
+  "--main",
+  "acceptedResultIntegrationTest"
+])
+await run("accepted-result integration sampled model", [
+  "run",
+  "specs/acceptedResultIntegration.qnt",
+  "--invariants",
+  ...acceptedResultIntegrationInvariants,
+  "--witnesses",
+  "acceptedReached",
+  "queuedReached",
+  "startedReached",
+  "dependencyWaitReached",
+  "restartReached",
+  "dependencyWaitReleasedTarget",
+  "--max-steps",
+  "12",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("accepted-result integration exhaustive model", [
+  "verify",
+  "specs/acceptedResultIntegration.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...acceptedResultIntegrationInvariants,
+  "--max-steps",
+  "12",
+  "--verbosity",
+  "1"
+])
+
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
   `\nComplete planned-attempt executor model gate: ${

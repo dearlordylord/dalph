@@ -28,3 +28,17 @@ export const TaskBranchRef = Schema.String.check(
   Schema.makeFilter((ref) => (isValidTaskBranchRef(ref) ? undefined : "must be a valid refs/heads Git ref"))
 ).pipe(Schema.brand("TaskBranchRef"))
 export type TaskBranchRef = typeof TaskBranchRef.Type
+
+/** Locates one Git repository authority, not a task worktree or tracker target. */
+export const GitRepositoryLocator = Schema.NonEmptyString.pipe(Schema.brand("GitRepositoryLocator"))
+export type GitRepositoryLocator = typeof GitRepositoryLocator.Type
+
+/** Names the exact Git branch ref to which one accepted-result stream is integrated. */
+export const IntegrationTargetRef = Schema.String.check(
+  Schema.makeFilter((ref) => (isValidTaskBranchRef(ref) ? undefined : "must be a valid refs/heads Git ref"))
+).pipe(Schema.brand("IntegrationTargetRef"))
+export type IntegrationTargetRef = typeof IntegrationTargetRef.Type
+
+/** Binds one serialized integration stream to its exact repository and Git ref. */
+export const IntegrationTarget = Schema.Struct({ repository: GitRepositoryLocator, ref: IntegrationTargetRef })
+export type IntegrationTarget = typeof IntegrationTarget.Type

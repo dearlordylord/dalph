@@ -3,6 +3,7 @@ import { Context, Schema } from "effect"
 import type { PlannedTaskAttempt } from "./planned-attempt.js"
 import { AttemptId } from "./planned-attempt.js"
 import { RunId } from "./workflow-identity.js"
+import { GitCommitSha } from "./git-locator.js"
 
 /**
  * Identifies the executor's complete work for one planned task attempt.
@@ -11,8 +12,19 @@ import { RunId } from "./workflow-identity.js"
 export const PlannedAttemptExecutorCorrelation = Schema.Struct({ attemptId: AttemptId, runId: RunId })
 export type PlannedAttemptExecutorCorrelation = typeof PlannedAttemptExecutorCorrelation.Type
 
+/**
+ * The exact immutable result accepted by the executor's whole bounded workflow.
+ * Git and later verification still have to prove its lineage and target facts.
+ */
+export const AcceptedResult = Schema.Struct({ commit: GitCommitSha })
+export type AcceptedResult = typeof AcceptedResult.Type
+
 /** The normalized terminal result of all executor work for one planned attempt. */
-export const PlannedAttemptExecutorResult = Schema.TaggedUnion({ Completed: {}, Failed: {} })
+export const PlannedAttemptExecutorResult = Schema.TaggedUnion({
+  Accepted: { acceptedResult: AcceptedResult },
+  Completed: {},
+  Failed: {}
+})
 export type PlannedAttemptExecutorResult = typeof PlannedAttemptExecutorResult.Type
 
 /**

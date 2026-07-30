@@ -14,6 +14,7 @@ import {
   JournalStore,
   journaledFreshRunRecoveryActivationLayer,
   journaledWorkflowInterpreterLayer,
+  integrationTargetSelectionLayer,
   livePlannedAttemptRecoveryAuthorityLayer,
   makeLiveWorkflowInterpreterLayer,
   memoryJournalStoreLayer,
@@ -141,6 +142,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const freshWorkflowLayer = Layer.mergeAll(
         interpreterLayer,
         journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(freshExecutorLayer)),
+        integrationTargetSelectionLayer(command.integrationTarget),
         planningLayer("fresh"),
         controlledControlPolicyLayer
       ).pipe(Layer.provideMerge(journalLayer))

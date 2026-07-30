@@ -29,13 +29,13 @@ import {
   type WorkflowOperation
 } from "@dalph/orchestrator"
 import {
-  CassetteIdentityRenaming,
   type CassetteIdentityRenaming as CassetteIdentityRenamingType,
   RecordedCassette,
   type RecordedCassette as RecordedCassetteType,
   RecordedCassetteEntry,
   type RecordedCassetteEntry as RecordedCassetteEntryType
 } from "./recorded-domain.js"
+import { isRecordedIntegrationEntry, renameRecordedIntegrationEntry } from "./recorded-integration-renaming.js"
 import {
   preserveRecordedRunBeginning,
   preserveRecordedRunPolicyChange,
@@ -353,6 +353,9 @@ const renameRecordedCassetteEntry = (
       (candidate): candidate is RecordedOperationEntry => "operation" in candidate,
       (operationEntry) => renameRecordedOperationEntry(operationEntry, maps)
     ),
+    Match.when(isRecordedIntegrationEntry, (integrationEntry) =>
+      renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
+    ),
     Match.tags({
       ControlCommandRecorded: (commandEntry) =>
         completeFields<typeof commandEntry>({
@@ -436,19 +439,4 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   )
 })
 
-const invertIdentityRenamings = <Identity extends string>(
-  renamings: ReadonlyArray<{ readonly from: Identity; readonly to: Identity }>
-) => renamings.map(({ from, to }) => ({ from: to, to: from }))
-
-export const invertCassetteIdentityRenaming = (renaming: CassetteIdentityRenamingType): CassetteIdentityRenamingType =>
-  CassetteIdentityRenaming.make(
-    completeFields<CassetteIdentityRenamingType>({
-      attemptIds: invertIdentityRenamings<AttemptId>(renaming.attemptIds),
-      claimTokens: invertIdentityRenamings<ClaimToken>(renaming.claimTokens),
-      controlCommandIds: invertIdentityRenamings<ControlCommandId>(renaming.controlCommandIds),
-      operationIds: invertIdentityRenamings<OperationId>(renaming.operationIds),
-      runIds: invertIdentityRenamings<RunId>(renaming.runIds),
-      taskBranchRefs: invertIdentityRenamings<TaskBranchRef>(renaming.taskBranchRefs),
-      worktreeLocators: invertIdentityRenamings<WorktreeLocator>(renaming.worktreeLocators)
-    })
-  )
+export { invertCassetteIdentityRenaming } from "./recorded-renaming-inversion.js"

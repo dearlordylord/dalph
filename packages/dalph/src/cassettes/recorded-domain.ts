@@ -1,6 +1,8 @@
 import { Schema } from "effect"
 import {
+  AcceptedResult,
   AttemptId,
+  IntegrationTarget,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -37,6 +39,18 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
   ControlCommandRecorded: { command: ControlCommand },
+  IntegrationResponsibilityBegan: {
+    acceptedResult: AcceptedResult,
+    ...initiatedByCoordinator,
+    integrationTarget: IntegrationTarget,
+    plannedAttempt: PlannedTaskAttempt
+  },
+  IntegrationStarted: {
+    acceptedResult: AcceptedResult,
+    ...initiatedByCoordinator,
+    integrationTarget: IntegrationTarget,
+    plannedAttempt: PlannedTaskAttempt
+  },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
     ordinal: PlannedAttemptExecutorReportOrdinal,
@@ -76,7 +90,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 2
+const currentRecordedCassetteVersion = 3
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

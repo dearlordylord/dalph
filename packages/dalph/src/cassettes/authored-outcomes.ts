@@ -32,9 +32,11 @@ const orchestrationReportEvidence = (
   attemptId: report.correlation.attemptId,
   report:
     report._tag === "Terminal"
-      ? report.result._tag === "Completed"
-        ? "TerminalCompleted"
-        : "TerminalFailed"
+      ? report.result._tag === "Accepted"
+        ? "TerminalAccepted"
+        : report.result._tag === "Completed"
+          ? "TerminalCompleted"
+          : "TerminalFailed"
       : report._tag
 })
 
@@ -65,6 +67,20 @@ const protocolEvidenceFor = (
 }
 
 const orchestrationEvidenceFor = (event: JournalRecord["event"]): ReadonlyArray<OrchestrationEvidence> => {
+  if (event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted") {
+    return [
+      {
+        _tag:
+          event._tag === "IntegrationResponsibilityBegan"
+            ? "AcceptedResultIntegrationResponsibilityBegan"
+            : "AcceptedResultIntegrationStarted",
+        attemptId: event.plannedAttempt.attemptId,
+        commit: event.acceptedResult.commit,
+        integrationTarget: event.integrationTarget,
+        taskId: event.plannedAttempt.taskId
+      }
+    ]
+  }
   if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     return [
       {
@@ -87,9 +103,11 @@ const taskWorkResultFor = (
   if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "Terminal") return []
   const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(event.report.correlation.attemptId)))
   return [
-    event.report.result._tag === "Completed"
-      ? { _tag: "PlannedWorkForTaskCompleted", taskId }
-      : { _tag: "PlannedWorkForTaskFailed", taskId }
+    event.report.result._tag === "Accepted"
+      ? { _tag: "PlannedWorkForTaskAccepted", commit: event.report.result.acceptedResult.commit, taskId }
+      : event.report.result._tag === "Completed"
+        ? { _tag: "PlannedWorkForTaskCompleted", taskId }
+        : { _tag: "PlannedWorkForTaskFailed", taskId }
   ]
 }
 

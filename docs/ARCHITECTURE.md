@@ -800,7 +800,7 @@ clean, move, reset, prune, or deletion.
 
 ## Planned-Attempt Executor Boundary
 
-For one planned task attempt, Dalph starts or continues executor work using the exact `RunId` and `AttemptId`. The executor reports `Running`, `SafelySuspended`, or a terminal `Completed` or `Failed` result. Safe suspension proves no executor-owned activity remains and allows Dalph to release the task-work position.
+For one planned task attempt, Dalph starts or continues executor work using the exact `RunId` and `AttemptId`. The executor reports `Running`, `SafelySuspended`, or a terminal `Accepted`, `Completed`, or `Failed` result. `Accepted` carries one immutable commit; Dalph, not the executor, selects its integration target. Safe suspension and every terminal result prove no executor-owned activity remains and allow Dalph to release the task-work position.
 
 The milestone executor is a same-process controlled fake. Coding agents, reviewers, provider sessions, handback, retry, restoration, and convergence are executor-internal policy that Dalph does not currently model. Future production executor internals require separate accepted operational scenarios; they must not add compatibility types to this generic boundary.
 
@@ -808,9 +808,24 @@ Before recovered executor work continues, Dalph rereads the current exact tracke
 
 Production startup validates every discovered run. Because this milestone exposes one requested run activation, startup fails closed when a different valid run still owns unfinished responsibility; it never silently ignores that work. Multi-run activation is future design.
 
-## Future Resolution and Integration
+## Accepted-Result Integration Admission
 
-Resolution, integration, tracker completion, and executor-internal review policy are not implemented by this milestone. Each requires accepted chronological operational scenarios before it may add domain types or workflow events.
+After an `Accepted` terminal report is durable, Dalph records one exact
+integration responsibility. Its journal position is its FIFO position; no
+durable queue ordinal or derived frontier is stored. The shared selector starts
+only the earliest queued responsibility for a free repository/ref target.
+`IntegrationStarted` is the non-cancellable cutoff and does not consume
+task-work capacity.
+
+A newly observed unfinished tracker prerequisite produces a derived dependency
+wait. Dalph retains the accepted result and recorded start, releases the
+process-local target resource, and preserves same-target order. Another target
+remains independently selectable.
+
+Candidate construction, repository verification, promotion, resolution,
+tracker completion, and executor-internal review policy remain future work.
+Each requires accepted chronological operational scenarios before adding
+domain types or workflow events.
 
 ## Formal Model and Executable Scenarios
 
@@ -818,7 +833,10 @@ The canonical `plannedAttemptExecutor` Quint model covers only the coarse
 executor boundary: exact planned-attempt correlation, running position
 ownership, retention of that position between a suspension request and its
 result, safe-suspension release, and terminal release. Detailed executor
-internals are not part of current Dalph.
+internals are not part of current Dalph. The `acceptedResultIntegration` model
+covers journal-position ordering, per-target serialization, the
+pre-integration cancellation cutoff, restart, and dependency-wait resource
+release while preserving same-target order.
 
 Executable TypeScript scenarios cover the same reports and recovery boundary,
 including generated traces replayed through the executor service. The Quint

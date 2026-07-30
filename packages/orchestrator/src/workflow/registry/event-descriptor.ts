@@ -1,11 +1,18 @@
-import { type PlannedTaskAttempt, type RunId, type PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import {
+  type AttemptId,
+  type PlannedAttemptExecutorCorrelation,
+  type PlannedTaskAttempt,
+  type RunId
+} from "@dalph/contracts"
 import { type ControlCommandId } from "../../control/identity.js"
-import { type JournalRecordKey } from "../../workflow-journal/identity.js"
+import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { type OperationId } from "../identity.js"
 import {
   attemptPlanRecordKey,
   controlCommandRecordKey,
   intentRecordKey,
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
@@ -52,8 +59,17 @@ interface RunPolicyEventDescriptor {
   readonly expectedKey: JournalRecordKey
 }
 
+interface IntegrationEventDescriptor {
+  readonly _tag: "IntegrationEventDescriptor"
+  readonly attemptId: AttemptId
+  readonly expectedKey: JournalRecordKey
+  readonly responsibilityBeganAt: JournalPosition | undefined
+  readonly runId: RunId
+}
+
 type JournalEventDescriptor =
   | ControlCommandEventDescriptor
+  | IntegrationEventDescriptor
   | OperationEventDescriptor
   | PlannedAttemptExecutorEventDescriptor
   | RunPolicyEventDescriptor
@@ -137,6 +153,22 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         undefined,
         event.ordinal
       )
+    case "IntegrationResponsibilityBegan":
+      return {
+        _tag: "IntegrationEventDescriptor",
+        attemptId: event.plannedAttempt.attemptId,
+        expectedKey: integrationResponsibilityBeganRecordKey(event.plannedAttempt.attemptId),
+        responsibilityBeganAt: undefined,
+        runId: event.plannedAttempt.runId
+      }
+    case "IntegrationStarted":
+      return {
+        _tag: "IntegrationEventDescriptor",
+        attemptId: event.plannedAttempt.attemptId,
+        expectedKey: integrationStartedRecordKey(event.plannedAttempt.attemptId),
+        responsibilityBeganAt: event.responsibilityBeganAt,
+        runId: event.plannedAttempt.runId
+      }
     case "TaskTrackerReadIntentRecorded":
       return operationEvent({
         expectedKey: intentRecordKey(event.operation.operationId),

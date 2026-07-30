@@ -31,3 +31,9 @@ export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,
   ordinal: PlannedAttemptExecutorReportOrdinal
 ): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-work-report:${ordinal}`)
+
+export const integrationResponsibilityBeganRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:integration-responsibility-began`)
+
+export const integrationStartedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:integration-started`)

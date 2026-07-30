@@ -2,6 +2,8 @@ import { Effect, Schema } from "effect"
 import {
   ControlCommandRecordedEvent,
   describeJournalEvent,
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent,
   JournalPosition,
   type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -81,6 +83,22 @@ const recordExecutorEntry = (
         report: event.report
       }
 
+type RecordedIntegrationEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }
+>
+
+const recordIntegrationEntry = (
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }>
+): RecordedIntegrationEntry => ({
+  _tag: event._tag,
+  acceptedResult: event.acceptedResult,
+  initiatedBy: coordinator(),
+  integrationTarget: event.integrationTarget,
+  occurrenceClassification: "InitiatedAction",
+  plannedAttempt: event.plannedAttempt
+})
+
 const recordTaskBoundaryEntry = (
   event: Exclude<
     WorkflowJournalEvent,
@@ -98,6 +116,9 @@ const recordTaskBoundaryEntry = (
   >
 ): RecordedCassetteEntry => {
   switch (event._tag) {
+    case "IntegrationResponsibilityBegan":
+    case "IntegrationStarted":
+      return recordIntegrationEntry(event)
     case "TaskAttemptPlanned":
       return { _tag: "TaskAttemptPlanned", operation: event.operation }
     case "TaskClaimAcquired":
@@ -156,12 +177,19 @@ const eventForTaskBoundaryEntry = (
         | "TaskAttemptPlanned"
         | "TaskClaimAcquired"
         | "TaskClaimAcquisitionIntended"
+        | "IntegrationResponsibilityBegan"
+        | "IntegrationStarted"
         | "TaskWorktreeReady"
         | "TaskWorktreeReconciliationIntended"
     }
-  >
+  >,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number
 ): WorkflowJournalEvent => {
   switch (entry._tag) {
+    case "IntegrationResponsibilityBegan":
+    case "IntegrationStarted":
+      return eventForIntegrationEntry(entry, entries, index)
     case "TaskAttemptPlanned":
       return TaskAttemptPlannedEvent.make({ operation: entry.operation, version: workflowJournalEventVersion })
     case "TaskClaimAcquired":
@@ -212,7 +240,42 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
     ? taskTrackerFactsObservedEvent(entry.originatingActionOperationId, entry.evidence)
     : taskTrackerReadIntent(entry.operation)
 
-const eventForRecordedEntry = (entry: RecordedCassetteEntry): WorkflowJournalEvent => {
+const eventForIntegrationEntry = (
+  entry: RecordedIntegrationEntry,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number
+): WorkflowJournalEvent => {
+  if (entry._tag === "IntegrationResponsibilityBegan") {
+    return IntegrationResponsibilityBeganEvent.make({
+      acceptedResult: entry.acceptedResult,
+      integrationTarget: entry.integrationTarget,
+      plannedAttempt: entry.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  }
+  const beganIndex = entries.findLastIndex(
+    (candidate, candidateIndex) =>
+      candidateIndex < index &&
+      candidate._tag === "IntegrationResponsibilityBegan" &&
+      candidate.plannedAttempt.attemptId === entry.plannedAttempt.attemptId &&
+      candidate.acceptedResult.commit === entry.acceptedResult.commit &&
+      candidate.integrationTarget.repository === entry.integrationTarget.repository &&
+      candidate.integrationTarget.ref === entry.integrationTarget.ref
+  )
+  return IntegrationStartedEvent.make({
+    acceptedResult: entry.acceptedResult,
+    integrationTarget: entry.integrationTarget,
+    plannedAttempt: entry.plannedAttempt,
+    responsibilityBeganAt: JournalPosition.make((beganIndex < 0 ? index : beganIndex) + 1),
+    version: workflowJournalEventVersion
+  })
+}
+
+const eventForRecordedEntry = (
+  entry: RecordedCassetteEntry,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number
+): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (entry._tag === "ControlCommandRecorded") {
     return ControlCommandRecordedEvent.make({ command: entry.command, version: workflowJournalEventVersion })
@@ -226,12 +289,12 @@ const eventForRecordedEntry = (entry: RecordedCassetteEntry): WorkflowJournalEve
   if (entry._tag === "TaskTrackerFactsObserved" || entry._tag === "TaskTrackerReadInitiated") {
     return eventForTrackerEntry(entry)
   }
-  return eventForTaskBoundaryEntry(entry)
+  return eventForTaskBoundaryEntry(entry, entries, index)
 }
 
 const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord> =>
   cassette.entries.map((entry, index) => {
-    const event = eventForRecordedEntry(entry)
+    const event = eventForRecordedEntry(entry, cassette.entries, index)
     return {
       event,
       key: describeJournalEvent(event).expectedKey,
@@ -368,6 +431,10 @@ const lyricForTaskBoundaryEntry = (
       return `Git showed worktree ${entry.proof.worktree} ready at ${entry.proof.headSha}.`
     case "TaskWorktreeReconciliationIntended":
       return `Dalph recorded its intent to reconcile the worktree for attempt ${entry.operation.plannedAttempt.attemptId}.`
+    case "IntegrationResponsibilityBegan":
+      return `Dalph coordinator queued accepted commit ${entry.acceptedResult.commit} for integration.`
+    case "IntegrationStarted":
+      return `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
 }
 

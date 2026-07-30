@@ -151,6 +151,8 @@ export {
   requestPlannedAttemptExecutorSuspension
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
+export * from "./workflow/protocols/integration-admission/events.js"
+export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export * from "./coordination/admission/controller.js"

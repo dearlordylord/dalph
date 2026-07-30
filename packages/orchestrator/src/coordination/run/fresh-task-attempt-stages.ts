@@ -1,5 +1,10 @@
-import { Effect } from "effect"
-import { type PlannedTaskAttempt, type PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { Effect, Option } from "effect"
+import {
+  type AcceptedResult,
+  type IntegrationTarget,
+  type PlannedTaskAttempt,
+  type PlannedAttemptExecutorReport
+} from "@dalph/contracts"
 import { type OperationId } from "../../workflow/identity.js"
 import { type Task } from "../../authorities/task-tracker/task.js"
 import type { FreshWorkflowStage } from "./fresh-activation.js"
@@ -27,13 +32,27 @@ import {
   TaskWorktreeReconciliationSimulatedTrace
 } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { type TraceItem, type WorkflowInterpreterService } from "../../workflow/interpretation/interpreter.js"
+import {
+  type IntegrationJournalUnavailable,
+  IntegrationTargetUnavailable,
+  type queueAcceptedResultIntegrationResponsibility
+} from "../../workflow/protocols/integration-admission/protocol.js"
 
 // eslint-disable-next-line functional/no-mixed-types -- Dependencies and the serialized trace emitter form one stage factory input.
 interface FreshTaskAttemptStageOptions {
   readonly allocator: OperationIdAllocatorService
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
   readonly interpreter: WorkflowInterpreterService
+  readonly integrationTarget: Option.Option<IntegrationTarget>
   readonly planner: PlannedTaskAttemptPlannerService
+  readonly queueAcceptedResult: (
+    plannedAttempt: PlannedTaskAttempt,
+    acceptedResult: AcceptedResult,
+    integrationTarget: IntegrationTarget
+  ) => Effect.Effect<
+    void,
+    Effect.Error<ReturnType<typeof queueAcceptedResultIntegrationResponsibility>> | IntegrationJournalUnavailable
+  >
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
@@ -45,7 +64,10 @@ const freshWorkflowTransition = (operationId: OperationId, task: Task) =>
 const makeExecutorStage = (
   plannedAttempt: PlannedTaskAttempt,
   resumed: boolean,
-  services: Pick<FreshTaskAttemptStageOptions, "continuePlannedAttemptExecutorWork">
+  services: Pick<
+    FreshTaskAttemptStageOptions,
+    "continuePlannedAttemptExecutorWork" | "integrationTarget" | "queueAcceptedResult"
+  >
 ): FreshWorkflowStage => {
   const transition = resumed
     ? RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
@@ -59,6 +81,16 @@ const makeExecutorStage = (
         const report = yield* services.continuePlannedAttemptExecutorWork(plannedAttempt)
         if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
           yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
+          if (report._tag === "Terminal" && report.result._tag === "Accepted") {
+            const integrationTarget = Option.getOrUndefined(services.integrationTarget)
+            if (integrationTarget === undefined) {
+              return yield* new IntegrationTargetUnavailable({
+                attemptId: plannedAttempt.attemptId,
+                runId: plannedAttempt.runId
+              })
+            }
+            yield* services.queueAcceptedResult(plannedAttempt, report.result.acceptedResult, integrationTarget)
+          }
           return undefined
         }
         return makeExecutorStage(plannedAttempt, true, services)

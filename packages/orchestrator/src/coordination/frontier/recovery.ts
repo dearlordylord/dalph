@@ -3,6 +3,7 @@ import { type RunId } from "@dalph/contracts"
 import { JournalStore } from "../../workflow-journal/store.js"
 import type { RunnableFrontierTransition } from "./frontier.js"
 import { WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
+import { startQueuedIntegration } from "../../workflow/protocols/integration-admission/protocol.js"
 
 const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId: RunId, operationId: string) {
   const journal = yield* JournalStore
@@ -39,6 +40,9 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
       return
     case "ReconcileTaskWorktree":
       yield* recoverWorktree(runId, transition.operationId)
+      return
+    case "StartQueuedIntegration":
+      yield* startQueuedIntegration(transition.responsibility)
       return
     case "CommitFreshTaskClaimIntent":
     case "ContinueFreshWorkflowOperation":

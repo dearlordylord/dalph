@@ -3,8 +3,12 @@ import { it } from "@effect/vitest"
 import {
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
+  AcceptedResult,
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -70,6 +74,11 @@ import {
 } from "./occurrence-projection.js"
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
+import { invalidIntegrationOccurrenceRelationship, projectIntegrationOccurrence } from "./integration-occurrence.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../protocols/integration-admission/events.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -86,6 +95,11 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("occurrence-revision"),
   worktree: WorktreeLocator.make("/worktrees/occurrence-attempt")
 })
+const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) })
+const integrationTarget = IntegrationTarget.make({
+  repository: GitRepositoryLocator.make("/repo/.git"),
+  ref: IntegrationTargetRef.make("refs/heads/master")
+})
 
 const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
   event,
@@ -93,6 +107,111 @@ const record = (position: number, event: JournalRecord["event"]): JournalRecord 
   position: JournalPosition.make(position),
   runId
 })
+
+it("projects both integration actions and rejects every inexact start relationship", () => {
+  const began = projectIntegrationOccurrence(
+    record(
+      1,
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    IntegrationResponsibilityBeganEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const started = projectIntegrationOccurrence(
+    record(
+      2,
+      IntegrationStartedEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        responsibilityBeganAt: JournalPosition.make(1),
+        version: workflowJournalEventVersion
+      })
+    ),
+    IntegrationStartedEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      responsibilityBeganAt: JournalPosition.make(1),
+      version: workflowJournalEventVersion
+    })
+  )
+
+  expect(invalidIntegrationOccurrenceRelationship([began, started], began, 0)).toBeUndefined()
+  expect(invalidIntegrationOccurrenceRelationship([began, started], started, 1)).toBeUndefined()
+
+  const mismatches = [
+    { ...started, runId: RunId.make("other-run") },
+    { ...started, recordedAt: JournalPosition.make(1) },
+    { ...started, plannedAttempt: { ...started.plannedAttempt, attemptId: AttemptId.make("other-attempt") } },
+    { ...started, acceptedResult: AcceptedResult.make({ commit: GitCommitSha.make("b".repeat(40)) }) },
+    {
+      ...started,
+      integrationTarget: IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/other.git"),
+        ref: started.integrationTarget.ref
+      })
+    },
+    {
+      ...started,
+      integrationTarget: IntegrationTarget.make({
+        repository: started.integrationTarget.repository,
+        ref: IntegrationTargetRef.make("refs/heads/other")
+      })
+    }
+  ] as const
+
+  for (const mismatch of mismatches) {
+    expect(invalidIntegrationOccurrenceRelationship([began, mismatch], mismatch, 1)).toEqual({
+      issue: "integration start must have one exact earlier responsibility at 1",
+      path: ["occurrences", 1]
+    })
+  }
+  expect(invalidIntegrationOccurrenceRelationship([], started, 0)).toEqual({
+    issue: "integration start must have one exact earlier responsibility at 1",
+    path: ["occurrences", 0]
+  })
+})
+
+it.effect("projects journaled integration actions through the complete occurrence boundary", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        IntegrationStartedEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt,
+          responsibilityBeganAt: JournalPosition.make(1),
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "IntegrationResponsibilityBegan",
+      "IntegrationStarted"
+    ])
+  })
+)
 
 it.effect("classifies an initiated tracker read separately from its observed result", () =>
   Effect.gen(function* () {
@@ -743,6 +862,8 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   const occurrenceVariants = {
     AppliedControlDirection: true,
     AppliedTaskWorkCapacity: true,
+    IntegrationResponsibilityBegan: true,
+    IntegrationStarted: true,
     PlannedAttemptExecutorWorkReported: true,
     PlannedAttemptExecutorWorkResponsibilityBegan: true,
     TaskTrackerFactsObserved: true,
@@ -750,6 +871,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(6)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(8)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

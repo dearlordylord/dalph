@@ -38,6 +38,7 @@ import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workfl
 import { JournalStore } from "../../workflow-journal/store.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { RunControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
+import { makeIntegrationStageContext } from "./integration-stage-context.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
@@ -78,10 +79,11 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   const interpreter = yield* WorkflowInterpreter
   const claimPlanner = yield* TaskClaimAcquisitionPlanner
   const planner = yield* PlannedTaskAttemptPlanner
+  const integration = yield* makeIntegrationStageContext()
   const trace = yield* WorkflowTrace
   const recovery = yield* RunRecoveryActivation
   const runId =
-    recovery._tag === "AuthoritativeRunRecoveryActivation"
+    recovery._tag === "AuthoritativeRunRecoveryActivation" || recovery._tag === "JournaledFreshRunActivation"
       ? recovery.runId
       : /* v8 ignore next -- Recovered entry points require authoritative recovery composition. */
         startup._tag === "Recovered"
@@ -118,7 +120,15 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
     predecessorOperationId: OperationId
   ) =>
     makeFreshTaskAttemptStage(
-      { allocator, continuePlannedAttemptExecutorWork: continuePlannedExecutorWork, emit, interpreter, planner },
+      {
+        allocator,
+        continuePlannedAttemptExecutorWork: continuePlannedExecutorWork,
+        emit,
+        integrationTarget: integration.integrationTarget,
+        interpreter,
+        planner,
+        queueAcceptedResult: integration.queueAcceptedResult
+      },
       task,
       specification,
       activeClaim,
@@ -302,7 +312,8 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
               FreshWorkflowStageError | RunRecoveryActivationError
             > = Option.match(Option.fromUndefinedOr(stage), {
               onNone: () =>
-                recovery._tag === "AuthoritativeRunRecoveryActivation"
+                recovery._tag === "AuthoritativeRunRecoveryActivation" ||
+                recovery._tag === "JournaledFreshRunActivation"
                   ? recovery
                       .runTransition(transition, execution)
                       .pipe(Effect.as<FreshWorkflowStage | undefined>(undefined))
