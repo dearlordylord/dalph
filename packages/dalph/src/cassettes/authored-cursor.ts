@@ -1,4 +1,4 @@
-import { Effect, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Option, Ref, Schema } from "effect"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -13,6 +13,9 @@ export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass
 type CursorFailure = AuthoredCassetteInteractionMismatch
 
 export interface StoryCursor {
+  readonly awaitCoordinatorProcessDeath: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
+  >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
@@ -38,12 +41,15 @@ export interface StoryCursor {
     CursorFailure
   >
   readonly consumeTrackerGraph: Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
+  readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
 }
 
 export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
   story: ReadonlyArray<StoryItem>
 ): Effect.fn.Return<StoryCursor> {
   const position = yield* Ref.make(0)
+  const coordinatorProcessDeath =
+    yield* Deferred.make<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
   const consume = (tag: StoryItem["_tag"]) =>
     Effect.gen(function* () {
       const index = yield* Ref.get(position)
@@ -87,6 +93,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   })
+  const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+    const index = yield* Ref.get(position)
+    const item = story[index]
+    if (item?._tag !== "CoordinatorProcessDies") return
+    yield* Ref.set(position, index + 1)
+    const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(
+      item
+    ).pipe(Effect.orDie)
+    yield* Deferred.succeed(coordinatorProcessDeath, decoded)
+    return yield* Effect.never
+  })
   const consumeRunCoordinator = consume("RunCoordinator").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.RunCoordinator)(item).pipe(Effect.orDie)
@@ -119,6 +136,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(item).pipe(Effect.orDie)
   })
   return {
+    awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
     consumeDalphSelection,
     consumeExecutorReport,
@@ -126,6 +144,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeRunCoordinator,
     consumeTaskWorkSpecification,
     consumeTerminalAssertions,
-    consumeTrackerGraph
+    consumeTrackerGraph,
+    pauseAtCoordinatorProcessDeath
   }
 })

@@ -99,6 +99,10 @@ Acceptance tests:
 
 - `restart reconstructs the latest applied capacity and both unfinished task
   positions` exercises journal reduction and recovered controller creation.
+- `restarts after a live capacity decrease and admits B only after recovered A
+  releases its position` drives an authored process death through fresh and
+  recovered coordinator activations, verifies A against current tracker and
+  Git facts, and proves B waits for A's reconstructed position.
 - `gives a resumed responsibility the next released position before fresh
   work` proves the ordinary frontier/admission seam retains recovered
   responsibility priority when occupied usage reaches the ceiling.

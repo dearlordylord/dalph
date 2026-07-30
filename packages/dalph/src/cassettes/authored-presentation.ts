@@ -51,7 +51,9 @@ const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
     ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
     : `The task tracker fails the logical graph read because ${item.reason}.`
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+type CoordinatorStoryItem = Exclude<AuthoredCassetteStoryItem, { readonly _tag: "CoordinatorProcessDies" }>
+
+const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
   if (isTrackerGraphStoryItem(item)) return trackerGraphLyric(item)
   return item._tag === "InitialControlPolicy"
     ? `Dalph starts with task-execution capacity ${item.policy.taskExecutionCapacity}.`
@@ -67,6 +69,11 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string => {
               ? expectedBehaviorLyric(item)
               : `Operator applies task-execution capacity ${item.capacity} to the Run.`
 }
+
+const storyLyric = (item: AuthoredCassetteStoryItem): string =>
+  item._tag === "CoordinatorProcessDies"
+    ? "The coordinator process and its same-process fake executor die; durable and authority facts remain."
+    : coordinatorStoryLyric(item)
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>

@@ -49,6 +49,17 @@ export const discardFreshStagesOwnedByRecovery = (
 ): ReadonlyArray<FreshWorkflowStage> =>
   stages.filter(({ transition }) => !recoveredTaskIds.has(runnableTransitionTaskId(transition)))
 
+/** Startup-recovered work remains authoritative, while this activation owns every live fresh stage it created. */
+export const discardRecoveredFrontierOwnedByFreshStages = (
+  frontier: RunnableFrontier,
+  freshTaskIds: ReadonlySet<TaskId>
+): RunnableFrontier => ({
+  explanations: frontier.explanations.filter(
+    (explanation) => !explanationTaskIds(explanation).some((taskId) => freshTaskIds.has(taskId))
+  ),
+  transitions: frontier.transitions.filter((transition) => !freshTaskIds.has(runnableTransitionTaskId(transition)))
+})
+
 type RunControlPolicyReadError = Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
 
 const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
@@ -227,20 +238,20 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const initialRecoveredFrontier = yield* recovery.readFrontier
-      const recoveredTaskIds = new Set([
+      const initialRecoveredTaskIds = new Set([
         ...initialRecoveredFrontier.explanations.flatMap(explanationTaskIds),
         ...initialRecoveredFrontier.transitions.map(runnableTransitionTaskId)
       ])
-      const initialTasks = snapshot.eligibleTasks().filter(({ id }) => !recoveredTaskIds.has(id))
+      const initialTasks = snapshot.eligibleTasks().filter(({ id }) => !initialRecoveredTaskIds.has(id))
       const initialStages = yield* Effect.forEach(initialTasks, makeCurrentGraphStage)
       const stages = yield* Ref.make<ReadonlyArray<WorkflowStage>>(initialStages)
       const currentSnapshot = yield* Ref.make(snapshot)
       const scheduledFreshTaskIds = yield* Ref.make<ReadonlySet<Task["id"]>>(new Set(initialTasks.map(({ id }) => id)))
       const readFrontier = Effect.fn("Workflow.readActivationFrontier")(function* () {
-        const recovered = yield* recovery.readFrontier
+        const completeRecovered = yield* recovery.readFrontier
         const recoveredTaskIds = new Set([
-          ...recovered.explanations.flatMap(explanationTaskIds),
-          ...recovered.transitions.map(runnableTransitionTaskId)
+          ...completeRecovered.explanations.flatMap(explanationTaskIds),
+          ...completeRecovered.transitions.map(runnableTransitionTaskId)
         ])
         const alreadyScheduled = yield* Ref.get(scheduledFreshTaskIds)
         const latestSnapshot = yield* Ref.get(currentSnapshot)
@@ -255,10 +266,12 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
             (current) => new Set([...current, ...newlyFresh.map(({ id }) => id)])
           )
         }
-        if (recoveredTaskIds.size > 0) {
-          yield* Ref.update(stages, (current) => discardFreshStagesOwnedByRecovery(current, recoveredTaskIds))
+        if (initialRecoveredTaskIds.size > 0) {
+          yield* Ref.update(stages, (current) => discardFreshStagesOwnedByRecovery(current, initialRecoveredTaskIds))
         }
         const current = yield* Ref.get(stages)
+        const freshTaskIds = new Set(current.map(({ transition }) => runnableTransitionTaskId(transition)))
+        const recovered = discardRecoveredFrontierOwnedByFreshStages(completeRecovered, freshTaskIds)
         return {
           explanations: recovered.explanations,
           transitions: [...recovered.transitions, ...current.map(({ transition }) => transition)]

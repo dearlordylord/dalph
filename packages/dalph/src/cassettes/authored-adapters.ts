@@ -136,6 +136,7 @@ export const controlledExecutorLayer = (cursor: StoryCursor, runId: RunId) =>
         request: "StartOrContinue" | "Suspend",
         plannedAttempt: PlannedTaskAttempt
       ) {
+        yield* cursor.pauseAtCoordinatorProcessDeath
         const item = yield* cursor.consumeExecutorReport.pipe(
           Effect.mapError(
             (failure) =>

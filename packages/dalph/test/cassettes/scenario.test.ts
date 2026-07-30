@@ -2,7 +2,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
-import { PlannedAttemptExecutorReport, TaskId } from "@dalph/contracts"
+import { AttemptId, PlannedAttemptExecutorReport, TaskId } from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
   ControlCommand,
@@ -366,6 +366,17 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     }
     expect((yield* runAuthoredScenarioCassette(nonTerminalAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
 
+    const duplicateCoordinatorDeath = {
+      ...singleton,
+      story: [
+        ...singleton.story.slice(0, -1),
+        { _tag: "CoordinatorProcessDies" },
+        { _tag: "CoordinatorProcessDies" },
+        singleton.story.at(-1)
+      ]
+    }
+    expect((yield* runAuthoredScenarioCassette(duplicateCoordinatorDeath).pipe(Effect.flip))._tag).toBe("SchemaError")
+
     const assertions = singleton.story.at(-1)
     if (assertions?._tag !== "ExpectedBehavior") return yield* Effect.die("missing singleton assertions")
     const duplicateAbsence = {
@@ -441,6 +452,94 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
     expect(aTerminalAt).toBeGreaterThan(changedAt)
     expect(bResponsibilityAt).toBeGreaterThan(aTerminalAt)
     expect(recordedLyrics).toContain("Operator changed task-work capacity to 1 at policy revision 2.")
+    expect(run.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+    ])
+  })
+)
+
+it.effect("restarts after a live capacity decrease and admits B only after recovered A releases its position", () =>
+  Effect.gen(function* () {
+    const command = dependentTasksCompleteInOneRunAuthoredCassette.story[1]
+    if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained pipeline has no coordinator")
+    const target = command.target
+    const initialGraph = dependentTasksCompleteInOneRunAuthoredCassette.startingFacts.trackerGraph
+    const firstRunning = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+    )
+    const recoveryAttemptId = AttemptId.make("attempt:B:0")
+    const restartItem = (item: (typeof dependentTasksCompleteInOneRunAuthoredCassette.story)[number]) => {
+      if (
+        item._tag === "DalphSelects" &&
+        (item.operation._tag === "RecordTaskAttemptPlan" || item.operation._tag === "ReconcileTaskWorktree") &&
+        item.operation.attemptId === "attempt:B:1"
+      ) {
+        return { ...item, operation: { ...item.operation, attemptId: recoveryAttemptId } }
+      }
+      if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report.attemptId === "attempt:B:1") {
+        return { ...item, report: { ...item.report, attemptId: recoveryAttemptId } }
+      }
+      return item
+    }
+    const withCoordinatorDeath = {
+      ...dependentTasksCompleteInOneRunAuthoredCassette,
+      name: "capacity contraction survives coordinator death before later admission",
+      story: dependentTasksCompleteInOneRunAuthoredCassette.story
+        .flatMap((item, index) => [
+          ...(index === 0 && item._tag === "InitialControlPolicy"
+            ? [{ ...item, policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } }]
+            : [item]),
+          ...(index === firstRunning
+            ? [
+                { _tag: "SetTaskExecutionCapacity", capacity: TaskWorkCapacity.make(1) } as const,
+                { _tag: "CoordinatorProcessDies" } as const,
+                { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
+                { _tag: "TrackerGraphReadReturned", graph: initialGraph } as const
+              ]
+            : [])
+        ])
+        .map(restartItem)
+    }
+
+    const run = yield* runAuthoredScenarioCassette(withCoordinatorDeath)
+    const eventTags = run.records.map(({ event }) => event._tag)
+    const changedAt = eventTags.indexOf("TaskWorkCapacityChanged")
+    const aTerminalAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report._tag === "Terminal" &&
+        event.report.correlation.attemptId === "attempt:A:0"
+    )
+    const bResponsibilityAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.taskId === TaskId.make("B")
+    )
+
+    expect(JSON.stringify(run.records)).not.toContain("CoordinatorProcessDies")
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "The coordinator process and its same-process fake executor die"
+    )
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual(["attempt:A:0"])
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.attemptId === "attempt:A:0"
+      )
+    ).toHaveLength(1)
+    expect(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === "attempt:A:0"
+          ? [event.report._tag]
+          : []
+      )
+    ).toEqual(["Running", "Terminal"])
+    expect(changedAt).toBeGreaterThan(0)
+    expect(aTerminalAt).toBeGreaterThan(changedAt)
+    expect(bResponsibilityAt).toBeGreaterThan(aTerminalAt)
     expect(run.observedBehavior.taskWorkResults).toEqual([
       { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
       { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }

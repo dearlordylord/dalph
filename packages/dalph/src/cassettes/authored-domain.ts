@@ -139,6 +139,8 @@ const RunCoordinatorFields = {
  * released compatibility promise.
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
+  /** Harness lifecycle: dispose one coordinator and its same-process fake without journaling an occurrence. */
+  CoordinatorProcessDies: {},
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
@@ -171,6 +173,7 @@ const defineStoryItemOwners = <
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: ["InitialControlPolicy", "RunCoordinator", "SetTaskExecutionCapacity"],
+  CassetteLifecycle: ["CoordinatorProcessDies"],
   DalphOperationTrace: ["DalphSelects"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadFailed", "TrackerGraphReadReturned"],
@@ -262,6 +265,12 @@ const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof Auth
     .find((issue) => issue !== undefined)
 )
 
+const coordinatorDiesAtMostOnce = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story.filter((item) => item._tag === "CoordinatorProcessDies").length <= 1
+    ? undefined
+    : "one authored cassette may dispose its coordinator process at most once"
+)
+
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
@@ -275,4 +284,5 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
+  .check(coordinatorDiesAtMostOnce)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

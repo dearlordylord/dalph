@@ -29,7 +29,13 @@ import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
-import { discardFreshStagesOwnedByRecovery, runRecoveredWorkflow, runWorkflow, runSyntheticWorkflow } from "./run.js"
+import {
+  discardFreshStagesOwnedByRecovery,
+  discardRecoveredFrontierOwnedByFreshStages,
+  runRecoveredWorkflow,
+  runWorkflow,
+  runSyntheticWorkflow
+} from "./run.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import {
   AuthoritativeTaskClaimAcquired,
@@ -62,6 +68,51 @@ it("drops a stale process-local stage when journal reconstruction owns its task"
   const independent = stage("B")
 
   expect(discardFreshStagesOwnedByRecovery([stale, independent], new Set([TaskId.make("A")]))).toEqual([independent])
+})
+
+it("keeps a live fresh stage authoritative over the same task's reconstructed frontier", () => {
+  const taskA = TaskId.make("A")
+  const taskB = TaskId.make("B")
+
+  expect(
+    discardRecoveredFrontierOwnedByFreshStages(
+      {
+        explanations: [
+          FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
+            operationId: OperationId.make("operation-A"),
+            taskId: taskA,
+            wakeCondition: "TaskTrackerFactsObserved"
+          }),
+          FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
+            operationId: OperationId.make("operation-B"),
+            taskId: taskB,
+            wakeCondition: "TaskTrackerFactsObserved"
+          })
+        ],
+        transitions: [
+          RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+            operationId: OperationId.make("operation-A"),
+            taskId: taskA
+          }),
+          RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+            operationId: OperationId.make("operation-B"),
+            taskId: taskB
+          })
+        ]
+      },
+      new Set([taskA])
+    )
+  ).toEqual({
+    explanations: [
+      {
+        _tag: "WorkflowOperationTaskMembershipConstraint",
+        operationId: "operation-B",
+        taskId: "B",
+        wakeCondition: "TaskTrackerFactsObserved"
+      }
+    ],
+    transitions: [{ _tag: "ContinueFreshWorkflowOperation", operationId: "operation-B", taskId: "B" }]
+  })
 })
 
 effectIt.effect("starts a production Run by recording its identity before reading the task tracker", () =>

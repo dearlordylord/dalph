@@ -304,15 +304,9 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
     _tag: "AuthoritativeRunRecoveryActivation",
     continuePlannedAttemptExecutorWork: (plannedAttempt) =>
       provideDependencies(
-        recoveryAuthority
-          .verify(plannedAttempt)
-          .pipe(
-            Effect.andThen(
-              continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-                Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
-              )
-            )
-          )
+        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
+        )
       ),
     readFrontier: provideDependencies(readFrontier()),
     readFinalityFrontier: provideDependencies(readFrontier()),
