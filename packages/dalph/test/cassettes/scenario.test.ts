@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
+import { PlannedAttemptExecutorReport, TaskId } from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
   ControlCommand,
@@ -9,6 +10,8 @@ import {
   ControlCommandRecordedEvent,
   describeJournalEvent,
   JournalPosition,
+  type TaskTrackerFactsObservation,
+  type WorkflowOperation,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -22,6 +25,7 @@ import {
   measureTrackerObservationEncoding,
   projectRecordedCassette,
   RecordedCassette,
+  type RecordedCassetteEntry,
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
@@ -406,12 +410,64 @@ it.effect(
           runId: run.runId
         }
       ]
-      const recorded = yield* projectRecordedCassette(records)
+      const projected = yield* projectRecordedCassette(records)
+      const executorReportEntry = projected.entries.find((entry) => entry._tag === "PlannedAttemptExecutorWorkReported")
+      if (executorReportEntry?._tag !== "PlannedAttemptExecutorWorkReported") {
+        return yield* Effect.die("missing executor report entry")
+      }
+      const additionalCommands: ReadonlyArray<RecordedCassetteEntry> = [
+        {
+          _tag: "ControlCommandRecorded",
+          command: ControlCommand.cases.RequestRunUnpause.make({
+            commandId: ControlCommandId.make("rename-run-unpause-command"),
+            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+            runId: run.runId
+          })
+        },
+        {
+          _tag: "ControlCommandRecorded",
+          command: ControlCommand.cases.RequestTaskPause.make({
+            commandId: ControlCommandId.make("rename-task-pause-command"),
+            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+            runId: run.runId,
+            taskId: TaskId.make("A")
+          })
+        },
+        {
+          _tag: "ControlCommandRecorded",
+          command: ControlCommand.cases.RequestTaskUnpause.make({
+            commandId: ControlCommandId.make("rename-task-unpause-command"),
+            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+            runId: run.runId,
+            taskId: TaskId.make("A")
+          })
+        }
+      ]
+      const recorded = RecordedCassette.make({
+        ...projected,
+        entries: [
+          ...projected.entries,
+          ...additionalCommands,
+          {
+            _tag: "PlannedAttemptExecutorWorkReported",
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: executorReportEntry.ordinal,
+            report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+              correlation: executorReportEntry.report.correlation
+            })
+          }
+        ]
+      })
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
         claimTokens: [{ from: `cassette-claim:A:cassette:${run.runId}:operation:2`, to: "renamed-claim-token-A" }],
-        controlCommandIds: [{ from: "rename-command", to: "renamed-command" }],
+        controlCommandIds: [
+          { from: "rename-command", to: "renamed-command" },
+          { from: "rename-run-unpause-command", to: "renamed-run-unpause-command" },
+          { from: "rename-task-pause-command", to: "renamed-task-pause-command" },
+          { from: "rename-task-unpause-command", to: "renamed-task-unpause-command" }
+        ],
         operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
           from: `cassette:${run.runId}:operation:${ordinal}`,
           to: `renamed-operation:${ordinal}`
@@ -427,13 +483,54 @@ it.effect(
         invertCassetteIdentityRenaming(renaming)
       )
       const encodedAfter = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamed))
+      const allRenamings = [
+        ...renaming.attemptIds,
+        ...renaming.claimTokens,
+        ...renaming.controlCommandIds,
+        ...renaming.operationIds,
+        ...renaming.runIds,
+        ...renaming.taskBranchRefs,
+        ...renaming.worktreeLocators
+      ]
+      const entryVariants = {
+        ControlCommandRecorded: true,
+        PlannedAttemptExecutorWorkReported: true,
+        PlannedAttemptExecutorWorkResponsibilityBegan: true,
+        TaskAttemptPlanned: true,
+        TaskClaimAcquired: true,
+        TaskClaimAcquisitionIntended: true,
+        TaskTrackerFactsObserved: true,
+        TaskTrackerReadInitiated: true,
+        TaskWorktreeReady: true,
+        TaskWorktreeReconciliationIntended: true
+      } satisfies Record<RecordedCassetteEntry["_tag"], true>
+      const operationVariants = {
+        AcquireTaskClaim: true,
+        ReadTaskWorkSpecification: true,
+        ReadTrackerGraph: true,
+        RecordTaskAttemptPlan: true,
+        ReconcileTaskWorktree: true
+      } satisfies Record<WorkflowOperation["_tag"], true>
+      const observationVariants = {
+        CompleteTaskTrackerFacts: true,
+        FocusedTaskWorkSpecificationFacts: true,
+        UnchangedTaskTrackerFactsReconfirmed: true
+      } satisfies Record<TaskTrackerFactsObservation["_tag"], true>
 
       expect(checkpoints.every((checkpoint) => checkpoint.workflowHistoryEquivalent)).toBe(true)
-      expect(encodedAfter).toContain("renamed-run")
-      expect(encodedAfter).toContain("renamed-attempt-A")
-      expect(encodedAfter).toContain("renamed-command")
-      expect(encodedAfter).toContain("renamed-claim-token-A")
-      expect(encodedAfter).toContain("renamed-operation:0")
+      for (const { from, to } of allRenamings) {
+        expect(encodedAfter).not.toContain(`"${from}"`)
+        expect(encodedAfter).toContain(`"${to}"`)
+      }
+      expect(new Set(recorded.entries.map(({ _tag }) => _tag))).toEqual(new Set(Object.keys(entryVariants)))
+      expect(
+        new Set(recorded.entries.flatMap((entry) => ("operation" in entry ? [entry.operation._tag] : [])))
+      ).toEqual(new Set(Object.keys(operationVariants)))
+      expect(
+        new Set(
+          recorded.entries.flatMap((entry) => (entry._tag === "TaskTrackerFactsObserved" ? [entry.evidence._tag] : []))
+        )
+      ).toEqual(new Set(Object.keys(observationVariants)))
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
       expect(encodedAfter).toContain("singleton-revision")
       expect(encodedBefore).toContain("singleton-revision")
