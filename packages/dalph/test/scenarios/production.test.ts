@@ -2,6 +2,9 @@
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
@@ -72,6 +75,12 @@ import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 
+const productionIntegrationTarget = (repository: string): IntegrationTarget =>
+  IntegrationTarget.make({
+    repository: GitRepositoryLocator.make(repository),
+    ref: IntegrationTargetRef.make("refs/heads/master")
+  })
+
 it.effect("continues a fresh production task after its claim is journaled", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -120,6 +129,7 @@ it.effect("continues a fresh production task after its claim is journaled", () =
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -203,6 +213,7 @@ it.effect("records an Operator capacity change through the production compositio
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -279,6 +290,7 @@ it.effect("rejects a second fresh production start for the same Run before any t
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -454,6 +466,7 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
         trackerLayer
       ).pipe(
         Layer.provide(
@@ -521,6 +534,7 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
       const application = productionWorkflowInterpreterLayer(
         RunId.make("current-production-run"),
         GitCommonDirectoryTarget.make(directory),
+        productionIntegrationTarget(directory),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(
@@ -579,6 +593,7 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
       const application = productionWorkflowInterpreterLayer(
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
+        productionIntegrationTarget(directory),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(
@@ -624,6 +639,7 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
       const application = productionWorkflowInterpreterLayer(
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
+        productionIntegrationTarget(directory),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(
@@ -688,6 +704,7 @@ it.effect("does not block startup for another run's completed responsibility", (
       const application = productionWorkflowInterpreterLayer(
         RunId.make("requested-after-completed-run"),
         GitCommonDirectoryTarget.make(directory),
+        productionIntegrationTarget(directory),
         controlledTrackerMutationLayer
       ).pipe(
         Layer.provide(

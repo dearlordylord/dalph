@@ -18,11 +18,14 @@ import {
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 
 export interface IntegrationFrontierRuntimeFacts {
+  /** Tasks covered by a complete graph observation committed in this activation. */
+  readonly currentTrackerTaskIds: ReadonlySet<TaskId>
   readonly heldResponsibilityPositions: ReadonlySet<JournalPosition>
   readonly integrationTarget: Option.Option<IntegrationTarget>
 }
 
 const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
+  currentTrackerTaskIds: new Set(),
   heldResponsibilityPositions: new Set(),
   integrationTarget: Option.none()
 }
@@ -53,11 +56,14 @@ export const deriveIntegrationFrontier = (
     (responsibility): responsibility is QueuedIntegrationResponsibility =>
       responsibility._tag === "QueuedIntegrationResponsibility"
   )
-  const startable = selectStartableIntegrationResponsibilities({ responsibilities })
+  const trackerFactsAreCurrentFor = (responsibility: { readonly plannedAttempt: { readonly taskId: TaskId } }) =>
+    runtimeFacts.currentTrackerTaskIds.has(responsibility.plannedAttempt.taskId)
+  const startable = selectStartableIntegrationResponsibilities({ responsibilities }).filter(trackerFactsAreCurrentFor)
   const transitions = startable.map((responsibility) =>
     RunnableFrontierTransition.StartQueuedIntegration({ responsibility })
   )
   const responsibilityTransitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
+    if (!trackerFactsAreCurrentFor(responsibility)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
     return waiting && held
@@ -69,13 +75,15 @@ export const deriveIntegrationFrontier = (
   const reconciliationTransitions = Option.match(runtimeFacts.integrationTarget, {
     onNone: () => [],
     onSome: (integrationTarget) =>
-      unqueuedAccepted.map((accepted) =>
-        RunnableFrontierTransition.QueueAcceptedResultIntegrationResponsibility({ accepted, integrationTarget })
-      )
+      unqueuedAccepted
+        .slice(0, 1)
+        .map((accepted) =>
+          RunnableFrontierTransition.QueueAcceptedResultIntegrationResponsibility({ accepted, integrationTarget })
+        )
   })
-  return {
-    explanations: [
-      ...Option.match(runtimeFacts.integrationTarget, {
+  if (unqueuedAccepted.length > 0) {
+    return {
+      explanations: Option.match(runtimeFacts.integrationTarget, {
         onNone: () =>
           unqueuedAccepted.map(({ plannedAttempt }) =>
             FrontierExplanation.IntegrationConfigurationWait({
@@ -85,7 +93,21 @@ export const deriveIntegrationFrontier = (
           ),
         onSome: () => []
       }),
-      ...started.map((responsibility) => {
+      transitions: reconciliationTransitions
+    }
+  }
+  const trackerFactsWaits = [...started, ...queued]
+    .filter((responsibility) => !trackerFactsAreCurrentFor(responsibility))
+    .map((responsibility) =>
+      FrontierExplanation.IntegrationTrackerFactsWait({
+        taskId: responsibility.plannedAttempt.taskId,
+        wakeCondition: "TaskTrackerFactsObserved"
+      })
+    )
+  return {
+    explanations: [
+      ...trackerFactsWaits,
+      ...started.filter(trackerFactsAreCurrentFor).map((responsibility) => {
         const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
         return prerequisiteTaskIds.length === 0
           ? FrontierExplanation.IntegrationInProgress({ taskId: responsibility.plannedAttempt.taskId })
@@ -95,17 +117,19 @@ export const deriveIntegrationFrontier = (
               wakeCondition: "TaskTrackerFactsObserved"
             })
       }),
-      ...queued.flatMap((responsibility) =>
-        transitions.some((transition) => transition.responsibility.queuedAt === responsibility.queuedAt)
-          ? []
-          : [
-              FrontierExplanation.IntegrationTargetWait({
-                taskId: responsibility.plannedAttempt.taskId,
-                wakeCondition: "IntegrationTargetReleased"
-              })
-            ]
-      )
+      ...queued
+        .filter(trackerFactsAreCurrentFor)
+        .flatMap((responsibility) =>
+          transitions.some((transition) => transition.responsibility.queuedAt === responsibility.queuedAt)
+            ? []
+            : [
+                FrontierExplanation.IntegrationTargetWait({
+                  taskId: responsibility.plannedAttempt.taskId,
+                  wakeCondition: "IntegrationTargetReleased"
+                })
+              ]
+        )
     ],
-    transitions: [...reconciliationTransitions, ...responsibilityTransitions, ...transitions]
+    transitions: [...responsibilityTransitions, ...transitions]
   }
 }

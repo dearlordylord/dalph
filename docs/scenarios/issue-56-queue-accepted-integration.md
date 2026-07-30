@@ -42,8 +42,16 @@ resource.
 The coordinator process and same-process fake executor die before either
 integration begins. The tracker, Git repository, claims, and journal survive.
 On restart, Dalph folds the journal and derives A then B from the two committed
-positions. Current tracker facts still report both tasks open, claimed by
-Dalph, inside the target, and without unfinished blockers.
+positions. The prior process's tracker observation can reconstruct history but
+cannot authorize a new integration action. Dalph reads the tracker again and
+records a new complete observation after recovery began. Those current facts
+report both tasks open, claimed by Dalph, inside the target, and without
+unfinished blockers. Until that observation commits, the selector exposes a
+typed tracker-facts wait and neither starts queued work nor reacquires a target.
+
+The production composition receives the exact repository locator and ref as a
+typed integration target at its configuration boundary. It does not infer a
+branch name from the Git common directory.
 
 The shared selector chooses A. Dalph acquires the exact integration-target
 resource and records that A's integration started. That initiated action is the
@@ -81,9 +89,11 @@ construction.
 - `orders accepted results by committed responsibility position after restart`
   proves the journal-derived FIFO, absence of a durable queue ordinal, and
   selection of only the earliest result for one target.
-- `reconciles a durable accepted terminal into one integration responsibility
-  after restart` proves the crash gap between terminal report and responsibility
-  append remains recoverable and idempotent.
+- `reconciles durable accepted terminals in order and idempotently after
+  restart` runs authoritative recovery, retries an already committed
+  reconciliation, proves only the next missing responsibility is exposed, and
+  proves that a focused task-work-specification read cannot substitute for the
+  post-restart complete graph observation required before a start is selectable.
 - `starts integration once and consumes only its pre-integration cancellation
   capability` proves the cutoff, idempotent recovery, and resource
   separation.
@@ -94,7 +104,8 @@ construction.
   cutoff once` records the terminal accepted result, coordinator death,
   recovered selection, integration-start occurrence, and tracker blocker
   through the production-shaped controlled fake providers.
-- Quint test `journalOrderSurvivesRestart` and invariants
+- Quint tests `journalOrderSurvivesRestart` and
+  `restartRequiresFreshTrackerFactsBeforeStart`, plus invariants
   `queuePositionsAreUnique`, `atMostOneTargetHolder`, and
   `startedPrecedesRemainingQueue` check the corresponding state-machine
   ordering and serialization properties.

@@ -86,7 +86,13 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
     if (run.history._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("accepted-result cassette must retain valid journal history")
     }
-    expect(deriveIntegrationFrontier(run.history.runState).explanations).toContainEqual(
+    expect(
+      deriveIntegrationFrontier(run.history.runState, {
+        currentTrackerTaskIds: new Set([TaskId.make("A")]),
+        heldResponsibilityPositions: new Set(),
+        integrationTarget: Option.none()
+      }).explanations
+    ).toContainEqual(
       expect.objectContaining({
         _tag: "IntegrationDependencyWait",
         prerequisiteTaskIds: ["C"],
@@ -99,6 +105,7 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
     if (integrationBeganAt === undefined) return yield* Effect.die("expected integration responsibility")
     expect(
       deriveIntegrationFrontier(run.history.runState, {
+        currentTrackerTaskIds: new Set([TaskId.make("A")]),
         heldResponsibilityPositions: new Set([integrationBeganAt]),
         integrationTarget: Option.some(
           IntegrationTarget.make({

@@ -40,10 +40,19 @@ import {
 import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { TaskAttemptPlannedEvent, taskTrackerReadIntent } from "../../registry/event.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../registry/operation.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
@@ -52,8 +61,20 @@ import { makeIntegrationTargetResourceController } from "../../../coordination/a
 import { runIntegrationTransition } from "../../../coordination/run/integration-transition-runtime.js"
 import { runnableTransitionTaskId, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { OperationId } from "../../identity.js"
-import { makeJournaledFreshRunRecoveryActivation } from "../../../coordination/run/recovery-activation.js"
+import {
+  makeJournaledFreshRunRecoveryActivation,
+  makeRunRecoveryActivation
+} from "../../../coordination/run/recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../../test/controlled-planned-attempt-executor.js"
+import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../../../coordination/run/recovery-authority.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../../workflow/interpretation/interpreter.js"
+import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
+import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
+import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
+import {
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../task-tracker-facts/observation.js"
 
 const runId = RunId.make("integration-admission-run")
 const integrationTarget = IntegrationTarget.make({
@@ -92,6 +113,18 @@ const beginRun = Effect.gen(function* () {
 const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedResult) =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(attempt.attemptId),
+      TaskAttemptPlannedEvent.make({
+        operation: makeTaskAttemptPlanOperation({
+          operationId: OperationId.make(`plan:${attempt.attemptId}`),
+          plannedAttempt: attempt,
+          predecessorOperationIds: []
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
     yield* journal.append(
       runId,
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
@@ -253,12 +286,15 @@ it.effect("orders accepted results by committed responsibility position after re
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("reconciles a durable accepted terminal into one integration responsibility after restart", () =>
+it.effect("reconciles durable accepted terminals in order and idempotently after restart", () =>
   Effect.gen(function* () {
-    const attempt = plannedAttempt("A", 0)
-    const result = acceptedResult("a")
+    const firstAttempt = plannedAttempt("A", 0)
+    const secondAttempt = plannedAttempt("B", 1)
+    const firstResult = acceptedResult("a")
+    const secondResult = acceptedResult("b")
     yield* beginRun
-    yield* recordAcceptedTerminal(attempt, result)
+    yield* recordAcceptedTerminal(firstAttempt, firstResult)
+    yield* recordAcceptedTerminal(secondAttempt, secondResult)
     const journal = yield* JournalStore
     const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
     expect(reconstructed._tag).toBe("ValidReconstructedRun")
@@ -267,33 +303,109 @@ it.effect("reconciles a durable accepted terminal into one integration responsib
     }
 
     const frontier = deriveIntegrationFrontier(reconstructed.state, {
+      currentTrackerTaskIds: new Set([firstAttempt.taskId, secondAttempt.taskId]),
       heldResponsibilityPositions: new Set(),
       integrationTarget: Option.some(integrationTarget)
     })
     expect(deriveIntegrationFrontier(reconstructed.state).explanations).toContainEqual({
       _tag: "IntegrationConfigurationWait",
-      taskId: attempt.taskId,
+      taskId: firstAttempt.taskId,
       wakeCondition: "IntegrationTargetConfigured"
     })
     expect(frontier.transitions).toMatchObject([
       {
         _tag: "QueueAcceptedResultIntegrationResponsibility",
-        accepted: { acceptedResult: result, plannedAttempt: attempt }
+        accepted: { acceptedResult: firstResult, plannedAttempt: firstAttempt }
       }
     ])
-    const transition = frontier.transitions[0]
-    if (transition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
+    expect(frontier.transitions).toHaveLength(1)
+
+    const recovery = yield* makeRunRecoveryActivation(runId, integrationTarget)
+    const firstTransition = (yield* recovery.readFrontier).transitions[0]
+    if (firstTransition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
       return yield* Effect.die("expected queue reconciliation")
     }
-    expect(runnableTransitionTaskId(transition)).toBe(attempt.taskId)
-    yield* runIntegrationTransition(transition, yield* makeIntegrationTargetResourceController())
+    expect(runnableTransitionTaskId(firstTransition)).toBe(firstAttempt.taskId)
+    yield* recovery.runTransition(firstTransition, undefined as never)
+    yield* recovery.runTransition(firstTransition, undefined as never)
 
-    expect(
-      deriveIntegrationAdmission(yield* journal.read(runId)).responsibilities.map(
-        ({ plannedAttempt }) => plannedAttempt.attemptId
+    const secondFrontier = yield* recovery.readFrontier
+    expect(secondFrontier.transitions).toHaveLength(1)
+    const secondTransition = secondFrontier.transitions[0]
+    if (secondTransition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
+      return yield* Effect.die("expected second queue reconciliation")
+    }
+    expect(runnableTransitionTaskId(secondTransition)).toBe(secondAttempt.taskId)
+    yield* recovery.runTransition(secondTransition, undefined as never)
+
+    const responsibilities = deriveIntegrationAdmission(yield* journal.read(runId)).responsibilities
+    expect(responsibilities.map(({ plannedAttempt }) => plannedAttempt.attemptId)).toEqual([
+      firstAttempt.attemptId,
+      secondAttempt.attemptId
+    ])
+    expect(responsibilities[0]?.queuedAt).toBeLessThan(responsibilities[1]?.queuedAt ?? JournalPosition.make(1))
+    const waitingFrontier = yield* recovery.readFrontier
+    expect(waitingFrontier.explanations.filter(({ _tag }) => _tag === "IntegrationTrackerFactsWait")).toEqual([
+      { _tag: "IntegrationTrackerFactsWait", taskId: "A", wakeCondition: "TaskTrackerFactsObserved" },
+      { _tag: "IntegrationTrackerFactsWait", taskId: "B", wakeCondition: "TaskTrackerFactsObserved" }
+    ])
+    expect(waitingFrontier.transitions).toEqual([])
+
+    const focusedRead = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("post-restart-focused-specification"),
+      FixtureTarget.make("integration-admission-target"),
+      firstAttempt.taskId
+    )
+    yield* journal.append(runId, intentRecordKey(focusedRead.operationId), taskTrackerReadIntent(focusedRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(focusedRead.operationId),
+      taskTrackerFactsObservedEvent(
+        focusedRead.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(
+          focusedRead,
+          makeTaskWorkSpecification({
+            body: "Integrate the accepted result.",
+            taskId: firstAttempt.taskId,
+            title: "Integrate result"
+          })
+        )
       )
-    ).toEqual([attempt.attemptId])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+    )
+    expect((yield* recovery.readFrontier).transitions).toEqual([])
+
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("post-restart-integration-facts"),
+      FixtureTarget.make("integration-admission-target")
+    )
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerGraphFactsObserved(graphRead, {
+        revision: TrackerRevision.make("post-restart-integration-revision"),
+        taskIds: [firstAttempt.taskId, secondAttempt.taskId]
+      })
+    )
+    expect(yield* recovery.readFrontier).toMatchObject({
+      transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
+    })
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("unused"),
+        readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
+        reconcileTaskWorktree: () => Effect.die("unused"),
+        recordTaskAttemptPlan: () => Effect.die("unused")
+      })
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
 )
 
 it.effect("journaled fresh activation fails closed on a non-integration recovered transition", () =>
@@ -347,6 +459,7 @@ it.effect("acquires, releases, and reacquires the process-local target around on
     yield* resources.release(started)
     expect(
       deriveIntegrationFrontier(runState.state, {
+        currentTrackerTaskIds: new Set([started.plannedAttempt.taskId]),
         heldResponsibilityPositions: new Set(),
         integrationTarget: Option.some(integrationTarget)
       }).transitions
@@ -459,7 +572,7 @@ it.effect("preserves same-target order while a blocker wait leaves another targe
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("derives one start, one same-target wait, and in-progress work without tracker facts", () =>
+it.effect("fails closed without current tracker facts and orders authorized integration work", () =>
   Effect.gen(function* () {
     const a = plannedAttempt("A", 0)
     const b = plannedAttempt("B", 1)
@@ -475,8 +588,16 @@ it.effect("derives one start, one same-target wait, and in-progress work without
     const queuedRun = reconstructRunState(runId, yield* journal.read(runId))
     expect(queuedRun._tag).toBe("ValidReconstructedRun")
     if (queuedRun._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid reconstruction")
+    expect(deriveIntegrationFrontier(queuedRun.state)).toMatchObject({
+      explanations: [
+        { _tag: "IntegrationTrackerFactsWait", taskId: "A" },
+        { _tag: "IntegrationTrackerFactsWait", taskId: "B" }
+      ],
+      transitions: []
+    })
     expect(
       deriveIntegrationFrontier(queuedRun.state, {
+        currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
         heldResponsibilityPositions: new Set(),
         integrationTarget: Option.some(integrationTarget)
       })
@@ -489,8 +610,16 @@ it.effect("derives one start, one same-target wait, and in-progress work without
     const startedRun = reconstructRunState(runId, yield* journal.read(runId))
     expect(startedRun._tag).toBe("ValidReconstructedRun")
     if (startedRun._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid reconstruction")
+    const staleStartedFrontier = deriveIntegrationFrontier(startedRun.state)
+    expect(staleStartedFrontier.explanations).toContainEqual({
+      _tag: "IntegrationTrackerFactsWait",
+      taskId: "A",
+      wakeCondition: "TaskTrackerFactsObserved"
+    })
+    expect(staleStartedFrontier.transitions).toEqual([])
     expect(
       deriveIntegrationFrontier(startedRun.state, {
+        currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
         heldResponsibilityPositions: new Set([queuedA.queuedAt]),
         integrationTarget: Option.some(integrationTarget)
       })

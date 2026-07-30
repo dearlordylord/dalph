@@ -77,6 +77,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
   }
   IntegrationConfigurationWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetConfigured" }
   IntegrationInProgress: { readonly taskId: TaskId }
+  IntegrationTrackerFactsWait: { readonly taskId: TaskId; readonly wakeCondition: "TaskTrackerFactsObserved" }
   IntegrationTargetWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetReleased" }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
@@ -165,6 +166,7 @@ export const deriveRunFinalityDecision = (
       ({ _tag }) =>
         _tag === "IntegrationDependencyWait" ||
         _tag === "IntegrationInProgress" ||
+        _tag === "IntegrationTrackerFactsWait" ||
         _tag === "IntegrationTargetWait" ||
         _tag === "IntegrationConfigurationWait"
     )

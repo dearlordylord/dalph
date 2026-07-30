@@ -8,6 +8,7 @@ module acceptedResultIntegrationTest {
       .then(queueAcceptedResult(1))
       .then(queueAcceptedResult(2))
       .then(recoverCoordinator)
+      .then(observeTrackerFacts)
       .then(startIntegration(1))
       .expect(and {
         restartReached,
@@ -27,6 +28,23 @@ module acceptedResultIntegrationTest {
         state.results.get(1).phase == Queued,
         state.results.get(1).queuePosition == 1,
         state.results.get(1).preIntegrationCancellation,
+      })
+  }
+
+  run restartRequiresFreshTrackerFactsBeforeStart = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(recoverCoordinator)
+      .then(all {
+        assert(not(canStart(state, 1))),
+        observeTrackerFacts,
+      })
+      .then(startIntegration(1))
+      .expect(and {
+        restartReached,
+        state.trackerFactsCurrent,
+        state.results.get(1).phase == Started,
       })
   }
 

@@ -22,6 +22,7 @@ module acceptedResultIntegration {
     results: int -> ResultState,
     nextJournalPosition: int,
     recovered: bool,
+    trackerFactsCurrent: bool,
   }
 
   pure val RESULT_IDS = Set(1, 2)
@@ -31,6 +32,7 @@ module acceptedResultIntegration {
     val result = s.results.get(id)
     and {
       result.phase == Queued,
+      s.trackerFactsCurrent,
       not(RESULT_IDS.exists(other =>
         s.results.get(other).phase == Started
           and s.results.get(other).targetHeld
@@ -117,6 +119,7 @@ module acceptedResultIntegration {
       }),
       nextJournalPosition: 1,
       recovered: false,
+      trackerFactsCurrent: true,
     }
   }
 
@@ -172,6 +175,7 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       result.phase == Started,
+      state.trackerFactsCurrent,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -185,7 +189,12 @@ module acceptedResultIntegration {
 
   action recoverCoordinator: bool = all {
     not(state.recovered),
-    state' = { ...state, recovered: true },
+    state' = { ...state, recovered: true, trackerFactsCurrent: false },
+  }
+
+  action observeTrackerFacts: bool = all {
+    not(state.trackerFactsCurrent),
+    state' = { ...state, trackerFactsCurrent: true },
   }
 
   action step: bool = any {
@@ -198,5 +207,6 @@ module acceptedResultIntegration {
     waitOnDependency(1),
     waitOnDependency(2),
     recoverCoordinator,
+    observeTrackerFacts,
   }
 }

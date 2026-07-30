@@ -1,5 +1,5 @@
 import { NodeServices } from "@effect/platform-node"
-import { GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef, type RunId } from "@dalph/contracts"
+import { type IntegrationTarget, type RunId } from "@dalph/contracts"
 import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import {
   AuthoritativeTaskWorktreeReady,
@@ -29,6 +29,7 @@ import { makeLiveWorkflowInterpreterLayer } from "./composition.js"
 export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
   runId: RunId,
   target: GitCommonDirectoryTarget,
+  integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>
 ) => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
@@ -66,13 +67,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   )
   const controlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
 
-  return startupRecoveryLayer(
-    runId,
-    IntegrationTarget.make({
-      repository: GitRepositoryLocator.make(target),
-      ref: IntegrationTargetRef.make("refs/heads/master")
-    })
-  ).pipe(
+  return startupRecoveryLayer(runId, integrationTarget).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(recoveryAuthorityLayer),
     Layer.provide(controlPolicyLayer),

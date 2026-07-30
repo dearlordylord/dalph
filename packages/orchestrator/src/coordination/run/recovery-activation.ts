@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Fresh and authoritative activation must share one recovery authority boundary. */
 import { Context, Effect, Exit, Layer, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "../activation/coordinator.js"
 import {
@@ -27,6 +28,7 @@ import {
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   deriveRunnableFrontier,
   ResponsibilityDisposition,
@@ -135,12 +137,31 @@ const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunS
   return reduction.runState
 })
 
+const latestJournalPosition = (
+  records: ReadonlyArray<{ readonly position: JournalPosition }>
+): Option.Option<JournalPosition> =>
+  Option.fromUndefinedOr(records.reduce<JournalPosition | undefined>((_previous, { position }) => position, undefined))
+
+const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
+  Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
+
 const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
-  integrationTarget: Option.Option<IntegrationTarget>
+  integrationTarget: Option.Option<IntegrationTarget>,
+  activationBaselinePosition: Option.Option<JournalPosition>
 ) {
   const runState = yield* readRecoveredRunState(runId)
+  const hasCurrentCompleteGraphObservation = runState.workflowHistory.records.some(
+    ({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+      positionIsAfter(position, activationBaselinePosition)
+  )
+  const currentTrackerTaskIds = Option.match(latestReconstructedTaskGraph(runState.graphKnowledge), {
+    onNone: () => new Set<TaskId>(),
+    onSome: (graph) => new Set(hasCurrentCompleteGraphObservation ? graph.taskIds() : [])
+  })
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
@@ -148,6 +169,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   })
   const integration = deriveIntegrationFrontier(runState, {
     ...(yield* integrationResources.snapshot),
+    currentTrackerTaskIds,
     integrationTarget
   })
   return {
@@ -159,15 +181,22 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
 const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
-  integrationTarget: Option.Option<IntegrationTarget>
+  integrationTarget: Option.Option<IntegrationTarget>,
+  activationBaselinePosition: Option.Option<JournalPosition>
 ) {
-  const frontier = yield* readRecoveredFrontier(runId, integrationResources, integrationTarget)
+  const frontier = yield* readRecoveredFrontier(
+    runId,
+    integrationResources,
+    integrationTarget,
+    activationBaselinePosition
+  )
   return {
     explanations: frontier.explanations.filter(
       ({ _tag }) =>
         _tag === "IntegrationDependencyWait" ||
         _tag === "IntegrationConfigurationWait" ||
         _tag === "IntegrationInProgress" ||
+        _tag === "IntegrationTrackerFactsWait" ||
         _tag === "IntegrationTargetWait" ||
         _tag === "PlannedAttemptTaskMembershipConstraint" ||
         _tag === "WorkflowOperationTaskMembershipConstraint"
@@ -270,6 +299,7 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
   function* (runId: RunId, integrationTarget: Option.Option<IntegrationTarget>) {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* JournalStore
+    const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
     const integrationResources = yield* makeIntegrationTargetResourceController()
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
       Effect.provideService(effect, JournalStore, journal)
@@ -282,8 +312,12 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       _tag: "JournaledFreshRunActivation",
       continueFreshPlannedAttemptExecutorWork: continueAttempt,
       continuePlannedAttemptExecutorWork: continueAttempt,
-      readFinalityFrontier: provideJournal(readRecoveredFrontier(runId, integrationResources, integrationTarget)),
-      readFrontier: provideJournal(readJournaledFreshFrontier(runId, integrationResources, integrationTarget)),
+      readFinalityFrontier: provideJournal(
+        readRecoveredFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
+      ),
+      readFrontier: provideJournal(
+        readJournaledFreshFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
+      ),
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
       ),
@@ -327,6 +361,7 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     return yield* Effect.fail(initialReduction)
   }
   const initialRecords = initialReduction.runState.workflowHistory.records
+  const activationBaselinePosition = latestJournalPosition(initialRecords)
   const reconstructedPlannedAttemptPositions = initialReduction.runState.responsibility.entries.flatMap(
     (responsibility) => {
       if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
@@ -349,7 +384,7 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     }
   )
   const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
-    return yield* readRecoveredFrontier(runId, integrationResources, integrationTarget)
+    return yield* readRecoveredFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
   })
   const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
   const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
