@@ -61,17 +61,52 @@ export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
 
-/** Cassette-only observed outcomes; these values are neither journal events nor provider inputs. */
-export const AuthoredObservedOutcome = Schema.TaggedUnion({
-  ExecutorReported: {
+/** Specialist-facing results of one task's planned work; attempt identity is deliberately absent. */
+export const AuthoredTaskWorkResult = Schema.TaggedUnion({
+  PlannedWorkForTaskCompleted: { taskId: TaskId },
+  PlannedWorkForTaskFailed: { taskId: TaskId }
+})
+export type AuthoredTaskWorkResult = typeof AuthoredTaskWorkResult.Type
+
+/** A terminal assertion that Dalph assumed no executor-work responsibility for the task. */
+export const AuthoredTaskWorkAbsence = Schema.TaggedStruct("NoPlannedWorkUndertakenForTask", { taskId: TaskId })
+export type AuthoredTaskWorkAbsence = typeof AuthoredTaskWorkAbsence.Type
+
+/** Optional exact-attempt evidence about how Dalph coordinated executor work. */
+export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
+  PlannedAttemptExecutorWorkReported: {
     attemptId: AttemptId,
     report: Schema.Literals(["Running", "SafelySuspended", "TerminalCompleted", "TerminalFailed"])
   },
-  TaskAttemptPrepared: { attemptId: AttemptId, taskId: TaskId },
-  TaskClaimed: { taskId: TaskId },
+  PlannedAttemptExecutorWorkResponsibilityBegan: { attemptId: AttemptId, taskId: TaskId }
+})
+export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence.Type
+
+/** Optional evidence from the claim, attempt-planning, and worktree protocol. */
+export const AuthoredProtocolEvidence = Schema.TaggedUnion({
+  TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
+  TaskClaimAcquired: { taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
-export type AuthoredObservedOutcome = typeof AuthoredObservedOutcome.Type
+export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
+
+export const AuthoredExpectedBehavior = Schema.Struct({
+  orchestration: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
+  protocol: Schema.NullOr(Schema.Array(AuthoredProtocolEvidence)),
+  taskWork: Schema.Struct({
+    absences: Schema.Array(AuthoredTaskWorkAbsence),
+    results: Schema.Array(AuthoredTaskWorkResult)
+  })
+})
+export type AuthoredExpectedBehavior = typeof AuthoredExpectedBehavior.Type
+
+export const AuthoredObservedBehavior = Schema.Struct({
+  orchestrationEvidence: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
+  plannedWorkUndertakenFor: Schema.Array(TaskId),
+  protocolEvidence: Schema.NullOr(Schema.Array(AuthoredProtocolEvidence)),
+  taskWorkResults: Schema.Array(AuthoredTaskWorkResult)
+})
+export type AuthoredObservedBehavior = typeof AuthoredObservedBehavior.Type
 
 const RunCoordinatorFields = {
   baseSha: GitCommitSha,
@@ -89,11 +124,8 @@ const RunCoordinatorFields = {
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   DalphSelects: { operation: AuthoredCassetteDecision },
-  /** The complete ordered projection of cassette-visible outcomes, plus explicit forbidden outcomes. */
-  ExpectedObservedOutcomes: {
-    expected: Schema.Array(AuthoredObservedOutcome),
-    forbidden: Schema.Array(AuthoredObservedOutcome)
-  },
+  /** Task-work assertions with optional complete lower-level evidence projections. */
+  ExpectedBehavior: AuthoredExpectedBehavior.fields,
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
@@ -119,7 +151,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   DalphOperationTrace: ["DalphSelects"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadReturned"],
-  TerminalAssertion: ["ExpectedObservedOutcomes"]
+  TerminalAssertion: ["ExpectedBehavior"]
 })
 
 export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedErrorClass<AuthoredCassetteStoryItemOwnerContradiction>()(
@@ -201,21 +233,20 @@ const startingFactsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredS
     : "authored starting facts must agree with their first controlled returns and name claims/specifications once"
 })
 
-const observedOutcomeKey = (outcome: AuthoredObservedOutcome): string =>
-  JSON.stringify(Schema.encodeUnknownSync(AuthoredObservedOutcome)(outcome))
-
-const outcomeAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
-  const assertions = cassette.story.find((item) => item._tag === "ExpectedObservedOutcomes")
-  if (assertions?._tag !== "ExpectedObservedOutcomes") return undefined
-  const expected = assertions.expected.map(observedOutcomeKey)
-  const forbidden = assertions.forbidden.map(observedOutcomeKey)
-  return new Set(expected).size !== expected.length
-    ? "each expected observed outcome must be asserted once"
-    : new Set(forbidden).size !== forbidden.length
-      ? "each forbidden observed outcome must be asserted once"
-      : expected.some((outcome) => forbidden.includes(outcome))
-        ? "one observed outcome cannot be both expected and forbidden"
-        : undefined
+const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const assertions = cassette.story.find((item) => item._tag === "ExpectedBehavior")
+  if (assertions?._tag !== "ExpectedBehavior") return undefined
+  const absentTasks = assertions.taskWork.absences.map(({ taskId }) => taskId)
+  if (new Set(absentTasks).size !== absentTasks.length) {
+    return "each no-planned-work-undertaken assertion must name a task once"
+  }
+  if (assertions.taskWork.results.some(({ taskId }) => absentTasks.includes(taskId))) {
+    return "one task cannot have a planned-work result and no planned work undertaken"
+  }
+  const resultTasks = assertions.taskWork.results.map(({ taskId }) => taskId)
+  return assertions.orchestration === null && new Set(resultTasks).size !== resultTasks.length
+    ? "multiple planned-work results for one task require orchestration evidence"
+    : undefined
 })
 
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
@@ -224,11 +255,11 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(exactlyOneAt("RunCoordinator", () => 1, "one RunCoordinator must follow InitialControlPolicy"))
   .check(
     exactlyOneAt(
-      "ExpectedObservedOutcomes",
+      "ExpectedBehavior",
       (length) => length - 1,
-      "one expected-and-forbidden observed-outcome group must be the terminal story item"
+      "one expected-behavior group must be the terminal story item"
     )
   )
   .check(startingFactsAreConsistent)
-  .check(outcomeAssertionsAreConsistent)
+  .check(behaviorAssertionsAreConsistent)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

@@ -62,15 +62,13 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       request: "StartOrContinue"
     },
     {
-      _tag: "ExpectedObservedOutcomes",
-      expected: [
-        { _tag: "TaskClaimed", taskId: "A" },
-        { _tag: "TaskAttemptPrepared", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "ExecutorReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "ExecutorReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
-      ],
-      forbidden: [{ _tag: "TaskAttemptPrepared", attemptId: "attempt:B:0", taskId: "B" }]
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: {
+        absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }],
+        results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }]
+      }
     }
   ]
 })

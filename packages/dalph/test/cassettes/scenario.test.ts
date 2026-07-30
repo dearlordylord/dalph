@@ -57,6 +57,19 @@ const insertBeforeRunTermination = (
   ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
 }
 
+it.effect("runs the maintained singleton through production activation and describes only its task-work result", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(singleton)
+    const expected = singleton.story.at(-1)
+
+    expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }])
+    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expect(expected?._tag === "ExpectedBehavior" ? expected.orchestration : undefined).toBeNull()
+    expect(expected?._tag === "ExpectedBehavior" ? expected.protocol : undefined).toBeNull()
+    expect(JSON.stringify(expected)).not.toContain("attempt:A:0")
+  })
+)
+
 it.effect("runs the maintained singleton through production activation and stops at terminal executor work", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.singletonTaskCompletes)
@@ -69,8 +82,8 @@ it.effect("runs the maintained singleton through production activation and stops
     expect(JSON.stringify(encoded)).not.toContain("runId")
     expect(run.runId).not.toContain("cassette-target")
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
-    expect(run.observedOutcomes).toEqual(
-      terminalAssertions?._tag === "ExpectedObservedOutcomes" ? terminalAssertions.expected : []
+    expect(run.observedBehavior.taskWorkResults).toEqual(
+      terminalAssertions?._tag === "ExpectedBehavior" ? terminalAssertions.taskWork.results : []
     )
     expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
     expect(
@@ -79,7 +92,7 @@ it.effect("runs the maintained singleton through production activation and stops
         : undefined
     ).toBe("Terminal")
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
-      "The story expects the complete ordered sequence of 5 outcomes and forbids 1."
+      "The story expects 1 task-work results and 1 no-planned-work assertions."
     )
   })
 )
@@ -133,7 +146,7 @@ it.effect("requires one terminal assertion group and one owner for every decoded
   Effect.gen(function* () {
     const withoutAssertions = {
       ...singleton,
-      story: singleton.story.filter((item) => item._tag !== "ExpectedObservedOutcomes")
+      story: singleton.story.filter((item) => item._tag !== "ExpectedBehavior")
     }
     expect((yield* runAuthoredScenarioCassette(withoutAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
 
@@ -147,28 +160,29 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     expect((yield* runAuthoredScenarioCassette(nonTerminalAssertions).pipe(Effect.flip))._tag).toBe("SchemaError")
 
     const assertions = singleton.story.at(-1)
-    if (assertions?._tag !== "ExpectedObservedOutcomes") return yield* Effect.die("missing singleton assertions")
-    const duplicateExpected = {
+    if (assertions?._tag !== "ExpectedBehavior") return yield* Effect.die("missing singleton assertions")
+    const duplicateAbsence = {
       ...singleton,
       story: [
         ...singleton.story.slice(0, -1),
-        { ...assertions, expected: [...assertions.expected, assertions.expected[0]] }
+        {
+          ...assertions,
+          taskWork: {
+            ...assertions.taskWork,
+            absences: [...assertions.taskWork.absences, assertions.taskWork.absences[0]]
+          }
+        }
       ]
     }
-    expect((yield* runAuthoredScenarioCassette(duplicateExpected).pipe(Effect.flip))._tag).toBe("SchemaError")
-    const duplicateForbidden = {
-      ...singleton,
-      story: [
-        ...singleton.story.slice(0, -1),
-        { ...assertions, forbidden: [...assertions.forbidden, assertions.forbidden[0]] }
-      ]
-    }
-    expect((yield* runAuthoredScenarioCassette(duplicateForbidden).pipe(Effect.flip))._tag).toBe("SchemaError")
+    expect((yield* runAuthoredScenarioCassette(duplicateAbsence).pipe(Effect.flip))._tag).toBe("SchemaError")
     const contradictory = {
       ...singleton,
       story: [
         ...singleton.story.slice(0, -1),
-        { ...assertions, forbidden: [...assertions.forbidden, assertions.expected[0]] }
+        {
+          ...assertions,
+          taskWork: { ...assertions.taskWork, absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "A" }] }
+        }
       ]
     }
     expect((yield* runAuthoredScenarioCassette(contradictory).pipe(Effect.flip))._tag).toBe("SchemaError")
@@ -320,7 +334,7 @@ it.effect("reports mismatches through the surface that owns the current story it
   })
 )
 
-it.effect("derives failed and safely-suspended executor outcomes only from recorded handling", () =>
+it.effect("derives failed task-work results and safely suspended orchestration evidence from recorded handling", () =>
   Effect.gen(function* () {
     const failed = {
       ...singleton,
@@ -328,25 +342,17 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") {
           return { ...item, report: { ...item.report, result: { _tag: "Failed" } } }
         }
-        if (item._tag === "ExpectedObservedOutcomes") {
+        if (item._tag === "ExpectedBehavior") {
           return {
             ...item,
-            expected: item.expected.map((outcome) =>
-              outcome._tag === "ExecutorReported" && outcome.report === "TerminalCompleted"
-                ? { ...outcome, report: "TerminalFailed" }
-                : outcome
-            )
+            taskWork: { ...item.taskWork, results: [{ _tag: "PlannedWorkForTaskFailed", taskId: "A" }] }
           }
         }
         return item
       })
     }
     const failedRun = yield* runAuthoredScenarioCassette(failed)
-    expect(failedRun.observedOutcomes).toContainEqual({
-      _tag: "ExecutorReported",
-      attemptId: "attempt:A:0",
-      report: "TerminalFailed"
-    })
+    expect(failedRun.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskFailed", taskId: "A" }])
 
     const safelySuspended = {
       ...singleton,
@@ -355,40 +361,31 @@ it.effect("derives failed and safely-suspended executor outcomes only from recor
           return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
-        if (item._tag === "ExpectedObservedOutcomes") {
-          return [
-            ...story,
-            {
-              ...item,
-              expected: [
-                ...item.expected.filter((outcome) => outcome._tag !== "ExecutorReported"),
-                { _tag: "ExecutorReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
-              ]
-            }
-          ]
+        if (item._tag === "ExpectedBehavior") {
+          return [...story, { ...item, taskWork: { ...item.taskWork, results: [] } }]
         }
         return [...story, item]
       }, [])
     }
     const suspendedRun = yield* runAuthoredScenarioCassette(safelySuspended)
-    expect(suspendedRun.observedOutcomes).toContainEqual({
-      _tag: "ExecutorReported",
+    expect(suspendedRun.observedBehavior.orchestrationEvidence).toContainEqual({
+      _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
       report: "SafelySuspended"
     })
   })
 )
 
-it.effect("fails typed observed-outcome assertions and renders the unsupported capacity item", () =>
+it.effect("fails typed expected-behavior assertions and renders the unsupported capacity item", () =>
   Effect.gen(function* () {
     const wrongOutcomes = {
       ...singleton,
       story: singleton.story.map((item) =>
-        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: [] } : item
+        item._tag === "ExpectedBehavior" ? { ...item, taskWork: { ...item.taskWork, results: [] } } : item
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongOutcomes).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteOutcomeMismatch"
+      "AuthoredCassetteBehaviorMismatch"
     )
 
     const decoded = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
@@ -405,38 +402,109 @@ it.effect("fails typed observed-outcome assertions and renders the unsupported c
   })
 )
 
-it.effect("requires the complete ordered journal-derived outcome sequence", () =>
+it.effect("matches optional orchestration and protocol evidence in exact order", () =>
   Effect.gen(function* () {
-    const withAdditionalProjectedOutcome = {
+    const withEvidence = {
       ...singleton,
       story: singleton.story.map((item) =>
-        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: item.expected.slice(0, -1) } : item
-      )
-    }
-    const withMissingProjectedOutcome = {
-      ...singleton,
-      story: singleton.story.map((item) =>
-        item._tag === "ExpectedObservedOutcomes"
-          ? { ...item, expected: [...item.expected, { _tag: "TaskClaimed", taskId: "B" }] }
+        item._tag === "ExpectedBehavior"
+          ? {
+              ...item,
+              orchestration: [
+                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+              ],
+              protocol: [
+                { _tag: "TaskClaimAcquired", taskId: "A" },
+                { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
+              ]
+            }
           : item
       )
     }
-    const reorderedOutcomes = {
+    const run = yield* runAuthoredScenarioCassette(withEvidence)
+
+    expect(run.observedBehavior.orchestrationEvidence).toHaveLength(3)
+    expect(run.observedBehavior.protocolEvidence).toHaveLength(3)
+  })
+)
+
+it.effect("requires orchestration evidence when task-work results cannot distinguish attempts", () =>
+  Effect.gen(function* () {
+    const ambiguousResults = {
       ...singleton,
       story: singleton.story.map((item) =>
-        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: [...item.expected].reverse() } : item
+        item._tag === "ExpectedBehavior"
+          ? { ...item, taskWork: { ...item.taskWork, results: [...item.taskWork.results, ...item.taskWork.results] } }
+          : item
       )
     }
 
-    expect((yield* runAuthoredScenarioCassette(withAdditionalProjectedOutcome).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteOutcomeMismatch"
+    expect((yield* runAuthoredScenarioCassette(ambiguousResults).pipe(Effect.flip))._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("rejects reordered evidence within a present authored assertion lens", () =>
+  Effect.gen(function* () {
+    const reorderedEvidence = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "ExpectedBehavior"
+          ? {
+              ...item,
+              protocol: [
+                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskClaimAcquired", taskId: "A" }
+              ]
+            }
+          : item
+      )
+    }
+
+    expect((yield* runAuthoredScenarioCassette(reorderedEvidence).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteBehaviorMismatch"
     )
-    expect((yield* runAuthoredScenarioCassette(withMissingProjectedOutcome).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteOutcomeMismatch"
+  })
+)
+
+it.effect("rejects no-work-undertaken when Dalph assumed executor-work responsibility for that task", () =>
+  Effect.gen(function* () {
+    const contradictedAbsence = {
+      ...singleton,
+      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item) => {
+        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
+          return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
+        }
+        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
+        if (item._tag === "ExpectedBehavior") {
+          return [
+            ...story,
+            { ...item, taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "A" }], results: [] } }
+          ]
+        }
+        return [...story, item]
+      }, [])
+    }
+
+    expect((yield* runAuthoredScenarioCassette(contradictedAbsence).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteBehaviorMismatch"
     )
-    expect((yield* runAuthoredScenarioCassette(reorderedOutcomes).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteOutcomeMismatch"
-    )
+  })
+)
+
+it.effect("keeps explicit story interactions chronological when lower-level evidence is omitted", () =>
+  Effect.gen(function* () {
+    const firstSelection = singleton.story[2]
+    const firstResponse = singleton.story[3]
+    const outOfOrder = {
+      ...singleton,
+      story: [singleton.story[0], singleton.story[1], firstResponse, firstSelection, ...singleton.story.slice(4)]
+    }
+
+    expect((yield* runAuthoredScenarioCassette(outOfOrder).pipe(Effect.flip))._tag).toBe("TraceOutput.TraceOutputError")
   })
 )
 
@@ -769,21 +837,13 @@ it.effect("labels the 100-task three-read encoding experiment as a baseline", ()
         if (item._tag === "PlannedAttemptExecutorWorkReported") {
           return { ...item, report: { ...item.report, attemptId: `attempt:${activeTaskId}:0` } }
         }
-        if (item._tag === "ExpectedObservedOutcomes") {
+        if (item._tag === "ExpectedBehavior") {
           return {
             ...item,
-            expected: item.expected.map((outcome) => {
-              switch (outcome._tag) {
-                case "TaskClaimed":
-                  return { ...outcome, taskId: replaceTask(outcome.taskId) }
-                case "ExecutorReported":
-                  return { ...outcome, attemptId: `attempt:${activeTaskId}:0` }
-                case "TaskAttemptPrepared":
-                case "TaskWorktreeReady":
-                  return { ...outcome, attemptId: `attempt:${activeTaskId}:0`, taskId: replaceTask(outcome.taskId) }
-              }
-            }),
-            forbidden: []
+            taskWork: {
+              absences: [],
+              results: item.taskWork.results.map((result) => ({ ...result, taskId: replaceTask(result.taskId) }))
+            }
           }
         }
         return item

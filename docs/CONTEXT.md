@@ -102,6 +102,13 @@ responsibility for one exact planned attempt before asking the executor to work.
 It does not prove that the executor accepted or started work.
 _Avoid_: Executor work started, executor accepted work
 
+**Planned work undertaken for a task**:
+The task-level phenomenon established when Dalph assumes executor-work
+responsibility for at least one planned attempt belonging to that task. It does
+not prove that the executor accepted or started work, that the task tracker
+closed the task, or that Git integrated the work.
+_Avoid_: Executor work started, completed tracker task, integrated task
+
 **Planned-attempt executor-work report**:
 The non-action occurrence established when Dalph receives `Running`,
 `SafelySuspended`, or `Terminal` for one exact planned attempt. It proves the

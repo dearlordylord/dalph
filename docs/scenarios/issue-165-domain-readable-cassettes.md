@@ -25,11 +25,11 @@ boundary, records and creates A's controlled claim, rereads A after the claim,
 reads and records A's exact task-work specification, records the immutable
 attempt, reconciles the controlled worktree, and asks the executor to do the
 complete attempt work. The executor first reports Running and then Terminal
-Completed. The runner compares the domain decisions declared by the cassette
-with the decisions emitted while the production loop runs. It also compares
-the declared valid-history result and exact coarse executor reports with the
-visible production result, and verifies that none of the cassette's forbidden
-journal occurrence kinds appeared.
+Completed. The specialist-facing assertion says that A's planned work
+completed and that Dalph undertook no planned work for B. Optional
+orchestration evidence may name executor-work responsibility and reports for
+the exact attempt; optional protocol evidence may name claim acquisition,
+attempt planning, and worktree readiness.
 
 There is no real GitHub, Git, SQLite, process, or operating-system boundary in
 this scenario, so network loss, an external process crash, and provider retry

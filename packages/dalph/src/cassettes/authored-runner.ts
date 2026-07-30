@@ -24,19 +24,19 @@ import {
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   AuthoredScenarioCassette,
-  type AuthoredObservedOutcome,
+  type AuthoredObservedBehavior,
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
 import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
 import { makeStoryCursor } from "./authored-cursor.js"
-import { assertAuthoredObservedOutcomes } from "./authored-outcomes.js"
+import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly cassette: ScenarioCassette
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
+  readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
-  readonly observedOutcomes: ReadonlyArray<AuthoredObservedOutcome>
 }
 
 /** Decodes and drives one story through the production coordinator activation program. */
@@ -91,12 +91,12 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
     return yield* (yield* JournalStore).read(runId)
   }).pipe(Effect.provide(workflowLayer))
   const assertions = yield* cursor.consumeTerminalAssertions
-  const observedOutcomes = yield* assertAuthoredObservedOutcomes(records, assertions)
+  const observedBehavior = yield* assertAuthoredExpectedBehavior(records, assertions)
   return {
     cassette,
     history: reduceWorkflowJournalHistory(runId, records),
+    observedBehavior,
     records,
-    runId,
-    observedOutcomes
+    runId
   } satisfies AuthoredScenarioCassetteRun
 })

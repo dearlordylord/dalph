@@ -1,4 +1,39 @@
-import type { AuthoredCassetteStoryItem, AuthoredScenarioCassette } from "./authored-domain.js"
+import type {
+  AuthoredCassetteStoryItem,
+  AuthoredOrchestrationEvidence,
+  AuthoredProtocolEvidence,
+  AuthoredScenarioCassette,
+  AuthoredTaskWorkResult
+} from "./authored-domain.js"
+
+const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string =>
+  result._tag === "PlannedWorkForTaskCompleted"
+    ? `The story expects the planned work for task ${result.taskId} to complete.`
+    : `The story expects the planned work for task ${result.taskId} to fail.`
+
+const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string =>
+  evidence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+    ? `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
+    : `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
+
+const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
+  switch (evidence._tag) {
+    case "TaskClaimAcquired":
+      return `The story expects Dalph to acquire the claim for task ${evidence.taskId}.`
+    case "TaskAttemptPlanned":
+      return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
+    case "TaskWorktreeReady":
+      return `The story expects the worktree for task ${evidence.taskId}, attempt ${evidence.attemptId}, to become ready.`
+  }
+}
+
+const expectedBehaviorLyric = (item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>) =>
+  [
+    ...item.taskWork.results.map(taskWorkResultLyric),
+    ...item.taskWork.absences.map(({ taskId }) => `The story expects no planned work undertaken for task ${taskId}.`),
+    ...(item.orchestration === null ? [] : item.orchestration.map(orchestrationEvidenceLyric)),
+    ...(item.protocol === null ? [] : item.protocol.map(protocolEvidenceLyric))
+  ].join("\n")
 
 const storyLyric = (item: AuthoredCassetteStoryItem): string =>
   item._tag === "InitialControlPolicy"
@@ -13,8 +48,8 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string =>
             ? `The task tracker returns "${item.title}" for task ${item.taskId}.`
             : item._tag === "PlannedAttemptExecutorWorkReported"
               ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
-              : item._tag === "ExpectedObservedOutcomes"
-                ? `The story expects the complete ordered sequence of ${item.expected.length} outcomes and forbids ${item.forbidden.length}.`
+              : item._tag === "ExpectedBehavior"
+                ? expectedBehaviorLyric(item)
                 : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
 
 /** Readable prose is derived from structured story items and is never parsed. */

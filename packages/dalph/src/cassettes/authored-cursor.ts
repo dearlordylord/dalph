@@ -32,7 +32,7 @@ export interface StoryCursor {
     CursorFailure
   >
   readonly consumeTerminalAssertions: Effect.Effect<
-    typeof AuthoredCassetteStoryItem.cases.ExpectedObservedOutcomes.Type,
+    typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type,
     CursorFailure
   >
   readonly consumeTrackerGraph: Effect.Effect<
@@ -92,9 +92,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
-  const consumeTerminalAssertions = consume("ExpectedObservedOutcomes").pipe(
+  const consumeTerminalAssertions = consume("ExpectedBehavior").pipe(
     Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedObservedOutcomes)(item).pipe(Effect.orDie)
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
     )
   )
   const consumeTrackerGraph = consume("TrackerGraphReadReturned").pipe(
