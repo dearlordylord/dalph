@@ -146,6 +146,11 @@ const readRecoveredMembershipConstraintFrontier = Effect.fn(
 
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction with its executor capability.
 interface RunRecoveryActivationSource {
+  /** Continues an attempt first planned by this activation, without applying startup-recovery authority checks. */
+  readonly continueFreshPlannedAttemptExecutorWork: (
+    plannedAttempt: PlannedTaskAttempt
+  ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
+  /** Continues an attempt reconstructed at startup after rereading its tracker claim and Git worktree. */
   readonly continuePlannedAttemptExecutorWork: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
@@ -190,17 +195,19 @@ export class RunRecoveryActivation extends Context.Service<RunRecoveryActivation
 export const emptyRunRecoveryActivationLayer = Layer.effect(
   RunRecoveryActivation,
   PlannedAttemptExecutor.pipe(
-    Effect.map((executor) =>
-      RunRecoveryActivation.of({
+    Effect.map((executor) => {
+      const continueAttempt = (plannedAttempt: PlannedTaskAttempt) => executor.startOrContinue(plannedAttempt)
+      return RunRecoveryActivation.of({
         _tag: "SyntheticFreshOnlyActivation",
-        continuePlannedAttemptExecutorWork: (plannedAttempt) => executor.startOrContinue(plannedAttempt),
+        continueFreshPlannedAttemptExecutorWork: continueAttempt,
+        continuePlannedAttemptExecutorWork: continueAttempt,
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       })
-    )
+    })
   )
 )
 
@@ -214,13 +221,15 @@ export const makeJournaledFreshRunRecoveryActivation = Effect.fn("RunRecoveryAct
     const journal = yield* JournalStore
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
       Effect.provideService(effect, JournalStore, journal)
+    const continueAttempt = (plannedAttempt: PlannedTaskAttempt) =>
+      continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.provideService(JournalStore, journal)
+      )
     return RunRecoveryActivation.of({
       _tag: "SyntheticFreshOnlyActivation",
-      continuePlannedAttemptExecutorWork: (plannedAttempt) =>
-        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-          Effect.provideService(PlannedAttemptExecutor, executor),
-          Effect.provideService(JournalStore, journal)
-        ),
+      continueFreshPlannedAttemptExecutorWork: continueAttempt,
+      continuePlannedAttemptExecutorWork: continueAttempt,
       readFinalityFrontier: provideJournal(readRecoveredFrontier(runId)),
       readFrontier: provideJournal(readRecoveredMembershipConstraintFrontier(runId)),
       readResponsibility: provideJournal(
@@ -302,11 +311,23 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
   })
   return {
     _tag: "AuthoritativeRunRecoveryActivation",
-    continuePlannedAttemptExecutorWork: (plannedAttempt) =>
+    continueFreshPlannedAttemptExecutorWork: (plannedAttempt) =>
       provideDependencies(
         continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
           Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
         )
+      ),
+    continuePlannedAttemptExecutorWork: (plannedAttempt) =>
+      provideDependencies(
+        recoveryAuthority
+          .verify(plannedAttempt)
+          .pipe(
+            Effect.andThen(
+              continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+                Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
+              )
+            )
+          )
       ),
     readFrontier: provideDependencies(readFrontier()),
     readFinalityFrontier: provideDependencies(readFrontier()),

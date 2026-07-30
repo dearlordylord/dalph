@@ -106,7 +106,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
   type WorkflowStage = FreshWorkflowStage
   const continuePlannedExecutorWork = (plannedAttempt: PlannedTaskAttempt) =>
-    recovery.continuePlannedAttemptExecutorWork(plannedAttempt)
+    recovery.continueFreshPlannedAttemptExecutorWork(plannedAttempt)
 
   const continued = (operationId: OperationId, task: Task): RunnableFrontierTransition =>
     FrontierTransition.ContinueFreshWorkflowOperation({ operationId, taskId: task.id })

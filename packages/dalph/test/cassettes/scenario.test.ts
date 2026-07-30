@@ -12,6 +12,7 @@ import {
   describeJournalEvent,
   JournalPosition,
   RunPolicyRevision,
+  TrackerRevision,
   TaskWorkCapacity,
   type JournalRecord,
   type TaskTrackerFactsObservation,
@@ -465,8 +466,23 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained pipeline has no coordinator")
     const target = command.target
     const initialGraph = dependentTasksCompleteInOneRunAuthoredCassette.startingFacts.trackerGraph
+    const recoveryGraph = {
+      ...initialGraph,
+      revision: TrackerRevision.make("pipeline-B-becomes-independent-during-recovery"),
+      tasks: initialGraph.tasks.map((task) => (task.id === TaskId.make("B") ? { ...task, prerequisiteIds: [] } : task))
+    }
     const firstRunning = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
       (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+    )
+    const aTerminal = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.report._tag === "Terminal" &&
+        item.report.attemptId === "attempt:A:0"
+    )
+    const acquireB = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
+      (item) =>
+        item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === "B"
     )
     const recoveryAttemptId = AttemptId.make("attempt:B:0")
     const restartItem = (item: (typeof dependentTasksCompleteInOneRunAuthoredCassette.story)[number]) => {
@@ -486,6 +502,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
       ...dependentTasksCompleteInOneRunAuthoredCassette,
       name: "capacity contraction survives coordinator death before later admission",
       story: dependentTasksCompleteInOneRunAuthoredCassette.story
+        .filter((_item, index) => index <= aTerminal + 2 || index >= acquireB)
         .flatMap((item, index) => [
           ...(index === 0 && item._tag === "InitialControlPolicy"
             ? [{ ...item, policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } }]
@@ -495,7 +512,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
                 { _tag: "SetTaskExecutionCapacity", capacity: TaskWorkCapacity.make(1) } as const,
                 { _tag: "CoordinatorProcessDies" } as const,
                 { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
-                { _tag: "TrackerGraphReadReturned", graph: initialGraph } as const
+                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const
               ]
             : [])
         ])
@@ -510,6 +527,18 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report._tag === "Terminal" &&
         event.report.correlation.attemptId === "attempt:A:0"
+    )
+    const bBecameIndependentAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies.some(
+          (family) =>
+            family._tag === "TaskPrerequisites" &&
+            family.prerequisites.some(
+              ({ prerequisiteTaskIds, taskId }) => taskId === TaskId.make("B") && prerequisiteTaskIds.length === 0
+            )
+        )
     )
     const bResponsibilityAt = run.records.findIndex(
       ({ event }) =>
@@ -538,6 +567,8 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
       )
     ).toEqual(["Running", "Terminal"])
     expect(changedAt).toBeGreaterThan(0)
+    expect(bBecameIndependentAt).toBeGreaterThan(changedAt)
+    expect(aTerminalAt).toBeGreaterThan(bBecameIndependentAt)
     expect(aTerminalAt).toBeGreaterThan(changedAt)
     expect(bResponsibilityAt).toBeGreaterThan(aTerminalAt)
     expect(run.observedBehavior.taskWorkResults).toEqual([
