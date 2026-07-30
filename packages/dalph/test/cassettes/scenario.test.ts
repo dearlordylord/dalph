@@ -53,7 +53,9 @@ it.effect("runs the maintained singleton through production activation and stops
     expect(lastEvent?._tag === "PlannedAttemptExecutorWorkReported" ? lastEvent.report._tag : undefined).toBe(
       "Terminal"
     )
-    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("The story requires 5 outcomes and forbids 1.")
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "The story expects the complete ordered sequence of 5 outcomes and forbids 1."
+    )
   })
 )
 
@@ -374,6 +376,41 @@ it.effect("fails typed observed-outcome assertions and renders the unsupported c
     })
     expect(renderAuthoredCassetteLyrics(decoded)).toContain(
       "The unsupported story asks Dalph to change task-execution capacity to 2."
+    )
+  })
+)
+
+it.effect("requires the complete ordered journal-derived outcome sequence", () =>
+  Effect.gen(function* () {
+    const withAdditionalProjectedOutcome = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: item.expected.slice(0, -1) } : item
+      )
+    }
+    const withMissingProjectedOutcome = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "ExpectedObservedOutcomes"
+          ? { ...item, expected: [...item.expected, { _tag: "TaskClaimed", taskId: "B" }] }
+          : item
+      )
+    }
+    const reorderedOutcomes = {
+      ...singleton,
+      story: singleton.story.map((item) =>
+        item._tag === "ExpectedObservedOutcomes" ? { ...item, expected: [...item.expected].reverse() } : item
+      )
+    }
+
+    expect((yield* runAuthoredScenarioCassette(withAdditionalProjectedOutcome).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteOutcomeMismatch"
+    )
+    expect((yield* runAuthoredScenarioCassette(withMissingProjectedOutcome).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteOutcomeMismatch"
+    )
+    expect((yield* runAuthoredScenarioCassette(reorderedOutcomes).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteOutcomeMismatch"
     )
   })
 )

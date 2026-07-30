@@ -48,11 +48,14 @@ search ahead, append a journal row, invoke a reducer, assign reconstructed
 state, or select work.
 
 After Dalph records the terminal coarse executor report, the story reaches its
-one final cassette-only assertion group. The group requires the typed observed
-outcomes that A was claimed, one attempt for A was prepared, its worktree
-became ready, and the executor reported Running then Terminal Completed. It
-forbids an attempt for B. Provider input alone cannot satisfy those outcomes:
-the runner derives them from Dalph's recorded handling.
+one final cassette-only assertion group. The group's expected outcomes are the
+complete ordered projection of cassette-visible outcomes derived from Dalph's
+journal: A was claimed, one attempt for A was prepared, its worktree became
+ready, and the executor reported Running then Terminal Completed. A missing,
+reordered, or additional projected outcome fails the story. A journal event
+that has no cassette-visible outcome projection does not enter this comparison.
+The group also explicitly forbids an attempt for B. Provider input alone cannot
+satisfy those outcomes: the runner derives them from Dalph's recorded handling.
 
 There is no real GitHub, Git process, executor process, SQLite, network loss,
 crash, or retry in this deterministic story. Rerunning creates fresh controlled
@@ -72,6 +75,7 @@ Acceptance tests:
   failure`
 - `requires one terminal assertion group and one owner for every decoded story
   item`
+- `requires the complete ordered journal-derived outcome sequence`
 - `rejects cassette-local contradictions and leaves an authority mismatch to
   its ordinary boundary`
 

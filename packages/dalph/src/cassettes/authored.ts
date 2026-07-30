@@ -124,6 +124,7 @@ const RunCoordinatorFields = {
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   DalphSelects: { operation: AuthoredCassetteDecision },
+  /** The complete ordered projection of cassette-visible outcomes, plus explicit forbidden outcomes. */
   ExpectedObservedOutcomes: {
     expected: Schema.Array(AuthoredObservedOutcome),
     forbidden: Schema.Array(AuthoredObservedOutcome)
@@ -670,7 +671,7 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string =>
             : item._tag === "PlannedAttemptExecutorWorkReported"
               ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
               : item._tag === "ExpectedObservedOutcomes"
-                ? `The story requires ${item.expected.length} outcomes and forbids ${item.forbidden.length}.`
+                ? `The story expects the complete ordered sequence of ${item.expected.length} outcomes and forbids ${item.forbidden.length}.`
                 : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
 
 /** Readable prose is derived from structured story items and is never parsed. */
