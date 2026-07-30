@@ -1,4 +1,4 @@
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Option, Ref, Schema } from "effect"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -10,14 +10,12 @@ export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass
   { actual: Schema.String, expected: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class UnsupportedAuthoredCapacityChange extends Schema.TaggedErrorClass<UnsupportedAuthoredCapacityChange>()(
-  "UnsupportedAuthoredCapacityChange",
-  { storyPosition: Schema.Int }
-) {}
-
-type CursorFailure = AuthoredCassetteInteractionMismatch | UnsupportedAuthoredCapacityChange
+type CursorFailure = AuthoredCassetteInteractionMismatch
 
 export interface StoryCursor {
+  readonly consumeCapacityChange: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
+  >
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
   readonly consumeExecutorReport: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.Type,
@@ -50,9 +48,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Effect.gen(function* () {
       const index = yield* Ref.get(position)
       const item = story[index]
-      if (item?._tag === "SetTaskExecutionCapacity") {
-        return yield* new UnsupportedAuthoredCapacityChange({ storyPosition: index })
-      }
       if (item?._tag !== tag) {
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: tag,
@@ -81,6 +76,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
     )
   )
+  const consumeCapacityChange = Effect.gen(function* () {
+    const index = yield* Ref.get(position)
+    const item = story[index]
+    if (item?._tag !== "SetTaskExecutionCapacity") return Option.none()
+    yield* Ref.set(position, index + 1)
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity)(item).pipe(
+        Effect.orDie
+      )
+    )
+  })
   const consumeRunCoordinator = consume("RunCoordinator").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.RunCoordinator)(item).pipe(Effect.orDie)
@@ -113,6 +119,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(item).pipe(Effect.orDie)
   })
   return {
+    consumeCapacityChange,
     consumeDalphSelection,
     consumeExecutorReport,
     consumeInitialPolicy,

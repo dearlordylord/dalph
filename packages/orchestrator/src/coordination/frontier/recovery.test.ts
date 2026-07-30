@@ -58,6 +58,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { InitialControlPolicy } from "../../control/policy.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
 
@@ -225,7 +226,11 @@ it.effect("fresh-run journal facts expose membership constraints without recover
 
   return Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),

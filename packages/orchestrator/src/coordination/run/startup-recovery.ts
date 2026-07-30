@@ -17,6 +17,7 @@ import {
   WorkflowJournalHistoryIdentityIssue,
   WorkflowJournalHistorySemanticIssue
 } from "../reconstruction/history-result.js"
+import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -49,6 +50,7 @@ export const startupRecoveryLayer = (runId: RunId) =>
       const executor = yield* PlannedAttemptExecutor
       const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
       const trace = yield* WorkflowTrace
+      const taskWorkCapacityControl = yield* TaskWorkCapacityControl
       const scan = yield* journal.scan()
       const reductions = scan.runs.map((history) => reduceWorkflowJournalHistory(history.runId, history.records))
       const issues = [
@@ -86,6 +88,7 @@ export const startupRecoveryLayer = (runId: RunId) =>
         Context.add(PlannedAttemptExecutor, executor),
         Context.add(JournalStore, journal),
         Context.add(PlannedAttemptRecoveryAuthority, recoveryAuthority),
+        Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
         Context.add(WorkflowTrace, trace)
       )
     })

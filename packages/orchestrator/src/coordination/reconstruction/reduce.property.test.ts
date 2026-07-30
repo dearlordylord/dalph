@@ -15,6 +15,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
@@ -61,7 +62,7 @@ it("never creates responsibility from generated graph membership", () => {
       const afterIntentRecords = [
         ...prefix,
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 6 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion }),
           key: intentRecordKey(claim.acquisition.operationId)
         }
       ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId }))

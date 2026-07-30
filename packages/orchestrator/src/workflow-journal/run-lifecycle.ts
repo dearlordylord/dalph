@@ -14,13 +14,19 @@ import {
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
 } from "./store.js"
+import type { InitialControlPolicy } from "../control/policy.js"
 
 type LifecycleTransition<A> =
   | { readonly _tag: "LifecycleTransitionAccepted"; readonly record: JournalRecord }
   | { readonly _tag: "LifecycleTransitionRejected"; readonly failure: A }
 
-export const makeWorkflowRunBeganRecord = (runId: RunId, target: TrackerTarget): JournalRecord => ({
+export const makeWorkflowRunBeganRecord = (
+  runId: RunId,
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy
+): JournalRecord => ({
   event: WorkflowRunBeganEvent.make({
+    initialControlPolicy,
     initiatedBy: { _tag: "DalphCoordinator" },
     occurrenceClassification: "InitiatedAction",
     target,
@@ -46,7 +52,8 @@ export const makeWorkflowRunTerminatedRecord = (runId: RunId, position: JournalP
 export const decideWorkflowRunBeginning = (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
-  target: TrackerTarget
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy
 ): LifecycleTransition<WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed> => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
   if (began !== undefined) {
@@ -57,7 +64,7 @@ export const decideWorkflowRunBeginning = (
   }
   const first = records[0]
   return first === undefined
-    ? { _tag: "LifecycleTransitionAccepted", record: makeWorkflowRunBeganRecord(runId, target) }
+    ? { _tag: "LifecycleTransitionAccepted", record: makeWorkflowRunBeganRecord(runId, target, initialControlPolicy) }
     : {
         _tag: "LifecycleTransitionRejected",
         failure: new WorkflowRunIdentityAlreadyUsed({ firstRecordAt: first.position, runId })

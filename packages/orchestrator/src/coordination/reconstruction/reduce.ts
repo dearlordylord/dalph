@@ -17,6 +17,7 @@ import {
   workflowResponsibilityOperationId,
   WorkflowResponsibilityState
 } from "./state.js"
+import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 
 /** Pure graph-knowledge reducer. */
 const reduceGraphKnowledge = (records: ReadonlyArray<JournalRecord>): BestAvailableDurableGraphKnowledge => {
@@ -67,6 +68,21 @@ const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): Wo
 
 /** Pure workflow-history reducer; it retains every exact decoded record. */
 const reduceWorkflowHistory = (records: ReadonlyArray<JournalRecord>): ReconstructedWorkflowHistory => ({ records })
+
+/** Applies the initial policy and every later Operator change in journal order. */
+const reduceControlPolicy = (records: ReadonlyArray<JournalRecord>) => {
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (began?.event._tag !== "WorkflowRunBegan") return Option.none()
+  let policy = RunControlPolicy.make({
+    revision: initialRunPolicyRevision,
+    taskExecutionCapacity: began.event.initialControlPolicy.taskExecutionCapacity
+  })
+  for (const { event } of records) {
+    if (event._tag !== "TaskWorkCapacityChanged") continue
+    policy = RunControlPolicy.make({ revision: event.revision, taskExecutionCapacity: event.capacity })
+  }
+  return Option.some(policy)
+}
 
 const validateGraphKnowledge = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<ReconstructedRunInvariantIssue> =>
   records.flatMap((record, index) =>
@@ -172,6 +188,7 @@ export const reconstructValidatedRunState = (
   const responsibility = reduceWorkflowResponsibility(records)
   return {
     appliedThrough: records.at(records.length - 1)?.position ?? null,
+    controlPolicy: reduceControlPolicy(records),
     graphKnowledge,
     pause: reducePauseState(records),
     responsibility,

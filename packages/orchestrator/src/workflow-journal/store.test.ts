@@ -9,6 +9,7 @@ import { describe, expect } from "vitest"
 import { RunId } from "@dalph/contracts"
 import {
   FixtureTarget,
+  InitialControlPolicy,
   JournalDatabaseLocator,
   JournalRecordKey,
   JournalStorageAccessDenied,
@@ -20,6 +21,7 @@ import {
   memoryJournalStoreLayer,
   OperationId,
   sqliteJournalStoreLayer,
+  TaskWorkCapacity,
   taskTrackerReadIntent,
   WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
@@ -31,6 +33,7 @@ import {
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
 const withTemporaryDatabase = <A, E, R>(
   use: (filename: JournalDatabaseLocator, directory: string) => Effect.Effect<A, E, R>
@@ -73,8 +76,8 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("single-start-target")
-        const began = yield* journal.beginRun(runId, target)
-        const repeated = yield* Effect.flip(journal.beginRun(runId, target))
+        const began = yield* journal.beginRun(runId, target, initialPolicy)
+        const repeated = yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))
 
         expect(began).toMatchObject({ event: { _tag: "WorkflowRunBegan", target }, position: 1, runId })
         expect(repeated).toBeInstanceOf(WorkflowRunAlreadyBegan)
@@ -86,7 +89,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
     it.effect("rejects every workflow record after Run termination", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
-        yield* journal.beginRun(runId, FixtureTarget.make("terminated-target"))
+        yield* journal.beginRun(runId, FixtureTarget.make("terminated-target"), initialPolicy)
         const terminated = yield* journal.terminateRun(runId)
         const failure = yield* Effect.flip(journal.append(runId, firstKey, intent("one", "task-1")))
 
@@ -104,7 +107,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("recoverable-target")
-        const began = yield* journal.beginRun(runId, target)
+        const began = yield* journal.beginRun(runId, target, initialPolicy)
 
         expect(yield* journal.readRunForRecovery(runId, target)).toEqual(began)
         const mismatch = yield* Effect.flip(journal.readRunForRecovery(runId, FixtureTarget.make("different-target")))
@@ -127,7 +130,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("already-terminated-target")
-        yield* journal.beginRun(runId, target)
+        yield* journal.beginRun(runId, target, initialPolicy)
         const terminated = yield* journal.terminateRun(runId)
 
         expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toMatchObject({
@@ -143,7 +146,9 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const existing = yield* journal.append(runId, firstKey, intent("one", "task-1"))
-        const failure = yield* Effect.flip(journal.beginRun(runId, FixtureTarget.make("late-beginning-target")))
+        const failure = yield* Effect.flip(
+          journal.beginRun(runId, FixtureTarget.make("late-beginning-target"), initialPolicy)
+        )
 
         expect(failure).toBeInstanceOf(WorkflowRunIdentityAlreadyUsed)
         expect(failure).toMatchObject({ firstRecordAt: existing.position, runId })

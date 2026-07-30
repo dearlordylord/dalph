@@ -36,6 +36,8 @@ import {
 } from "../../presentation/tracker-workflow-trace.js"
 import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { JournalStore } from "../../workflow-journal/store.js"
+import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
+import { RunControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
@@ -47,13 +49,19 @@ export const discardFreshStagesOwnedByRecovery = (
 ): ReadonlyArray<FreshWorkflowStage> =>
   stages.filter(({ transition }) => !recoveredTaskIds.has(runnableTransitionTaskId(transition)))
 
+type RunControlPolicyReadError = Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
+
 const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy,
   startup:
-    | { readonly _tag: "Fresh"; readonly runId: AllocatedFreshWorkflowRunId }
+    | {
+        readonly _tag: "Fresh"
+        readonly initialControlPolicy: InitialControlPolicy
+        readonly runId: AllocatedFreshWorkflowRunId
+      }
     | { readonly _tag: "Recovered" }
-    | { readonly _tag: "Synthetic"; readonly runId: RunId }
+    | { readonly _tag: "Synthetic"; readonly initialControlPolicy: InitialControlPolicy; readonly runId: RunId },
+  readCurrentControlPolicy: Effect.Effect<RunControlPolicy, RunControlPolicyReadError>
 ) {
   const allocator = yield* OperationIdAllocator
   const interpreter = yield* WorkflowInterpreter
@@ -81,7 +89,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   const traceEmission = yield* Semaphore.make(1)
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
-    capacity: initialControlPolicy.taskExecutionCapacity,
+    capacity: (yield* readCurrentControlPolicy).taskExecutionCapacity,
     reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
@@ -313,6 +321,11 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
       })
 
       for (;;) {
+        const appliedPolicy = yield* readCurrentControlPolicy
+        const admission = yield* admissionController.snapshot()
+        if (admission.capacity !== appliedPolicy.taskExecutionCapacity) {
+          yield* admissionController.resize(appliedPolicy.taskExecutionCapacity)
+        }
         yield* coordinator.signal(ActivationCause.Startup())
         const pendingCompletion = yield* Queue.poll(completions)
         if (Option.isSome(pendingCompletion)) {
@@ -350,26 +363,41 @@ export const runWorkflow = (
 ) =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
-    const finality = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
+    const control = yield* TaskWorkCapacityControl
+    yield* journal.beginRun(runId, target, initialControlPolicy)
+    const finality = yield* runWorkflowWithStartup(
+      target,
+      { _tag: "Fresh", initialControlPolicy, runId },
+      control.read(runId)
+    )
     if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(runId)
     return finality
   })
 
 /** Runs the exact reconstructed identity owned by authoritative recovery. */
-export const runRecoveredWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy) =>
+export const runRecoveredWorkflow = (target: TrackerTarget) =>
   Effect.gen(function* () {
     const recovery = yield* RunRecoveryActivation
     if (recovery._tag !== "AuthoritativeRunRecoveryActivation") {
       return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
     }
     const journal = yield* JournalStore
+    const control = yield* TaskWorkCapacityControl
     yield* journal.readRunForRecovery(recovery.runId, target)
-    const finality = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
+    const finality = yield* runWorkflowWithStartup(target, { _tag: "Recovered" }, control.read(recovery.runId))
     if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(recovery.runId)
     return finality
   })
 
 /** Explicit non-durable path for dry-run and deterministic workflow tests. */
 export const runSyntheticWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy, runId: RunId) =>
-  runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Synthetic", runId })
+  runWorkflowWithStartup(
+    target,
+    { _tag: "Synthetic", initialControlPolicy, runId },
+    Effect.succeed(
+      RunControlPolicy.make({
+        revision: initialRunPolicyRevision,
+        taskExecutionCapacity: initialControlPolicy.taskExecutionCapacity
+      })
+    )
+  )

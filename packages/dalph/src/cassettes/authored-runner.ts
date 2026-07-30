@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
@@ -18,6 +18,8 @@ import {
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
   runWorkflow,
+  taskWorkCapacityControlLayer,
+  TaskWorkCapacityControl,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
@@ -73,6 +75,27 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
     Layer.provide(gitWorktreeTestLayer(cassette.startingFacts.worktreeObservation))
   )
   const executorLayer = controlledExecutorLayer(cursor, runId)
+  const baseControlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
+  const controlledControlPolicyLayer = Layer.effect(
+    TaskWorkCapacityControl,
+    Effect.gen(function* () {
+      const control = yield* TaskWorkCapacityControl
+      return TaskWorkCapacityControl.of({
+        ...control,
+        read: (requestedRunId) =>
+          Effect.gen(function* () {
+            const change = yield* cursor.consumeCapacityChange
+            if (Option.isSome(change)) {
+              const current = yield* control.read(requestedRunId)
+              yield* control
+                .apply({ capacity: change.value.capacity, expectedRevision: current.revision, runId: requestedRunId })
+                .pipe(Effect.orDie)
+            }
+            return yield* control.read(requestedRunId)
+          })
+      })
+    })
+  ).pipe(Layer.provide(baseControlPolicyLayer))
   const workflowLayer = Layer.mergeAll(
     journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer),
     journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(executorLayer)),
@@ -83,7 +106,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       executor: command.executor,
       runId,
       worktreeRoot: command.worktreeRoot
-    })
+    }),
+    controlledControlPolicyLayer
   ).pipe(Layer.provideMerge(journalLayer))
 
   const records = yield* Effect.gen(function* () {

@@ -10,6 +10,8 @@ import { TaskTrackerFactsObservation } from "../task-tracker-facts/observation.j
 import { taskTrackerObservationMatchesRead } from "../task-tracker-facts/observation-match.js"
 import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
+import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
+import { RunPolicyRevision } from "../../control/policy.js"
 export { WorkflowActor } from "./actor.js"
 
 const initiatedActionFields = {
@@ -121,8 +123,20 @@ export const AppliedControlDirection = Schema.TaggedStruct("AppliedControlDirect
 })
 export type AppliedControlDirection = typeof AppliedControlDirection.Type
 
+/** Operator durably changed the future task-admission ceiling for one Run. */
+export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapacity", {
+  capacity: TaskWorkCapacity,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  policyRevision: RunPolicyRevision,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
+
 export const WorkflowOccurrence = Schema.Union([
   AppliedControlDirection,
+  AppliedTaskWorkCapacity,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
   TaskTrackerReadInitiated,
@@ -152,7 +166,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 2 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 3 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -263,6 +277,7 @@ type ProjectedJournalEvent = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorWorkReported"
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
+      | "TaskWorkCapacityChanged"
       | "TaskTrackerReadIntentRecorded"
       | "TaskTrackerFactsObserved"
   }
@@ -297,6 +312,45 @@ export class ExecutorReportWithoutResponsibilityBegan extends Schema.TaggedError
   { attemptId: AttemptId, position: JournalPosition, runId: RunId }
 ) {}
 
+type DirectlyProjectedJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" | "TaskWorkCapacityChanged" }
+>
+
+const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is DirectlyProjectedJournalEvent =>
+  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" || event._tag === "TaskWorkCapacityChanged"
+
+const projectDirectOccurrence = (
+  record: JournalRecord,
+  event: DirectlyProjectedJournalEvent,
+  executorResponsibilities: Set<string>,
+  occurrences: Array<WorkflowOccurrence>
+): void => {
+  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    executorResponsibilities.add(relationshipKey(record.runId, event.plannedAttempt.attemptId))
+    occurrences.push(
+      PlannedAttemptExecutorWorkResponsibilityBegan.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt: event.plannedAttempt,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+    return
+  }
+  occurrences.push(
+    AppliedTaskWorkCapacity.make({
+      capacity: event.capacity,
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      policyRevision: event.revision,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
 /**
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
@@ -313,6 +367,10 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
 
   for (const record of records) {
     const event = record.event
+    if (isDirectlyProjectedJournalEvent(event)) {
+      projectDirectOccurrence(record, event, executorResponsibilities, occurrences)
+      continue
+    }
     if (event._tag === "TaskTrackerReadIntentRecorded") {
       trackerReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
       occurrences.push(
@@ -340,19 +398,6 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
           evidence: event.observation,
           occurrenceClassification: "NonActionOccurrence",
           originatingActionOperationId: event.operationId,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-      executorResponsibilities.add(relationshipKey(record.runId, event.plannedAttempt.attemptId))
-      occurrences.push(
-        PlannedAttemptExecutorWorkResponsibilityBegan.make({
-          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-          occurrenceClassification: "InitiatedAction",
-          plannedAttempt: event.plannedAttempt,
           recordedAt: record.position,
           runId: record.runId
         })

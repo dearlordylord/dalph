@@ -30,6 +30,7 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import {
   makeTaskAttemptPlanOperation,
@@ -61,7 +62,7 @@ it("gives every generated acknowledged-plan prefix exactly one derived recovery 
       })
       const reduction = reduceWorkflowJournalHistory(runId, [
         {
-          event: TaskAttemptPlannedEvent.make({ operation, version: 6 }),
+          event: TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion }),
           key: attemptPlanRecordKey(attempt.attemptId),
           position: JournalPosition.make(1),
           runId
@@ -113,11 +114,14 @@ it("classifies every generated pre-attempt fact-to-next-intent crash prefix", ()
           key: outcomeRecordKey(initial.operationId)
         },
         {
-          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: 6 }),
+          event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion }),
           key: intentRecordKey(claim.acquisition.operationId)
         },
         {
-          event: TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(claim.acquisition), version: 6 }),
+          event: TaskClaimAcquiredEvent.make({
+            claim: ActiveTaskClaim.make(claim.acquisition),
+            version: workflowJournalEventVersion
+          }),
           key: outcomeRecordKey(claim.acquisition.operationId)
         },
         { event: taskTrackerReadIntent(admission), key: intentRecordKey(admission.operationId) },

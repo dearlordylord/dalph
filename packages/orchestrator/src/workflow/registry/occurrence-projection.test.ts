@@ -20,7 +20,8 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
-import { InitialControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import {
@@ -528,6 +529,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       const target = FixtureTarget.make("occurrence-fixture")
       const began: JournalRecord = {
         event: WorkflowRunBeganEvent.make({
+          initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
           target,
@@ -576,6 +578,19 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Layer.succeed(
+          TaskWorkCapacityControl,
+          TaskWorkCapacityControl.of({
+            apply: () => Effect.die("recovery startup does not apply capacity"),
+            read: () =>
+              Effect.succeed(
+                RunControlPolicy.make({
+                  revision: initialRunPolicyRevision,
+                  taskExecutionCapacity: TaskWorkCapacity.make(1)
+                })
+              )
+          })
+        ),
+        Layer.succeed(
           OperationIdAllocator,
           OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("startup-reread")) })
         ),
@@ -588,10 +603,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("no eligible startup task") })
         )
       )
-      yield* runRecoveredWorkflow(
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      ).pipe(Effect.provide(workflowLayer))
+      yield* runRecoveredWorkflow(target).pipe(Effect.provide(workflowLayer))
       expect(yield* Ref.get(trackerReads)).toBe(2)
     }
 
@@ -730,6 +742,7 @@ it.effect("rejects an observation whose exact initiating action is absent, later
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
     AppliedControlDirection: true,
+    AppliedTaskWorkCapacity: true,
     PlannedAttemptExecutorWorkReported: true,
     PlannedAttemptExecutorWorkResponsibilityBegan: true,
     TaskTrackerFactsObserved: true,
@@ -737,6 +750,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(5)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(6)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

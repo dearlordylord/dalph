@@ -431,10 +431,20 @@ release it. For example, continuing task A through the executor requires one
 position, while reading task A from GitHub requires none.
 
 Fresh coordinator creation receives one schema-decoded `InitialControlPolicy`.
-The current policy contains task-execution capacity and is passed to the one
-process-local admission controller. There is no production live-capacity
-change in this slice; a cassette cannot mutate the controller on production's
-behalf.
+The Run beginning records task-execution capacity at policy revision one before
+the first tracker read. Operator's local control boundary checks the expected
+revision, appends one `TaskWorkCapacityChanged` initiated action, and only then
+may the next scheduling cycle resize the process-local controller. A stale
+expected revision returns the reconstructed current policy without another
+append.
+
+Contraction never deletes or interrupts an occupied task position. If two
+tasks hold positions and the new ceiling is one, both continue and fresh work
+waits until usage falls below one. Expansion preserves every holder and may
+admit more work on the next scheduling decision. Recovery accepts no initial
+policy argument: it reconstructs the latest applied revision from the journal
+and recreates occupied positions from unfinished planned-attempt
+responsibilities. Positions, queues, wakeups, and frontier remain process-local.
 
 The production fresh-workflow entry point accepts only an
 `AllocatedFreshWorkflowRunId` minted by the cryptographic fresh-run allocator.

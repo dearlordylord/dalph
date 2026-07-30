@@ -11,6 +11,8 @@ import {
   decodeFreshWorkflowRunIdForDiagnostics,
   describeJournalEvent,
   JournalPosition,
+  RunPolicyRevision,
+  TaskWorkCapacity,
   type JournalRecord,
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
@@ -406,19 +408,43 @@ it.effect("requires one terminal assertion group and one owner for every decoded
   })
 )
 
-it.effect("fails at an unsupported chronological capacity change without changing production admission", () =>
+it.effect("lowers capacity while A holds a position and admits B only after A releases it", () =>
   Effect.gen(function* () {
-    const withUnsupportedChange = {
-      ...singleton,
-      story: [
-        ...singleton.story.slice(0, 2),
-        { _tag: "SetTaskExecutionCapacity", capacity: 2 },
-        ...singleton.story.slice(2)
-      ]
+    const firstRunning = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+    )
+    const withAppliedChange = {
+      ...dependentTasksCompleteInOneRunAuthoredCassette,
+      story: dependentTasksCompleteInOneRunAuthoredCassette.story.flatMap((item, index) => [
+        ...(index === 0 && item._tag === "InitialControlPolicy"
+          ? [{ ...item, policy: { taskExecutionCapacity: 2 } }]
+          : [item]),
+        ...(index === firstRunning ? [{ _tag: "SetTaskExecutionCapacity", capacity: 1 } as const] : [])
+      ])
     }
-    const failure = yield* runAuthoredScenarioCassette(withUnsupportedChange).pipe(Effect.flip)
-    expect(failure._tag).toBe("TraceOutput.TraceOutputError")
-    expect("detail" in failure ? failure.detail : "").toContain("UnsupportedAuthoredCapacityChange")
+    const run = yield* runAuthoredScenarioCassette(withAppliedChange)
+    const recordedLyrics = renderRecordedCassetteLyrics(yield* projectRecordedCassette(run.records))
+    const changedAt = run.records.findIndex(({ event }) => event._tag === "TaskWorkCapacityChanged")
+    const aTerminalAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report._tag === "Terminal" &&
+        event.report.correlation.attemptId === "attempt:A:0"
+    )
+    const bResponsibilityAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.taskId === TaskId.make("B")
+    )
+
+    expect(changedAt).toBeGreaterThan(0)
+    expect(aTerminalAt).toBeGreaterThan(changedAt)
+    expect(bResponsibilityAt).toBeGreaterThan(aTerminalAt)
+    expect(recordedLyrics).toContain("Operator changed task-work capacity to 1 at policy revision 2.")
+    expect(run.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+    ])
   })
 )
 
@@ -594,7 +620,7 @@ it.effect("derives failed task-work results and safely suspended orchestration e
   })
 )
 
-it.effect("fails typed expected-behavior assertions and renders the unsupported capacity item", () =>
+it.effect("fails typed expected-behavior assertions and renders the applied capacity item", () =>
   Effect.gen(function* () {
     const wrongOutcomes = {
       ...singleton,
@@ -614,9 +640,7 @@ it.effect("fails typed expected-behavior assertions and renders the unsupported 
         ...singleton.story.slice(2)
       ]
     })
-    expect(renderAuthoredCassetteLyrics(decoded)).toContain(
-      "The unsupported story asks Dalph to change task-execution capacity to 2."
-    )
+    expect(renderAuthoredCassetteLyrics(decoded)).toContain("Operator applies task-execution capacity 2 to the Run.")
   })
 )
 
@@ -857,6 +881,14 @@ it.effect(
         entries: [
           ...entriesWithSuspension.slice(0, insertionIndex),
           ...additionalCommands,
+          {
+            _tag: "TaskWorkCapacityChanged",
+            capacity: TaskWorkCapacity.make(2),
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            previousRevision: RunPolicyRevision.make(1),
+            revision: RunPolicyRevision.make(2)
+          },
           ...entriesWithSuspension.slice(insertionIndex)
         ]
       })
@@ -909,6 +941,7 @@ it.effect(
         TaskTrackerReadInitiated: true,
         TaskWorktreeReady: true,
         TaskWorktreeReconciliationIntended: true,
+        TaskWorkCapacityChanged: true,
         WorkflowRunBegan: true,
         WorkflowRunTerminated: true
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
@@ -942,6 +975,7 @@ it.effect(
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
       expect(encodedAfter).toContain("singleton-revision")
       expect(encodedBefore).toContain("singleton-revision")
+      expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph terminated the Run with disposition Completed.")
     })
 )
 

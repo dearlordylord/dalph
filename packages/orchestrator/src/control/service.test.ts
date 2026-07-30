@@ -11,6 +11,7 @@ import { JournalStorageUnavailable, JournalStore } from "../workflow-journal/sto
 import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { sqliteJournalStoreLayer } from "../workflow-journal/adapters/sqlite-store.js"
+import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 
 const operatorId = AuthenticatedOperatorIdentity.make("local-user")
 const runId = RunId.make("control-run")
@@ -43,10 +44,10 @@ describe("ControlService", () => {
 
       const records = yield* journal.read(runId)
       expect(records.map(({ event }) => event)).toEqual([
-        { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: 6 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: 6 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: 6 },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: 6 }
+        { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: workflowJournalEventVersion },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: workflowJournalEventVersion },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: workflowJournalEventVersion },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: workflowJournalEventVersion }
       ])
       const reduced = reduceWorkflowJournalHistory(runId, records)
       expect(reduced._tag).toBe("ValidWorkflowJournalHistory")

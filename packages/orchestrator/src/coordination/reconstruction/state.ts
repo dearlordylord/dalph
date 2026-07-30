@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Schema, type Option } from "effect"
 import {
   AttemptId,
   PlannedTaskAttempt,
@@ -13,6 +13,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { TaskTrackerFactsObservation } from "../../workflow/task-tracker-facts/observation.js"
+import type { RunControlPolicy } from "../../control/policy.js"
 
 /** Best available journaled graph knowledge, never current tracker authority. */
 export const BestAvailableDurableGraphKnowledge = Schema.Struct({
@@ -85,6 +86,7 @@ export interface ReconstructedWorkflowHistory {
 /** Validated process-local composition; never persisted frontier or capacity. */
 export interface ReconstructedRunState {
   readonly appliedThrough: JournalPosition | null
+  readonly controlPolicy: Option.Option<RunControlPolicy>
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly pause: ReconstructedPauseState
   readonly responsibility: WorkflowResponsibilityState

@@ -9,17 +9,31 @@ import { OperationId } from "../identity.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./operation.js"
 import { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { WorkflowActor } from "./actor.js"
+import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 
 /**
  * Dalph durably began one Run for the exact tracker target. This must be the
  * first record for the Run and is created only by the fresh-start boundary.
  */
 export const WorkflowRunBeganEvent = Schema.TaggedStruct("WorkflowRunBegan", {
+  initialControlPolicy: InitialControlPolicy,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
   target: TrackerTarget,
   version: Schema.Literal(workflowJournalEventVersion)
 })
+
+/** Operator durably changed the future task-admission ceiling for one Run. */
+export const TaskWorkCapacityChangedEvent = Schema.TaggedStruct("TaskWorkCapacityChanged", {
+  capacity: TaskWorkCapacity,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  previousRevision: RunPolicyRevision,
+  revision: RunPolicyRevision,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type TaskWorkCapacityChangedEvent = typeof TaskWorkCapacityChangedEvent.Type
 
 /**
  * Dalph reached the normal no-more-runnable-work result for one Run. A crash
@@ -71,6 +85,7 @@ export const TaskWorktreeReadyEvent = Schema.TaggedStruct("TaskWorktreeReady", {
 export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent,
+  TaskWorkCapacityChangedEvent,
   ControlCommandRecordedEvent,
   TaskTrackerReadIntentRecorded,
   TaskTrackerFactsObservedEvent,

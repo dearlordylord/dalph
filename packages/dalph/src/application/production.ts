@@ -16,6 +16,7 @@ import {
   runGitWorktreeReconciliation,
   type TrackerMutation,
   startupRecoveryLayer,
+  taskWorkCapacityControlLayer,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
 import { Effect, Layer } from "effect"
@@ -63,10 +64,12 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(trackerMutationLayer),
     Layer.provide(journalLayer)
   )
+  const controlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
 
   return startupRecoveryLayer(runId).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(recoveryAuthorityLayer),
+    Layer.provide(controlPolicyLayer),
     Layer.provide(controlledFakePlannedAttemptExecutorLayer),
     Layer.provide(journalLayer),
     Layer.provide(ownershipLayer)

@@ -22,6 +22,8 @@ import {
   type GithubRepositoryOwner,
   type OperationId,
   type PlannedAttemptExecutorReportOrdinal,
+  type RunPolicyRevision,
+  type TaskWorkCapacity,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation
@@ -34,6 +36,11 @@ import {
   RecordedCassetteEntry,
   type RecordedCassetteEntry as RecordedCassetteEntryType
 } from "./recorded-domain.js"
+import {
+  preserveRecordedRunBeginning,
+  preserveRecordedRunPolicyChange,
+  preserveRecordedRunTermination
+} from "./recorded-policy-renaming.js"
 
 const identityRenamingMap = <Identity extends string>(
   renamings: ReadonlyArray<{ readonly from: Identity; readonly to: Identity }>
@@ -71,6 +78,8 @@ type PreservedCassetteBrand =
   | GithubRepositoryName
   | GithubRepositoryOwner
   | PlannedAttemptExecutorReportOrdinal
+  | RunPolicyRevision
+  | TaskWorkCapacity
   | TaskExecutorLocator
   | TaskId
   | TaskRevision
@@ -382,6 +391,7 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
           originatingActionOperationId: renamed(observationEntry.originatingActionOperationId, maps.operationIds)
         }),
+      TaskWorkCapacityChanged: preserveRecordedRunPolicyChange,
       TaskWorktreeReady: (worktreeEntry) =>
         completeFields<typeof worktreeEntry>({
           _tag: "TaskWorktreeReady",
@@ -394,19 +404,8 @@ const renameRecordedCassetteEntry = (
             worktree: renamed(worktreeEntry.proof.worktree, maps.worktreeLocators)
           })
         }),
-      WorkflowRunBegan: (beginningEntry) =>
-        completeFields<typeof beginningEntry>({
-          _tag: "WorkflowRunBegan",
-          initiatedBy: preserveCassetteValue(beginningEntry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(beginningEntry.occurrenceClassification),
-          target: preserveCassetteValue(beginningEntry.target)
-        }),
-      WorkflowRunTerminated: (terminationEntry) =>
-        completeFields<typeof terminationEntry>({
-          _tag: "WorkflowRunTerminated",
-          disposition: preserveCassetteValue(terminationEntry.disposition),
-          occurrenceClassification: preserveCassetteValue(terminationEntry.occurrenceClassification)
-        })
+      WorkflowRunBegan: preserveRecordedRunBeginning,
+      WorkflowRunTerminated: preserveRecordedRunTermination
     }),
     Match.exhaustive
   )

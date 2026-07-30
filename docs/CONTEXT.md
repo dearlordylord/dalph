@@ -132,11 +132,24 @@ executor to continue task A, while a tracker-only read requires none.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
 **Initial control policy**:
-The schema-decoded values Dalph uses when it creates a fresh coordinator. The
-current production slice contains task-execution capacity only. Supplying this
-startup value does not authorize a live policy change or override recovered
-policy; those behaviors require their own accepted protocol.
-_Avoid_: Mutable coordinator settings, live capacity command, recovered policy
+The schema-decoded values Dalph records with a fresh Run beginning. The current
+production slice contains task-execution capacity only. Recovery accepts no
+replacement initial value and reconstructs the latest durable Run control
+policy.
+_Avoid_: Process default during recovery, mutable coordinator settings
+
+**Run control policy**:
+The latest schema-decoded task-execution capacity and monotonic revision that
+Dalph reconstructs from one Run's beginning plus later applied changes. It is
+durable workflow-journal history, not the process-local task-position map.
+_Avoid_: Persisted positions, process configuration, admission snapshot
+
+**Applied task-work capacity**:
+The initiated action established when Operator's capacity change is durably
+appended for one Run policy revision. Receiving or decoding the request is not
+this event. Existing task-work position holders continue; later admissions use
+the new ceiling.
+_Avoid_: Capacity command receipt, executor capacity, preemptive contraction
 
 **Planned-attempt executor-work suspension**:
 The executor's proof that its complete work for one exact planned task attempt

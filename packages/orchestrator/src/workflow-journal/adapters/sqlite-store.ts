@@ -34,6 +34,7 @@ import {
 } from "../store.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord, JournalStoreError } from "../store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import type { InitialControlPolicy } from "../../control/policy.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -297,10 +298,14 @@ export const sqliteJournalStoreLayer = (
         `
       })
 
-      const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (runId: RunId, target: TrackerTarget) {
+      const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
+        runId: RunId,
+        target: TrackerTarget,
+        initialControlPolicy: InitialControlPolicy
+      ) {
         return yield* Effect.gen(function* () {
           const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
-          const decision = decideWorkflowRunBeginning(existing, runId, target)
+          const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
           if (decision._tag === "LifecycleTransitionRejected") {
             return yield* decision.failure
           }

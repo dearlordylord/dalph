@@ -45,6 +45,46 @@ it("generated selection and cancellation commands stay within configured capacit
   )
 })
 
+it("generated capacity changes retain held tasks and admit no new task at or above the ceiling", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.integer({ min: 1, max: 8 }),
+      fc.integer({ min: 0, max: 8 }),
+      async (capacityValue, heldCount) => {
+        const runId = RunId.make("generated-resize-run")
+        const held = Array.from({ length: heldCount }, (_unused, index) => ({
+          attemptId: AttemptId.make(`generated-held-attempt-${index}`),
+          runId,
+          taskId: TaskId.make(`generated-held-task-${index}`)
+        }))
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const controller = yield* makeTaskAdmissionController({
+              capacity: TaskWorkCapacity.make(8),
+              reconstructedPlannedAttemptPositions: held
+            })
+            yield* controller.resize(TaskWorkCapacity.make(capacityValue))
+            const afterResize = yield* controller.snapshot()
+            const fresh = transitionFor(9, 0)
+            const decision = yield* controller.admit({ explanations: [], transitions: [fresh] }, runId)
+
+            expect(afterResize.reservedTaskIds).toEqual(held.map(({ taskId }) => taskId))
+            expect(decision.transition._tag).toBe(heldCount >= capacityValue ? "None" : "Some")
+          })
+        )
+      }
+    ),
+    {
+      examples: [
+        [1, 0],
+        [1, 8],
+        [8, 8]
+      ],
+      numRuns: 100
+    }
+  )
+})
+
 it("a delayed planned-attempt release changes only its exact pair", async () => {
   await fc.assert(
     fc.asyncProperty(

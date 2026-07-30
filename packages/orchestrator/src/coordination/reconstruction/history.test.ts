@@ -29,6 +29,8 @@ import { reduceWorkflowJournalHistory } from "./history.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
 
 const runId = RunId.make("duplicate-attempt-run")
 const taskId = TaskId.make("A")
@@ -38,6 +40,7 @@ it("rejects workflow records after Run termination", () => {
   const records: ReadonlyArray<JournalRecord> = [
     {
       event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,
@@ -101,6 +104,7 @@ it("rejects a Run beginning that follows workflow records", () => {
     ...planAndStart(attempt("before-beginning"), 1),
     {
       event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,

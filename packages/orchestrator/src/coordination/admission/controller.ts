@@ -61,6 +61,7 @@ export interface TaskAdmissionController {
   readonly releasePlannedAttemptPosition: (
     correlation: PlannedAttemptExecutorCorrelation
   ) => Effect.Effect<AdmissionAvailabilityChange, PlannedAttemptPositionReleaseIssue>
+  readonly resize: (capacity: TaskWorkCapacity) => Effect.Effect<AdmissionAvailabilityChange>
   readonly snapshot: () => Effect.Effect<TaskAdmissionControllerSnapshot>
 }
 
@@ -248,6 +249,9 @@ export const makeTaskAdmissionController = Effect.fn("TaskAdmissionController.ma
         }
         return availabilityAfterRemoval()
       }
+    ),
+    resize: Effect.fn("TaskAdmissionController.resize")((capacity) =>
+      Ref.update(state, (current) => ({ ...current, capacity })).pipe(Effect.as(availabilityAfterRemoval()))
     ),
     snapshot: () =>
       Ref.get(state).pipe(

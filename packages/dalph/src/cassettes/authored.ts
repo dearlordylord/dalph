@@ -15,7 +15,7 @@ export {
   AuthoredTaskWorkSpecification,
   AuthoredTrackerGraph
 } from "./authored-domain.js"
-export { AuthoredCassetteInteractionMismatch, UnsupportedAuthoredCapacityChange } from "./authored-cursor.js"
+export { AuthoredCassetteInteractionMismatch } from "./authored-cursor.js"
 export { AuthoredCassetteBehaviorMismatch } from "./authored-outcomes.js"
 export { renderAuthoredCassetteLyrics } from "./authored-presentation.js"
 export { runAuthoredScenarioCassette, type AuthoredScenarioCassetteRun } from "./authored-runner.js"

@@ -18,6 +18,7 @@ import {
   decideWorkflowRunTermination,
   readRecoverableRunBeginning
 } from "../run-lifecycle.js"
+import type { InitialControlPolicy } from "../../control/policy.js"
 
 interface MemoryJournalState {
   readonly recordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
@@ -32,7 +33,11 @@ export const memoryJournalStoreLayer = Layer.effect(
   Effect.gen(function* () {
     const state = yield* Ref.make<MemoryJournalState>({ recordsByRun: new Map() })
 
-    const beginRun = Effect.fn("JournalStore.Memory.beginRun")(function* (runId: RunId, target: TrackerTarget) {
+    const beginRun = Effect.fn("JournalStore.Memory.beginRun")(function* (
+      runId: RunId,
+      target: TrackerTarget,
+      initialControlPolicy: InitialControlPolicy
+    ) {
       const update = (
         current: MemoryJournalState
       ): readonly [
@@ -40,7 +45,7 @@ export const memoryJournalStoreLayer = Layer.effect(
         MemoryJournalState
       ] => {
         const records = current.recordsByRun.get(runId) ?? []
-        const decision = decideWorkflowRunBeginning(records, runId, target)
+        const decision = decideWorkflowRunBeginning(records, runId, target, initialControlPolicy)
         if (decision._tag === "LifecycleTransitionRejected") {
           return [Effect.fail(decision.failure), current]
         }

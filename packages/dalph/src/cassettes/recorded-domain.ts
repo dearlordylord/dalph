@@ -12,10 +12,13 @@ import {
   ClaimToken,
   ControlCommand,
   ControlCommandId,
+  InitialControlPolicy,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
   TrackerTarget,
+  RunPolicyRevision,
+  TaskWorkCapacity,
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation
@@ -57,7 +60,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   TaskWorktreeReady: { operationId: OperationId, proof: PlannedWorktreeReady },
   TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree },
-  WorkflowRunBegan: { ...initiatedByCoordinator, target: TrackerTarget },
+  TaskWorkCapacityChanged: {
+    capacity: TaskWorkCapacity,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    previousRevision: RunPolicyRevision,
+    revision: RunPolicyRevision
+  },
+  WorkflowRunBegan: { ...initiatedByCoordinator, initialControlPolicy: InitialControlPolicy, target: TrackerTarget },
   WorkflowRunTerminated: { ...nonActionOccurrence, disposition: Schema.Literal("Completed") }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
@@ -66,7 +76,8 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-export const recordedCassetteVersion = 1 as const
+const currentRecordedCassetteVersion = 2
+export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {
   entries: Schema.Array(RecordedCassetteEntry),

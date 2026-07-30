@@ -2,7 +2,7 @@ import { Schema } from "effect"
 
 // Accepted policy: https://github.com/dearlordylord/dalph/issues/24
 // Runtime resizing owner: https://github.com/dearlordylord/dalph/issues/54
-// Future policy revision owner: https://github.com/dearlordylord/dalph/issues/64
+// Other future-only run-policy changes: https://github.com/dearlordylord/dalph/issues/64
 const defaultTaskWorkCapacityValue = 2
 export const maximumTaskWorkCapacityValue = 8
 

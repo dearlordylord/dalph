@@ -65,7 +65,7 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string => {
             ? `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
             : item._tag === "ExpectedBehavior"
               ? expectedBehaviorLyric(item)
-              : `The unsupported story asks Dalph to change task-execution capacity to ${item.capacity}.`
+              : `Operator applies task-execution capacity ${item.capacity} to the Run.`
 }
 
 /** Readable prose is derived from structured story items and is never parsed. */

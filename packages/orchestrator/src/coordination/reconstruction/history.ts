@@ -22,6 +22,7 @@ import {
   type TaskTrackerReconfirmationIndex
 } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
+import { validateRunPolicyHistory } from "./run-policy-history.js"
 
 const finalArrayElementOffset = -1
 
@@ -50,6 +51,7 @@ interface FoldIndexes {
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
   readonly plans: Map<AttemptId, PlannedTaskAttempt>
+  latestRunPolicyRevision: number | undefined
   readonly seenEventKindsByOperation: Map<OperationId, ReadonlySet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: Set<JournalRecordKey>
   readonly seenOperationIds: Set<OperationId>
@@ -61,6 +63,7 @@ const emptyIndexes = (): FoldIndexes => ({
   executorReportOrdinals: new Map(),
   executorResponsibilitiesBegan: new Map(),
   plans: new Map(),
+  latestRunPolicyRevision: undefined,
   seenEventKindsByOperation: new Map(),
   seenKeys: new Set(),
   seenOperationIds: new Set(),
@@ -401,6 +404,11 @@ export const reduceWorkflowJournalHistory = (
     validateTrackerObservation(record, runId, records, issues)
     validateReconfirmationReference(record, runId, indexes, issues)
     validateExecutorEvent(record, runId, indexes, issues)
+    const policyValidation = validateRunPolicyHistory(record, indexes)
+    indexes.latestRunPolicyRevision = policyValidation.latestRunPolicyRevision
+    for (const detail of policyValidation.details) {
+      semanticIssue(issues, runId, record.position, detail)
+    }
   })
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   validateRunLifecycle(runId, records, issues)

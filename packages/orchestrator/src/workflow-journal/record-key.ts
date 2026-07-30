@@ -3,6 +3,7 @@ import { type ControlCommandId } from "../control/identity.js"
 import { type OperationId } from "../workflow/identity.js"
 import { JournalRecordKey } from "./identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../workflow/protocols/planned-attempt-executor-work/events.js"
+import type { RunPolicyRevision } from "../control/policy.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -10,6 +11,9 @@ export const workflowRunTerminatedRecordKey = JournalRecordKey.make("run:termina
 
 export const controlCommandRecordKey = (commandId: ControlCommandId): JournalRecordKey =>
   JournalRecordKey.make(`control-command:${commandId}`)
+
+export const taskWorkCapacityPolicyRecordKey = (revision: RunPolicyRevision): JournalRecordKey =>
+  JournalRecordKey.make(`run-policy:${revision}:task-work-capacity`)
 
 export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:intent`)

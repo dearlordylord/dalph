@@ -127,7 +127,7 @@ it.effect(
         const journal = yield* JournalStore
         for (const record of invalidRecords) {
           if (record.event._tag === "WorkflowRunBegan") {
-            yield* journal.beginRun(record.runId, record.event.target)
+            yield* journal.beginRun(record.runId, record.event.target, record.event.initialControlPolicy)
           } else if (record.event._tag === "WorkflowRunTerminated") {
             yield* journal.terminateRun(record.runId)
           } else {

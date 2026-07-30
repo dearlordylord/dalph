@@ -15,8 +15,6 @@ import {
   TaskWorktreeReconciliationIntendedEvent,
   type WorkflowJournalEvent,
   WorkflowActor,
-  WorkflowRunBeganEvent,
-  WorkflowRunTerminatedEvent,
   workflowJournalEventVersion,
   reduceWorkflowJournalHistory
 } from "@dalph/orchestrator"
@@ -28,6 +26,14 @@ import {
   recordedCassetteVersion
 } from "./recorded-domain.js"
 import { renameRecordedCassette } from "./recorded-renaming.js"
+import {
+  eventForRunEntry,
+  isJournalRunEntry,
+  isRecordedRunEntry,
+  lyricForRunEntry,
+  recordedRunEntryFor,
+  type RecordedRunEntry
+} from "./recorded-run-mapping.js"
 
 const coordinator = () => WorkflowActor.cases.DalphCoordinator.make({})
 
@@ -85,6 +91,7 @@ const recordTaskBoundaryEntry = (
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
+        | "TaskWorkCapacityChanged"
         | "WorkflowRunBegan"
         | "WorkflowRunTerminated"
     }
@@ -105,21 +112,7 @@ const recordTaskBoundaryEntry = (
 }
 
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
-  if (event._tag === "WorkflowRunBegan") {
-    return {
-      _tag: "WorkflowRunBegan",
-      initiatedBy: event.initiatedBy,
-      occurrenceClassification: event.occurrenceClassification,
-      target: event.target
-    }
-  }
-  if (event._tag === "WorkflowRunTerminated") {
-    return {
-      _tag: "WorkflowRunTerminated",
-      disposition: event.disposition,
-      occurrenceClassification: event.occurrenceClassification
-    }
-  }
+  if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (event._tag === "ControlCommandRecorded") {
     return { _tag: "ControlCommandRecorded", command: event.command }
   }
@@ -220,21 +213,7 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
     : taskTrackerReadIntent(entry.operation)
 
 const eventForRecordedEntry = (entry: RecordedCassetteEntry): WorkflowJournalEvent => {
-  if (entry._tag === "WorkflowRunBegan") {
-    return WorkflowRunBeganEvent.make({
-      initiatedBy: entry.initiatedBy,
-      occurrenceClassification: entry.occurrenceClassification,
-      target: entry.target,
-      version: workflowJournalEventVersion
-    })
-  }
-  if (entry._tag === "WorkflowRunTerminated") {
-    return WorkflowRunTerminatedEvent.make({
-      disposition: entry.disposition,
-      occurrenceClassification: entry.occurrenceClassification,
-      version: workflowJournalEventVersion
-    })
-  }
+  if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (entry._tag === "ControlCommandRecorded") {
     return ControlCommandRecordedEvent.make({ command: entry.command, version: workflowJournalEventVersion })
   }
@@ -375,7 +354,7 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
-    RecordedExecutorEntry | RecordedTrackerEntry | { readonly _tag: "ControlCommandRecorded" }
+    RecordedExecutorEntry | RecordedRunEntry | RecordedTrackerEntry | { readonly _tag: "ControlCommandRecorded" }
   >
 ): string => {
   switch (entry._tag) {
@@ -389,10 +368,6 @@ const lyricForTaskBoundaryEntry = (
       return `Git showed worktree ${entry.proof.worktree} ready at ${entry.proof.headSha}.`
     case "TaskWorktreeReconciliationIntended":
       return `Dalph recorded its intent to reconcile the worktree for attempt ${entry.operation.plannedAttempt.attemptId}.`
-    case "WorkflowRunBegan":
-      return `Dalph began the Run for tracker target ${JSON.stringify(entry.target)}.`
-    case "WorkflowRunTerminated":
-      return `Dalph terminated the Run with disposition ${entry.disposition}.`
   }
 }
 
@@ -409,6 +384,7 @@ const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (entry._tag === "TaskTrackerFactsObserved" || entry._tag === "TaskTrackerReadInitiated") {
     return lyricForTrackerEntry(entry)
   }
+  if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
   return lyricForTaskBoundaryEntry(entry)
 }
 

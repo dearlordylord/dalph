@@ -80,24 +80,19 @@ Acceptance tests:
 - `rejects cassette-local contradictions and leaves an authority mismatch to
   its ordinary boundary`
 
-## A story names an unsupported live capacity change
+## A story names a live capacity change
 
-The project owner chose not to add the production live-capacity-change protocol
-in issue #170. A maintained or ad hoc story may decode the provisional
-capacity-change tag, but when it becomes the current story item the cassette
-stops with an unsupported-capacity-change failure. It does not change the
-process-local admission controller, skip the item, or claim that production
-handled it.
-
-Crash recovery and retries do not apply because no outside request is made and
-no durable policy-change intent exists. A later production control-policy
-ticket must supply its own accepted operational scenarios before this item can
-advance successfully.
+Issue #170 deliberately left the decoded capacity-change item unsupported.
+Issue #54 now supplies the production protocol and chronological scenarios. In
+an authored story, the controlled Operator applies the item through the same
+revision-checked journal service used by production. The next scheduling cycle
+reads that durable revision and resizes the ordinary process-local admission
+controller without interrupting a holder.
 
 Acceptance test:
 
-- `fails at an unsupported chronological capacity change without changing
-  production admission`
+- `lowers capacity while A holds a position and admits B only after A releases
+  it`
 
 ## A journal is recorded and checked after every occurrence
 

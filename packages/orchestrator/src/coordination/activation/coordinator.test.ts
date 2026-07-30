@@ -7,6 +7,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunnableFrontierTransition, runnableTransitionTaskId } from "../frontier/frontier.js"
 import { makeTaskAdmissionController } from "../admission/controller.js"
+import { makeSelectedTransitionIdentity } from "./selected-transition.js"
 
 const freshTransition = (taskId: TaskId) =>
   RunnableFrontierTransition.CommitFreshTaskClaimIntent({
@@ -78,6 +79,55 @@ it.effect("serializes selection while capacity-N runners overlap", () =>
       yield* Deferred.succeed(releaseRunners, undefined)
     })
   )
+)
+
+it.effect("lowers capacity without preempting two holders and admits C only after both positions are released", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("contract-capacity-run")
+    const taskA = TaskId.make("contract-capacity-A")
+    const taskB = TaskId.make("contract-capacity-B")
+    const taskC = TaskId.make("contract-capacity-C")
+    const transitionA = freshTransition(taskA)
+    const transitionB = freshTransition(taskB)
+    const transitionC = freshTransition(taskC)
+    const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(2) })
+
+    yield* controller.admit({ explanations: [], transitions: [transitionA] }, runId)
+    yield* controller.admit({ explanations: [], transitions: [transitionB] }, runId)
+    yield* controller.resize(TaskWorkCapacity.make(1))
+
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA, taskB])
+    expect((yield* controller.admit({ explanations: [], transitions: [transitionC] }, runId)).transition._tag).toBe(
+      "None"
+    )
+
+    yield* controller.cancelReservedPosition(makeSelectedTransitionIdentity(runId, transitionA))
+    expect((yield* controller.admit({ explanations: [], transitions: [transitionC] }, runId)).transition._tag).toBe(
+      "None"
+    )
+
+    yield* controller.cancelReservedPosition(makeSelectedTransitionIdentity(runId, transitionB))
+    expect((yield* controller.admit({ explanations: [], transitions: [transitionC] }, runId)).transition._tag).toBe(
+      "Some"
+    )
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskC])
+  })
+)
+
+it.effect("increasing capacity keeps the holder and admits another task on the next decision", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("expand-capacity-run")
+    const taskA = TaskId.make("expand-capacity-A")
+    const taskB = TaskId.make("expand-capacity-B")
+    const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+
+    yield* controller.admit({ explanations: [], transitions: [freshTransition(taskA)] }, runId)
+    yield* controller.resize(TaskWorkCapacity.make(2))
+    const admitted = yield* controller.admit({ explanations: [], transitions: [freshTransition(taskB)] }, runId)
+
+    expect(admitted.transition._tag).toBe("Some")
+    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskA, taskB])
+  })
 )
 
 it.effect("keeps the immutable selection correlation after intent", () =>

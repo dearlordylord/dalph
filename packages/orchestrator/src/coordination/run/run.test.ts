@@ -1,6 +1,6 @@
 import { it as effectIt } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Option, Ref } from "effect"
+import { Effect, Layer, Option, Ref } from "effect"
 import { expect, it } from "vitest"
 import {
   AttemptId,
@@ -41,6 +41,13 @@ import { JournalStore, WorkflowRunAlreadyBegan, WorkflowRunAlreadyTerminated } f
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { WorkflowResponsibilityState } from "../reconstruction/state.js"
+import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
+
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const durableRunLayer = Layer.merge(
+  memoryJournalStoreLayer,
+  taskWorkCapacityControlLayer.pipe(Layer.provide(memoryJournalStoreLayer))
+)
 
 const stage = (taskId: string): FreshWorkflowStage => ({
   run: () => Effect.die("projection test does not run stages"),
@@ -111,7 +118,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
       "WorkflowRunBegan",
       "WorkflowRunTerminated"
     ])
-  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(NodeCrypto.layer))
+  }).pipe(Effect.provide(durableRunLayer), Effect.provide(NodeCrypto.layer))
 )
 
 effectIt.effect("rejects a second fresh start for the same Run before any tracker read", () =>
@@ -119,7 +126,7 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
     const target = FixtureTarget.make("duplicate-fresh-target")
     const runId = yield* freshWorkflowRunId(target)
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
+    yield* journal.beginRun(runId, target, initialPolicy)
     const trackerReads = yield* Ref.make(0)
     const projected = projectTrackerSnapshot({ revision: "duplicate-fresh-snapshot", tasks: [] })
     const snapshot = Option.getOrThrow(
@@ -168,7 +175,7 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
 
     expect(failure).toBeInstanceOf(WorkflowRunAlreadyBegan)
     expect(yield* Ref.get(trackerReads)).toBe(0)
-  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(NodeCrypto.layer))
+  }).pipe(Effect.provide(durableRunLayer), Effect.provide(NodeCrypto.layer))
 )
 
 effectIt.effect("recovers a Run that crashed immediately after its beginning was recorded", () =>
@@ -176,17 +183,14 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
     const target = FixtureTarget.make("beginning-only-target")
     const runId = RunId.make("beginning-only-run")
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
+    yield* journal.beginRun(runId, target, initialPolicy)
     const projected = projectTrackerSnapshot({ revision: "beginning-only-snapshot", tasks: [] })
     const snapshot = Option.getOrThrow(
       Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
     )
     const trackerReads = yield* Ref.make(0)
 
-    yield* runRecoveredWorkflow(
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    ).pipe(
+    yield* runRecoveredWorkflow(target).pipe(
       Effect.provideService(RunRecoveryActivation, {
         _tag: "AuthoritativeRunRecoveryActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
@@ -228,7 +232,7 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
       "WorkflowRunBegan",
       "WorkflowRunTerminated"
     ])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(durableRunLayer))
 )
 
 effectIt.effect("rejects recovery of a terminated Run before any tracker read", () =>
@@ -236,14 +240,11 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
     const target = FixtureTarget.make("terminated-recovery-target")
     const runId = RunId.make("terminated-recovery-run")
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
+    yield* journal.beginRun(runId, target, initialPolicy)
     yield* journal.terminateRun(runId)
     const trackerReads = yield* Ref.make(0)
 
-    const failure = yield* runRecoveredWorkflow(
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    ).pipe(
+    const failure = yield* runRecoveredWorkflow(target).pipe(
       Effect.provideService(RunRecoveryActivation, {
         _tag: "AuthoritativeRunRecoveryActivation",
         continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
@@ -286,7 +287,7 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
 
     expect(failure).toBeInstanceOf(WorkflowRunAlreadyTerminated)
     expect(yield* Ref.get(trackerReads)).toBe(0)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(durableRunLayer))
 )
 
 effectIt.effect("keeps a membership-constrained recovered Run active after a quiescent refresh", () =>
@@ -296,7 +297,7 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
     const taskId = TaskId.make("membership-constrained-entry-task")
     const operationId = OperationId.make("membership-constrained-entry-claim")
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target)
+    yield* journal.beginRun(runId, target, initialPolicy)
     const responsibility = WorkflowResponsibilityState.make({
       entries: [
         {
@@ -346,10 +347,7 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
       waitForNextExecutorWake: Effect.void
     })
 
-    const finality = yield* runRecoveredWorkflow(
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    ).pipe(
+    const finality = yield* runRecoveredWorkflow(target).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(
         WorkflowInterpreter,
@@ -378,14 +376,14 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
 
     expect(finality).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
     expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(durableRunLayer))
 )
 
 effectIt.effect("runs an authoritative recovered transition in the shared activation loop", () =>
   Effect.gen(function* () {
     const runId = RunId.make("workflow-recovered-run")
     const target = FixtureTarget.make("workflow-recovered-target")
-    yield* (yield* JournalStore).beginRun(runId, target)
+    yield* (yield* JournalStore).beginRun(runId, target, initialPolicy)
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("workflow-recovered-attempt"),
       baseSha: GitCommitSha.make("4".repeat(40)),
@@ -429,10 +427,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
       recordTaskAttemptPlan: () => Effect.die("unused")
     })
 
-    yield* runRecoveredWorkflow(
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    ).pipe(
+    yield* runRecoveredWorkflow(target).pipe(
       Effect.provideService(RunRecoveryActivation, recovery),
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -450,7 +445,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
       )
     )
     expect(yield* Ref.get(ran)).toBe(1)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(durableRunLayer))
 )
 
 effectIt.effect("runs the authoritative fresh claim path through one complete attempt", () =>

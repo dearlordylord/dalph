@@ -9,6 +9,7 @@ import {
   type WorkflowJournalEvent,
   WorkflowJournalEvent as WorkflowJournalEventSchema
 } from "../workflow/registry/event.js"
+import type { InitialControlPolicy } from "../control/policy.js"
 
 /** One schema-decodable durable envelope around a workflow event. */
 export const JournalRecord = Schema.Struct({
@@ -119,7 +120,8 @@ export type JournalAppendError = JournalStoreContradiction | JournalStoreError |
 interface JournalStoreService {
   readonly beginRun: (
     runId: RunId,
-    target: TrackerTarget
+    target: TrackerTarget,
+    initialControlPolicy: InitialControlPolicy
   ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed>
   readonly append: (
     runId: RunId,

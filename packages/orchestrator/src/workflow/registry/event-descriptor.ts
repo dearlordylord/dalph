@@ -10,7 +10,8 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   workflowRunBeganRecordKey,
-  workflowRunTerminatedRecordKey
+  workflowRunTerminatedRecordKey,
+  taskWorkCapacityPolicyRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
@@ -46,10 +47,16 @@ interface WorkflowRunLifecycleEventDescriptor {
   readonly expectedKey: JournalRecordKey
 }
 
+interface RunPolicyEventDescriptor {
+  readonly _tag: "RunPolicyEventDescriptor"
+  readonly expectedKey: JournalRecordKey
+}
+
 type JournalEventDescriptor =
   | ControlCommandEventDescriptor
   | OperationEventDescriptor
   | PlannedAttemptExecutorEventDescriptor
+  | RunPolicyEventDescriptor
   | WorkflowRunLifecycleEventDescriptor
 
 type PlannedAttemptFact =
@@ -107,6 +114,8 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunBeganRecordKey }
     case "WorkflowRunTerminated":
       return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunTerminatedRecordKey }
+    case "TaskWorkCapacityChanged":
+      return { _tag: "RunPolicyEventDescriptor", expectedKey: taskWorkCapacityPolicyRecordKey(event.revision) }
     case "ControlCommandRecorded":
       return {
         _tag: "ControlCommandEventDescriptor",

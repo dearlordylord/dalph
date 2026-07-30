@@ -24,7 +24,19 @@ export {
   TrackerTask
 } from "./authorities/task-tracker/task.js"
 export { AuthenticatedOperatorIdentity, ControlCommandId } from "./control/identity.js"
-export { InitialControlPolicy } from "./control/policy.js"
+export {
+  InitialControlPolicy,
+  initialRunPolicyRevision,
+  RunControlPolicy,
+  RunPolicyRevision
+} from "./control/policy.js"
+export {
+  SetTaskWorkCapacityRequest,
+  taskWorkCapacityControlLayer,
+  TaskWorkCapacityControl,
+  TaskWorkCapacityPolicyRevisionConflict
+} from "./control/task-work-capacity.js"
+export { workflowJournalEventVersion } from "./workflow/kernel/event.js"
 export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
 export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"
 export {
@@ -113,6 +125,7 @@ export {
   TaskClaimAcquisitionIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
+  TaskWorkCapacityChangedEvent,
   taskTrackerReadIntent,
   WorkflowJournalEvent,
   WorkflowRunBeganEvent,
@@ -235,6 +248,7 @@ export {
 } from "./coordination/run/startup-recovery.js"
 export {
   AppliedControlDirection,
+  AppliedTaskWorkCapacity,
   ControlDirectionSubject,
   decodeWorkflowOccurrence,
   ExecutorReportWithoutResponsibilityBegan,

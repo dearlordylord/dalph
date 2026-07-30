@@ -35,6 +35,7 @@ import {
   TaskClaimAcquisitionSimulated,
   TaskWorktreeReconciliationSimulated,
   TrackerRevision,
+  workflowJournalEventVersion,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option } from "effect"
@@ -195,7 +196,7 @@ it.effect("requires one exact causal planned-attempt acknowledgement", () =>
       predecessorOperationIds: []
     })
     const record = {
-      event: TaskAttemptPlannedEvent.make({ operation: plan, version: 6 as const }),
+      event: TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion }),
       key: attemptPlanRecordKey(plannedAttempt.attemptId),
       position: JournalPosition.make(1),
       runId

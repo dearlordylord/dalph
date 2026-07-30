@@ -54,6 +54,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent,
   TaskWorkCapacity,
+  TaskWorkCapacityControl,
   TaskClaimAcquisitionPlanner,
   taskRevisionFor,
   TaskWorktreeReadyEvent,
@@ -66,7 +67,7 @@ import {
   workflowJournalEventVersion,
   WorkflowTrace
 } from "@dalph/orchestrator"
-import { ConfigProvider, Effect, FileSystem, Layer, Option, Ref } from "effect"
+import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
@@ -161,6 +162,94 @@ it.effect("continues a fresh production task after its claim is journaled", () =
       )
 
       expect(yield* Ref.get(specificationReads)).toBe(1)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("records an Operator capacity change through the production composition before scheduling continues", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-capacity-change-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const target = FixtureTarget.make("production-capacity-change-target")
+      const runId = yield* freshWorkflowRunId(target)
+      const projected = projectTrackerSnapshot({ revision: "production-capacity-change-snapshot", tasks: [] })
+      const snapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
+      const initialReadStarted = yield* Deferred.make<void>()
+      const returnInitialRead = yield* Deferred.make<void>()
+      const reads = yield* Ref.make(0)
+      const trackerReaderLayer = Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: () =>
+            Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 0
+                  ? Deferred.succeed(initialReadStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(returnInitialRead)),
+                      Effect.as(snapshot)
+                    )
+                  : Effect.succeed(snapshot)
+              )
+            ),
+          readTaskWorkSpecification: () => Effect.die("empty tracker has no task-work specification")
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        controlledTrackerMutationLayer
+      ).pipe(
+        Layer.provide(trackerReaderLayer),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const records = yield* Effect.gen(function* () {
+        const control = yield* TaskWorkCapacityControl
+        const running = yield* runWorkflow(
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+          runId
+        ).pipe(
+          Effect.provideService(
+            OperationIdAllocator,
+            OperationIdAllocator.of({
+              allocate: () => Effect.succeed(OperationId.make("production-capacity-change-read"))
+            })
+          ),
+          Effect.provideService(
+            TaskClaimAcquisitionPlanner,
+            TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("empty tracker has no claim") })
+          ),
+          Effect.provideService(
+            PlannedTaskAttemptPlanner,
+            PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("empty tracker has no attempt") })
+          ),
+          Effect.forkScoped
+        )
+        yield* Deferred.await(initialReadStarted)
+        const current = yield* control.read(runId)
+        yield* control.apply({ capacity: 1, expectedRevision: current.revision, runId })
+        yield* Deferred.succeed(returnInitialRead, undefined)
+        yield* Fiber.join(running)
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      expect(records.find(({ event }) => event._tag === "WorkflowRunBegan")?.event).toMatchObject({
+        initialControlPolicy: { taskExecutionCapacity: 2 }
+      })
+      expect(records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")?.event).toMatchObject({
+        capacity: 1,
+        previousRevision: 1,
+        revision: 2
+      })
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
@@ -524,7 +613,11 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const unfinishedRunId = RunId.make("began-only-unfinished-run")
       yield* Effect.gen(function* () {
-        yield* (yield* JournalStore).beginRun(unfinishedRunId, FixtureTarget.make("began-only-target"))
+        yield* (yield* JournalStore).beginRun(
+          unfinishedRunId,
+          FixtureTarget.make("began-only-target"),
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
 
       const requestedRunId = RunId.make("new-run-after-began-only")
