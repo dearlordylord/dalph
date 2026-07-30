@@ -1,4 +1,4 @@
-import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
+import { type IntegrationTarget, PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema } from "effect"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { JournalBoundaryDecodeIssue } from "../../workflow-journal/recovery-model.js"
@@ -18,6 +18,7 @@ import {
   WorkflowJournalHistorySemanticIssue
 } from "../reconstruction/history-result.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
+import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -41,7 +42,7 @@ const runBeganWithoutTermination = (
   !reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
 
 /** Discovers journaled work before exposing the production run environment. */
-export const startupRecoveryLayer = (runId: RunId) =>
+export const startupRecoveryLayer = (runId: RunId, integrationTarget?: IntegrationTarget) =>
   Layer.effectContext(
     Effect.gen(function* () {
       yield* CoordinatorOwnership
@@ -80,9 +81,9 @@ export const startupRecoveryLayer = (runId: RunId) =>
       )
       const recovery =
         currentRun === undefined
-          ? yield* makeJournaledFreshRunRecoveryActivation(runId)
-          : yield* makeRunRecoveryActivation(runId)
-      return Context.empty().pipe(
+          ? yield* makeJournaledFreshRunRecoveryActivation(runId, integrationTarget)
+          : yield* makeRunRecoveryActivation(runId, integrationTarget)
+      const context = Context.empty().pipe(
         Context.add(WorkflowInterpreter, interpreter),
         Context.add(RunRecoveryActivation, recovery),
         Context.add(PlannedAttemptExecutor, executor),
@@ -91,5 +92,8 @@ export const startupRecoveryLayer = (runId: RunId) =>
         Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
         Context.add(WorkflowTrace, trace)
       )
+      return integrationTarget === undefined
+        ? context
+        : Context.add(context, IntegrationTargetSelection, integrationTarget)
     })
   )

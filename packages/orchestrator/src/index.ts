@@ -56,6 +56,12 @@ export {
 } from "./workflow-journal/identity.js"
 export { defaultTaskWorkCapacity, TaskWorkCapacity } from "./coordination/admission/capacity.js"
 export {
+  IntegrationTargetResourceUnavailable,
+  makeIntegrationTargetResourceController,
+  type IntegrationTargetResourceController,
+  type IntegrationTargetResourceSnapshot
+} from "./coordination/admission/integration-target-resource.js"
+export {
   SelectedTransitionFingerprint,
   SelectedTransitionIdentity
 } from "./coordination/activation/selected-transition.js"

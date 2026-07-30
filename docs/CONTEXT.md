@@ -467,6 +467,13 @@ capability, but does not prove candidate construction, verification, promotion,
 or tracker completion.
 _Avoid_: Integration completed, target promoted, task completed
 
+**Integration target resource**:
+The process-local serialized right to act on one exact repository/ref target.
+It is acquired before integration starts, released while the started
+responsibility waits on tracker prerequisites, and recreated empty after
+process restart. The journal never stores its ownership.
+_Avoid_: Integration responsibility, durable lock, queue position
+
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording
 operation as the observed reason Dalph may record that immutable decision. Its

@@ -141,7 +141,9 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const freshExecutorLayer = controlledExecutorLayer(cursor, runId)
       const freshWorkflowLayer = Layer.mergeAll(
         interpreterLayer,
-        journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(freshExecutorLayer)),
+        journaledFreshRunRecoveryActivationLayer(runId, command.integrationTarget).pipe(
+          Layer.provide(freshExecutorLayer)
+        ),
         integrationTargetSelectionLayer(command.integrationTarget),
         planningLayer("fresh"),
         controlledControlPolicyLayer
@@ -172,7 +174,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         })
       ).pipe(Layer.provide(recoveryAuthorityLayer))
       const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId)
-      const recoveryStartupLayer = startupRecoveryLayer(runId).pipe(
+      const recoveryStartupLayer = startupRecoveryLayer(runId, command.integrationTarget).pipe(
         Layer.provide(interpreterLayer),
         Layer.provide(observedRecoveryAuthorityLayer),
         Layer.provide(controlledControlPolicyLayer),

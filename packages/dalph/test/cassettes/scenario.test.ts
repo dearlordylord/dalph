@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -93,6 +93,26 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
         wakeCondition: "TaskTrackerFactsObserved"
       })
     )
+    const integrationBeganAt = integrationRecords.find(
+      ({ event }) => event._tag === "IntegrationResponsibilityBegan"
+    )?.position
+    if (integrationBeganAt === undefined) return yield* Effect.die("expected integration responsibility")
+    expect(
+      deriveIntegrationFrontier(run.history.runState, {
+        heldResponsibilityPositions: new Set([integrationBeganAt]),
+        integrationTarget: Option.some(
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          })
+        )
+      }).transitions
+    ).toContainEqual(
+      expect.objectContaining({
+        _tag: "ReleaseStartedIntegrationTarget",
+        responsibility: expect.objectContaining({ queuedAt: integrationBeganAt })
+      })
+    )
     expect(run.observedBehavior.taskWorkResults).toEqual([
       { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
     ])
@@ -126,7 +146,7 @@ it.effect("starts a queued accepted result in the same live coordinator process"
     const uninterrupted = AuthoredScenarioCassette.make({
       ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
       name: "accepted result starts without coordinator restart",
-      story: [...withoutDeath.slice(0, -3), ...withoutDeath.slice(-1)]
+      story: [...withoutDeath.slice(0, -5), ...withoutDeath.slice(-1)]
     })
 
     const run = yield* runAuthoredScenarioCassette(uninterrupted)

@@ -1,5 +1,12 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { AcceptedResult, AttemptId, IntegrationTarget, PlannedTaskAttempt, RunId } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  IntegrationTarget,
+  PlannedTaskAttempt,
+  RunId,
+  plannedTaskAttemptEquivalence
+} from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   integrationResponsibilityBeganRecordKey,
@@ -8,6 +15,7 @@ import {
 import { type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
+import { integrationResponsibilityEquivalence } from "./responsibility.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived
@@ -47,6 +55,13 @@ export type IntegrationResponsibility = typeof IntegrationResponsibility.Type
 export interface IntegrationAdmission {
   readonly responsibilities: ReadonlyArray<IntegrationResponsibility>
 }
+
+export const UnqueuedAcceptedResult = Schema.Struct({
+  acceptedResult: AcceptedResult,
+  plannedAttempt: PlannedTaskAttempt,
+  terminalAt: JournalPosition
+})
+export type UnqueuedAcceptedResult = typeof UnqueuedAcceptedResult.Type
 
 /** Coordinator configuration owns the exact serialized Git integration stream. */
 export class IntegrationTargetSelection extends Context.Service<IntegrationTargetSelection, IntegrationTarget>()(
@@ -88,8 +103,7 @@ const hasDurableAcceptedResult = (
   )
   if (
     responsibility?.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
-    responsibility.event.plannedAttempt.runId !== plannedAttempt.runId ||
-    responsibility.event.plannedAttempt.taskId !== plannedAttempt.taskId
+    !plannedTaskAttemptEquivalence(responsibility.event.plannedAttempt, plannedAttempt)
   ) {
     return false
   }
@@ -111,12 +125,48 @@ const startedFor = (
   records.find(
     (record): record is JournalRecord & { readonly event: typeof IntegrationStartedEvent.Type } =>
       record.event._tag === "IntegrationStarted" &&
-      record.event.plannedAttempt.attemptId === queued.event.plannedAttempt.attemptId &&
       record.event.responsibilityBeganAt === queued.position &&
-      record.event.integrationTarget.repository === queued.event.integrationTarget.repository &&
-      record.event.integrationTarget.ref === queued.event.integrationTarget.ref &&
-      sameAcceptedResult(record.event.acceptedResult, queued.event.acceptedResult)
+      integrationResponsibilityEquivalence(record.event, queued.event)
   )
+
+/** Finds accepted terminal facts that still need their exact durable integration responsibility. */
+export const deriveUnqueuedAcceptedResults = (
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<UnqueuedAcceptedResult> => {
+  const queuedAttemptIds = new Set(
+    records.flatMap(({ event }) =>
+      event._tag === "IntegrationResponsibilityBegan" ? [event.plannedAttempt.attemptId] : []
+    )
+  )
+  const executorResponsibilities = new Map(
+    records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+        ? [[event.plannedAttempt.attemptId, event.plannedAttempt] as const]
+        : []
+    )
+  )
+  return records.flatMap((record) => {
+    const event = record.event
+    if (
+      event._tag !== "PlannedAttemptExecutorWorkReported" ||
+      event.report._tag !== "Terminal" ||
+      event.report.result._tag !== "Accepted" ||
+      queuedAttemptIds.has(event.report.correlation.attemptId)
+    ) {
+      return []
+    }
+    const plannedAttempt = executorResponsibilities.get(event.report.correlation.attemptId)
+    return plannedAttempt === undefined
+      ? []
+      : [
+          UnqueuedAcceptedResult.make({
+            acceptedResult: event.report.result.acceptedResult,
+            plannedAttempt,
+            terminalAt: record.position
+          })
+        ]
+  })
+}
 
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
 export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>): IntegrationAdmission => ({

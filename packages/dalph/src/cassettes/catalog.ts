@@ -243,6 +243,8 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
       { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
       {
         _tag: "ExpectedBehavior",
         orchestration: [

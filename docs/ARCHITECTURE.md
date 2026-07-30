@@ -817,10 +817,22 @@ only the earliest queued responsibility for a free repository/ref target.
 `IntegrationStarted` is the non-cancellable cutoff and does not consume
 task-work capacity.
 
+The terminal report and responsibility use separate idempotent appends. If the
+coordinator stops between them, restart derives the missing responsibility
+from the exact accepted terminal and executor responsibility, then submits
+that reconciliation through the same selector before integration may start.
+
+Serialized target ownership is a distinct process-local controller, not a
+journal fact. Starting integration acquires the exact repository/ref target
+before recording the cutoff. Restart begins with no runtime lease and
+reacquires one only when current tracker facts permit progress.
+
 A newly observed unfinished tracker prerequisite produces a derived dependency
 wait. Dalph retains the accepted result and recorded start, releases the
-process-local target resource, and preserves same-target order. Another target
-remains independently selectable.
+process-local target resource through the shared selector, and preserves
+same-target order. Another target remains independently selectable. When a
+later complete tracker observation clears the prerequisites, the selector may
+reacquire the same target for the same started responsibility.
 
 Candidate construction, repository verification, promotion, resolution,
 tracker completion, and executor-internal review policy remain future work.

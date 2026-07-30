@@ -2,6 +2,7 @@ import { Context, Effect, Exit, Layer, Option, Queue } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "../activation/coordinator.js"
 import {
   type AttemptId,
+  type IntegrationTarget,
   type PlannedTaskAttempt,
   type RunId,
   type TaskId,
@@ -11,7 +12,7 @@ import {
 } from "@dalph/contracts"
 import { type TaskWorkCapacity } from "../admission/capacity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
-import { JournalStore, type JournalStoreError } from "../../workflow-journal/store.js"
+import { JournalStore, type JournalAppendError, type JournalStoreError } from "../../workflow-journal/store.js"
 import { workflowJournalTransitionRuleFor } from "../reconstruction/history-transition.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
@@ -40,8 +41,14 @@ import type {
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
-import { startQueuedIntegration } from "../../workflow/protocols/integration-admission/protocol.js"
+import { type AcceptedResultNotDurable } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
+import {
+  type IntegrationTargetResourceController,
+  type IntegrationTargetResourceUnavailable,
+  makeIntegrationTargetResourceController
+} from "../admission/integration-target-resource.js"
+import { runIntegrationTransition } from "./integration-transition-runtime.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 type InterpreterError = {
@@ -55,8 +62,11 @@ type InvalidWorkflowJournalHistory = Extract<
 
 export type RunRecoveryActivationError =
   | Effect.Error<ReturnType<typeof continuePlannedAttemptExecutorWork>>
+  | AcceptedResultNotDurable
   | InvalidWorkflowJournalHistory
   | InterpreterError
+  | IntegrationTargetResourceUnavailable
+  | JournalAppendError
   | JournalStoreError
   | PlannedAttemptRecoveryAuthorityError
 
@@ -125,14 +135,21 @@ const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunS
   return reduction.runState
 })
 
-const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (runId: RunId) {
+const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
+  runId: RunId,
+  integrationResources: IntegrationTargetResourceController,
+  integrationTarget: Option.Option<IntegrationTarget>
+) {
   const runState = yield* readRecoveredRunState(runId)
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
     responsibilityFacts: deriveJournalResponsibilityFacts(runState)
   })
-  const integration = deriveIntegrationFrontier(runState)
+  const integration = deriveIntegrationFrontier(runState, {
+    ...(yield* integrationResources.snapshot),
+    integrationTarget
+  })
   return {
     explanations: [...ordinary.explanations, ...integration.explanations],
     transitions: [...integration.transitions, ...ordinary.transitions]
@@ -140,19 +157,28 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
 })
 
 const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
-  runId: RunId
+  runId: RunId,
+  integrationResources: IntegrationTargetResourceController,
+  integrationTarget: Option.Option<IntegrationTarget>
 ) {
-  const frontier = yield* readRecoveredFrontier(runId)
+  const frontier = yield* readRecoveredFrontier(runId, integrationResources, integrationTarget)
   return {
     explanations: frontier.explanations.filter(
       ({ _tag }) =>
         _tag === "IntegrationDependencyWait" ||
+        _tag === "IntegrationConfigurationWait" ||
         _tag === "IntegrationInProgress" ||
         _tag === "IntegrationTargetWait" ||
         _tag === "PlannedAttemptTaskMembershipConstraint" ||
         _tag === "WorkflowOperationTaskMembershipConstraint"
     ),
-    transitions: frontier.transitions.filter(({ _tag }) => _tag === "StartQueuedIntegration")
+    transitions: frontier.transitions.filter(
+      ({ _tag }) =>
+        _tag === "AcquireStartedIntegrationTarget" ||
+        _tag === "QueueAcceptedResultIntegrationResponsibility" ||
+        _tag === "ReleaseStartedIntegrationTarget" ||
+        _tag === "StartQueuedIntegration"
+    )
   }
 })
 
@@ -240,10 +266,11 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
  * Fresh-run composition that records coarse executor responsibility and
  * reports while exposing no recovered transitions.
  */
-export const makeJournaledFreshRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeJournaledFreshSource")(
-  function* (runId: RunId) {
+const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeJournaledFreshSource")(
+  function* (runId: RunId, integrationTarget: Option.Option<IntegrationTarget>) {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* JournalStore
+    const integrationResources = yield* makeIntegrationTargetResourceController()
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
       Effect.provideService(effect, JournalStore, journal)
     const continueAttempt = (plannedAttempt: PlannedTaskAttempt) =>
@@ -255,29 +282,40 @@ export const makeJournaledFreshRunRecoveryActivation = Effect.fn("RunRecoveryAct
       _tag: "JournaledFreshRunActivation",
       continueFreshPlannedAttemptExecutorWork: continueAttempt,
       continuePlannedAttemptExecutorWork: continueAttempt,
-      readFinalityFrontier: provideJournal(readRecoveredFrontier(runId)),
-      readFrontier: provideJournal(readJournaledFreshFrontier(runId)),
+      readFinalityFrontier: provideJournal(readRecoveredFrontier(runId, integrationResources, integrationTarget)),
+      readFrontier: provideJournal(readJournaledFreshFrontier(runId, integrationResources, integrationTarget)),
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
       ),
       reconstructedPlannedAttemptPositions: [],
       runId,
       runTransition: (transition) =>
-        transition._tag === "StartQueuedIntegration"
-          ? provideJournal(startQueuedIntegration(transition.responsibility)).pipe(Effect.asVoid)
-          : Effect.die(`fresh journal activation cannot run ${transition._tag}`),
+        provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
+          Effect.flatMap((handled) =>
+            handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
+          )
+        ),
       waitForNextExecutorWake: Effect.void
     })
   }
 )
 
-export const journaledFreshRunRecoveryActivationLayer = (runId: RunId) =>
-  Layer.effect(RunRecoveryActivation, makeJournaledFreshRunRecoveryActivation(runId))
+export const makeJournaledFreshRunRecoveryActivation = (
+  runId: RunId,
+  configuredIntegrationTarget?: IntegrationTarget
+) => makeJournaledFreshRunRecoveryActivationEffect(runId, Option.fromUndefinedOr(configuredIntegrationTarget))
 
-export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
-  runId: RunId
+export const journaledFreshRunRecoveryActivationLayer = (
+  runId: RunId,
+  configuredIntegrationTarget?: IntegrationTarget
+) => Layer.effect(RunRecoveryActivation, makeJournaledFreshRunRecoveryActivation(runId, configuredIntegrationTarget))
+
+const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
+  runId: RunId,
+  integrationTarget: Option.Option<IntegrationTarget>
 ) {
   const dependencies = yield* Effect.context<JournalStore | WorkflowInterpreter | WorkflowTrace>()
+  const integrationResources = yield* makeIntegrationTargetResourceController()
   const plannedAttemptExecutor = yield* PlannedAttemptExecutor
   const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
   const provideDependencies = <A, E>(
@@ -311,17 +349,14 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
     }
   )
   const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
-    return yield* readRecoveredFrontier(runId)
+    return yield* readRecoveredFrontier(runId, integrationResources, integrationTarget)
   })
   const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
   const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
   ) {
-    if (transition._tag === "StartQueuedIntegration") {
-      yield* startQueuedIntegration(transition.responsibility)
-      return
-    }
+    if (yield* runIntegrationTransition(transition, integrationResources)) return
     if (
       transition._tag === "ContinuePlannedAttemptExecutorWork" ||
       transition._tag === "SuspendPlannedAttemptExecutorWork"
@@ -374,6 +409,9 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
     waitForNextExecutorWake: provideDependencies(waitForNextExecutorWake())
   } satisfies AuthoritativeRunRecoveryActivation
 })
+
+export const makeRunRecoveryActivation = (runId: RunId, configuredIntegrationTarget?: IntegrationTarget) =>
+  makeRunRecoveryActivationEffect(runId, Option.fromUndefinedOr(configuredIntegrationTarget))
 
 /**
  * Routes every already-intended recovered responsibility through the same

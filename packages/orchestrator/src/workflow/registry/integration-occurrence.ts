@@ -4,6 +4,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { WorkflowActor } from "./actor.js"
 import type { WorkflowJournalEvent } from "./event.js"
+import { integrationResponsibilityEquivalence } from "../protocols/integration-admission/responsibility.js"
 
 const integrationActionFields = {
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
@@ -71,10 +72,7 @@ const integrationResponsibilityMatches = (
   responsibility !== undefined &&
   responsibility.runId === occurrence.runId &&
   responsibility.recordedAt < occurrence.recordedAt &&
-  responsibility.plannedAttempt.attemptId === occurrence.plannedAttempt.attemptId &&
-  responsibility.acceptedResult.commit === occurrence.acceptedResult.commit &&
-  responsibility.integrationTarget.repository === occurrence.integrationTarget.repository &&
-  responsibility.integrationTarget.ref === occurrence.integrationTarget.ref
+  integrationResponsibilityEquivalence(responsibility, occurrence)
 
 const isIntegrationStarted = (candidate: { readonly _tag: string }): candidate is IntegrationStarted =>
   candidate._tag === "IntegrationStarted"

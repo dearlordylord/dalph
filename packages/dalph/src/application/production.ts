@@ -1,5 +1,5 @@
 import { NodeServices } from "@effect/platform-node"
-import type { RunId } from "@dalph/contracts"
+import { GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef, type RunId } from "@dalph/contracts"
 import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import {
   AuthoritativeTaskWorktreeReady,
@@ -66,7 +66,13 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   )
   const controlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
 
-  return startupRecoveryLayer(runId).pipe(
+  return startupRecoveryLayer(
+    runId,
+    IntegrationTarget.make({
+      repository: GitRepositoryLocator.make(target),
+      ref: IntegrationTargetRef.make("refs/heads/master")
+    })
+  ).pipe(
     Layer.provide(interpreterLayer),
     Layer.provide(recoveryAuthorityLayer),
     Layer.provide(controlPolicyLayer),

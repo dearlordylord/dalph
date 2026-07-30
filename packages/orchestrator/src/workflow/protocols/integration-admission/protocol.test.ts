@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -26,6 +26,8 @@ import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memo
 import {
   AcceptedResultNotDurable,
   deriveIntegrationAdmission,
+  PreIntegrationCancellationCapability,
+  QueuedIntegrationResponsibility,
   queueAcceptedResultIntegrationResponsibility,
   selectStartableIntegrationResponsibilities,
   startQueuedIntegration
@@ -46,6 +48,12 @@ import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
+import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
+import { runIntegrationTransition } from "../../../coordination/run/integration-transition-runtime.js"
+import { runnableTransitionTaskId, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
+import { OperationId } from "../../identity.js"
+import { makeJournaledFreshRunRecoveryActivation } from "../../../coordination/run/recovery-activation.js"
+import { controlledFakePlannedAttemptExecutorLayer } from "../../../../test/controlled-planned-attempt-executor.js"
 
 const runId = RunId.make("integration-admission-run")
 const integrationTarget = IntegrationTarget.make({
@@ -117,6 +125,32 @@ it.effect("rejects a responsibility before the matching accepted terminal report
     )
 
     expect(failure).toEqual(new AcceptedResultNotDurable({ attemptId: attempt.attemptId, runId: attempt.runId }))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("rejects a responsibility whose planned attempt differs from the durable executor responsibility", () =>
+  Effect.gen(function* () {
+    const durableAttempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(durableAttempt, result)
+    const contradictoryAttempt = PlannedTaskAttempt.make({
+      ...durableAttempt,
+      baseSha: GitCommitSha.make("2".repeat(40))
+    })
+
+    const failure = yield* Effect.flip(
+      queueAcceptedResultIntegrationResponsibility(contradictoryAttempt, result, integrationTarget)
+    )
+
+    expect(failure).toEqual(
+      new AcceptedResultNotDurable({ attemptId: contradictoryAttempt.attemptId, runId: contradictoryAttempt.runId })
+    )
+    expect(
+      (yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId)))).some(
+        ({ event }) => event._tag === "IntegrationResponsibilityBegan"
+      )
+    ).toBe(false)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
@@ -219,6 +253,158 @@ it.effect("orders accepted results by committed responsibility position after re
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
+it.effect("reconciles a durable accepted terminal into one integration responsibility after restart", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const journal = yield* JournalStore
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    expect(reconstructed._tag).toBe("ValidReconstructedRun")
+    if (reconstructed._tag !== "ValidReconstructedRun") {
+      return yield* Effect.die("expected accepted terminal reconstruction")
+    }
+
+    const frontier = deriveIntegrationFrontier(reconstructed.state, {
+      heldResponsibilityPositions: new Set(),
+      integrationTarget: Option.some(integrationTarget)
+    })
+    expect(deriveIntegrationFrontier(reconstructed.state).explanations).toContainEqual({
+      _tag: "IntegrationConfigurationWait",
+      taskId: attempt.taskId,
+      wakeCondition: "IntegrationTargetConfigured"
+    })
+    expect(frontier.transitions).toMatchObject([
+      {
+        _tag: "QueueAcceptedResultIntegrationResponsibility",
+        accepted: { acceptedResult: result, plannedAttempt: attempt }
+      }
+    ])
+    const transition = frontier.transitions[0]
+    if (transition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
+      return yield* Effect.die("expected queue reconciliation")
+    }
+    expect(runnableTransitionTaskId(transition)).toBe(attempt.taskId)
+    yield* runIntegrationTransition(transition, yield* makeIntegrationTargetResourceController())
+
+    expect(
+      deriveIntegrationAdmission(yield* journal.read(runId)).responsibilities.map(
+        ({ plannedAttempt }) => plannedAttempt.attemptId
+      )
+    ).toEqual([attempt.attemptId])
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("journaled fresh activation fails closed on a non-integration recovered transition", () =>
+  Effect.gen(function* () {
+    const activation = yield* makeJournaledFreshRunRecoveryActivation(runId, integrationTarget)
+    if (activation._tag !== "JournaledFreshRunActivation") {
+      return yield* Effect.die("expected journaled fresh activation")
+    }
+    const exit = yield* Effect.exit(
+      activation.runTransition(
+        RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+          operationId: OperationId.make("not-recovered-in-fresh"),
+          taskId: TaskId.make("A")
+        }),
+        undefined as never
+      )
+    )
+
+    expect(exit._tag).toBe("Failure")
+  }).pipe(Effect.provide(Layer.merge(memoryJournalStoreLayer, controlledFakePlannedAttemptExecutorLayer)))
+)
+
+it.effect("acquires, releases, and reacquires the process-local target around one started responsibility", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    const resources = yield* makeIntegrationTargetResourceController()
+
+    expect(
+      yield* runIntegrationTransition(
+        RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued }),
+        resources
+      )
+    ).toBe(true)
+    const started = deriveIntegrationAdmission(
+      yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId)))
+    ).responsibilities[0]
+    if (started?._tag !== "StartedIntegrationResponsibility") {
+      return yield* Effect.die("expected started responsibility")
+    }
+    expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
+
+    const runState = reconstructRunState(
+      runId,
+      yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId)))
+    )
+    if (runState._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid started run")
+    yield* resources.release(started)
+    expect(
+      deriveIntegrationFrontier(runState.state, {
+        heldResponsibilityPositions: new Set(),
+        integrationTarget: Option.some(integrationTarget)
+      }).transitions
+    ).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }))
+    yield* resources.acquire(started)
+
+    expect(
+      yield* runIntegrationTransition(
+        RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started }),
+        resources
+      )
+    ).toBe(true)
+    expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
+    expect(
+      yield* runIntegrationTransition(
+        RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }),
+        resources
+      )
+    ).toBe(true)
+    expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
+    expect(
+      yield* runIntegrationTransition(
+        RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+          operationId: OperationId.make("not-integration"),
+          taskId: attempt.taskId
+        }),
+        resources
+      )
+    ).toBe(false)
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("releases the process-local target when the cutoff append fails", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    yield* beginRun
+    yield* JournalStore.pipe(Effect.flatMap((journal) => journal.terminateRun(runId)))
+    const queued = QueuedIntegrationResponsibility.make({
+      acceptedResult: acceptedResult("a"),
+      integrationTarget,
+      plannedAttempt: attempt,
+      preIntegrationCancellation: PreIntegrationCancellationCapability.make({
+        attemptId: attempt.attemptId,
+        queuedAt: JournalPosition.make(1),
+        runId: attempt.runId
+      }),
+      queuedAt: JournalPosition.make(1)
+    })
+    const resources = yield* makeIntegrationTargetResourceController()
+
+    yield* Effect.flip(
+      runIntegrationTransition(RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued }), resources)
+    )
+
+    expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
 it.effect("starts integration once and consumes only its pre-integration cancellation capability", () =>
   Effect.gen(function* () {
     const attempt = plannedAttempt("A", 0)
@@ -289,7 +475,12 @@ it.effect("derives one start, one same-target wait, and in-progress work without
     const queuedRun = reconstructRunState(runId, yield* journal.read(runId))
     expect(queuedRun._tag).toBe("ValidReconstructedRun")
     if (queuedRun._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid reconstruction")
-    expect(deriveIntegrationFrontier(queuedRun.state)).toMatchObject({
+    expect(
+      deriveIntegrationFrontier(queuedRun.state, {
+        heldResponsibilityPositions: new Set(),
+        integrationTarget: Option.some(integrationTarget)
+      })
+    ).toMatchObject({
       explanations: [{ _tag: "IntegrationTargetWait", taskId: "B" }],
       transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
     })
@@ -298,7 +489,12 @@ it.effect("derives one start, one same-target wait, and in-progress work without
     const startedRun = reconstructRunState(runId, yield* journal.read(runId))
     expect(startedRun._tag).toBe("ValidReconstructedRun")
     if (startedRun._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid reconstruction")
-    expect(deriveIntegrationFrontier(startedRun.state)).toMatchObject({
+    expect(
+      deriveIntegrationFrontier(startedRun.state, {
+        heldResponsibilityPositions: new Set([queuedA.queuedAt]),
+        integrationTarget: Option.some(integrationTarget)
+      })
+    ).toMatchObject({
       explanations: [
         { _tag: "IntegrationInProgress", taskId: "A" },
         { _tag: "IntegrationTargetWait", taskId: "B" }

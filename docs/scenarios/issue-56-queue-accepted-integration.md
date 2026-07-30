@@ -26,6 +26,14 @@ executor report, then records exact integration responsibility for A. The
 journal envelope position of that responsibility is A's integration order;
 Dalph writes no queue row, queue ordinal, timestamp, or completed-ID set.
 
+If the coordinator dies after the accepted terminal report commits but before
+the responsibility append, restart folds that exact executor responsibility
+and terminal result. The coordinator-selected target policy supplies the
+integration target again, and the shared selector appends the missing
+responsibility exactly once before any integration start. If the original
+append actually committed before an ambiguous failure, the stable attempt key
+rediscovers the same responsibility instead of creating another.
+
 Dalph receives B's typed terminal accepted result second and records B's exact
 integration responsibility at the next committed journal position. Releasing
 each task-work position does not acquire or release the serialized integration
@@ -73,9 +81,15 @@ construction.
 - `orders accepted results by committed responsibility position after restart`
   proves the journal-derived FIFO, absence of a durable queue ordinal, and
   selection of only the earliest result for one target.
+- `reconciles a durable accepted terminal into one integration responsibility
+  after restart` proves the crash gap between terminal report and responsibility
+  append remains recoverable and idempotent.
 - `starts integration once and consumes only its pre-integration cancellation
   capability` proves the cutoff, idempotent recovery, and resource
   separation.
+- `serializes one exact target while allowing another target and releases only
+  its owner` proves the process-local controller is distinct from task-work
+  capacity and journal state.
 - `recovers an accepted result in journal order and crosses its integration
   cutoff once` records the terminal accepted result, coordinator death,
   recovered selection, integration-start occurrence, and tracker blocker
@@ -136,10 +150,14 @@ Dalph must not:
 
 - `preserves same-target order while a blocker wait leaves another target
   usable` proves that later same-target work cannot leapfrog while another
-  target remains independently selectable.
-- The authored cassette test above proves the exact `IntegrationDependencyWait`
-  names blocker C and the tracker-observation wake condition while the accepted
-  result and recorded start remain present.
+  target remains independently selectable. The process-local controller test
+  named above proves release then reacquisition is exact to the owning
+  responsibility.
+- The authored cassette test above proves the exact
+  `IntegrationDependencyWait` names blocker C and the tracker-observation wake
+  condition while the accepted result and recorded start remain present, and
+  derives the selector's exact `ReleaseStartedIntegrationTarget` transition
+  from that chronology.
 - Quint test `blockerReleasesTargetWithoutDiscardingResult` plus invariant
   `dependencyWaitPreservesQueueOrder` checks process-local target release
   without same-target reordering.

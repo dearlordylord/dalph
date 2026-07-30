@@ -8,6 +8,7 @@ import {
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -22,15 +23,6 @@ export interface IntegrationHistoryIndexes {
 }
 
 const sameAcceptedResult = (left: AcceptedResult, right: AcceptedResult): boolean => left.commit === right.commit
-
-const sameIntegrationResponsibility = (
-  began: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,
-  started: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
-): boolean =>
-  plannedTaskAttemptEquivalence(began.plannedAttempt, started.plannedAttempt) &&
-  sameAcceptedResult(began.acceptedResult, started.acceptedResult) &&
-  began.integrationTarget.repository === started.integrationTarget.repository &&
-  began.integrationTarget.ref === started.integrationTarget.ref
 
 const invalidResponsibilityBeginning = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,
@@ -52,7 +44,9 @@ const invalidIntegrationStart = (
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const began = indexes.integrationResponsibilitiesBegan.get(event.responsibilityBeganAt)
-  return began === undefined || event.responsibilityBeganAt >= position || !sameIntegrationResponsibility(began, event)
+  return began === undefined ||
+    event.responsibilityBeganAt >= position ||
+    !integrationResponsibilityEquivalence(began, event)
     ? `integration start for attempt ${event.plannedAttempt.attemptId} has no exact earlier responsibility at ${event.responsibilityBeganAt}`
     : undefined
 }

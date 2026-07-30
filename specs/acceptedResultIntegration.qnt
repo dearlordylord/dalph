@@ -10,7 +10,6 @@ module acceptedResultIntegration {
     | Queued
     | Started
     | DependencyWait
-    | Cancelled
 
   type ResultState = {
     phase: Phase,
@@ -151,23 +150,6 @@ module acceptedResultIntegration {
     }
   }
 
-  action cancelQueuedResult(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      RESULT_IDS.contains(id),
-      result.phase == Queued,
-      result.preIntegrationCancellation,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: Cancelled,
-          preIntegrationCancellation: false,
-        }),
-      },
-    }
-  }
-
   action startIntegration(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -211,8 +193,6 @@ module acceptedResultIntegration {
     acceptResult(2),
     queueAcceptedResult(1),
     queueAcceptedResult(2),
-    cancelQueuedResult(1),
-    cancelQueuedResult(2),
     startIntegration(1),
     startIntegration(2),
     waitOnDependency(1),

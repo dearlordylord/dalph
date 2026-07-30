@@ -17,6 +17,19 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run acceptedTerminalReconcilesAfterRestart = {
+    init
+      .then(acceptResult(1))
+      .then(recoverCoordinator)
+      .then(queueAcceptedResult(1))
+      .expect(and {
+        restartReached,
+        state.results.get(1).phase == Queued,
+        state.results.get(1).queuePosition == 1,
+        state.results.get(1).preIntegrationCancellation,
+      })
+  }
+
   run startConsumesCancellationCapability = {
     init
       .then(acceptResult(1))
@@ -44,18 +57,6 @@ module acceptedResultIntegrationTest {
         state.results.get(1).phase == DependencyWait,
         state.results.get(2).phase == Queued,
         not(state.results.get(2).targetHeld),
-      })
-  }
-
-  run queuedCancellationCannotCrossCutoff = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(cancelQueuedResult(1))
-      .expect(and {
-        state.results.get(1).phase == Cancelled,
-        not(state.results.get(1).preIntegrationCancellation),
-        not(state.results.get(1).targetHeld),
       })
   }
 }
