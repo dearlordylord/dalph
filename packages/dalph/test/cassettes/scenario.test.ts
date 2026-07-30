@@ -64,6 +64,8 @@ it.effect("runs the maintained singleton through production activation and descr
 
     expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }])
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expect(run.observedBehavior.orchestrationEvidence).toBeNull()
+    expect(run.observedBehavior.protocolEvidence).toBeNull()
     expect(expected?._tag === "ExpectedBehavior" ? expected.orchestration : undefined).toBeNull()
     expect(expected?._tag === "ExpectedBehavior" ? expected.protocol : undefined).toBeNull()
     expect(JSON.stringify(expected)).not.toContain("attempt:A:0")
@@ -92,7 +94,10 @@ it.effect("runs the maintained singleton through production activation and stops
         : undefined
     ).toBe("Terminal")
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
-      "The story expects 1 task-work results and 1 no-planned-work assertions."
+      "The story expects the planned work for task A to complete."
+    )
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "The story expects no planned work undertaken for task B."
     )
   })
 )
@@ -362,7 +367,17 @@ it.effect("derives failed task-work results and safely suspended orchestration e
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
         if (item._tag === "ExpectedBehavior") {
-          return [...story, { ...item, taskWork: { ...item.taskWork, results: [] } }]
+          return [
+            ...story,
+            {
+              ...item,
+              orchestration: [
+                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+              ],
+              taskWork: { ...item.taskWork, results: [] }
+            }
+          ]
         }
         return [...story, item]
       }, [])
@@ -428,6 +443,12 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
 
     expect(run.observedBehavior.orchestrationEvidence).toHaveLength(3)
     expect(run.observedBehavior.protocolEvidence).toHaveLength(3)
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "The story expects Dalph to assume executor-work responsibility for task A, attempt attempt:A:0."
+    )
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "The story expects Dalph to acquire the claim for task A."
+    )
   })
 )
 
@@ -446,25 +467,35 @@ it.effect("requires orchestration evidence when task-work results cannot disting
   })
 )
 
-it.effect("rejects reordered evidence within a present authored assertion lens", () =>
+it.effect("rejects reordered evidence within either present authored assertion lens", () =>
   Effect.gen(function* () {
-    const reorderedEvidence = {
+    const completeOrchestration = [
+      { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+    ]
+    const completeProtocol = [
+      { _tag: "TaskClaimAcquired", taskId: "A" },
+      { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+      { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
+    ]
+    const withReordered = (lens: "orchestration" | "protocol") => ({
       ...singleton,
       story: singleton.story.map((item) =>
         item._tag === "ExpectedBehavior"
           ? {
               ...item,
-              protocol: [
-                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
-                { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-                { _tag: "TaskClaimAcquired", taskId: "A" }
-              ]
+              orchestration: lens === "orchestration" ? [...completeOrchestration].reverse() : null,
+              protocol: lens === "protocol" ? [...completeProtocol].reverse() : null
             }
           : item
       )
-    }
+    })
 
-    expect((yield* runAuthoredScenarioCassette(reorderedEvidence).pipe(Effect.flip))._tag).toBe(
+    expect((yield* runAuthoredScenarioCassette(withReordered("orchestration")).pipe(Effect.flip))._tag).toBe(
+      "AuthoredCassetteBehaviorMismatch"
+    )
+    expect((yield* runAuthoredScenarioCassette(withReordered("protocol")).pipe(Effect.flip))._tag).toBe(
       "AuthoredCassetteBehaviorMismatch"
     )
   })
