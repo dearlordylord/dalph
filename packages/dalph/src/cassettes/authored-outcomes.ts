@@ -72,9 +72,10 @@ const claimObservationEvidence = (
   return [{ _tag: "TaskClaimObserved", claimState: exact ? "Exact" : "Foreign", taskId: observation.taskId }]
 }
 
+// eslint-disable-next-line complexity -- One closed event vocabulary is projected exhaustively into exact cassette evidence.
 const protocolEvidenceFor = (
   event: JournalRecord["event"],
-  worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>,
+  plannedAttemptByGitOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>,
   priorAcquiredClaimByTask: ReadonlyMap<
     TaskId,
     Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
@@ -87,6 +88,33 @@ const protocolEvidenceFor = (
   }
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimAcquired", taskId: event.claim.taskId }]
   if (event._tag === "TaskClaimReleased") return [{ _tag: "TaskClaimReleased", taskId: event.release.claim.taskId }]
+  if (event._tag === "PlannedAttemptWorktreeObserved" && event.observation._tag === "AttemptWorktreeLost") {
+    return [
+      {
+        _tag: "AttemptWorktreeLost",
+        attemptId: event.observation.plannedAttempt.attemptId,
+        taskId: event.observation.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "TargetLineageObserved") {
+    if (
+      event.observation.plannedBaseIsAncestorOfTargetHead &&
+      event.observation.plannedBaseSha === event.observation.targetHeadSha
+    ) {
+      return []
+    }
+    return [
+      {
+        _tag: event.observation.plannedBaseIsAncestorOfTargetHead
+          ? "CompatibleTargetAdvance"
+          : "IncompatibleTargetRewrite",
+        plannedBaseSha: event.observation.plannedBaseSha,
+        targetHeadSha: event.observation.targetHeadSha,
+        taskId: event.plannedAttempt.taskId
+      }
+    ]
+  }
   if (event._tag === "TaskTrackerFactsObserved") return claimObservationEvidence(event, priorAcquiredClaimByTask)
   if (event._tag === "TaskAttemptPlanned") {
     return [
@@ -97,7 +125,7 @@ const protocolEvidenceFor = (
       }
     ]
   }
-  if (event._tag === "TaskWorktreeReady") return [worktreeEvidence(event, worktreeAttemptByOperation)]
+  if (event._tag === "TaskWorktreeReady") return [worktreeEvidence(event, plannedAttemptByGitOperation)]
   return []
 }
 
@@ -147,11 +175,13 @@ const taskWorkResultFor = (
 }
 
 const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): CompleteAuthoredObservedBehavior => {
-  const worktreeAttemptByOperation = new Map(
+  const plannedAttemptByGitOperation = new Map(
     records.flatMap(({ event }) =>
       event._tag === "TaskWorktreeReconciliationIntended"
         ? [[event.operation.operationId, event.operation.plannedAttempt] as const]
-        : []
+        : event._tag === "GitReadIntentRecorded"
+          ? [[event.operation.operationId, event.operation.plannedAttempt] as const]
+          : []
     )
   )
   const taskByAttempt = new Map(
@@ -179,7 +209,7 @@ const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): Comple
             prior._tag === "TaskClaimAcquired" ? [[prior.claim.taskId, prior.claim] as const] : []
           )
       )
-      return protocolEvidenceFor(event, worktreeAttemptByOperation, priorAcquiredClaimByTask)
+      return protocolEvidenceFor(event, plannedAttemptByGitOperation, priorAcquiredClaimByTask)
     }),
     taskWorkResults: records.flatMap(({ event }) => taskWorkResultFor(event, taskByAttempt))
   }

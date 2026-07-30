@@ -18,7 +18,6 @@ import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeTaskAdmissionController } from "../coordination/admission/controller.js"
 import { RunnableFrontierTransition } from "../coordination/frontier/frontier.js"
 import { makeRunRecoveryActivation } from "../coordination/run/recovery-activation.js"
-import { PlannedAttemptRecoveryAuthority } from "../coordination/run/recovery-authority.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../workflow-journal/store.js"
@@ -215,14 +214,12 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
         })
       ),
       Effect.provideService(
-        PlannedAttemptRecoveryAuthority,
-        PlannedAttemptRecoveryAuthority.of({ verify: () => Effect.void })
-      ),
-      Effect.provideService(
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("restart construction does not call the tracker"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Effect.die("restart construction does not call the tracker"),
           readTaskWorkSpecification: () => Effect.die("restart construction does not call the tracker"),
           reconcileTaskWorktree: () => Effect.die("restart construction does not call Git"),

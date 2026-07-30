@@ -124,6 +124,74 @@ await run("task-fact reconciliation exhaustive model", [
   "1"
 ])
 
+const gitReconciliationInvariants = [
+  "compatibleTargetAdvanceDoesNotConstrainAttempt",
+  "incompatibleRewriteConstrainsOnlyAffectedAttempt",
+  "gitConstraintPreservesIndependentEligibility",
+  "lostWorktreeNeverAuthorizesRepair",
+  "registrationConflictNeverAuthorizesRepair",
+  "positionHeldUntilSafeSuspension",
+  "rejectedResultPreservesWorktree",
+  "staleTargetNeverOverwrites",
+  "ambiguousTargetNeverPromotes",
+  "promotionRequiresExactExpectedHead",
+  "unverifiedCandidateNeverPromotes"
+]
+
+await run("Git reconciliation model typecheck", [
+  "typecheck",
+  "specs/gitReconciliation.qnt"
+])
+await run("Git reconciliation deterministic tests", [
+  "test",
+  "specs/gitReconciliation_test.qnt",
+  "--main",
+  "gitReconciliationTest"
+])
+await run("Git reconciliation negative mutation profile", [
+  "test",
+  "specs/gitReconciliation_negative_test.qnt",
+  "--main",
+  "gitReconciliationNegativeTest"
+])
+await run("Git reconciliation sampled model", [
+  "run",
+  "specs/gitReconciliation.qnt",
+  "--invariants",
+  ...gitReconciliationInvariants,
+  "--witnesses",
+  "compatibleAdvanceReached",
+  "targetRewriteWaitReached",
+  "lostWorktreeWaitReached",
+  "registrationConflictWaitReached",
+  "independentTaskSelectedReached",
+  "missingResultRejectedReached",
+  "nonDescendantResultRejectedReached",
+  "eligibleResultReached",
+  "exactCompareAndSetReached",
+  "staleTargetReconciliationReached",
+  "ambiguousTargetRereadReached",
+  "unverifiedCandidateRejectionReached",
+  "--max-steps",
+  "7",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("Git reconciliation exhaustive model", [
+  "verify",
+  "specs/gitReconciliation.qnt",
+  "--step",
+  "verificationStep",
+  "--invariants",
+  ...gitReconciliationInvariants,
+  "--max-steps",
+  "7",
+  "--verbosity",
+  "1"
+])
+
 const acceptedResultIntegrationInvariants = [
   "cancellationExactlyQueued",
   "queuePositionsAreUnique",
@@ -177,10 +245,10 @@ await run("accepted-result integration exhaustive model", [
 
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
-  `\nComplete planned-attempt executor model gate: ${
+  `\nComplete Quint model gate: ${
     (elapsedMilliseconds / 1000).toFixed(2)
   }s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
 )
 if (elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
-  throw new Error("Planned-attempt executor models exceeded their regression budget")
+  throw new Error("Quint models exceeded their regression budget")
 }

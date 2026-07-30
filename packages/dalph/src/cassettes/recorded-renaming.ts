@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Exhaustive alpha-renaming keeps every closed recorded-cassette variant in one reviewable boundary. */
 import { Effect, Match, Schema, type Brand } from "effect"
 import {
   type AttemptId,
@@ -11,21 +12,28 @@ import {
   type WorktreeLocator
 } from "@dalph/contracts"
 import {
+  CompetingWorktreeRegistrations,
+  ConflictingWorktreeRegistration,
+  ContradictoryWorktreeState,
   type ClaimOwner,
   type ClaimToken,
   type ControlCommand,
   type ControlCommandId,
   type FixtureTarget,
+  ForeignWorktreeRegistration,
   type GithubIssueNumber,
   type GithubRepositoryName,
   type GithubRepositoryOwner,
   type OperationId,
+  type PlannedAttemptWorktreeObservation,
   type PlannedAttemptExecutorReportOrdinal,
   type RunPolicyRevision,
   type TaskWorkCapacity,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
-  type WorkflowOperation
+  type WorkflowOperation,
+  UntrackedWorktreePath,
+  WorktreeBaseMismatch
 } from "@dalph/orchestrator"
 import {
   type CassetteIdentityRenaming as CassetteIdentityRenamingType,
@@ -177,6 +185,63 @@ const renameExecutorReport = (
         _tag: "Terminal",
         correlation,
         result: preserveCassetteValue(report.result)
+      })
+  }
+}
+
+// eslint-disable-next-line complexity -- Distinct worktree facts carry different generated locators and require exhaustive renaming.
+const renamePlannedAttemptWorktreeObservation = (
+  observation: PlannedAttemptWorktreeObservation,
+  maps: IdentityRenamingMaps
+): PlannedAttemptWorktreeObservation => {
+  switch (observation._tag) {
+    case "AttemptWorktreeLost":
+      return completeFields<typeof observation>({
+        _tag: "AttemptWorktreeLost",
+        plannedAttempt: renamePlannedAttempt(observation.plannedAttempt, maps)
+      })
+    case "CompetingWorktreeRegistrations":
+      return new CompetingWorktreeRegistrations({
+        observedBranchAtPlannedWorktree: renamed(observation.observedBranchAtPlannedWorktree, maps.taskBranchRefs),
+        observedHeadAtPlannedWorktree: preserveCassetteValue(observation.observedHeadAtPlannedWorktree),
+        plannedBranch: renamed(observation.plannedBranch, maps.taskBranchRefs),
+        plannedBranchRegisteredWorktree: renamed(observation.plannedBranchRegisteredWorktree, maps.worktreeLocators),
+        plannedWorktree: renamed(observation.plannedWorktree, maps.worktreeLocators)
+      })
+    case "ConflictingWorktreeRegistration":
+      return new ConflictingWorktreeRegistration({
+        observedBranch: renamed(observation.observedBranch, maps.taskBranchRefs),
+        observedHead: preserveCassetteValue(observation.observedHead),
+        plannedBranch: renamed(observation.plannedBranch, maps.taskBranchRefs),
+        worktree: renamed(observation.worktree, maps.worktreeLocators)
+      })
+    case "ContradictoryWorktreeState":
+      return new ContradictoryWorktreeState({
+        detail: preserveCassetteValue(observation.detail),
+        worktree: renamed(observation.worktree, maps.worktreeLocators)
+      })
+    case "ForeignWorktreeRegistration":
+      return new ForeignWorktreeRegistration({
+        branch: renamed(observation.branch, maps.taskBranchRefs),
+        plannedWorktree: renamed(observation.plannedWorktree, maps.worktreeLocators),
+        registeredWorktree: renamed(observation.registeredWorktree, maps.worktreeLocators)
+      })
+    case "PlannedWorktreeReady":
+      return completeFields<typeof observation>({
+        _tag: "PlannedWorktreeReady",
+        baseSha: preserveCassetteValue(observation.baseSha),
+        branch: renamed(observation.branch, maps.taskBranchRefs),
+        headSha: preserveCassetteValue(observation.headSha),
+        worktree: renamed(observation.worktree, maps.worktreeLocators)
+      })
+    case "UntrackedWorktreePath":
+      return new UntrackedWorktreePath({ worktree: renamed(observation.worktree, maps.worktreeLocators) })
+    case "WorktreeBaseMismatch":
+      return new WorktreeBaseMismatch({
+        baseSha: preserveCassetteValue(observation.baseSha),
+        branch: renamed(observation.branch, maps.taskBranchRefs),
+        headSha: preserveCassetteValue(observation.headSha),
+        worktree: renamed(observation.worktree, maps.worktreeLocators)
       })
   }
 }
@@ -340,6 +405,21 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(responsibilityEntry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(responsibilityEntry.occurrenceClassification),
           plannedAttempt: renamePlannedAttempt(responsibilityEntry.plannedAttempt, maps)
+        }),
+      PlannedAttemptWorktreeObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "PlannedAttemptWorktreeObserved",
+          observation: renamePlannedAttemptWorktreeObservation(observationEntry.observation, maps),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          originatingActionOperationId: renamed(observationEntry.originatingActionOperationId, maps.operationIds)
+        }),
+      TargetLineageObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "TargetLineageObserved",
+          observation: preserveCassetteValue(observationEntry.observation),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          originatingActionOperationId: renamed(observationEntry.originatingActionOperationId, maps.operationIds),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps)
         }),
       TaskClaimAcquired: (claimEntry) =>
         completeFields<typeof claimEntry>({

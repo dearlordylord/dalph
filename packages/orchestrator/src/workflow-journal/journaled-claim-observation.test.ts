@@ -65,6 +65,8 @@ it.effect("records one exact claim observation and replays it without another pr
                         : Effect.die("journal replay repeated the provider claim read")
                     )
                   ),
+                readTaskWorktree: () => Effect.die("unused worktree observation"),
+                readTargetLineage: () => Effect.die("unused target-lineage observation"),
                 readTrackerGraph: unused,
                 readTaskWorkSpecification: unused,
                 reconcileTaskWorktree: unused,

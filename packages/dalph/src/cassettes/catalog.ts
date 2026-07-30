@@ -1,9 +1,26 @@
+/* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
 import { Schema } from "effect"
 import { AuthoredScenarioCassette } from "./authored.js"
 
 const singletonGraph = {
   revision: "singleton-revision",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+}
+
+const independentRecoveryGraph = {
+  revision: "independent-recovery-revision",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+}
+
+const independentRecoveryStartingGraph = {
+  revision: "independent-recovery-starting-revision",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
 }
 
 const acceptedResultBlockedGraph = {
@@ -29,6 +46,16 @@ const releasedPipelineGraph = {
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
   ]
 }
+
+const singletonExpectedBehavior = {
+  _tag: "ExpectedBehavior",
+  orchestration: null,
+  protocol: null,
+  taskWork: {
+    absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }],
+    results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }]
+  }
+} as const
 
 /**
  * The maintained manually authored singleton story. Its schema version is
@@ -88,13 +115,205 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    singletonExpectedBehavior
+  ]
+})
+
+const lostWorktreeStoryBeforeAssertions = singletonTaskCompletesAuthoredCassette.story.flatMap((item) => {
+  if (item._tag === "ExpectedBehavior") return []
+  return item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
+    ? [{ _tag: "CoordinatorProcessDies" as const }]
+    : [item]
+})
+
+/** A recovered running attempt records its disappeared worktree and suspends without repairing it. */
+export const lostPlannedWorktreeSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "a disappeared planned worktree safely suspends only its recovered attempt",
+  story: [
+    ...lostWorktreeStoryBeforeAssertions,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "GitWorktreeObservationChanged", observation: { _tag: "PlannedWorktreeAbsent" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...singletonExpectedBehavior,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+      ],
+      protocol: [
+        { _tag: "TaskClaimAcquired", taskId: "A" },
+        { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" },
+        { _tag: "AttemptWorktreeLost", attemptId: "attempt:A:0", taskId: "A" }
+      ],
+      taskWork: { ...singletonExpectedBehavior.taskWork, results: [] }
+    }
+  ]
+})
+
+const targetLineageRecoveryReads = [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  {
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the accepted singleton behavior.",
+    taskId: "A",
+    title: "Implement singleton"
+  },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+  { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } }
+] as const
+
+const targetLineageProtocolPrefix = [
+  { _tag: "TaskClaimAcquired", taskId: "A" },
+  { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+  { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+  { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
+] as const
+
+/** A recovered attempt continues when Git proves the target advanced from its immutable Base. */
+export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "a compatible target advance keeps the recovered attempt eligible",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "2222222222222222222222222222222222222222"
+    }
+  },
+  story: [
+    ...lostWorktreeStoryBeforeAssertions,
+    ...targetLineageRecoveryReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...singletonExpectedBehavior,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+      ],
+      protocol: [
+        ...targetLineageProtocolPrefix,
+        {
+          _tag: "CompatibleTargetAdvance",
+          plannedBaseSha: "1111111111111111111111111111111111111111",
+          targetHeadSha: "2222222222222222222222222222222222222222",
+          taskId: "A"
+        }
+      ]
+    }
+  ]
+})
+
+/** A recovered attempt safely suspends when Git proves the target left its immutable Base lineage. */
+export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "an incompatible target rewrite safely suspends only its recovered attempt",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...singletonTaskCompletesAuthoredCassette.startingFacts.taskWorkSpecifications,
+      { body: "Complete independent task C.", taskId: "C", title: "Complete C" }
+    ],
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: false,
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "3333333333333333333333333333333333333333"
+    },
+    trackerGraph: independentRecoveryStartingGraph
+  },
+  story: [
+    ...lostWorktreeStoryBeforeAssertions.map((item) =>
+      item._tag === "TrackerGraphReadReturned" ? { ...item, graph: independentRecoveryStartingGraph } : item
+    ),
+    ...targetLineageRecoveryReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Complete independent task C.",
+      taskId: "C",
+      title: "Complete C"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:0", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:C:0" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
     {
       _tag: "ExpectedBehavior",
-      orchestration: null,
-      protocol: null,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:C:0", taskId: "C" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:C:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:C:0", report: "TerminalCompleted" }
+      ],
+      protocol: [
+        ...targetLineageProtocolPrefix,
+        {
+          _tag: "IncompatibleTargetRewrite",
+          plannedBaseSha: "1111111111111111111111111111111111111111",
+          targetHeadSha: "3333333333333333333333333333333333333333",
+          taskId: "A"
+        },
+        { _tag: "TaskClaimAcquired", taskId: "C" },
+        { _tag: "TaskAttemptPlanned", attemptId: "attempt:C:0", taskId: "C" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:C:0", taskId: "C" }
+      ],
       taskWork: {
         absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }],
-        results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }]
+        results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "C" }]
       }
     }
   ]
@@ -282,6 +501,9 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
 export const maintainedAuthoredCassetteCatalog = {
   acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
+  incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
+  lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
 } as const

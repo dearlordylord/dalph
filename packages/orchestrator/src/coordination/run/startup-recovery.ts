@@ -4,7 +4,6 @@ import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ow
 import { JournalBoundaryDecodeIssue } from "../../workflow-journal/recovery-model.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { PlannedAttemptRecoveryAuthority } from "./recovery-authority.js"
 import {
   hasUnfinishedRunResponsibility,
   makeJournaledFreshRunRecoveryActivation,
@@ -49,7 +48,6 @@ export const startupRecoveryLayer = (runId: RunId, integrationTarget?: Integrati
       const journal = yield* JournalStore
       const interpreter = yield* WorkflowInterpreter
       const executor = yield* PlannedAttemptExecutor
-      const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
       const trace = yield* WorkflowTrace
       const taskWorkCapacityControl = yield* TaskWorkCapacityControl
       const scan = yield* journal.scan()
@@ -88,7 +86,6 @@ export const startupRecoveryLayer = (runId: RunId, integrationTarget?: Integrati
         Context.add(RunRecoveryActivation, recovery),
         Context.add(PlannedAttemptExecutor, executor),
         Context.add(JournalStore, journal),
-        Context.add(PlannedAttemptRecoveryAuthority, recoveryAuthority),
         Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
         Context.add(WorkflowTrace, trace)
       )

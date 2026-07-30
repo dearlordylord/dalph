@@ -507,6 +507,37 @@ current `HEAD`. Dalph preserves the resource and fact for operator repair; it
 does not repair, move, reset, clean, or delete the resource.
 _Avoid_: Git error, worktree cleanup candidate, recoverable mismatch
 
+**Attempt worktree lost**:
+A read-only Git observation that the exact worktree previously prepared for
+one immutable planned task attempt is no longer registered. It carries that
+attempt's exact branch, path, Base, Run, and task identity through the plan.
+Dalph records the observation, safely suspends running executor work, and
+preserves the claim, plan, evidence, and remaining resources. It never
+authorizes recreating or repairing the disappeared worktree.
+_Avoid_: Missing fresh worktree, worktree reconciliation request, disposable
+worktree
+
+**Target lineage observation**:
+Git's exact current integration-target head together with whether one planned
+attempt's immutable Base is its ancestor. Compatible advancement leaves the
+attempt unconstrained. A proven non-ancestral target rewrite creates a
+task-local Git constraint and preserves independent task eligibility.
+_Avoid_: Target version, Base equality check, integration completion
+
+**Result commit qualification**:
+The pure decision from Git's result-commit existence and ancestry facts.
+Missing or non-descendant commits are rejected while the planned worktree,
+claim, and evidence remain preserved. Qualification does not construct or
+verify an integration candidate.
+_Avoid_: Executor result, candidate verification, integration success
+
+**Exact-head promotion decision**:
+The pure authorization immediately before the concrete promotion protocol. A
+verified candidate may be offered only by compare-and-set against its exact
+expected target head. A stale exact head selects candidate reconciliation; an
+ambiguous head requires a reread. Neither decision authorizes a force update.
+_Avoid_: Target overwrite, promotion result, integration start
+
 **Task revision fingerprint**:
 The opaque fingerprint of one task-work specification's exact normalized
 tracker-authored title and body, bound to a planned task attempt. It excludes

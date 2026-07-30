@@ -29,10 +29,16 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
-  attemptPlanRecordKey
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
-import { TaskAttemptPlannedEvent } from "../../registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../registry/event.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   activateRecoveredResponsibilities,
@@ -40,7 +46,6 @@ import {
 } from "../../../coordination/run/recovery-activation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./events.js"
 import { continuePlannedAttemptExecutorWork, requestPlannedAttemptExecutorSuspension } from "./protocol.js"
-import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../../../coordination/run/recovery-authority.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import {
   deriveRunnableFrontier,
@@ -49,14 +54,21 @@ import {
 } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
 import { makeTaskAdmissionController } from "../../../coordination/admission/controller.js"
-import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
-import { AuthoritativeTaskClaimObserved, WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
-import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
+import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
+import {
+  AuthoritativePlannedAttemptWorktreeObserved,
+  AuthoritativeTaskClaimObserved,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../interpretation/interpreter.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
+import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 
 const currentSpecification = makeTaskWorkSpecification({
   body: "Complete task A.",
@@ -75,6 +87,26 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const taskClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("planned-attempt-executor-claim"),
+  owner: ClaimOwner.make("planned-attempt-executor-owner"),
+  taskId: plannedAttempt.taskId,
+  token: ClaimToken.make("planned-attempt-executor-token")
+})
+const taskClaimOperation = makeTaskClaimAcquisitionOperation({ acquisition: taskClaim, predecessorOperationIds: [] })
+const appendTaskClaim = Effect.gen(function* () {
+  const journal = yield* JournalStore
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(taskClaim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: taskClaimOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(taskClaim.operationId),
+    TaskClaimAcquiredEvent.make({ claim: taskClaim, version: workflowJournalEventVersion })
+  )
+})
 const recoveryTarget = FixtureTarget.make("planned-attempt-executor-recovery-target")
 const projectedCurrentGraph = projectTrackerSnapshot({
   revision: "planned-attempt-executor-current-graph",
@@ -87,10 +119,19 @@ const currentFactsProviderLayer = Layer.succeed(
   WorkflowInterpreter,
   WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("unused"),
-    readTaskClaim: () =>
+    readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: taskClaim })),
+    readTaskWorktree: () =>
       Effect.succeed(
-        AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId: plannedAttempt.taskId }) })
+        AuthoritativePlannedAttemptWorktreeObserved.make({
+          observation: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          })
+        })
       ),
+    readTargetLineage: () => Effect.die("unused target-lineage observation"),
     readTrackerGraph: () => Effect.succeed(currentGraph),
     readTaskWorkSpecification: () => Effect.succeed(currentSpecification),
     reconcileTaskWorktree: () => Effect.die("unused"),
@@ -247,12 +288,13 @@ it.effect("continues an exact planned attempt through the recovered source capab
         })
       ])
     ),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
@@ -355,6 +397,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskClaim
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
@@ -362,7 +405,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
         operation: makeTaskAttemptPlanOperation({
           operationId: OperationId.make("plan-before-completion"),
           plannedAttempt,
-          predecessorOperationIds: []
+          predecessorOperationIds: [taskClaim.operationId]
         }),
         version: workflowJournalEventVersion
       })
@@ -377,7 +420,10 @@ it.effect("frees the exact task-work position after a terminal report", () =>
         ])
       )
     )
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1)).pipe(
+    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
+      capacity: TaskWorkCapacity.make(1),
+      integrationTarget: undefined
+    }).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
           ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -404,7 +450,6 @@ it.effect("frees the exact task-work position after a terminal report", () =>
   }).pipe(
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provide(memoryJournalStoreLayer)
   )
 )
@@ -467,9 +512,10 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       )
     ).toBe(true)
 
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1)).pipe(
-      Effect.provide(suspensionLayer)
-    )
+    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
+      capacity: TaskWorkCapacity.make(1),
+      integrationTarget: undefined
+    }).pipe(Effect.provide(suspensionLayer))
     const after = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
     expect(after.reconstructedPlannedAttemptPositions).toEqual([])
     const afterController = yield* makeTaskAdmissionController({
@@ -486,6 +532,8 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
@@ -494,7 +542,6 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provide(memoryJournalStoreLayer)
   )
 )
@@ -507,6 +554,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskClaim
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
@@ -514,7 +562,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
         operation: makeTaskAttemptPlanOperation({
           operationId: OperationId.make("plan-before-resume"),
           plannedAttempt,
-          predecessorOperationIds: []
+          predecessorOperationIds: [taskClaim.operationId]
         }),
         version: workflowJournalEventVersion
       })
@@ -552,7 +600,10 @@ it.effect("resumes the same planned attempt after unpause", () =>
       runId: plannedAttempt.runId,
       taskId: plannedAttempt.taskId
     })
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1)).pipe(
+    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
+      capacity: TaskWorkCapacity.make(1),
+      integrationTarget: undefined
+    }).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
           ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -579,7 +630,6 @@ it.effect("resumes the same planned attempt after unpause", () =>
     Effect.provide(controlServiceLayer),
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provide(memoryJournalStoreLayer)
   )
 )
@@ -624,10 +674,11 @@ it.effect("generic activation continues reconstructed work through the controlle
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskClaim
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-attempt-A-3"),
       plannedAttempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [taskClaim.operationId]
     })
     yield* journal.append(
       plannedAttempt.runId,
@@ -640,7 +691,10 @@ it.effect("generic activation continues reconstructed work through the controlle
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
 
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, TaskWorkCapacity.make(1))
+    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
+      capacity: TaskWorkCapacity.make(1),
+      integrationTarget: undefined
+    })
 
     expect((yield* journal.read(plannedAttempt.runId)).at(-1)?.event).toMatchObject({
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -657,7 +711,6 @@ it.effect("generic activation continues reconstructed work through the controlle
     ),
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provide(memoryJournalStoreLayer)
   )
 )

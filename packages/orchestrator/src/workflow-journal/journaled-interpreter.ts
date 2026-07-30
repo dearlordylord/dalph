@@ -9,6 +9,9 @@ import {
   TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
@@ -31,7 +34,11 @@ import {
   reconstructedTaskWorkSpecificationFor,
   TaskTrackerKnowledgeUnavailable
 } from "../coordination/reconstruction/graph-knowledge.js"
-import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
+import {
+  AuthoritativePlannedAttemptWorktreeObserved,
+  AuthoritativeTargetLineageObserved,
+  WorkflowInterpreter
+} from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
@@ -170,6 +177,79 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         return result
       })
 
+      const readTaskWorktree = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorktree")(function* (
+        operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+      ) {
+        yield* journal.append(
+          runId,
+          intentRecordKey(operation.operationId),
+          GitReadIntentRecordedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation,
+            version: workflowJournalEventVersion
+          })
+        )
+        const existing = (yield* journal.read(runId)).find(
+          ({ event }) => event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === operation.operationId
+        )?.event
+        if (existing?._tag === "PlannedAttemptWorktreeObserved") {
+          return AuthoritativePlannedAttemptWorktreeObserved.make({ observation: existing.observation })
+        }
+        const result = yield* interpreter.readTaskWorktree(operation)
+        /* v8 ignore else -- @preserve The typed interpreter result has only the authoritative success variant. */
+        if (result._tag === "AuthoritativePlannedAttemptWorktreeObserved") {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            PlannedAttemptWorktreeObservedEvent.make({
+              observation: result.observation,
+              occurrenceClassification: "NonActionOccurrence",
+              operationId: operation.operationId,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+        return result
+      })
+
+      const readTargetLineage = Effect.fn("WorkflowInterpreter.Journaled.readTargetLineage")(function* (
+        operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+      ) {
+        yield* journal.append(
+          runId,
+          intentRecordKey(operation.operationId),
+          GitReadIntentRecordedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation,
+            version: workflowJournalEventVersion
+          })
+        )
+        const existing = (yield* journal.read(runId)).find(
+          ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === operation.operationId
+        )?.event
+        if (existing?._tag === "TargetLineageObserved") {
+          return AuthoritativeTargetLineageObserved.make({ observation: existing.observation })
+        }
+        const result = yield* interpreter.readTargetLineage(operation)
+        /* v8 ignore else -- @preserve The typed interpreter result has only the authoritative success variant. */
+        if (result._tag === "AuthoritativeTargetLineageObserved") {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            TargetLineageObservedEvent.make({
+              observation: result.observation,
+              occurrenceClassification: "NonActionOccurrence",
+              operationId: operation.operationId,
+              plannedAttempt: operation.plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+        return result
+      })
+
       const readTaskWorkSpecification = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorkSpecification")(function* (
         operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
       ) {
@@ -299,6 +379,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTaskClaim,
+        readTaskWorktree,
+        readTargetLineage,
         readTrackerGraph,
         readTaskWorkSpecification,
         releaseTaskClaim,

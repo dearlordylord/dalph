@@ -36,6 +36,8 @@ const provider = Layer.effect(
     return WorkflowInterpreter.of({
       acquireTaskClaim: unused,
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,

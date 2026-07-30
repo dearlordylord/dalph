@@ -798,6 +798,36 @@ worktrees, and malformed Git output remain distinct typed reconciliation facts.
 Dalph preserves every observed resource; this workflow performs no repair,
 clean, move, reset, prune, or deletion.
 
+Recovery first observes a previously prepared worktree and then, when an
+integration target is configured and that worktree is ready, observes the
+target's exact lineage. These are two distinct journaled Git read operations.
+Dalph records `GitReadIntentRecorded` before either boundary call,
+`PlannedAttemptWorktreeObserved` after the worktree call, and
+`TargetLineageObserved` after the target call. A missing registration becomes
+`AttemptWorktreeLost`; foreign, conflicting, competing, untracked,
+Base-mismatched, and contradictory facts retain their distinct typed
+observations. Each recorded outcome is replayed without another Git read. Any
+non-ready worktree observation safely suspends running executor work and
+becomes a task-local Git constraint afterward; no observation in this protocol
+calls `git worktree add` or releases the task claim.
+
+The controlled fake and read-only Node Git adapter implement the same target
+lineage authority: resolve the configured target head, then ask whether the
+planned Base is its ancestor. A compatible target head permits ordinary
+continuation; a proven non-ancestral rewrite requests safe suspension and then
+constrains only that attempt. Issue #73 retains broader real-Git qualification.
+Issue #74 retains real-worktree registration, ownership, contradiction, and
+preservation qualification.
+
+Provider-neutral result-commit and promotion decisions remain pure at this
+milestone. Missing or non-descendant result commits are rejected while
+preserving the worktree. A verified candidate observed against its exact
+expected target head yields only an exact compare-and-set authorization. A
+stale head yields `ReconcileCandidateFromCurrentTarget`, and an ambiguous head
+yields `RereadTargetBeforePromotion`; neither can authorize overwrite.
+Issues #57, #59, and #60 retain candidate construction, candidate
+verification, and the concrete compare-and-set effect respectively.
+
 ## Planned-Attempt Executor Boundary
 
 For one planned task attempt, Dalph starts or continues executor work using the exact `RunId` and `AttemptId`. The executor reports `Running`, `SafelySuspended`, or a terminal `Accepted`, `Completed`, or `Failed` result. `Accepted` carries one immutable commit; Dalph, not the executor, selects its integration target. Safe suspension and every terminal result prove no executor-owned activity remains and allow Dalph to release the task-work position.

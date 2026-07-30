@@ -270,6 +270,7 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
 ): Effect.fn.Return<ActivationCoordinator, never, Scope.Scope | R> {
   const scope = yield* Effect.scope
   const triggers = yield* Queue.dropping<ActivationCause>(1)
+  const retryWaitKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
   const signalState = yield* Ref.make<{
     readonly acknowledgements: ReadonlyArray<Deferred.Deferred<void, ActivationCoordinatorClosed>>
     readonly closed: boolean
@@ -355,6 +356,9 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
             })).pipe(Effect.orDie)
             yield* settleRunnerAdmission(owned)
             yield* ownership.remove(key)
+            if (Exit.isFailure(exit)) {
+              yield* Ref.update(retryWaitKeys, (keys) => new Set(keys).add(key))
+            }
             yield* checkpoint((observation) => ({
               _tag: "OwnershipReleased",
               observation,
@@ -362,9 +366,11 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
               runnerExit,
               transition: entry.transition
             })).pipe(Effect.orDie)
-            yield* signal(ActivationCause.WorkflowResultRecorded()).pipe(
-              Effect.catchTag("ActivationCoordinatorClosed", () => Effect.void)
-            )
+            if (Exit.isSuccess(exit)) {
+              yield* signal(ActivationCause.WorkflowResultRecorded()).pipe(
+                Effect.catchTag("ActivationCoordinatorClosed", () => Effect.void)
+              )
+            }
           })
         )
       )
@@ -475,7 +481,13 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
   const runPass = Effect.fn("ActivationCoordinator.runPass")(function* () {
     const frontier = yield* input.readFrontier
     yield* checkpoint((observation) => ({ _tag: "FrontierDerived", frontier, observation })).pipe(Effect.orDie)
-    const selectable = yield* ownership.exclude(frontier)
+    const waiting = yield* Ref.get(retryWaitKeys)
+    const selectable = yield* ownership.exclude({
+      ...frontier,
+      transitions: frontier.transitions.filter(
+        (transition) => !waiting.has(selectedTransitionKey(makeSelectedTransitionIdentity(input.runId, transition)))
+      )
+    })
     const exclusionCheckpoint = yield* checkpoint((observation) => ({
       _tag: "OwnedTransitionsExcluded",
       frontier: selectable,
@@ -493,6 +505,7 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
   const runTriggeredPasses = Effect.fn("ActivationCoordinator.runTriggeredPasses")(function* () {
     for (;;) {
       yield* Queue.take(triggers)
+      yield* Ref.set(retryWaitKeys, new Set())
       while (yield* runPass()) {
         // Each established handoff causes a fresh read before another choice.
       }

@@ -42,6 +42,9 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.Type,
     CursorFailure
   >
+  readonly consumeGitWorktreeObservationChange: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged.Type>
+  >
   readonly consumeInitialPolicy: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
@@ -141,6 +144,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
+  const consumeGitWorktreeObservationChange = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged.Type =>
+        item?._tag === "GitWorktreeObservationChanged"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
@@ -196,6 +211,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeClaimReacquisitionRequest,
     consumeDalphSelection,
     consumeExecutorReport,
+    consumeGitWorktreeObservationChange,
     consumeInitialPolicy,
     consumeRunCoordinator,
     consumeTaskClaimRead,

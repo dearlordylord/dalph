@@ -72,6 +72,8 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
     case "ObservePlannedAttemptContinuationGraph":
     case "ObservePlannedAttemptContinuationClaim":
     case "ObservePlannedAttemptContinuationSpecification":
+    case "ObservePlannedAttemptContinuationTargetLineage":
+    case "ObservePlannedAttemptContinuationWorktree":
     case "ObserveResponsibleTaskClaim":
     case "SuspendPlannedAttemptExecutorWork":
     case "StartPlannedAttemptExecutorWork":

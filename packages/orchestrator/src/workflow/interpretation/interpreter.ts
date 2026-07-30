@@ -1,7 +1,12 @@
 import { Context, Effect, Schema } from "effect"
 import { TaskId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
-import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "../../authorities/git/worktree.js"
+import type {
+  GitWorktreeCreateFailure,
+  GitWorktreeObservationError,
+  GitWorktreeReadFailure,
+  GitWorktreeService
+} from "../../authorities/git/worktree.js"
 import type { JournalAppendError } from "../../workflow-journal/store.js"
 import * as TaskAttemptPlan from "../protocols/task-attempt-planning/record.js"
 import {
@@ -38,6 +43,12 @@ import {
   type TaskClaimReleaseDidNotConverge
 } from "../protocols/task-claim-release/protocol.js"
 import { observeTaskClaim } from "../protocols/task-claim-observation/protocol.js"
+import {
+  observePlannedAttemptWorktree,
+  PlannedAttemptWorktreeObservation
+} from "../protocols/planned-attempt-worktree-observation/protocol.js"
+import type { GitTargetLineageReadFailure, GitTargetLineageService } from "../../authorities/git/target-lineage.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
@@ -70,6 +81,12 @@ export interface WorkflowInterpreterService {
   readonly readTaskClaim: (
     operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
   ) => Effect.Effect<TaskClaimObservationResult, JournalAppendError>
+  readonly readTaskWorktree: (
+    operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+  ) => Effect.Effect<PlannedAttemptWorktreeObservationResult, GitWorktreeReadFailure | JournalAppendError>
+  readonly readTargetLineage: (
+    operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+  ) => Effect.Effect<TargetLineageObservationResult, GitTargetLineageReadFailure | JournalAppendError>
   readonly releaseTaskClaim: (
     operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
   ) => Effect.Effect<
@@ -133,6 +150,34 @@ const TaskClaimObservationResult = Schema.Union([
 ])
 export type TaskClaimObservationResult = typeof TaskClaimObservationResult.Type
 
+export const AuthoritativePlannedAttemptWorktreeObserved = Schema.TaggedStruct(
+  "AuthoritativePlannedAttemptWorktreeObserved",
+  { observation: PlannedAttemptWorktreeObservation }
+)
+
+export const PlannedAttemptWorktreeObservationSimulated = Schema.TaggedStruct(
+  "PlannedAttemptWorktreeObservationSimulated",
+  { operation: WorkflowOperation.cases.ReadTaskWorktree }
+)
+
+const PlannedAttemptWorktreeObservationResult = Schema.Union([
+  AuthoritativePlannedAttemptWorktreeObserved,
+  PlannedAttemptWorktreeObservationSimulated
+])
+export type PlannedAttemptWorktreeObservationResult = typeof PlannedAttemptWorktreeObservationResult.Type
+
+export const AuthoritativeTargetLineageObserved = Schema.TaggedStruct("AuthoritativeTargetLineageObserved", {
+  observation: TargetLineageObservation
+})
+export const TargetLineageObservationSimulated = Schema.TaggedStruct("TargetLineageObservationSimulated", {
+  operation: WorkflowOperation.cases.ReadTargetLineage
+})
+const TargetLineageObservationResult = Schema.Union([
+  AuthoritativeTargetLineageObserved,
+  TargetLineageObservationSimulated
+])
+export type TargetLineageObservationResult = typeof TargetLineageObservationResult.Type
+
 /** Dry-run records intended ownership without claiming or reading claim state. */
 export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct("TaskClaimAcquisitionSimulated", {
   operation: WorkflowOperation.cases.AcquireTaskClaim
@@ -185,6 +230,22 @@ export const observeTaskClaimThrough = (
       onSuccess: (observation) => AuthoritativeTaskClaimObserved.make({ observation })
     })
   )
+
+export const observePlannedAttemptWorktreeThrough = (
+  git: GitWorktreeService,
+  operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+) =>
+  observePlannedAttemptWorktree(git, operation.plannedAttempt).pipe(
+    Effect.map((observation) => AuthoritativePlannedAttemptWorktreeObserved.make({ observation }))
+  )
+
+export const observeTargetLineageThrough = (
+  targetLineage: GitTargetLineageService,
+  operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+) =>
+  targetLineage
+    .read(operation.plannedAttempt.baseSha, operation.integrationTarget)
+    .pipe(Effect.map((observation) => AuthoritativeTargetLineageObserved.make({ observation })))
 
 export const releaseTaskClaimThrough = (
   tracker: TrackerMutationService,

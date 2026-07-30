@@ -25,10 +25,10 @@ import { JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
 import { activateRecoveredResponsibilities } from "./recovery-activation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { PlannedAttemptRecoveryAuthority } from "./recovery-authority.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { sqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
+import { causalClaimForAttempt } from "./recovery-authority.js"
 
 const runId = RunId.make("duplicate-attempt-production-recovery")
 const taskId = TaskId.make("A")
@@ -74,6 +74,28 @@ const firstAttempt = plannedAttempt("attempt-A-3")
 const secondAttempt = plannedAttempt("attempt-A-4")
 const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(secondAttempt, 3)]
 
+it("fails closed when a planned attempt or one of its causal predecessors is absent", () => {
+  expect(causalClaimForAttempt([], firstAttempt.attemptId)).toBeUndefined()
+  const operation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("plan-with-missing-predecessor"),
+    plannedAttempt: firstAttempt,
+    predecessorOperationIds: [OperationId.make("missing-predecessor")]
+  })
+  expect(
+    causalClaimForAttempt(
+      [
+        {
+          event: TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion }),
+          key: attemptPlanRecordKey(firstAttempt.attemptId),
+          position: JournalPosition.make(1),
+          runId
+        }
+      ],
+      firstAttempt.attemptId
+    )
+  ).toBeUndefined()
+})
+
 const failIfCalled = (boundary: string) =>
   Effect.die(`${boundary} must not be called for invalid workflow-journal history`)
 
@@ -95,6 +117,8 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
       WorkflowInterpreter.of({
         acquireTaskClaim: () => failIfCalled("task tracker claim"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => failIfCalled("task tracker read"),
         readTaskWorkSpecification: () => failIfCalled("task-work specification read"),
         reconcileTaskWorktree: () => failIfCalled("Git worktree"),
@@ -109,10 +133,6 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
         requestSuspension: () => failIfCalled("executor suspension"),
         startOrContinue: () => failIfCalled("executor start or continuation")
       })
-    ),
-    Layer.succeed(
-      PlannedAttemptRecoveryAuthority,
-      PlannedAttemptRecoveryAuthority.of({ verify: () => failIfCalled("tracker or Git recovery verification") })
     ),
     Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))
   )
@@ -140,10 +160,10 @@ it.effect(
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
       expect(roundTrippedRecords).toEqual(invalidRecords)
 
-      const failure = yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(
-        Effect.provide(boundaryLayer(roundTrippedRecords)),
-        Effect.flip
-      )
+      const failure = yield* activateRecoveredResponsibilities(runId, {
+        capacity: TaskWorkCapacity.make(1),
+        integrationTarget: undefined
+      }).pipe(Effect.provide(boundaryLayer(roundTrippedRecords)), Effect.flip)
 
       expect(failure).toMatchObject({
         _tag: "InvalidWorkflowJournalHistory",

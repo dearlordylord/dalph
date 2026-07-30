@@ -10,30 +10,45 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
-  TaskId
+  RunId,
+  TaskBranchRef,
+  TaskId,
+  WorktreeLocator
 } from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
+  AttemptWorktreeLost,
   ClaimOwner,
   ClaimToken,
+  CompetingWorktreeRegistrations,
+  ConflictingWorktreeRegistration,
   ControlCommand,
   ControlCommandId,
   ControlCommandRecordedEvent,
+  ContradictoryWorktreeState,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
   describeJournalEvent,
+  ForeignWorktreeRegistration,
   JournalPosition,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTargetLineageObservationOperation,
+  makeTaskWorktreeObservationOperation,
   OperationId,
+  originatingActionForTargetLineageObservation,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedWorktreeReady,
+  projectWorkflowOccurrences,
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
+  UntrackedWorktreePath,
   UnclaimedTask,
+  WorktreeBaseMismatch,
   type JournalRecord,
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
@@ -48,9 +63,12 @@ import {
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   compareRecordedCassetteCheckpoints,
+  compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRunAuthoredCassette,
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
+  incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
+  lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   maintainedAuthoredCassetteCatalog,
   measureTrackerObservationEncoding,
   projectRecordedCassette,
@@ -656,7 +674,23 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
                   title: "Complete A"
                 } as const,
                 { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: TaskId.make("A") } } as const,
-                { _tag: "TaskClaimCurrentReadReturned", taskId: TaskId.make("A") } as const
+                { _tag: "TaskClaimCurrentReadReturned", taskId: TaskId.make("A") } as const,
+                {
+                  _tag: "DalphSelects",
+                  operation: {
+                    _tag: "ReadTaskWorktree",
+                    attemptId: AttemptId.make("attempt:A:0"),
+                    taskId: TaskId.make("A")
+                  }
+                } as const,
+                {
+                  _tag: "DalphSelects",
+                  operation: {
+                    _tag: "ReadTargetLineage",
+                    attemptId: AttemptId.make("attempt:A:0"),
+                    taskId: TaskId.make("A")
+                  }
+                } as const
               ]
             : [])
         ])
@@ -695,7 +729,6 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
       "The coordinator process and its same-process fake executor die"
     )
     expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
-    expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual(["attempt:A:0"])
     expect(
       run.records.filter(
         ({ event }) =>
@@ -883,7 +916,6 @@ it.effect(
       )
 
       expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
-      expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([])
       expect(
         run.records.flatMap(({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
@@ -1402,6 +1434,8 @@ it.effect("records a foreign claim from an authored recovery story and safely su
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
@@ -1459,6 +1493,100 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       attempted: { taskId: "A" },
       observed: foreignClaim
     })
+  })
+)
+
+it.effect("records a lost planned worktree in the authored and recorded recovery cassette", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(lostPlannedWorktreeSafelySuspendsAuthoredCassette)
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "AttemptWorktreeLost",
+      attemptId: "attempt:A:0",
+      taskId: "A"
+    })
+    expect(run.records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "PlannedAttemptWorktreeObserved",
+        observation: expect.objectContaining({ _tag: "AttemptWorktreeLost" })
+      })
+    )
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "Git changes the planned worktree observation to PlannedWorktreeAbsent."
+    )
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("Git no longer registered planned worktree")
+  })
+)
+
+it.effect("records compatible target advancement and isolates a proven target rewrite in maintained cassettes", () =>
+  Effect.gen(function* () {
+    const compatible = yield* runAuthoredScenarioCassette(compatibleTargetAdvanceContinuesAuthoredCassette)
+    const rewritten = yield* runAuthoredScenarioCassette(incompatibleTargetRewriteSafelySuspendsAuthoredCassette)
+
+    expect(compatible.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "CompatibleTargetAdvance",
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "2222222222222222222222222222222222222222",
+      taskId: "A"
+    })
+    expect(compatible.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }])
+    expect(rewritten.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "IncompatibleTargetRewrite",
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "3333333333333333333333333333333333333333",
+      taskId: "A"
+    })
+    expect(rewritten.observedBehavior.orchestrationEvidence).toContainEqual({
+      _tag: "PlannedAttemptExecutorWorkReported",
+      attemptId: "attempt:A:0",
+      report: "SafelySuspended"
+    })
+    expect(rewritten.observedBehavior.taskWorkResults).toContainEqual({
+      _tag: "PlannedWorkForTaskCompleted",
+      taskId: "C"
+    })
+    expect(rewritten.records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+    expect(renderAuthoredCassetteLyrics(compatible.cassette)).toContain("descends from Base")
+    expect(renderAuthoredCassetteLyrics(rewritten.cassette)).toContain("is outside Base")
+
+    const compatibleRecorded = yield* projectRecordedCassette(compatible.records)
+    const rewrittenRecorded = yield* projectRecordedCassette(rewritten.records)
+    const rewrittenOccurrences = yield* projectWorkflowOccurrences(rewritten.records)
+    const targetLineageOccurrence = rewrittenOccurrences.occurrences.find(
+      (occurrence) => occurrence._tag === "TargetLineageObserved"
+    )
+    if (targetLineageOccurrence?._tag !== "TargetLineageObserved") {
+      return yield* Effect.die("missing projected target-lineage occurrence")
+    }
+    expect(
+      Option.isSome(originatingActionForTargetLineageObservation(rewrittenOccurrences, targetLineageOccurrence))
+    ).toBe(true)
+    expect(renderRecordedCassetteLyrics(compatibleRecorded)).toContain("descended from Base")
+    expect(renderRecordedCassetteLyrics(rewrittenRecorded)).toContain("outside Base")
+    expect(
+      [...compatible.records, ...rewritten.records].some(({ event }) => event._tag === "TargetLineageObserved")
+    ).toBe(true)
+    expect(
+      verifyRecordedCassetteRoundTrip(compatible.records, compatibleRecorded).every(
+        (checkpoint) => checkpoint.workflowHistoryEquivalent && checkpoint.operationalStateEquivalent
+      )
+    ).toBe(true)
+    expect(
+      verifyRecordedCassetteRoundTrip(rewritten.records, rewrittenRecorded).every(
+        (checkpoint) => checkpoint.workflowHistoryEquivalent && checkpoint.operationalStateEquivalent
+      )
+    ).toBe(true)
   })
 )
 
@@ -1853,6 +1981,12 @@ it.effect(
         acquiredClaimEntry.claim.taskId,
         [claimRead.operationId]
       )
+      const unclaimedClaimRead = makeTaskClaimObservationOperation(
+        OperationId.make(`cassette-unclaimed-claim-read:${run.runId}`),
+        runBeganEntry.target,
+        acquiredClaimEntry.claim.taskId,
+        [unreadableClaimRead.operationId]
+      )
       const claimObservationEntries = [
         {
           _tag: "TaskTrackerReadInitiated" as const,
@@ -1877,6 +2011,65 @@ it.effect(
           evidence: makeFocusedTaskClaimFactsUnreadable(unreadableClaimRead),
           occurrenceClassification: "NonActionOccurrence" as const,
           originatingActionOperationId: unreadableClaimRead.operationId
+        },
+        {
+          _tag: "TaskTrackerReadInitiated" as const,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          operation: unclaimedClaimRead
+        },
+        {
+          _tag: "TaskTrackerFactsObserved" as const,
+          evidence: makeFocusedTaskClaimFactsObserved(
+            unclaimedClaimRead,
+            UnclaimedTask.make({ taskId: acquiredClaimEntry.claim.taskId })
+          ),
+          occurrenceClassification: "NonActionOccurrence" as const,
+          originatingActionOperationId: unclaimedClaimRead.operationId
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const worktreeObservationOperation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make(`cassette-worktree-read:${run.runId}`),
+        plannedAttempt: executorResponsibilityEntry.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      const worktreeObservationEntries = [
+        {
+          _tag: "GitReadInitiated" as const,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          operation: worktreeObservationOperation
+        },
+        {
+          _tag: "PlannedAttemptWorktreeObserved" as const,
+          observation: AttemptWorktreeLost.make({ plannedAttempt: executorResponsibilityEntry.plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence" as const,
+          originatingActionOperationId: worktreeObservationOperation.operationId
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const targetLineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget,
+        operationId: OperationId.make(`cassette-target-lineage-read:${run.runId}`),
+        plannedAttempt: executorResponsibilityEntry.plannedAttempt,
+        predecessorOperationIds: [worktreeObservationOperation.operationId]
+      })
+      const targetLineageEntries = [
+        {
+          _tag: "GitReadInitiated" as const,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          operation: targetLineageOperation
+        },
+        {
+          _tag: "TargetLineageObserved" as const,
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: executorResponsibilityEntry.plannedAttempt.baseSha,
+            targetHeadSha: executorResponsibilityEntry.plannedAttempt.baseSha
+          },
+          occurrenceClassification: "NonActionOccurrence" as const,
+          originatingActionOperationId: targetLineageOperation.operationId,
+          plannedAttempt: executorResponsibilityEntry.plannedAttempt
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const recorded = RecordedCassette.make({
@@ -1896,6 +2089,8 @@ it.effect(
           ...claimReleaseEntries,
           ...rejectedClaimEntries,
           ...claimObservationEntries,
+          ...worktreeObservationEntries,
+          ...targetLineageEntries,
           ...entriesWithAcceptedResult.slice(insertionIndex)
         ]
       })
@@ -1915,7 +2110,10 @@ it.effect(
             from: `cassette:${run.runId}:operation:${ordinal}`,
             to: `renamed-operation:${ordinal}`
           })),
-          { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" }
+          { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" },
+          { from: `cassette-worktree-read:${run.runId}`, to: "renamed-operation:worktree-read" },
+          { from: `cassette-target-lineage-read:${run.runId}`, to: "renamed-operation:target-lineage-read" },
+          { from: `cassette-unclaimed-claim-read:${run.runId}`, to: "renamed-operation:unclaimed-claim-read" }
         ],
         runIds: [{ from: run.runId, to: "renamed-run" }],
         taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
@@ -1947,10 +2145,13 @@ it.effect(
       ]
       const entryVariants = {
         ControlCommandRecorded: true,
+        GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
+        PlannedAttemptWorktreeObserved: true,
+        TargetLineageObserved: true,
         TaskAttemptPlanned: true,
         TaskClaimAcquired: true,
         TaskClaimAcquisitionIntended: true,
@@ -1968,6 +2169,8 @@ it.effect(
       const operationVariants = {
         AcquireTaskClaim: true,
         ReadTaskClaim: true,
+        ReadTargetLineage: true,
+        ReadTaskWorktree: true,
         ReleaseTaskClaim: true,
         ReadTaskWorkSpecification: true,
         ReadTrackerGraph: true,
@@ -2001,6 +2204,74 @@ it.effect(
       expect(encodedBefore).toContain("singleton-revision")
       expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph terminated the Run with disposition Completed.")
     })
+)
+
+it.effect("renames and renders every contradictory planned-worktree observation distinctly", () =>
+  Effect.gen(function* () {
+    const plannedBranch = TaskBranchRef.make("refs/heads/dalph/planned")
+    const observedBranch = TaskBranchRef.make("refs/heads/dalph/observed")
+    const plannedWorktree = WorktreeLocator.make("/worktrees/planned")
+    const registeredWorktree = WorktreeLocator.make("/worktrees/registered")
+    const sha = GitCommitSha.make("9".repeat(40))
+    const operationId = OperationId.make("recorded-worktree-variant-read")
+    const observations = [
+      new CompetingWorktreeRegistrations({
+        observedBranchAtPlannedWorktree: observedBranch,
+        observedHeadAtPlannedWorktree: sha,
+        plannedBranch,
+        plannedBranchRegisteredWorktree: registeredWorktree,
+        plannedWorktree
+      }),
+      new ConflictingWorktreeRegistration({
+        observedBranch,
+        observedHead: sha,
+        plannedBranch,
+        worktree: plannedWorktree
+      }),
+      new ContradictoryWorktreeState({ detail: "inconsistent registration", worktree: plannedWorktree }),
+      new ForeignWorktreeRegistration({ branch: plannedBranch, plannedWorktree, registeredWorktree }),
+      PlannedWorktreeReady.make({ baseSha: sha, branch: plannedBranch, headSha: sha, worktree: plannedWorktree }),
+      new UntrackedWorktreePath({ worktree: plannedWorktree }),
+      new WorktreeBaseMismatch({ baseSha: sha, branch: plannedBranch, headSha: sha, worktree: plannedWorktree })
+    ] as const
+    const cassette = RecordedCassette.make({
+      _tag: "RecordedCassette",
+      entries: observations.map((observation) => ({
+        _tag: "PlannedAttemptWorktreeObserved" as const,
+        observation,
+        occurrenceClassification: "NonActionOccurrence" as const,
+        originatingActionOperationId: operationId
+      })),
+      runId: RunId.make("recorded-worktree-variant-run"),
+      schemaVersion: 4
+    })
+    const renamed = yield* renameRecordedCassette(
+      cassette,
+      yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+        attemptIds: [],
+        claimTokens: [],
+        controlCommandIds: [],
+        operationIds: [],
+        runIds: [],
+        taskBranchRefs: [
+          { from: plannedBranch, to: "refs/heads/dalph/renamed-planned" },
+          { from: observedBranch, to: "refs/heads/dalph/renamed-observed" }
+        ],
+        worktreeLocators: [
+          { from: plannedWorktree, to: "/worktrees/renamed-planned" },
+          { from: registeredWorktree, to: "/worktrees/renamed-registered" }
+        ]
+      })
+    )
+    const lyrics = renderRecordedCassetteLyrics(cassette)
+    expect(lyrics).toContain("competing registrations")
+    expect(lyrics).toContain("contradictory facts")
+    expect(lyrics).toContain("foreign worktree")
+    expect(lyrics).toContain("did not register")
+    expect(lyrics).toContain("outside Base")
+    expect(JSON.stringify(renamed)).toContain("/worktrees/renamed-registered")
+    expect(JSON.stringify(renamed)).toContain("refs/heads/dalph/renamed-observed")
+  })
 )
 
 it.effect("rejects identity renaming that repeats a source or destination", () =>

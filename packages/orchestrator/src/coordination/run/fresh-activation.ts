@@ -13,7 +13,7 @@ import type {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 
 type InterpreterError = {
-  [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
+  [Key in keyof WorkflowInterpreterService]-?: Effect.Error<ReturnType<NonNullable<WorkflowInterpreterService[Key]>>>
 }[keyof WorkflowInterpreterService]
 
 export type FreshWorkflowStageError =

@@ -18,6 +18,17 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
+  PlannedAttemptGitConstraint: {
+    readonly gitState:
+      | "CompetingWorktreeRegistrations"
+      | "ConflictingWorktreeRegistration"
+      | "ContradictoryWorktreeState"
+      | "ForeignWorktreeRegistration"
+      | "TargetRewrite"
+      | "UntrackedWorktreePath"
+      | "WorktreeBaseMismatch"
+      | "WorktreeLost"
+  }
   TaskExternalSuccessConstraint: Record<never, never>
   TaskExternalSuccessReleaseNeeded: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
   TaskExternalSuccessSettled: Record<never, never>
@@ -26,6 +37,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   TaskForeignClaimIsolation: Record<never, never>
   TaskClaimReacquisitionRequested: { readonly commandId: ControlCommandId }
   WorkflowOperationTaskClaimConstraint: { readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved" }
+  WorkflowOperationGitConstraint: { readonly gitState: "WorktreeLost" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
   TaskMembershipConstraint: Record<never, never>
   TaskSpecificationChangeConstraint: {
@@ -43,13 +55,14 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
 
 export const ResponsibilityDisposition = Data.taggedEnum<ResponsibilityDisposition>()
 
-type PlannedAttemptExecutorDisposition = Extract<
+export type PlannedAttemptExecutorDisposition = Extract<
   ResponsibilityDisposition,
   {
     readonly _tag:
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "PlannedAttemptGitConstraint"
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"
       | "TaskExternalSuccessSettled"
@@ -71,6 +84,7 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "PlannedAttemptGitConstraint"
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"
       | "TaskExternalSuccessSettled"

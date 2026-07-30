@@ -25,7 +25,9 @@ import {
   makeDryRunWorkflowInterpreterLayer,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTargetLineageObservationOperation,
   makeTaskWorkSpecification,
+  makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   nodeGitCommandLayer,
@@ -135,12 +137,28 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
       plannedAttempt,
       predecessorOperationIds: [plan.operationId]
     })
+    const worktreeRead = makeTaskWorktreeObservationOperation({
+      operationId: PublicApi.OperationId.make("support-worktree-read"),
+      plannedAttempt,
+      predecessorOperationIds: [worktree.operationId]
+    })
+    const targetLineageRead = makeTargetLineageObservationOperation({
+      integrationTarget: Contracts.IntegrationTarget.make({
+        repository: Contracts.GitRepositoryLocator.make("/repositories/support.git"),
+        ref: Contracts.IntegrationTargetRef.make("refs/heads/master")
+      }),
+      operationId: PublicApi.OperationId.make("support-target-lineage-read"),
+      plannedAttempt,
+      predecessorOperationIds: [worktreeRead.operationId]
+    })
 
     const live = yield* WorkflowInterpreter
     expect((yield* live.readTrackerGraph(graph)).eligibleTasks()).toHaveLength(1)
     expect((yield* live.acquireTaskClaim(claim))._tag).toBe("AuthoritativeTaskClaimAcquired")
     expect((yield* live.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordingSimulated")
     expect((yield* live.reconcileTaskWorktree(worktree))._tag).toBe("TaskWorktreeReconciliationSimulated")
+    expect((yield* live.readTaskWorktree(worktreeRead))._tag).toBe("PlannedAttemptWorktreeObservationSimulated")
+    expect((yield* live.readTargetLineage(targetLineageRead))._tag).toBe("TargetLineageObservationSimulated")
 
     const dry = yield* WorkflowInterpreter.pipe(
       Effect.provide(
@@ -148,6 +166,9 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
       )
     )
     expect((yield* dry.acquireTaskClaim(claim))._tag).toBe("TaskClaimAcquisitionSimulated")
+    expect((yield* dry.readTaskWorktree(worktreeRead))._tag).toBe("PlannedAttemptWorktreeObservationSimulated")
+    expect((yield* dry.readTargetLineage(targetLineageRead))._tag).toBe("TargetLineageObservationSimulated")
+    expect((yield* dry.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordingSimulated")
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({

@@ -14,6 +14,9 @@ const transitionRuleByEventKind: Partial<Record<JournalEventTag, WorkflowJournal
   TaskClaimReleased: { _tag: "Outcome", requiredIntent: "TaskClaimReleaseIntended" },
   TaskWorktreeReady: { _tag: "Outcome", requiredIntent: "TaskWorktreeReconciliationIntended" },
   TaskWorktreeReconciliationIntended: { _tag: "Intent" },
+  GitReadIntentRecorded: { _tag: "Intent" },
+  PlannedAttemptWorktreeObserved: { _tag: "Outcome", requiredIntent: "GitReadIntentRecorded" },
+  TargetLineageObserved: { _tag: "Outcome", requiredIntent: "GitReadIntentRecorded" },
   TaskTrackerReadIntentRecorded: { _tag: "Intent" },
   TaskTrackerFactsObserved: { _tag: "Outcome", requiredIntent: "TaskTrackerReadIntentRecorded" }
 }

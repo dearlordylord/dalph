@@ -29,6 +29,9 @@ import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   taskTrackerReadIntent,
   WorkflowJournalEvent,
   WorkflowRunBeganEvent,
@@ -49,7 +52,6 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../protocols/planned-attempt-executor-work/events.js"
 import { makeRunRecoveryActivation, RunRecoveryActivation } from "../../coordination/run/recovery-activation.js"
-import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../../coordination/run/recovery-authority.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskClaimAcquisitionPlanner } from "../protocols/task-claim-acquisition/plan.js"
 import {
@@ -58,12 +60,18 @@ import {
 } from "../task-tracker-facts/observation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../protocols/task-attempt-planning/plan.js"
-import { makeTaskWorkSpecificationObservationOperation, makeTrackerGraphObservationOperation } from "./operation.js"
+import {
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "./operation.js"
+import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { runRecoveredWorkflow } from "../../coordination/run/run.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
 import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
+  originatingActionForPlannedAttemptWorktreeObservation,
   originatingActionForTrackerObservation,
   plannedAttemptExecutorResponsibilityForReport,
   presentWorkflowOccurrence,
@@ -445,6 +453,47 @@ it.effect("follows a tracker observation to its exact initiating action without 
   })
 )
 
+it.effect("follows a lost planned worktree observation to its exact initiating Git read", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("read-planned-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: gitRead,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const observation = projection.occurrences.find(
+      (occurrence) => occurrence._tag === "PlannedAttemptWorktreeObserved"
+    )
+    if (observation?._tag !== "PlannedAttemptWorktreeObserved") {
+      throw new Error("expected a planned worktree observation occurrence")
+    }
+
+    expect(
+      Option.getOrThrow(originatingActionForPlannedAttemptWorktreeObservation(projection, observation))
+    ).toMatchObject({ _tag: "GitReadInitiated", operation: { operationId: observation.originatingActionOperationId } })
+    expect("initiatedBy" in observation).toBe(false)
+  })
+)
+
 it.effect("does not turn a constructed or proposed tracker read into a past-tense event", () =>
   Effect.gen(function* () {
     const failure = yield* decodeWorkflowOccurrence(operation).pipe(Effect.flip)
@@ -467,6 +516,41 @@ it.effect("rejects a tracker outcome without an earlier same-run read intent", (
       position: 1,
       runId
     })
+  })
+)
+
+it.effect("rejects each Git outcome without its distinct earlier same-run read intent", () =>
+  Effect.gen(function* () {
+    const worktreeFailure = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: OperationId.make("unmatched-worktree-outcome"),
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+    const lineageFailure = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: plannedAttempt.baseSha,
+            targetHeadSha: plannedAttempt.baseSha
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: OperationId.make("unmatched-target-lineage-outcome"),
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+
+    expect(worktreeFailure._tag).toBe("GitOutcomeWithoutReadIntent")
+    expect(lineageFailure._tag).toBe("GitOutcomeWithoutReadIntent")
   })
 )
 
@@ -671,6 +755,8 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       const interpreter = WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("startup authority reread must not reach task claiming"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
         readTaskWorkSpecification: () => Effect.die("startup must not read task-work specifications"),
         reconcileTaskWorktree: () => Effect.die("startup authority reread must not reach Git"),
@@ -689,8 +775,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         Layer.succeed(JournalStore, journal),
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-        controlledFakePlannedAttemptExecutorLayer,
-        trustedPlannedAttemptRecoveryAuthorityLayer
+        controlledFakePlannedAttemptExecutorLayer
       )
       const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
       const workflowLayer = Layer.mergeAll(
@@ -866,13 +951,16 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     AppliedTaskWorkCapacity: true,
     IntegrationResponsibilityBegan: true,
     IntegrationStarted: true,
+    GitReadInitiated: true,
     PlannedAttemptExecutorWorkReported: true,
     PlannedAttemptExecutorWorkResponsibilityBegan: true,
+    PlannedAttemptWorktreeObserved: true,
+    TargetLineageObserved: true,
     TaskTrackerFactsObserved: true,
     TaskTrackerReadInitiated: true
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(8)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(11)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

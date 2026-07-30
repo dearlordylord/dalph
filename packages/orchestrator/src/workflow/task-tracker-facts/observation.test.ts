@@ -672,6 +672,8 @@ it("appends one canonical observation for each logical provider read", async () 
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: () => Effect.succeed(providerSnapshot),
       readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: () => Effect.die("unused"),
@@ -758,6 +760,8 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
     WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: () => Effect.die("replay must not call the graph provider"),
       readTaskWorkSpecification: () => Effect.die("replay must not call the focused provider"),
       reconcileTaskWorktree: () => Effect.die("unused"),
@@ -797,6 +801,8 @@ it("replays a focused read from its canonical journal observation without callin
       return WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () =>
           Effect.gen(function* () {

@@ -175,6 +175,30 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         operationId: event.operation.operationId,
         requiredOperationIds: event.operation.predecessorOperationIds
       })
+    case "GitReadIntentRecorded":
+      return operationEvent({
+        expectedKey: intentRecordKey(event.operation.operationId),
+        operationId: event.operation.operationId,
+        plannedAttempt: event.operation.plannedAttempt,
+        requiredOperationIds: event.operation.predecessorOperationIds
+      })
+    case "PlannedAttemptWorktreeObserved":
+      return operationEvent({
+        expectedKey: outcomeRecordKey(event.operationId),
+        operationId: event.operationId,
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: ["GitReadIntentRecorded"]
+      })
+    case "TargetLineageObserved":
+      return operationEvent({
+        expectedKey: outcomeRecordKey(event.operationId),
+        operationId: event.operationId,
+        plannedAttempt: event.plannedAttempt,
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: ["GitReadIntentRecorded"]
+      })
     case "TaskTrackerFactsObserved":
       return operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),

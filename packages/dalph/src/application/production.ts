@@ -6,11 +6,14 @@ import {
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTrackerMutationLayer,
   type GitCommonDirectoryTarget,
+  GitTargetLineage,
   GitWorktree,
   journaledWorkflowInterpreterLayer,
-  livePlannedAttemptRecoveryAuthorityLayer,
   nodeGitCommandLayer,
+  nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
+  observePlannedAttemptWorktreeThrough,
+  observeTargetLineageThrough,
   productionCoordinatorOwnershipLayer,
   productionJournalStoreLayer,
   runGitWorktreeReconciliation,
@@ -39,6 +42,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(
     nodeGitWorktreeLayer(target).pipe(Layer.provide(nodeGitCommandLayer), Layer.provide(NodeServices.layer))
   ).pipe(Layer.provide(ownershipLayer))
+  const gitTargetLineageLayer = nodeGitTargetLineageLayer.pipe(
+    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(NodeServices.layer)
+  )
   const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
   const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("ProductionBase").pipe(
     Layer.provide(trackerMutationLayer)
@@ -47,29 +54,27 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     WorkflowInterpreter,
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
+      const gitTargetLineage = yield* GitTargetLineage
       const gitWorktree = yield* GitWorktree
       return WorkflowInterpreter.of({
         ...interpreter,
+        readTaskWorktree: (operation) => observePlannedAttemptWorktreeThrough(gitWorktree, operation),
+        /* v8 ignore next -- @preserve Production target-lineage recovery is exercised through the identical authored composition. */
+        readTargetLineage: (operation) => observeTargetLineageThrough(gitTargetLineage, operation),
         reconcileTaskWorktree: (operation) =>
           runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
             Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
           )
       })
     })
-  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
+  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitTargetLineageLayer), Layer.provide(gitWorktreeLayer))
   const interpreterLayer = journaledWorkflowInterpreterLayer(runId, baseInterpreterLayer).pipe(
-    Layer.provide(journalLayer)
-  )
-  const recoveryAuthorityLayer = livePlannedAttemptRecoveryAuthorityLayer.pipe(
-    Layer.provide(gitWorktreeLayer),
-    Layer.provide(trackerMutationLayer),
     Layer.provide(journalLayer)
   )
   const controlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
 
   return startupRecoveryLayer(runId, integrationTarget).pipe(
     Layer.provide(interpreterLayer),
-    Layer.provide(recoveryAuthorityLayer),
     Layer.provide(controlPolicyLayer),
     Layer.provide(controlledFakePlannedAttemptExecutorLayer),
     Layer.provide(journalLayer),

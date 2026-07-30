@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- Projection indexes and accumulation are private scratch. */
+/* eslint-disable functional/immutable-data, max-lines -- The closed occurrence schema, relationship validation, and journal projection share one exhaustive boundary. */
 import { Effect, Option, Schema } from "effect"
 import { AttemptId, PlannedTaskAttempt, RunId, TaskId, PlannedAttemptExecutorReport } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -10,6 +10,8 @@ import { TaskTrackerFactsObservation } from "../task-tracker-facts/observation.j
 import { taskTrackerObservationMatchesRead } from "../task-tracker-facts/observation-match.js"
 import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
+import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { RunPolicyRevision } from "../../control/policy.js"
 import {
@@ -71,6 +73,37 @@ export const TaskTrackerFactsObserved = Schema.TaggedStruct("TaskTrackerFactsObs
   )
 )
 export type TaskTrackerFactsObserved = typeof TaskTrackerFactsObserved.Type
+
+/** Dalph committed one exact planned-attempt Git read and owns its continuation. */
+export const GitReadInitiated = Schema.TaggedStruct("GitReadInitiated", {
+  ...initiatedActionFields,
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  operation: Schema.Union([WorkflowOperation.cases.ReadTaskWorktree, WorkflowOperation.cases.ReadTargetLineage]),
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type GitReadInitiated = typeof GitReadInitiated.Type
+
+/** Git returned the exact worktree observation through its named read action. */
+export const PlannedAttemptWorktreeObserved = Schema.TaggedStruct("PlannedAttemptWorktreeObserved", {
+  ...nonActionOccurrenceFields,
+  observation: PlannedAttemptWorktreeObservation,
+  originatingActionOperationId: OperationId,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type PlannedAttemptWorktreeObserved = typeof PlannedAttemptWorktreeObserved.Type
+
+/** Git returned the target head and ancestry fact through its distinct named read action. */
+export const TargetLineageObserved = Schema.TaggedStruct("TargetLineageObserved", {
+  ...nonActionOccurrenceFields,
+  observation: TargetLineageObservation,
+  originatingActionOperationId: OperationId,
+  plannedAttempt: PlannedTaskAttempt,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TargetLineageObserved = typeof TargetLineageObserved.Type
 
 /**
  * Dalph recorded its intent and assumed responsibility for the exact planned
@@ -147,8 +180,11 @@ export const WorkflowOccurrence = Schema.Union([
   AppliedTaskWorkCapacity,
   IntegrationResponsibilityBegan,
   IntegrationStarted,
+  GitReadInitiated,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
+  PlannedAttemptWorktreeObserved,
+  TargetLineageObserved,
   TaskTrackerReadInitiated,
   TaskTrackerFactsObserved
 ])
@@ -176,7 +212,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 4 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 5 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -196,6 +232,14 @@ const isExecutorResponsibilityFor =
     occurrence.runId === report.runId &&
     occurrence.plannedAttempt.attemptId === report.report.correlation.attemptId &&
     occurrence.recordedAt < report.recordedAt
+
+const isOriginatingGitReadFor =
+  (observation: PlannedAttemptWorktreeObserved | TargetLineageObserved) =>
+  (occurrence: WorkflowOccurrence): occurrence is GitReadInitiated =>
+    occurrence._tag === "GitReadInitiated" &&
+    occurrence.runId === observation.runId &&
+    occurrence.operation.operationId === observation.originatingActionOperationId &&
+    occurrence.recordedAt < observation.recordedAt
 
 const ambiguousRelationship = Symbol("ambiguous workflow-occurrence relationship")
 type IndexedRelationship<A> = A | typeof ambiguousRelationship
@@ -253,6 +297,15 @@ const invalidOutcomeRelationship = (
   if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
     return invalidExecutorRelationship(executorResponsibilities, occurrence, index)
   }
+  if (occurrence._tag === "PlannedAttemptWorktreeObserved" || occurrence._tag === "TargetLineageObserved") {
+    const action = projection.occurrences.find(isOriginatingGitReadFor(occurrence))
+    return action === undefined
+      ? {
+          issue: `Git worktree observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
+          path: ["occurrences", index]
+        }
+      : undefined
+  }
   return invalidIntegrationOccurrenceRelationship(projection.occurrences, occurrence, index)
 }
 
@@ -298,6 +351,9 @@ type ProjectedJournalEvent = Extract<
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
       | "IntegrationResponsibilityBegan"
       | "IntegrationStarted"
+      | "GitReadIntentRecorded"
+      | "PlannedAttemptWorktreeObserved"
+      | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
       | "TaskTrackerReadIntentRecorded"
       | "TaskTrackerFactsObserved"
@@ -327,6 +383,12 @@ const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOc
 /** A tracker result cannot prove which same-run read action observed it. */
 export class TrackerOutcomeWithoutReadIntent extends Schema.TaggedErrorClass<TrackerOutcomeWithoutReadIntent>()(
   "TrackerOutcomeWithoutReadIntent",
+  { operationId: OperationId, position: JournalPosition, runId: RunId }
+) {}
+
+/** A Git result cannot prove which same-run read action observed it. */
+export class GitOutcomeWithoutReadIntent extends Schema.TaggedErrorClass<GitOutcomeWithoutReadIntent>()(
+  "GitOutcomeWithoutReadIntent",
   { operationId: OperationId, position: JournalPosition, runId: RunId }
 ) {}
 
@@ -396,6 +458,7 @@ const projectDirectOccurrence = (
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
  */
+// eslint-disable-next-line complexity -- One pass validates relationships while exhaustively projecting the closed event vocabulary.
 export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
   records: ReadonlyArray<JournalRecord>
 ) {
@@ -404,6 +467,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     string,
     Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
   >()
+  const gitReadIntents = new Map<string, Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>>()
   const executorResponsibilities = new Set<string>()
 
   for (const record of records) {
@@ -419,6 +483,60 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
           initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
           occurrenceClassification: "InitiatedAction",
           operation: event.operation,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "GitReadIntentRecorded") {
+      gitReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+      occurrences.push(
+        GitReadInitiated.make({
+          initiatedBy: event.initiatedBy,
+          occurrenceClassification: event.occurrenceClassification,
+          operation: event.operation,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "PlannedAttemptWorktreeObserved") {
+      const intent = gitReadIntents.get(relationshipKey(record.runId, event.operationId))
+      if (intent?.operation._tag !== "ReadTaskWorktree") {
+        return yield* new GitOutcomeWithoutReadIntent({
+          operationId: event.operationId,
+          position: record.position,
+          runId: record.runId
+        })
+      }
+      occurrences.push(
+        PlannedAttemptWorktreeObserved.make({
+          observation: event.observation,
+          occurrenceClassification: event.occurrenceClassification,
+          originatingActionOperationId: event.operationId,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "TargetLineageObserved") {
+      const intent = gitReadIntents.get(relationshipKey(record.runId, event.operationId))
+      if (intent?.operation._tag !== "ReadTargetLineage") {
+        return yield* new GitOutcomeWithoutReadIntent({
+          operationId: event.operationId,
+          position: record.position,
+          runId: record.runId
+        })
+      }
+      occurrences.push(
+        TargetLineageObserved.make({
+          observation: event.observation,
+          occurrenceClassification: event.occurrenceClassification,
+          originatingActionOperationId: event.operationId,
+          plannedAttempt: event.plannedAttempt,
           recordedAt: record.position,
           runId: record.runId
         })
@@ -479,6 +597,20 @@ export const originatingActionForTrackerObservation = (
   observation: TaskTrackerFactsObserved
 ): Option.Option<TaskTrackerReadInitiated> =>
   Option.fromUndefinedOr(projection.occurrences.find(isOriginatingActionFor(observation)))
+
+/** Follows only the exact operation relationship carried by the Git observation. */
+export const originatingActionForPlannedAttemptWorktreeObservation = (
+  projection: WorkflowOccurrenceProjection,
+  observation: PlannedAttemptWorktreeObserved
+): Option.Option<GitReadInitiated> =>
+  Option.fromUndefinedOr(projection.occurrences.find(isOriginatingGitReadFor(observation)))
+
+/** Follows only the exact operation relationship carried by the target-lineage observation. */
+export const originatingActionForTargetLineageObservation = (
+  projection: WorkflowOccurrenceProjection,
+  observation: TargetLineageObserved
+): Option.Option<GitReadInitiated> =>
+  Option.fromUndefinedOr(projection.occurrences.find(isOriginatingGitReadFor(observation)))
 
 /** Follows one report to the exact Dalph responsibility that preceded it. */
 export const plannedAttemptExecutorResponsibilityForReport = (

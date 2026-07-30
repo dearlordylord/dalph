@@ -474,10 +474,14 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
           releaseTaskClaim: () => Effect.void
         })
       )
+      const retryTarget = IntegrationTarget.make({
+        repository: GitRepositoryLocator.make(`${directory}/.git`),
+        ref: IntegrationTargetRef.make("refs/heads/recovery-target")
+      })
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
-        productionIntegrationTarget(`${directory}/.git`),
+        retryTarget,
         trackerLayer
       ).pipe(
         Layer.provide(
@@ -493,7 +497,33 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
       )
       yield* Effect.gen(function* () {
         yield* (yield* WorkflowInterpreter).reconcileTaskWorktree(worktree)
-        yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1))
+        const failure = yield* activateRecoveredResponsibilities(runId, {
+          capacity: TaskWorkCapacity.make(1),
+          integrationTarget: retryTarget
+        }).pipe(Effect.flip)
+        expect(failure._tag).toBe("GitTargetLineageReadFailure")
+        const failedRecords = yield* (yield* JournalStore).read(runId)
+        const targetReadIntents = failedRecords.filter(
+          ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+        )
+        expect(targetReadIntents).toHaveLength(1)
+        expect(failedRecords.some(({ event }) => event._tag === "TargetLineageObserved")).toBe(false)
+
+        yield* git.runInWorktree(directory, ["update-ref", retryTarget.ref, plannedAttempt.baseSha])
+        yield* activateRecoveredResponsibilities(runId, {
+          capacity: TaskWorkCapacity.make(1),
+          integrationTarget: retryTarget
+        })
+        const recoveredRecords = yield* (yield* JournalStore).read(runId)
+        const originalTargetReadOperationId =
+          targetReadIntents[0]?.event._tag === "GitReadIntentRecorded"
+            ? targetReadIntents[0].event.operation.operationId
+            : undefined
+        expect(
+          recoveredRecords.some(
+            ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === originalTargetReadOperationId
+          )
+        ).toBe(true)
       }).pipe(
         Effect.provide(application),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))

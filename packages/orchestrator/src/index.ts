@@ -73,6 +73,13 @@ export {
   nodeGitCommandLayer
 } from "./authorities/git/command.js"
 export {
+  GitTargetLineage,
+  GitTargetLineageReadFailure,
+  gitTargetLineageTestLayer,
+  nodeGitTargetLineageLayer,
+  TestGitTargetLineage
+} from "./authorities/git/target-lineage.js"
+export {
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,
   ContradictoryWorktreeState,
@@ -126,6 +133,9 @@ export {
   WorkflowRunTargetMismatch
 } from "./workflow-journal/store.js"
 export {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -140,6 +150,12 @@ export {
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "./workflow/registry/event.js"
+export {
+  AttemptWorktreeLost,
+  PlannedAttemptWorktreeObservation
+} from "./workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+export * from "./workflow/protocols/git-reconciliation/decision.js"
+export { responsibilityDispositionForTargetLineage } from "./workflow/protocols/git-reconciliation/frontier-adapter.js"
 export { memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
 export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"
 export {
@@ -269,12 +285,18 @@ export {
   ControlDirectionSubject,
   decodeWorkflowOccurrence,
   ExecutorReportWithoutResponsibilityBegan,
+  GitOutcomeWithoutReadIntent,
+  GitReadInitiated,
   InitiatedAction,
   NonActionOccurrence,
   originatingActionForTrackerObservation,
+  originatingActionForPlannedAttemptWorktreeObservation,
+  originatingActionForTargetLineageObservation,
   plannedAttemptExecutorResponsibilityForReport,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
+  PlannedAttemptWorktreeObserved,
+  TargetLineageObserved,
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
   TaskTrackerFactsObserved,
@@ -288,7 +310,11 @@ export {
 } from "./workflow/registry/occurrence-projection.js"
 export {
   acquireTaskClaimThrough,
+  AuthoritativePlannedAttemptWorktreeObserved,
+  AuthoritativeTargetLineageObserved,
   AuthoritativeTaskClaimAcquired,
+  observePlannedAttemptWorktreeThrough,
+  observeTargetLineageThrough,
   TaskClaimAcquisitionSimulated,
   TraceItem,
   WorkflowInterpreter,
@@ -308,6 +334,8 @@ export {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTargetLineageObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimAcquisitionAuthority,

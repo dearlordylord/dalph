@@ -30,6 +30,13 @@ import {
 import { renameRecordedCassette } from "./recorded-renaming.js"
 import { appliedOccurrencePosition, semanticJson, semanticState } from "./recorded-semantic-state.js"
 import {
+  eventForGitObservationEntry,
+  isRecordedGitObservationEntry,
+  lyricForGitObservationEntry,
+  recordGitObservationEntry,
+  type RecordedGitObservationEntry
+} from "./recorded-git-observation-mapping.js"
+import {
   eventForRunEntry,
   isJournalRunEntry,
   isRecordedRunEntry,
@@ -121,6 +128,9 @@ const recordTaskBoundaryEntry = (
     {
       readonly _tag:
         | "ControlCommandRecorded"
+        | "GitReadIntentRecorded"
+        | "PlannedAttemptWorktreeObserved"
+        | "TargetLineageObserved"
         | "PlannedAttemptExecutorWorkReported"
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
         | "TaskTrackerFactsObserved"
@@ -151,10 +161,18 @@ const recordTaskBoundaryEntry = (
   }
 }
 
+// eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (event._tag === "ControlCommandRecorded") {
     return { _tag: "ControlCommandRecorded", command: event.command }
+  }
+  if (
+    event._tag === "GitReadIntentRecorded" ||
+    event._tag === "PlannedAttemptWorktreeObserved" ||
+    event._tag === "TargetLineageObserved"
+  ) {
+    return recordGitObservationEntry(event)
   }
   if (event._tag === "TaskTrackerReadIntentRecorded" || event._tag === "TaskTrackerFactsObserved") {
     return recordTrackerEntry(event)
@@ -298,6 +316,7 @@ const eventForRecordedEntry = (
   if (entry._tag === "ControlCommandRecorded") {
     return ControlCommandRecordedEvent.make({ command: entry.command, version: workflowJournalEventVersion })
   }
+  if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (
     entry._tag === "PlannedAttemptExecutorWorkReported" ||
     entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -425,7 +444,11 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
-    RecordedExecutorEntry | RecordedRunEntry | RecordedTrackerEntry | { readonly _tag: "ControlCommandRecorded" }
+    | RecordedExecutorEntry
+    | RecordedGitObservationEntry
+    | RecordedRunEntry
+    | RecordedTrackerEntry
+    | { readonly _tag: "ControlCommandRecorded" }
   >
 ): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
@@ -443,6 +466,7 @@ const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (entry._tag === "ControlCommandRecorded") {
     return `Dalph recorded the operator's ${entry.command._tag} command.`
   }
+  if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (
     entry._tag === "PlannedAttemptExecutorWorkReported" ||
     entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"

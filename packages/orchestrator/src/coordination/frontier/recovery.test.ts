@@ -47,7 +47,6 @@ import {
   makeRunRecoveryActivation,
   RunRecoveryActivation
 } from "../run/recovery-activation.js"
-import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../run/recovery-authority.js"
 import { RunnableFrontierTransition } from "./frontier.js"
 import { recoverRunnableTransition } from "./recovery.js"
 import {
@@ -130,6 +129,8 @@ it.effect("routes generic recovery transitions including exact claim-release int
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -179,17 +180,21 @@ it.effect("settles a recovered generic claim through run recovery activation", (
             })
           ),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,
       recordTaskAttemptPlan: unused,
       releaseTaskClaim: unused
     })
-    yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(
+    yield* activateRecoveredResponsibilities(runId, {
+      capacity: TaskWorkCapacity.make(1),
+      integrationTarget: undefined
+    }).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-      Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-      Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer)
+      Effect.provide(controlledFakePlannedAttemptExecutorLayer)
     )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
@@ -238,12 +243,13 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -304,12 +310,13 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -381,6 +388,8 @@ it.effect("fresh-run journal facts expose membership constraints without recover
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -472,6 +481,8 @@ it.effect("routes journaled fresh fact reads, exact claim release, and suspensio
         WorkflowInterpreter.of({
           acquireTaskClaim: unused,
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Ref.update(calls, (items) => [...items, "graph"]).pipe(Effect.as(graph.snapshot)),
           readTaskWorkSpecification: () =>
             Ref.update(calls, (items) => [...items, "specification"]).pipe(Effect.as(specification)),
@@ -563,6 +574,8 @@ it.effect("runs a journaled fresh read when no optional trace output is installe
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () =>
           Effect.suspend(() => {
             const projection = projectTrackerSnapshot({ revision: "journaled-fresh-without-trace-graph", tasks: [] })
@@ -915,12 +928,13 @@ it.effect("a task leaving complete membership safely suspends its executor work 
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -979,6 +993,8 @@ it.effect("replays the exact durable claim and worktree intents", () => {
           Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })
         ),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: (operation) =>
@@ -1049,12 +1065,13 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
     expect(initiallyInvalid._tag).toBe("InvalidWorkflowJournalHistory")
   }).pipe(
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,

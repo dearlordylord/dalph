@@ -53,6 +53,39 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
   )
 )
 
+it.effect("waits for another activation cause before retrying a failed transition", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const transition = freshTransition(TaskId.make("activation-failed-read"))
+      const returned = yield* Deferred.make<void>()
+      const runnerCount = yield* Ref.make(0)
+      const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+      const control: ActivationCoordinatorControl = {
+        checkpoint: (checkpoint) =>
+          checkpoint._tag === "OwnershipReleased" && checkpoint.runnerExit === "Failed"
+            ? Deferred.succeed(returned, undefined)
+            : Effect.void
+      }
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController: controller,
+        control,
+        readFrontier: Effect.succeed({ explanations: [], transitions: [transition] }),
+        runId: RunId.make("activation-failed-read-run"),
+        runTransition: () =>
+          Ref.update(runnerCount, (count) => count + 1).pipe(Effect.andThen(Effect.fail("typed boundary read failure")))
+      })
+
+      yield* coordinator.signal(ActivationCause.Startup())
+      yield* Deferred.await(returned)
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(runnerCount)).toBe(1)
+
+      yield* coordinator.signal(ActivationCause.Resume())
+      expect(yield* Ref.get(runnerCount)).toBe(2)
+    })
+  )
+)
+
 it.effect("serializes selection while capacity-N runners overlap", () =>
   Effect.scoped(
     Effect.gen(function* () {

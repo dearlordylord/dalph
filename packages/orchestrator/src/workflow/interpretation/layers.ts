@@ -10,6 +10,8 @@ import {
   TaskClaimAcquisitionSimulated,
   TaskClaimReleaseSimulated,
   TaskClaimObservationSimulated,
+  PlannedAttemptWorktreeObservationSimulated,
+  TargetLineageObservationSimulated,
   WorkflowInterpreter
 } from "./interpreter.js"
 import { TaskWorktreeReconciliationSimulated } from "../protocols/worktree-reconciliation/protocol.js"
@@ -52,6 +54,9 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTaskClaim,
+        readTaskWorktree: (operation) => Effect.succeed(PlannedAttemptWorktreeObservationSimulated.make({ operation })),
+        /* v8 ignore next -- @preserve The simulated interpreter returns the selected operation without a Git boundary. */
+        readTargetLineage: (operation) => Effect.succeed(TargetLineageObservationSimulated.make({ operation })),
         readTrackerGraph,
         readTaskWorkSpecification,
         releaseTaskClaim,
@@ -74,6 +79,9 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterp
         acquireTaskClaim: (operation, onIntentRecorded: Effect.Effect<void> = Effect.void) =>
           onIntentRecorded.pipe(Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))),
         readTaskClaim: (operation) => Effect.succeed(TaskClaimObservationSimulated.make({ operation })),
+        readTaskWorktree: (operation) => Effect.succeed(PlannedAttemptWorktreeObservationSimulated.make({ operation })),
+        /* v8 ignore next -- @preserve Dry-run records the selected target-lineage operation without observing Git. */
+        readTargetLineage: (operation) => Effect.succeed(TargetLineageObservationSimulated.make({ operation })),
         readTrackerGraph: (operation) => reader.read(operation.target),
         readTaskWorkSpecification: (operation) => reader.readTaskWorkSpecification(operation.target, operation.taskId),
         releaseTaskClaim: (operation) => Effect.succeed(TaskClaimReleaseSimulated.make({ release: operation.release })),

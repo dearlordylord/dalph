@@ -81,20 +81,39 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
 
 type ReadOperation = Extract<
   WorkflowOperation,
-  { readonly _tag: "ReadTaskClaim" | "ReadTaskWorkSpecification" | "ReadTrackerGraph" }
+  {
+    readonly _tag:
+      | "ReadTaskClaim"
+      | "ReadTargetLineage"
+      | "ReadTaskWorkSpecification"
+      | "ReadTaskWorktree"
+      | "ReadTrackerGraph"
+  }
 >
 
 const isReadOperation = (operation: WorkflowOperation): operation is ReadOperation =>
   operation._tag === "ReadTaskClaim" ||
+  operation._tag === "ReadTargetLineage" ||
   operation._tag === "ReadTaskWorkSpecification" ||
+  operation._tag === "ReadTaskWorktree" ||
   operation._tag === "ReadTrackerGraph"
 
 const actualReadDecision = (operation: ReadOperation): CassetteDecision => {
   switch (operation._tag) {
     case "ReadTaskClaim":
       return AuthoredCassetteDecision.cases.ReadTaskClaim.make({ taskId: operation.taskId })
+    case "ReadTargetLineage":
+      return AuthoredCassetteDecision.cases.ReadTargetLineage.make({
+        attemptId: operation.plannedAttempt.attemptId,
+        taskId: operation.plannedAttempt.taskId
+      })
     case "ReadTaskWorkSpecification":
       return AuthoredCassetteDecision.cases.ReadTaskWorkSpecification.make({ taskId: operation.taskId })
+    case "ReadTaskWorktree":
+      return AuthoredCassetteDecision.cases.ReadTaskWorktree.make({
+        attemptId: operation.plannedAttempt.attemptId,
+        taskId: operation.plannedAttempt.taskId
+      })
     case "ReadTrackerGraph":
       return AuthoredCassetteDecision.cases.ReadTrackerGraph.make({ target: operation.target })
   }
@@ -191,6 +210,7 @@ export const controlledTrackerMutationLayer = (cursor: StoryCursor, tracker: Tra
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
               }
               const attempted = { _tag: "ActiveTaskClaim" as const, ...acquisition }
+              /* v8 ignore next -- @preserve Active-observation redelivery and conflict behavior is covered by the ignored underlying acquisition-contract block below. */
               if (observed._tag === "UnclaimedTask") {
                 return tracker
                   .acquireTaskClaim(acquisition)
@@ -290,7 +310,9 @@ export const controlledExecutorLayer = (cursor: StoryCursor, runId: RunId) =>
           Effect.mapError(
             (failure) =>
               new ControlledFakeExecutorMismatch({
-                detail: `${failure._tag} at story position ${failure.storyPosition}`
+                detail:
+                  `${failure._tag} at story position ${failure.storyPosition}: ` +
+                  `expected ${failure.expected}, received ${failure.actual}`
               })
           )
         )

@@ -6,6 +6,9 @@ import { ControlCommand, ControlCommandRecordedEvent } from "../../control/comma
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -23,7 +26,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { ConflictingWorktreeRegistration, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -36,12 +39,15 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionRejectedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
+  TargetLineageObservedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
@@ -64,10 +70,13 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTargetLineageObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   WorkflowOperation
 } from "../../workflow/registry/operation.js"
+import { AttemptWorktreeLost } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
   latestTaskClaimReacquisitionCommand,
   taskClaimReacquisitionOperationId
@@ -230,6 +239,104 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   expect(final.recoveryFrontier.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
   expect(final.runState.appliedThrough).toBe(records.length)
   expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
+})
+
+it("rejects Git outcomes that do not match the exact read intent and planned attempt", () => {
+  const integrationTarget = IntegrationTarget.make({
+    repository: GitRepositoryLocator.make("/repositories/history-target.git"),
+    ref: IntegrationTargetRef.make("refs/heads/master")
+  })
+  const worktreeRead = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("history-worktree-read"),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const targetRead = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make("history-target-lineage-read"),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const otherAttempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("attempt-B"),
+    baseSha: GitCommitSha.make("2".repeat(40)),
+    branch: TaskBranchRef.make("refs/heads/dalph/attempt-B"),
+    worktree: WorktreeLocator.make("/worktrees/attempt-B")
+  })
+  const worktreeOutcome = PlannedAttemptWorktreeObservedEvent.make({
+    observation: AttemptWorktreeLost.make({ plannedAttempt }),
+    occurrenceClassification: "NonActionOccurrence",
+    operationId: targetRead.operationId,
+    version: workflowJournalEventVersion
+  })
+  const mismatchedWorktreeOutcomes = [
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: PlannedWorktreeReady.make({
+        baseSha: otherAttempt.baseSha,
+        branch: otherAttempt.branch,
+        headSha: otherAttempt.baseSha,
+        worktree: otherAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: worktreeRead.operationId,
+      version: workflowJournalEventVersion
+    }),
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: AttemptWorktreeLost.make({ plannedAttempt: otherAttempt }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: worktreeRead.operationId,
+      version: workflowJournalEventVersion
+    }),
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: new ConflictingWorktreeRegistration({
+        observedBranch: otherAttempt.branch,
+        observedHead: otherAttempt.baseSha,
+        plannedBranch: otherAttempt.branch,
+        worktree: otherAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: worktreeRead.operationId,
+      version: workflowJournalEventVersion
+    })
+  ]
+  const lineageOutcome = (operationId: OperationId, outcomeAttempt: PlannedTaskAttempt) =>
+    TargetLineageObservedEvent.make({
+      observation: {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: outcomeAttempt.baseSha,
+        targetHeadSha: GitCommitSha.make("3".repeat(40))
+      },
+      occurrenceClassification: "NonActionOccurrence",
+      operationId,
+      plannedAttempt: outcomeAttempt,
+      version: workflowJournalEventVersion
+    })
+  const intent = (operation: typeof worktreeRead | typeof targetRead) => ({
+    event: GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation,
+      version: workflowJournalEventVersion
+    }),
+    key: intentRecordKey(operation.operationId)
+  })
+  const outcome = (event: typeof worktreeOutcome | ReturnType<typeof lineageOutcome>) => ({
+    event,
+    key: outcomeRecordKey(event.operationId)
+  })
+
+  for (const history of [
+    recordsFrom([intent(targetRead), outcome(worktreeOutcome)]),
+    recordsFrom([intent(worktreeRead), outcome(lineageOutcome(worktreeRead.operationId, plannedAttempt))]),
+    recordsFrom([intent(targetRead), outcome(lineageOutcome(targetRead.operationId, otherAttempt))]),
+    ...mismatchedWorktreeOutcomes.map((event) => recordsFrom([intent(worktreeRead), outcome(event)]))
+  ]) {
+    expect(reduceWorkflowJournalHistory(runId, history)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: [expect.objectContaining({ detail: expect.stringContaining("requires its exact prior") })]
+    })
+  }
 })
 
 it("describes every current journal identity", () => {

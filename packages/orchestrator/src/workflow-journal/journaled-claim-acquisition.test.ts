@@ -11,7 +11,6 @@ import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { deriveRunRecoveryFrontier } from "../coordination/frontier/recovery-frontier.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { makeRunRecoveryActivation } from "../coordination/run/recovery-activation.js"
-import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../coordination/run/recovery-authority.js"
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
@@ -93,6 +92,8 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
                 })
               ),
             readTaskClaim: unused,
+            readTaskWorktree: () => Effect.die("unused worktree observation"),
+            readTargetLineage: () => Effect.die("unused target-lineage observation"),
             readTrackerGraph: unused,
             readTaskWorkSpecification: unused,
             reconcileTaskWorktree: unused,
@@ -103,7 +104,6 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
       ).pipe(Layer.provide(memoryJournalStoreLayer))
     ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(memoryJournalStoreLayer)
   )

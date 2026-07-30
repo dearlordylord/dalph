@@ -5,6 +5,7 @@ import { type OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
@@ -30,6 +31,7 @@ import {
   taskClaimReacquisitionOperationId
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 
 const finalArrayElementOffset = -1
 
@@ -58,6 +60,10 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
   readonly plans: Map<AttemptId, PlannedTaskAttempt>
+  readonly gitReadIntents: Map<
+    OperationId,
+    Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
+  >
   latestRunPolicyRevision: number | undefined
   readonly seenEventKindsByOperation: Map<OperationId, ReadonlySet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: Set<JournalRecordKey>
@@ -72,6 +78,7 @@ const emptyIndexes = (): FoldIndexes => ({
   executorResponsibilitiesBegan: new Map(),
   integrationResponsibilitiesBegan: new Map(),
   plans: new Map(),
+  gitReadIntents: new Map(),
   latestRunPolicyRevision: undefined,
   seenEventKindsByOperation: new Map(),
   seenKeys: new Set(),
@@ -122,6 +129,37 @@ const validateOperationEvent = (
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
+  if (record.event._tag === "GitReadIntentRecorded") {
+    indexes.gitReadIntents.set(record.event.operation.operationId, record.event.operation)
+  }
+  if (record.event._tag === "PlannedAttemptWorktreeObserved") {
+    const intent = indexes.gitReadIntents.get(record.event.operationId)
+    if (
+      intent?._tag !== "ReadTaskWorktree" ||
+      !plannedAttemptWorktreeObservationMatchesPlan(record.event.observation, intent.plannedAttempt)
+    ) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `worktree observation ${record.event.operationId} requires its exact prior worktree-read intent and planned attempt`
+      )
+    }
+  }
+  if (record.event._tag === "TargetLineageObserved") {
+    const intent = indexes.gitReadIntents.get(record.event.operationId)
+    if (
+      intent?._tag !== "ReadTargetLineage" ||
+      !plannedTaskAttemptEquivalence(intent.plannedAttempt, record.event.plannedAttempt)
+    ) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `target-lineage observation ${record.event.operationId} requires its exact prior target-lineage-read intent and planned attempt`
+      )
+    }
+  }
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag !== "OperationEventDescriptor") return
   for (const requiredOperationId of descriptor.requiredOperationIds) {

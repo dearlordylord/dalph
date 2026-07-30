@@ -47,6 +47,14 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
     readonly plannedAttempt: PlannedTaskAttempt
   }
+  ObservePlannedAttemptContinuationWorktree: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  ObservePlannedAttemptContinuationTargetLineage: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
   ObserveResponsibleTaskClaim: {
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
     readonly taskId: TaskId
@@ -127,6 +135,20 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
+  PlannedAttemptGitConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly gitState:
+      | "CompetingWorktreeRegistrations"
+      | "ConflictingWorktreeRegistration"
+      | "ContradictoryWorktreeState"
+      | "ForeignWorktreeRegistration"
+      | "TargetRewrite"
+      | "UntrackedWorktreePath"
+      | "WorktreeBaseMismatch"
+      | "WorktreeLost"
+    readonly taskId: TaskId
+    readonly wakeCondition: "GitFactsObserved"
+  }
   PlannedAttemptTaskExternalSuccessConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
@@ -182,6 +204,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly operationId: OperationId
     readonly taskId: TaskId
     readonly wakeCondition: "ExplicitTaskClaimReacquisitionRequested" | "TaskClaimFactsObserved"
+  }
+  WorkflowOperationGitConstraint: {
+    readonly gitState: "WorktreeLost"
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+    readonly wakeCondition: "GitFactsObserved"
   }
   UnreadableFactWait: {
     readonly boundary: "Executor" | "Git" | "TaskTracker"
@@ -253,6 +281,14 @@ const executorDecisionFor = (
       PlannedAttemptExecutorSuspensionRequested: () => ({
         transition: RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({
           plannedAttempt: facts.responsibility.plannedAttempt
+        })
+      }),
+      PlannedAttemptGitConstraint: ({ gitState }) => ({
+        explanation: FrontierExplanation.PlannedAttemptGitConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          gitState,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "GitFactsObserved"
         })
       }),
       TaskExternalSuccessConstraint: () => ({
@@ -405,6 +441,14 @@ const operationDecisionFor = (
             claimState === "Missing" || claimState === "Foreign"
               ? "ExplicitTaskClaimReacquisitionRequested"
               : "TaskClaimFactsObserved"
+        })
+      }),
+      WorkflowOperationGitConstraint: ({ gitState }) => ({
+        explanation: FrontierExplanation.WorkflowOperationGitConstraint({
+          gitState,
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility),
+          wakeCondition: "GitFactsObserved"
         })
       }),
       UnreadableFactWait: ({ boundary }) => ({

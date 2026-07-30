@@ -1,5 +1,5 @@
-import { Context, Effect, Fiber, Layer, Option, Ref, Schema } from "effect"
-import { type AttemptId, type RunId } from "@dalph/contracts"
+import { Context, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   ControlService,
@@ -10,24 +10,28 @@ import {
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
   freshWorkflowRunId,
+  GitTargetLineage,
   GitWorktree,
+  gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
   type JournalRecord,
   JournalStore,
   journaledFreshRunRecoveryActivationLayer,
   journaledWorkflowInterpreterLayer,
   integrationTargetSelectionLayer,
-  livePlannedAttemptRecoveryAuthorityLayer,
   makeLiveWorkflowInterpreterLayer,
   memoryJournalStoreLayer,
+  observePlannedAttemptWorktreeThrough,
+  observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
-  PlannedAttemptRecoveryAuthority,
   runGitWorktreeReconciliation,
   runRecoveredWorkflow,
   runWorkflow,
   startupRecoveryLayer,
   taskWorkCapacityControlLayer,
   TaskWorkCapacityControl,
+  TargetLineageObservation,
+  TestGitWorktree,
   TrackerMutation,
   WorkflowInterpreter,
   WorkflowTrace
@@ -53,7 +57,6 @@ export interface AuthoredScenarioCassetteRun {
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
-  readonly recoveryAuthorityVerifiedAttemptIds: ReadonlyArray<AttemptId>
   readonly runId: RunId
 }
 
@@ -70,18 +73,27 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorDies = cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
-      const recoveryAuthorityVerifiedAttemptIds = yield* Ref.make<ReadonlyArray<AttemptId>>([])
       const trace = controlledTrace(cursor)
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
           controlledTrackerMutationLayerFrom(cassette.startingFacts.taskClaims),
+          gitTargetLineageTestLayer(
+            cassette.startingFacts.targetLineageObservation ??
+              TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: true,
+                plannedBaseSha: command.baseSha,
+                targetHeadSha: command.baseSha
+              })
+          ),
           gitWorktreeTestLayer(cassette.startingFacts.worktreeObservation)
         )
       )
       const journalLayer = Layer.succeed(JournalStore, Context.get(sharedContext, JournalStore))
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
+      const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
+      const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
       const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
         Layer.provide(Layer.merge(trackerLayer, trackerMutationLayer))
@@ -93,6 +105,15 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           const gitWorktree = yield* GitWorktree
           return WorkflowInterpreter.of({
             ...interpreter,
+            readTaskWorktree: (operation) =>
+              Effect.gen(function* () {
+                const change = yield* cursor.consumeGitWorktreeObservationChange
+                if (Option.isSome(change)) {
+                  yield* testGitWorktree.setObservation(change.value.observation)
+                }
+                return yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
+              }),
+            readTargetLineage: (operation) => observeTargetLineageThrough(gitTargetLineage, operation),
             reconcileTaskWorktree: (operation) =>
               runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
                 Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
@@ -173,31 +194,10 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         /* v8 ignore next -- startup only requires capability presence; cassette mutations use controlled authorities. */
         CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
       )
-      const recoveryAuthorityLayer = livePlannedAttemptRecoveryAuthorityLayer.pipe(
-        Layer.provide(gitWorktreeLayer),
-        Layer.provide(trackerMutationLayer),
-        Layer.provide(journalLayer)
-      )
-      const observedRecoveryAuthorityLayer = Layer.effect(
-        PlannedAttemptRecoveryAuthority,
-        Effect.gen(function* () {
-          const authority = yield* PlannedAttemptRecoveryAuthority
-          return PlannedAttemptRecoveryAuthority.of({
-            verify: Effect.fn("AuthoredCassette.RecoveryAuthority.verify")(function* (plannedAttempt) {
-              yield* authority.verify(plannedAttempt)
-              yield* Ref.update(recoveryAuthorityVerifiedAttemptIds, (attemptIds) => [
-                ...attemptIds,
-                plannedAttempt.attemptId
-              ])
-            })
-          })
-        })
-      ).pipe(Layer.provide(recoveryAuthorityLayer))
       const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId)
       const recoveryPlanningLayer = planningLayer("recovery")
       const recoveryStartupLayer = startupRecoveryLayer(runId, command.integrationTarget).pipe(
         Layer.provide(interpreterLayer),
-        Layer.provide(observedRecoveryAuthorityLayer),
         Layer.provide(controlledControlPolicyLayer),
         Layer.provide(recoveryExecutorLayer),
         Layer.provide(journalLayer),
@@ -237,7 +237,6 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         history: reduceWorkflowJournalHistory(runId, records),
         observedBehavior,
         records,
-        recoveryAuthorityVerifiedAttemptIds: yield* Ref.get(recoveryAuthorityVerifiedAttemptIds),
         runId
       } satisfies AuthoredScenarioCassetteRun
     })

@@ -30,8 +30,15 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
   }
 }
 
+// eslint-disable-next-line complexity -- Every closed protocol-evidence variant owns one maintainer-readable sentence.
 const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
   switch (evidence._tag) {
+    case "AttemptWorktreeLost":
+      return `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
+    case "CompatibleTargetAdvance":
+      return `The story expects Git to prove target ${evidence.targetHeadSha} descends from Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
+    case "IncompatibleTargetRewrite":
+      return `The story expects Git to prove target ${evidence.targetHeadSha} is outside Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
     case "TaskClaimAcquired":
       return `The story expects Dalph to acquire the claim for task ${evidence.taskId}.`
     case "TaskClaimReleased":
@@ -114,11 +121,14 @@ const operatorLyric = (item: OperatorStoryItem): string =>
     ? `Operator applies task-execution capacity ${item.capacity} to the Run.`
     : `Operator ${item.operatorId} requests a replacement claim for task ${item.taskId} with command ${item.commandId}.`
 
+// eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {
   if (isOperatorStoryItem(item)) return operatorLyric(item)
   switch (item._tag) {
     case "DalphSelects":
       return `Dalph selects ${item.operation._tag}.`
+    case "GitWorktreeObservationChanged":
+      return `Git changes the planned worktree observation to ${item.observation._tag}.`
     case "TaskWorkSpecificationReadReturned":
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":

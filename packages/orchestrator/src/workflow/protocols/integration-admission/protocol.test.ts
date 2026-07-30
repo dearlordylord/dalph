@@ -74,7 +74,6 @@ import {
   makeRunRecoveryActivation
 } from "../../../coordination/run/recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../../test/controlled-planned-attempt-executor.js"
-import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../../../coordination/run/recovery-authority.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../../workflow/interpretation/interpreter.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
@@ -445,12 +444,13 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
+        readTaskWorktree: () => Effect.die("unused worktree observation"),
+        readTargetLineage: () => Effect.die("unused target-lineage observation"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),

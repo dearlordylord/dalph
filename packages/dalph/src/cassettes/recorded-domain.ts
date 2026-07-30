@@ -17,11 +17,13 @@ import {
   InitialControlPolicy,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptWorktreeObservation,
   PlannedWorktreeReady,
   TrackerTarget,
   RunPolicyRevision,
   TaskWorkCapacity,
   TaskClaimRelease,
+  TargetLineageObservation,
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation
@@ -40,6 +42,10 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
   ControlCommandRecorded: { command: ControlCommand },
+  GitReadInitiated: {
+    ...initiatedByCoordinator,
+    operation: Schema.Union([WorkflowOperation.cases.ReadTaskWorktree, WorkflowOperation.cases.ReadTargetLineage])
+  },
   IntegrationResponsibilityBegan: {
     acceptedResult: AcceptedResult,
     ...initiatedByCoordinator,
@@ -58,6 +64,17 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { ...initiatedByCoordinator, plannedAttempt: PlannedTaskAttempt },
+  PlannedAttemptWorktreeObserved: {
+    ...nonActionOccurrence,
+    observation: PlannedAttemptWorktreeObservation,
+    originatingActionOperationId: OperationId
+  },
+  TargetLineageObserved: {
+    ...nonActionOccurrence,
+    observation: TargetLineageObservation,
+    originatingActionOperationId: OperationId,
+    plannedAttempt: PlannedTaskAttempt
+  },
   TaskAttemptPlanned: { operation: WorkflowOperation.cases.RecordTaskAttemptPlan },
   TaskClaimAcquired: { claim: ActiveTaskClaim },
   TaskClaimAcquisitionIntended: { operation: WorkflowOperation.cases.AcquireTaskClaim },
@@ -99,7 +116,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 3
+const currentRecordedCassetteVersion = 4
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

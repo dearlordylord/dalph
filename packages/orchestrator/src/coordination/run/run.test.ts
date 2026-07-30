@@ -145,6 +145,8 @@ effectIt.effect("starts a production Run by recording its identity before readin
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -207,6 +209,8 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -265,6 +269,8 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -322,6 +328,8 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () =>
             Ref.update(trackerReads, (count) => count + 1).pipe(
               Effect.andThen(Effect.die("tracker read occurred after Run termination"))
@@ -418,6 +426,8 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
+          readTaskWorktree: () => Effect.die("unused worktree observation"),
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
           readTrackerGraph: () => Effect.succeed(snapshot),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -486,6 +496,8 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: () => Effect.succeed(snapshot),
       readTaskWorkSpecification: (operation) =>
         Effect.succeed(
@@ -556,6 +568,8 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
       acquireTaskClaim: (operation) =>
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
+      readTaskWorktree: () => Effect.die("unused worktree observation"),
+      readTargetLineage: () => Effect.die("unused target-lineage observation"),
       readTrackerGraph: (operation) =>
         Effect.succeed(operation.operationId === "fresh-operation-1" ? emptySnapshot : snapshot),
       readTaskWorkSpecification: (operation) =>

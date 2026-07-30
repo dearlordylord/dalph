@@ -1,7 +1,11 @@
 import { Schema } from "effect"
-import { type TaskId } from "@dalph/contracts"
+import { type IntegrationTarget, type TaskId } from "@dalph/contracts"
 import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
-import { PlannedTaskAttempt, TaskId as TaskIdSchema } from "@dalph/contracts"
+import {
+  IntegrationTarget as IntegrationTargetSchema,
+  PlannedTaskAttempt,
+  TaskId as TaskIdSchema
+} from "@dalph/contracts"
 import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
@@ -97,6 +101,21 @@ const ReconcileTaskWorktreeOperation = Schema.TaggedStruct("ReconcileTaskWorktre
   predecessorOperationIds: CausalPredecessorOperationIds
 }).check(Schema.makeFilter(withoutSelfPredecessor))
 
+/** Reads Git's current registration for one previously prepared planned-attempt worktree. */
+const ReadTaskWorktreeOperation = Schema.TaggedStruct("ReadTaskWorktree", {
+  operationId: OperationId,
+  plannedAttempt: PlannedTaskAttempt,
+  predecessorOperationIds: CausalPredecessorOperationIds
+}).check(Schema.makeFilter(withoutSelfPredecessor))
+
+/** Reads the exact configured target head and its ancestry relationship to one planned Base SHA. */
+const ReadTargetLineageOperation = Schema.TaggedStruct("ReadTargetLineage", {
+  integrationTarget: IntegrationTargetSchema,
+  operationId: OperationId,
+  plannedAttempt: PlannedTaskAttempt,
+  predecessorOperationIds: CausalPredecessorOperationIds
+}).check(Schema.makeFilter(withoutSelfPredecessor))
+
 /**
  * Generic orchestration knows only tracker, claim, plan, and Git operations.
  * Complete-attempt executor work crosses its own service boundary.
@@ -109,7 +128,9 @@ export const WorkflowOperation = Object.assign(
     AcquireTaskClaimOperation,
     ReleaseTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
-    ReconcileTaskWorktreeOperation
+    ReconcileTaskWorktreeOperation,
+    ReadTaskWorktreeOperation,
+    ReadTargetLineageOperation
   ]),
   {
     cases: {
@@ -118,6 +139,8 @@ export const WorkflowOperation = Object.assign(
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTaskClaim: ReadTaskClaimOperation,
+      ReadTaskWorktree: ReadTaskWorktreeOperation,
+      ReadTargetLineage: ReadTargetLineageOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation,
       ReadTaskWorkSpecification: ReadTaskWorkSpecificationOperation
     }
@@ -233,6 +256,27 @@ export const makeTaskWorktreeReconciliationOperation = (fields: {
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }): typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type =>
   WorkflowOperation.cases.ReconcileTaskWorktree.make({
+    ...fields,
+    predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
+  })
+
+export const makeTaskWorktreeObservationOperation = (fields: {
+  readonly operationId: OperationId
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
+}): typeof WorkflowOperation.cases.ReadTaskWorktree.Type =>
+  WorkflowOperation.cases.ReadTaskWorktree.make({
+    ...fields,
+    predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
+  })
+
+export const makeTargetLineageObservationOperation = (fields: {
+  readonly integrationTarget: IntegrationTarget
+  readonly operationId: OperationId
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
+}): typeof WorkflowOperation.cases.ReadTargetLineage.Type =>
+  WorkflowOperation.cases.ReadTargetLineage.make({
     ...fields,
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })

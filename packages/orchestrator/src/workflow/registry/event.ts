@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { PlannedTaskAttempt } from "@dalph/contracts"
 import { ControlCommandRecordedEvent } from "../../control/command.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
@@ -18,6 +19,8 @@ import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../protocols/integration-admission/events.js"
+import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -116,6 +119,31 @@ export const TaskWorktreeReadyEvent = Schema.TaggedStruct("TaskWorktreeReady", {
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+export const GitReadIntentRecordedEvent = Schema.TaggedStruct("GitReadIntentRecorded", {
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  operation: Schema.Union([
+    WorkflowOperationSchema.cases.ReadTaskWorktree,
+    WorkflowOperationSchema.cases.ReadTargetLineage
+  ]),
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+export const PlannedAttemptWorktreeObservedEvent = Schema.TaggedStruct("PlannedAttemptWorktreeObserved", {
+  observation: PlannedAttemptWorktreeObservation,
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  operationId: OperationId,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+export const TargetLineageObservedEvent = Schema.TaggedStruct("TargetLineageObserved", {
+  observation: TargetLineageObservation,
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  operationId: OperationId,
+  plannedAttempt: PlannedTaskAttempt,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
 /** Closed semantic event vocabulary accepted by the workflow journal. */
 export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
@@ -132,8 +160,17 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskAttemptPlannedEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   ResponsibilityJournalEvent
-])
+]).check(
+  Schema.makeFilter((event) =>
+    event._tag !== "TargetLineageObserved" || event.observation.plannedBaseSha === event.plannedAttempt.baseSha
+      ? undefined
+      : "target lineage must be bound to the exact planned Base SHA"
+  )
+)
 export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
 export const taskTrackerReadIntent = (

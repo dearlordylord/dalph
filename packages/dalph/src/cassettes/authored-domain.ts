@@ -20,6 +20,7 @@ import {
   TaskLifecycle,
   TaskWorkCapacity,
   TaskClaimObservation,
+  TargetLineageObservation,
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
@@ -48,6 +49,8 @@ export type AuthoredTaskWorkSpecification = typeof AuthoredTaskWorkSpecification
 export const AuthoredCassetteDecision = Schema.TaggedUnion({
   AcquireTaskClaim: { taskId: TaskId },
   ReadTaskClaim: { taskId: TaskId },
+  ReadTargetLineage: { attemptId: AttemptId, taskId: TaskId },
+  ReadTaskWorktree: { attemptId: AttemptId, taskId: TaskId },
   ReadTaskWorkSpecification: { taskId: TaskId },
   ReadTrackerGraph: { target: TrackerTarget },
   ReleaseTaskClaim: { taskId: TaskId },
@@ -103,6 +106,9 @@ export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence
 
 /** Optional evidence from the claim, attempt-planning, and worktree protocol. */
 export const AuthoredProtocolEvidence = Schema.TaggedUnion({
+  AttemptWorktreeLost: { attemptId: AttemptId, taskId: TaskId },
+  CompatibleTargetAdvance: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
+  IncompatibleTargetRewrite: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
   TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
   TaskClaimAcquired: { taskId: TaskId },
   TaskClaimReleased: { taskId: TaskId },
@@ -168,6 +174,9 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
+  GitWorktreeObservationChanged: {
+    observation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
+  },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
@@ -212,6 +221,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   ],
   CassetteLifecycle: ["CoordinatorProcessDies"],
   DalphOperationTrace: ["DalphSelects"],
+  Git: ["GitWorktreeObservationChanged"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: [
     "TaskClaimReadFailed",
@@ -258,6 +268,7 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     journal: Schema.Literal("Empty"),
     taskClaims: Schema.Array(ActiveTaskClaim),
     taskWorkSpecifications: Schema.Array(AuthoredTaskWorkSpecification),
+    targetLineageObservation: Schema.optionalKey(TargetLineageObservation),
     trackerGraph: AuthoredTrackerGraph,
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),

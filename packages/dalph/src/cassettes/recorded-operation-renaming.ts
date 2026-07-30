@@ -26,6 +26,7 @@ export const renamePlannedAttempt = (
   worktree: renamed(attempt.worktree, maps.worktreeLocators)
 })
 
+// eslint-disable-next-line complexity -- Closed operation variants must explicitly declare which identities are renamed or preserved.
 export const renameWorkflowOperation = (
   operation: WorkflowOperation,
   maps: RecordedOperationIdentityMaps
@@ -63,6 +64,8 @@ export const renameWorkflowOperation = (
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
       }
     case "RecordTaskAttemptPlan":
+    case "ReadTargetLineage":
+    case "ReadTaskWorktree":
     case "ReconcileTaskWorktree":
       return {
         ...operation,
