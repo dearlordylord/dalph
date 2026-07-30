@@ -9,6 +9,7 @@ import { makeFreshTaskAttemptStage } from "./fresh-task-attempt-stages.js"
 import type { FreshWorkflowStage, FreshWorkflowStageError } from "./fresh-activation.js"
 import { RunRecoveryActivation, type RunRecoveryActivationError } from "./recovery-activation.js"
 import {
+  deriveRunFinalityDecision,
   type RunnableFrontier,
   type RunnableFrontierTransition,
   RunnableFrontierTransition as FrontierTransition,
@@ -266,6 +267,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
           })
         )
         yield* Ref.set(currentSnapshot, refreshed)
+        return refreshed
       })
       const coordinator = yield* makeActivationCoordinator({
         admissionController,
@@ -319,8 +321,18 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
         }
         const currentFrontier = yield* readFrontier()
         if (currentFrontier.transitions.length === 0) {
-          yield* refreshCurrentGraph()
-          if ((yield* readFrontier()).transitions.length === 0) return
+          const refreshed = yield* refreshCurrentGraph()
+          const refreshedFrontier = yield* readFrontier()
+          if (refreshedFrontier.transitions.length === 0) {
+            const trackerTargetSettled = refreshed
+              .taskIds()
+              .every((taskId) => Option.getOrThrow(refreshed.lifecycleOf(taskId))._tag === "CompletedSuccessfully")
+            return deriveRunFinalityDecision(
+              refreshedFrontier,
+              yield* recovery.readResponsibility,
+              trackerTargetSettled
+            )
+          }
           continue
         }
         const awaitedCompletion = yield* Queue.take(completions)
@@ -339,9 +351,9 @@ export const runWorkflow = (
   Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.beginRun(runId, target)
-    const result = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
-    yield* journal.terminateRun(runId)
-    return result
+    const finality = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Fresh", runId })
+    if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(runId)
+    return finality
   })
 
 /** Runs the exact reconstructed identity owned by authoritative recovery. */
@@ -353,9 +365,9 @@ export const runRecoveredWorkflow = (target: TrackerTarget, initialControlPolicy
     }
     const journal = yield* JournalStore
     yield* journal.readRunForRecovery(recovery.runId, target)
-    const result = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
-    yield* journal.terminateRun(recovery.runId)
-    return result
+    const finality = yield* runWorkflowWithStartup(target, initialControlPolicy, { _tag: "Recovered" })
+    if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(recovery.runId)
+    return finality
   })
 
 /** Explicit non-durable path for dry-run and deterministic workflow tests. */

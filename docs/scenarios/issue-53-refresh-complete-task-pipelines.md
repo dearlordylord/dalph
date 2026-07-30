@@ -41,14 +41,15 @@ Acceptance tests:
   facts and only a later observed completion releases B` retains the #164
   journal/recovery proof used by this traversal.
 
-## An unchanged quiescent refresh ends without inventing work
+## An unchanged quiescent refresh returns control without inventing completion
 
 The controlled tracker reports open A and open B with B depending on A. A's
 planned executor work reaches Terminal Completed, but the next complete tracker
 read returns the same graph: A remains open and B remains blocked. Dalph records
 the later read as an unchanged reconfirmation of the earlier complete payload.
 After reconstructing the same eligible set and finding no unscheduled task or
-unfinished responsibility, the Run terminates.
+unfinished responsibility, this activation returns control. The Run remains
+unterminated because the fresh observation still reports A open and B blocked.
 
 There is no provider retry or crash in this scenario. If the read fails, the
 typed read failure remains visible and the Run does not terminate normally. Git
@@ -60,8 +61,8 @@ attempt, infer A completed, or create B's claim.
 
 Acceptance test:
 
-- `stops after one unchanged quiescent refresh and records a compact
-  reconfirmation` proves bounded convergence and the recorded projection.
+- `returns control after one unchanged refresh without terminating the
+  unsettled Run` proves bounded activation and the recorded projection.
 
 ## Changed membership is local and invalid reads authorize nothing
 
@@ -98,6 +99,8 @@ Acceptance tests:
   constraint`;
 - `an executor responsibility leaving complete membership becomes an
   executor-local constraint`;
+- `keeps a membership-constrained recovered Run active after a quiescent
+  refresh`;
 - `an invalid quiescent refresh authorizes no new work`;
 - `serializes selection while capacity-N runners overlap` retains the existing
   capacity-two proof while the cassette proves refreshed facts precede new

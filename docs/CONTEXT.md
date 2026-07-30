@@ -247,8 +247,8 @@ _Avoid_: Tracker target closure, scope, complete native graph
 **Task-membership constraint**:
 The task-local stop derived when a later complete task-tracker observation no
 longer includes a task for which Dalph still has an exact workflow
-responsibility. Dalph preserves that responsibility and waits for later
-reconciliation or disposition; the membership edit does not prove cleanup,
+responsibility. Dalph preserves that responsibility for a later activation,
+reconciliation, or disposition; the membership edit does not prove cleanup,
 claim release, successful handoff, or a whole-run conflict.
 _Avoid_: Removed task, automatic cleanup, whole-run membership conflict
 

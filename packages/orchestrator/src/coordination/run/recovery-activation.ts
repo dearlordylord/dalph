@@ -22,6 +22,7 @@ import { PlannedAttemptRecoveryAuthority, type PlannedAttemptRecoveryAuthorityEr
 import {
   type ReconstructedRunState,
   reconstructedTaskIsPaused,
+  type WorkflowResponsibilityState,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
@@ -112,16 +113,21 @@ export const hasUnfinishedRunResponsibility = (runState: ReconstructedRunState):
     ({ disposition }) => disposition._tag !== "Settled" && disposition._tag !== "PlannedAttemptExecutorWorkTerminal"
   )
 
-const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (runId: RunId) {
+const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunState")(function* (runId: RunId) {
   const journal = yield* JournalStore
   const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
   if (reduction._tag === "InvalidWorkflowJournalHistory") {
     return yield* Effect.fail(reduction)
   }
+  return reduction.runState
+})
+
+const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (runId: RunId) {
+  const runState = yield* readRecoveredRunState(runId)
   return deriveRunnableFrontier({
     freshEligibleTasks: [],
-    responsibility: reduction.runState.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(reduction.runState)
+    responsibility: runState.responsibility,
+    responsibilityFacts: deriveJournalResponsibilityFacts(runState)
   })
 })
 
@@ -131,6 +137,7 @@ interface RunRecoveryActivationSource {
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
   readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
+  readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
     readonly attemptId: AttemptId
     readonly runId: RunId
@@ -174,6 +181,7 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
         _tag: "SyntheticFreshOnlyActivation",
         continuePlannedAttemptExecutorWork: (plannedAttempt) => executor.startOrContinue(plannedAttempt),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+        readResponsibility: Effect.succeed({ entries: [] }),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       })
@@ -198,6 +206,7 @@ export const journaledFreshRunRecoveryActivationLayer = Layer.effect(
           Effect.provideService(JournalStore, journal)
         ),
       readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
+      readResponsibility: Effect.succeed({ entries: [] }),
       reconstructedPlannedAttemptPositions: [],
       waitForNextExecutorWake: Effect.void
     })
@@ -284,6 +293,9 @@ export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRe
           )
       ),
     readFrontier: provideDependencies(readFrontier()),
+    readResponsibility: provideDependencies(
+      readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
+    ),
     reconstructedPlannedAttemptPositions,
     runId,
     runTransition: (transition, execution) => provideDependencies(runTransition(transition, execution)),

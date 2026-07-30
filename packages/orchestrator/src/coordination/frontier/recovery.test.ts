@@ -173,6 +173,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
     )
 
     const recovery = yield* makeRunRecoveryActivation(runId)
+    expect((yield* recovery.readResponsibility).entries).toHaveLength(1)
     expect(yield* recovery.readFrontier).toEqual({
       explanations: [
         {

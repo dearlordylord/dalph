@@ -15,6 +15,7 @@ import {
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
   type WorkflowOperation,
+  WorkflowRunTerminatedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -68,7 +69,7 @@ it.effect("continues the same run with B only after a recorded refresh reports A
   })
 )
 
-it.effect("stops after one unchanged quiescent refresh and records a compact reconfirmation", () =>
+it.effect("returns control after one unchanged refresh without terminating the unsettled Run", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(singleton)
     const graphObservations = run.records.flatMap(({ event }) =>
@@ -76,7 +77,8 @@ it.effect("stops after one unchanged quiescent refresh and records a compact rec
     )
 
     expect(graphObservations.at(-1)?._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
-    expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    expect(run.records.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
+    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
   })
 )
@@ -269,7 +271,7 @@ it.effect("runs the maintained singleton through production activation and descr
   })
 )
 
-it.effect("runs the maintained singleton through production activation and stops at terminal executor work", () =>
+it.effect("keeps the maintained singleton Run active while its tracker task remains open", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.singletonTaskCompletes)
     const encoded = yield* Schema.encodeUnknownEffect(AuthoredScenarioCassette)(run.cassette)
@@ -284,7 +286,8 @@ it.effect("runs the maintained singleton through production activation and stops
     expect(run.observedBehavior.taskWorkResults).toEqual(
       terminalAssertions?._tag === "ExpectedBehavior" ? terminalAssertions.taskWork.results : []
     )
-    expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    expect(run.records.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
+    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     expect(
       terminalExecutorReport?._tag === "PlannedAttemptExecutorWorkReported"
         ? terminalExecutorReport.report._tag
@@ -787,7 +790,21 @@ it.effect(
         runId: run.runId
       })
       const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-      const records = insertBeforeRunTermination(run.records, commandEvent)
+      const recordsWithCommand = insertBeforeRunTermination(run.records, commandEvent)
+      const terminationEvent = WorkflowRunTerminatedEvent.make({
+        disposition: "Completed",
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+      const records = [
+        ...recordsWithCommand,
+        {
+          event: terminationEvent,
+          key: describeJournalEvent(terminationEvent).expectedKey,
+          position: JournalPosition.make(recordsWithCommand.length + 1),
+          runId: run.runId
+        }
+      ]
       const projected = yield* projectRecordedCassette(records)
       const executorReportEntry = projected.entries.find((entry) => entry._tag === "PlannedAttemptExecutorWorkReported")
       if (executorReportEntry?._tag !== "PlannedAttemptExecutorWorkReported") {
