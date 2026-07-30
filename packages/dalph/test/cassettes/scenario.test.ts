@@ -9,6 +9,8 @@ import {
   ControlCommandRecordedEvent,
   describeJournalEvent,
   JournalPosition,
+  type JournalRecord,
+  type WorkflowJournalEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -35,12 +37,29 @@ const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
 
+const insertBeforeRunTermination = (
+  records: ReadonlyArray<JournalRecord>,
+  event: WorkflowJournalEvent
+): ReadonlyArray<JournalRecord> => {
+  const terminationIndex = records.findIndex(({ event: recorded }) => recorded._tag === "WorkflowRunTerminated")
+  const insertionIndex = terminationIndex < 0 ? records.length : terminationIndex
+  const runId = records[0]?.runId
+  if (runId === undefined) return records
+  return [
+    ...records.slice(0, insertionIndex),
+    { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(insertionIndex + 1), runId },
+    ...records.slice(insertionIndex)
+  ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+}
+
 it.effect("runs the maintained singleton through production activation and stops at terminal executor work", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.singletonTaskCompletes)
     const encoded = yield* Schema.encodeUnknownEffect(AuthoredScenarioCassette)(run.cassette)
     const terminalAssertions = run.cassette.story.at(-1)
-    const lastEvent = run.records.at(-1)?.event
+    const terminalExecutorReport = run.records.findLast(
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+    )?.event
 
     expect(JSON.stringify(encoded)).not.toContain("runId")
     expect(run.runId).toMatch(/^workflow:"cassette-target":/)
@@ -48,10 +67,12 @@ it.effect("runs the maintained singleton through production activation and stops
     expect(run.observedOutcomes).toEqual(
       terminalAssertions?._tag === "ExpectedObservedOutcomes" ? terminalAssertions.expected : []
     )
-    expect(run.records.at(-1)?.event._tag).toBe("PlannedAttemptExecutorWorkReported")
-    expect(lastEvent?._tag === "PlannedAttemptExecutorWorkReported" ? lastEvent.report._tag : undefined).toBe(
-      "Terminal"
-    )
+    expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    expect(
+      terminalExecutorReport?._tag === "PlannedAttemptExecutorWorkReported"
+        ? terminalExecutorReport.report._tag
+        : undefined
+    ).toBe("Terminal")
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("The story requires 5 outcomes and forbids 1.")
   })
 )
@@ -397,15 +418,7 @@ it.effect(
         runId: run.runId
       })
       const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-      const records = [
-        ...run.records,
-        {
-          event: commandEvent,
-          key: describeJournalEvent(commandEvent).expectedKey,
-          position: JournalPosition.make(run.records.length + 1),
-          runId: run.runId
-        }
-      ]
+      const records = insertBeforeRunTermination(run.records, commandEvent)
       const recorded = yield* projectRecordedCassette(records)
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
@@ -507,15 +520,7 @@ it.effect("renders a recorded operator command from its structured occurrence", 
       runId: run.runId
     })
     const event = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-    const withCommand = yield* projectRecordedCassette([
-      ...run.records,
-      {
-        event,
-        key: describeJournalEvent(event).expectedKey,
-        position: JournalPosition.make(run.records.length + 1),
-        runId: run.runId
-      }
-    ])
+    const withCommand = yield* projectRecordedCassette(insertBeforeRunTermination(run.records, event))
     expect(renderRecordedCassetteLyrics(withCommand)).toContain(
       "Dalph recorded the operator's RequestRunPause command."
     )

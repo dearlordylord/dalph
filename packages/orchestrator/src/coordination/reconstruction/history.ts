@@ -23,6 +23,8 @@ import {
 } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 
+const finalArrayElementOffset = -1
+
 const identityIssue = (
   issues: Array<WorkflowJournalHistoryIssue>,
   runId: RunId,
@@ -340,6 +342,24 @@ const validateOneUnfinishedAttemptPerTask = (
   }
 }
 
+const validateRunLifecycle = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
+  if (began !== undefined && began.position !== 1) {
+    semanticIssue(issues, runId, began.position, "WorkflowRunBegan must be the first record")
+  }
+  if (terminated !== undefined && began === undefined) {
+    semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated requires prior WorkflowRunBegan")
+  }
+  if (terminated !== undefined && terminated !== records.at(finalArrayElementOffset)) {
+    semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated must be the final record")
+  }
+}
+
 /**
  * Validates all decoded records before reconstruction or any outside call.
  * The fold retains every issue it can establish from the immutable history.
@@ -383,6 +403,7 @@ export const reduceWorkflowJournalHistory = (
     validateExecutorEvent(record, runId, indexes, issues)
   })
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
+  validateRunLifecycle(runId, records, issues)
   if (issues.length > 0) {
     return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
   }

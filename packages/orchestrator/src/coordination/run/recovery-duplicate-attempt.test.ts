@@ -83,8 +83,11 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
       JournalStore,
       JournalStore.of({
         append: () => failIfCalled("journal append"),
+        beginRun: () => failIfCalled("journal begin Run"),
         read: () => Effect.succeed(records),
-        scan: () => failIfCalled("journal scan")
+        readRunForRecovery: () => failIfCalled("journal recover Run"),
+        scan: () => failIfCalled("journal scan"),
+        terminateRun: () => failIfCalled("journal terminate Run")
       })
     ),
     Layer.succeed(
@@ -123,7 +126,13 @@ it.effect(
       const roundTrippedRecords = yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         for (const record of invalidRecords) {
-          yield* journal.append(record.runId, record.key, record.event)
+          if (record.event._tag === "WorkflowRunBegan") {
+            yield* journal.beginRun(record.runId, record.event.target)
+          } else if (record.event._tag === "WorkflowRunTerminated") {
+            yield* journal.terminateRun(record.runId)
+          } else {
+            yield* journal.append(record.runId, record.key, record.event)
+          }
         }
         return yield* journal.read(runId)
       }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))

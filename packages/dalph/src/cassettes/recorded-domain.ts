@@ -15,6 +15,7 @@ import {
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
+  TrackerTarget,
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation
@@ -55,7 +56,9 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ])
   },
   TaskWorktreeReady: { operationId: OperationId, proof: PlannedWorktreeReady },
-  TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree }
+  TaskWorktreeReconciliationIntended: { operation: WorkflowOperation.cases.ReconcileTaskWorktree },
+  WorkflowRunBegan: { ...initiatedByCoordinator, target: TrackerTarget },
+  WorkflowRunTerminated: { ...nonActionOccurrence, disposition: Schema.Literal("Completed") }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
@@ -267,18 +270,20 @@ const renameRecordedOperationEntry = (
   }
 }
 
-const renameRecordedCassetteEntry = (
-  entry: RecordedCassetteEntry,
-  maps: IdentityRenamingMaps
-): RecordedCassetteEntry => {
-  if ("operation" in entry) return renameRecordedOperationEntry(entry, maps)
+type RecordedFactEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag:
+      | "TaskClaimAcquired"
+      | "TaskTrackerFactsObserved"
+      | "TaskWorktreeReady"
+      | "WorkflowRunBegan"
+      | "WorkflowRunTerminated"
+  }
+>
+
+const renameRecordedFactEntry = (entry: RecordedFactEntry, maps: IdentityRenamingMaps): RecordedFactEntry => {
   switch (entry._tag) {
-    case "ControlCommandRecorded":
-      return { ...entry, command: renameControlCommand(entry.command, maps) }
-    case "PlannedAttemptExecutorWorkReported":
-      return { ...entry, report: renameExecutorReport(entry.report, maps) }
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return { ...entry, plannedAttempt: renamePlannedAttempt(entry.plannedAttempt, maps) }
     case "TaskClaimAcquired":
       return {
         ...entry,
@@ -304,7 +309,27 @@ const renameRecordedCassetteEntry = (
           worktree: renamed(entry.proof.worktree, maps.worktreeLocators)
         }
       }
+    case "WorkflowRunBegan":
+    case "WorkflowRunTerminated":
+      return entry
   }
+}
+
+const renameRecordedCassetteEntry = (
+  entry: RecordedCassetteEntry,
+  maps: IdentityRenamingMaps
+): RecordedCassetteEntry => {
+  if ("operation" in entry) return renameRecordedOperationEntry(entry, maps)
+  if (entry._tag === "ControlCommandRecorded") {
+    return { ...entry, command: renameControlCommand(entry.command, maps) }
+  }
+  if (entry._tag === "PlannedAttemptExecutorWorkReported") {
+    return { ...entry, report: renameExecutorReport(entry.report, maps) }
+  }
+  if (entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    return { ...entry, plannedAttempt: renamePlannedAttempt(entry.plannedAttempt, maps) }
+  }
+  return renameRecordedFactEntry(entry, maps)
 }
 
 /** Applies an exhaustive per-entry alpha-renaming through the cassette Schema boundary. */

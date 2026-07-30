@@ -221,9 +221,12 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
     const reads = yield* Ref.make(0)
     const changingJournal = JournalStore.of({
       append: () => Effect.die("unused"),
+      beginRun: () => Effect.die("unused"),
       read: () =>
         Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
-      scan: () => Effect.succeed({ issues: [], runs: [] })
+      readRunForRecovery: () => Effect.die("unused"),
+      scan: () => Effect.succeed({ issues: [], runs: [] }),
+      terminateRun: () => Effect.die("unused")
     })
     const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provideService(JournalStore, changingJournal))
     expect((yield* recovery.readFrontier.pipe(Effect.flip))._tag).toBe("InvalidWorkflowJournalHistory")

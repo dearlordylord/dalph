@@ -4,6 +4,10 @@ import { type OperationId } from "../workflow/identity.js"
 import { JournalRecordKey } from "./identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../workflow/protocols/planned-attempt-executor-work/events.js"
 
+export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
+
+export const workflowRunTerminatedRecordKey = JournalRecordKey.make("run:terminated")
+
 export const controlCommandRecordKey = (commandId: ControlCommandId): JournalRecordKey =>
   JournalRecordKey.make(`control-command:${commandId}`)
 

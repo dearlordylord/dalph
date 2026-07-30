@@ -114,8 +114,11 @@ const executorConformanceDriver = defineDriver(
           }
           return record
         }),
+      beginRun: () => Effect.die("executor conformance never begins a Run"),
       read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
-      scan: () => Effect.die("executor conformance never scans the journal")
+      readRunForRecovery: () => Effect.die("executor conformance never recovers a Run"),
+      scan: () => Effect.die("executor conformance never scans the journal"),
+      terminateRun: () => Effect.die("executor conformance never terminates a Run")
     })
     const workflowLayer = Layer.merge(
       Layer.succeed(JournalStore, journal),

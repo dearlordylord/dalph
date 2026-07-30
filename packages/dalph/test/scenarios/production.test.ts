@@ -23,17 +23,20 @@ import {
   ClaimToken,
   controlledTrackerMutationLayer,
   FixtureTarget,
+  freshWorkflowRunId,
   GitCommand,
   GitCommonDirectoryTarget,
   intentRecordKey,
   JournalDatabaseLocator,
   JournalStore,
+  InitialControlPolicy,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   nodeGitCommandLayer,
   OperationId,
+  OperationIdAllocator,
   outcomeRecordKey,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -41,25 +44,95 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   PlannedWorktreeReady,
+  PlannedTaskAttemptPlanner,
+  projectTrackerSnapshot,
+  runWorkflow,
   sqliteJournalStoreLayer,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent,
   TaskWorkCapacity,
+  TaskClaimAcquisitionPlanner,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TrackerGraphReader,
   TrackerMutation,
   TrackerRevision,
   WorkflowInterpreter,
+  WorkflowRunAlreadyBegan,
   workflowJournalEventVersion,
   WorkflowTrace
 } from "@dalph/orchestrator"
-import { ConfigProvider, Effect, FileSystem, Layer } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+
+it.effect("rejects a second fresh production start for the same Run before any tracker read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-single-start-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const target = FixtureTarget.make("production-single-start-target")
+      const runId = yield* freshWorkflowRunId(target)
+      const projected = projectTrackerSnapshot({ revision: "production-single-start-snapshot", tasks: [] })
+      const snapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
+      const trackerReads = yield* Ref.make(0)
+      const trackerReaderLayer = Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("empty tracker has no task-work specification")
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        controlledTrackerMutationLayer
+      ).pipe(
+        Layer.provide(trackerReaderLayer),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const execute = runWorkflow(
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        runId
+      ).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("production-single-start-read")) })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("empty tracker has no claim") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("empty tracker has no attempt") })
+        ),
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      yield* execute
+      const repeated = yield* execute.pipe(Effect.flip)
+
+      expect(repeated).toBeInstanceOf(WorkflowRunAlreadyBegan)
+      expect(yield* Ref.get(trackerReads)).toBe(1)
+      const records = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+      expect(records[0]?.event._tag).toBe("WorkflowRunBegan")
+      expect(records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("installs the running-then-terminal coarse fake in the production-shaped composition", () =>
   Effect.scoped(
@@ -339,6 +412,48 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
         Effect.flip
       )
+      expect(blocked).toMatchObject({
+        _tag: "StartupRecoveryBlocked",
+        issues: [{ _tag: "OtherUnfinishedRunIssue", requestedRunId, unfinishedRunId }]
+      })
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("blocks a new Run when another Run crashed immediately after recording its beginning", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-began-only-run-" })
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const unfinishedRunId = RunId.make("began-only-unfinished-run")
+      yield* Effect.gen(function* () {
+        yield* (yield* JournalStore).beginRun(unfinishedRunId, FixtureTarget.make("began-only-target"))
+      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+
+      const requestedRunId = RunId.make("new-run-after-began-only")
+      const application = productionWorkflowInterpreterLayer(
+        requestedRunId,
+        GitCommonDirectoryTarget.make(directory),
+        controlledTrackerMutationLayer
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.die("startup must stop before reading the tracker"),
+              readTaskWorkSpecification: () => Effect.die("startup must stop before reading task work")
+            })
+          )
+        ),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const blocked = yield* PlannedAttemptExecutor.pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
+        Effect.flip
+      )
+
       expect(blocked).toMatchObject({
         _tag: "StartupRecoveryBlocked",
         issues: [{ _tag: "OtherUnfinishedRunIssue", requestedRunId, unfinishedRunId }]

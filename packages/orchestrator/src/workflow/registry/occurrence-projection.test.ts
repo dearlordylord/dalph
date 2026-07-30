@@ -23,13 +23,20 @@ import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
-import { taskTrackerReadIntent, WorkflowJournalEvent } from "./event.js"
+import {
+  taskTrackerReadIntent,
+  WorkflowJournalEvent,
+  WorkflowRunBeganEvent,
+  WorkflowRunTerminatedEvent
+} from "./event.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  workflowRunBeganRecordKey,
+  workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -518,6 +525,28 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
 
     for (const prefix of retainedPrefixes) {
       const trackerReads = yield* Ref.make(0)
+      const target = FixtureTarget.make("occurrence-fixture")
+      const began: JournalRecord = {
+        event: WorkflowRunBeganEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          target,
+          version: workflowJournalEventVersion
+        }),
+        key: workflowRunBeganRecordKey,
+        position: JournalPosition.make(1),
+        runId
+      }
+      const terminated: JournalRecord = {
+        event: WorkflowRunTerminatedEvent.make({
+          disposition: "Completed",
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        }),
+        key: workflowRunTerminatedRecordKey,
+        position: JournalPosition.make(prefix.length + 2),
+        runId
+      }
       const interpreter = WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("startup authority reread must not reach task claiming"),
         readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
@@ -525,15 +554,16 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         reconcileTaskWorktree: () => Effect.die("startup authority reread must not reach Git"),
         recordTaskAttemptPlan: () => Effect.die("startup authority reread must not reach attempt planning")
       })
+      const journal = JournalStore.of({
+        append: () => Effect.die("startup authority reread must not append"),
+        beginRun: () => Effect.die("recovery must not begin the Run again"),
+        read: () => Effect.succeed(prefix),
+        readRunForRecovery: () => Effect.succeed(began),
+        scan: () => Effect.die("startup authority reread must not scan"),
+        terminateRun: () => Effect.succeed(terminated)
+      })
       const startupLayer = Layer.mergeAll(
-        Layer.succeed(
-          JournalStore,
-          JournalStore.of({
-            append: () => Effect.die("startup authority reread must not append"),
-            read: () => Effect.succeed(prefix),
-            scan: () => Effect.die("startup authority reread must not scan")
-          })
-        ),
+        Layer.succeed(JournalStore, journal),
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         controlledFakePlannedAttemptExecutorLayer,
@@ -541,6 +571,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       )
       const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
       const workflowLayer = Layer.mergeAll(
+        Layer.succeed(JournalStore, journal),
         Layer.succeed(RunRecoveryActivation, recovery),
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -558,7 +589,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         )
       )
       yield* runRecoveredWorkflow(
-        FixtureTarget.make("occurrence-fixture"),
+        target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       ).pipe(Effect.provide(workflowLayer))
       expect(yield* Ref.get(trackerReads)).toBe(1)

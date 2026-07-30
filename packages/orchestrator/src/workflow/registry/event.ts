@@ -7,6 +7,29 @@ import { PlannedAttemptExecutorJournalEvent } from "../protocols/planned-attempt
 import { TaskTrackerFactsObservedEvent } from "../task-tracker-facts/observation.js"
 import { OperationId } from "../identity.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./operation.js"
+import { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { WorkflowActor } from "./actor.js"
+
+/**
+ * Dalph durably began one Run for the exact tracker target. This must be the
+ * first record for the Run and is created only by the fresh-start boundary.
+ */
+export const WorkflowRunBeganEvent = Schema.TaggedStruct("WorkflowRunBegan", {
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  target: TrackerTarget,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+/**
+ * Dalph reached the normal no-more-runnable-work result for one Run. A crash
+ * records no termination, leaving the Run eligible for recovery.
+ */
+export const WorkflowRunTerminatedEvent = Schema.TaggedStruct("WorkflowRunTerminated", {
+  disposition: Schema.Literal("Completed"),
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  version: Schema.Literal(workflowJournalEventVersion)
+})
 
 const TaskTrackerReadOperation = Schema.Union([
   WorkflowOperationSchema.cases.ReadTrackerGraph,
@@ -46,6 +69,8 @@ export const TaskWorktreeReadyEvent = Schema.TaggedStruct("TaskWorktreeReady", {
 
 /** Closed semantic event vocabulary accepted by the workflow journal. */
 export const WorkflowJournalEvent = Schema.Union([
+  WorkflowRunBeganEvent,
+  WorkflowRunTerminatedEvent,
   ControlCommandRecordedEvent,
   TaskTrackerReadIntentRecorded,
   TaskTrackerFactsObservedEvent,

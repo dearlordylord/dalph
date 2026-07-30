@@ -15,6 +15,8 @@ import {
   TaskWorktreeReconciliationIntendedEvent,
   type WorkflowJournalEvent,
   WorkflowActor,
+  WorkflowRunBeganEvent,
+  WorkflowRunTerminatedEvent,
   workflowJournalEventVersion,
   reduceWorkflowJournalHistory
 } from "@dalph/orchestrator"
@@ -83,6 +85,8 @@ const recordTaskBoundaryEntry = (
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
+        | "WorkflowRunBegan"
+        | "WorkflowRunTerminated"
     }
   >
 ): RecordedCassetteEntry => {
@@ -101,6 +105,21 @@ const recordTaskBoundaryEntry = (
 }
 
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
+  if (event._tag === "WorkflowRunBegan") {
+    return {
+      _tag: "WorkflowRunBegan",
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      target: event.target
+    }
+  }
+  if (event._tag === "WorkflowRunTerminated") {
+    return {
+      _tag: "WorkflowRunTerminated",
+      disposition: event.disposition,
+      occurrenceClassification: event.occurrenceClassification
+    }
+  }
   if (event._tag === "ControlCommandRecorded") {
     return { _tag: "ControlCommandRecorded", command: event.command }
   }
@@ -201,6 +220,21 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
     : taskTrackerReadIntent(entry.operation)
 
 const eventForRecordedEntry = (entry: RecordedCassetteEntry): WorkflowJournalEvent => {
+  if (entry._tag === "WorkflowRunBegan") {
+    return WorkflowRunBeganEvent.make({
+      initiatedBy: entry.initiatedBy,
+      occurrenceClassification: entry.occurrenceClassification,
+      target: entry.target,
+      version: workflowJournalEventVersion
+    })
+  }
+  if (entry._tag === "WorkflowRunTerminated") {
+    return WorkflowRunTerminatedEvent.make({
+      disposition: entry.disposition,
+      occurrenceClassification: entry.occurrenceClassification,
+      version: workflowJournalEventVersion
+    })
+  }
   if (entry._tag === "ControlCommandRecorded") {
     return ControlCommandRecordedEvent.make({ command: entry.command, version: workflowJournalEventVersion })
   }
@@ -355,6 +389,10 @@ const lyricForTaskBoundaryEntry = (
       return `Git showed worktree ${entry.proof.worktree} ready at ${entry.proof.headSha}.`
     case "TaskWorktreeReconciliationIntended":
       return `Dalph recorded its intent to reconcile the worktree for attempt ${entry.operation.plannedAttempt.attemptId}.`
+    case "WorkflowRunBegan":
+      return `Dalph began the Run for tracker target ${JSON.stringify(entry.target)}.`
+    case "WorkflowRunTerminated":
+      return `Dalph terminated the Run with disposition ${entry.disposition}.`
   }
 }
 

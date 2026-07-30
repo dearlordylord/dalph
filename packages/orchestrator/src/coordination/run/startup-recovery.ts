@@ -32,6 +32,12 @@ export class StartupRecoveryBlocked extends Schema.TaggedErrorClass<StartupRecov
   { issues: Schema.Array(StartupRecoveryIssue) }
 ) {}
 
+const runBeganWithoutTermination = (
+  reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
+): boolean =>
+  reduction.records.some(({ event }) => event._tag === "WorkflowRunBegan") &&
+  !reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
+
 /** Discovers journaled work before exposing the production run environment. */
 export const startupRecoveryLayer = (runId: RunId) =>
   Layer.effectContext(
@@ -57,7 +63,7 @@ export const startupRecoveryLayer = (runId: RunId) =>
         (reduction) =>
           reduction._tag === "ValidWorkflowJournalHistory" &&
           reduction.runId !== runId &&
-          hasUnfinishedRunResponsibility(reduction.runState)
+          (runBeganWithoutTermination(reduction) || hasUnfinishedRunResponsibility(reduction.runState))
       )
       if (otherUnfinishedRun?._tag === "ValidWorkflowJournalHistory") {
         return yield* new StartupRecoveryBlocked({

@@ -7,7 +7,7 @@ import { JournalPosition } from "../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { controlCommandRecordKey } from "../workflow-journal/record-key.js"
 import { JournalStore } from "../workflow-journal/store.js"
-import type { JournalRecord, JournalStoreError } from "../workflow-journal/store.js"
+import type { JournalRecord, JournalStoreError, WorkflowRunAlreadyTerminated } from "../workflow-journal/store.js"
 
 /**
  * The run already contains another immutable payload under this control
@@ -22,7 +22,10 @@ interface ControlServiceInterface {
   readonly record: (
     operatorId: AuthenticatedOperatorIdentity,
     input: unknown
-  ) => Effect.Effect<JournalRecord, ControlCommandIdentityContradiction | JournalStoreError | Schema.SchemaError>
+  ) => Effect.Effect<
+    JournalRecord,
+    ControlCommandIdentityContradiction | JournalStoreError | Schema.SchemaError | WorkflowRunAlreadyTerminated
+  >
 }
 
 /** Transport-independent boundary that decodes and journals user commands. */

@@ -3,6 +3,7 @@ import type { Effect } from "effect"
 import { Context, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
+import { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { JournalScan } from "./recovery-model.js"
 import {
   type WorkflowJournalEvent,
@@ -18,11 +19,20 @@ export const JournalRecord = Schema.Struct({
 })
 export type JournalRecord = typeof JournalRecord.Type
 
+/** Ordinary workflow facts accepted by generic append; Run lifecycle facts use their dedicated atomic methods. */
+export type AppendableWorkflowJournalEvent = Exclude<
+  WorkflowJournalEvent,
+  { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
+>
+
 const JournalStoreOperation = Schema.Literals([
   "JournalStore.open",
   "JournalStore.migrate",
   "JournalStore.append",
-  "JournalStore.read"
+  "JournalStore.read",
+  "JournalStore.beginRun",
+  "JournalStore.terminateRun",
+  "JournalStore.readRunForRecovery"
 ])
 
 /** Journal storage could not perform an operation and may become available later. */
@@ -75,14 +85,59 @@ export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalSt
   { runId: RunId, key: JournalRecordKey, existingPosition: JournalPosition }
 ) {}
 
+/** The fresh-start boundary submitted an identity whose Run already began. */
+export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(
+  "WorkflowRunAlreadyBegan",
+  { beganAt: JournalPosition, runId: RunId }
+) {}
+
+/** The fresh-start boundary received an identity already used by non-lifecycle journal history. */
+export class WorkflowRunIdentityAlreadyUsed extends Schema.TaggedErrorClass<WorkflowRunIdentityAlreadyUsed>()(
+  "WorkflowRunIdentityAlreadyUsed",
+  { firstRecordAt: JournalPosition, runId: RunId }
+) {}
+
+/** Recovery or termination named an identity for which no Run beginning exists. */
+export class WorkflowRunNotBegan extends Schema.TaggedErrorClass<WorkflowRunNotBegan>()("WorkflowRunNotBegan", {
+  runId: RunId
+}) {}
+
+/** Recovery named a tracker target different from the one recorded when the Run began. */
+export class WorkflowRunTargetMismatch extends Schema.TaggedErrorClass<WorkflowRunTargetMismatch>()(
+  "WorkflowRunTargetMismatch",
+  { recordedTarget: TrackerTarget, requestedTarget: TrackerTarget, runId: RunId }
+) {}
+
+/** The caller attempted to recover or extend a Run after its durable termination. */
+export class WorkflowRunAlreadyTerminated extends Schema.TaggedErrorClass<WorkflowRunAlreadyTerminated>()(
+  "WorkflowRunAlreadyTerminated",
+  { runId: RunId, terminatedAt: JournalPosition }
+) {}
+
+export type JournalAppendError = JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated
+
 interface JournalStoreService {
+  readonly beginRun: (
+    runId: RunId,
+    target: TrackerTarget
+  ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed>
   readonly append: (
     runId: RunId,
     key: JournalRecordKey,
-    event: WorkflowJournalEvent
-  ) => Effect.Effect<JournalRecord, JournalStoreContradiction | JournalStoreError>
+    event: AppendableWorkflowJournalEvent
+  ) => Effect.Effect<JournalRecord, JournalAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
+  readonly readRunForRecovery: (
+    runId: RunId,
+    target: TrackerTarget
+  ) => Effect.Effect<
+    JournalRecord,
+    JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTargetMismatch
+  >
   readonly scan: () => Effect.Effect<JournalScan, JournalStoreError>
+  readonly terminateRun: (
+    runId: RunId
+  ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan>
 }
 
 export class JournalStore extends Context.Service<JournalStore, JournalStoreService>()("@dalph/JournalStore") {}
