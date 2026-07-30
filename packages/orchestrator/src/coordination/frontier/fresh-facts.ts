@@ -7,6 +7,7 @@ import {
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type { ControlCommandId } from "../../control/identity.js"
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
@@ -20,6 +21,11 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   TaskExternalSuccessConstraint: Record<never, never>
   TaskExternalSuccessReleaseNeeded: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
   TaskExternalSuccessSettled: Record<never, never>
+  TaskClaimMissingConstraint: Record<never, never>
+  TaskClaimUnreadableWait: Record<never, never>
+  TaskForeignClaimIsolation: Record<never, never>
+  TaskClaimReacquisitionRequested: { readonly commandId: ControlCommandId }
+  WorkflowOperationTaskClaimConstraint: { readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
   TaskMembershipConstraint: Record<never, never>
   TaskSpecificationChangeConstraint: {
@@ -47,6 +53,10 @@ type PlannedAttemptExecutorDisposition = Extract<
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"
       | "TaskExternalSuccessSettled"
+      | "TaskClaimMissingConstraint"
+      | "TaskClaimUnreadableWait"
+      | "TaskForeignClaimIsolation"
+      | "TaskClaimReacquisitionRequested"
       | "TaskLifecycleConstraint"
       | "TaskMembershipConstraint"
       | "TaskSpecificationChangeConstraint"
@@ -64,6 +74,10 @@ type WorkflowOperationDisposition = Exclude<
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"
       | "TaskExternalSuccessSettled"
+      | "TaskClaimMissingConstraint"
+      | "TaskClaimUnreadableWait"
+      | "TaskForeignClaimIsolation"
+      | "TaskClaimReacquisitionRequested"
       | "TaskLifecycleConstraint"
       | "TaskSpecificationChangeConstraint"
   }

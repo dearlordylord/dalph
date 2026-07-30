@@ -1,4 +1,5 @@
 import { Context, Effect, Schema } from "effect"
+import { TaskId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
 import type { GitWorktreeCreateFailure, GitWorktreeObservationError } from "../../authorities/git/worktree.js"
 import type { JournalAppendError } from "../../workflow-journal/store.js"
@@ -19,6 +20,7 @@ import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-
 import type { TaskTrackerKnowledgeUnavailable } from "../../coordination/reconstruction/graph-knowledge.js"
 import {
   ActiveTaskClaim,
+  TaskClaimObservation,
   type TaskClaimConflict,
   type TaskClaimOwnershipConflict,
   type TaskClaimReadFailure,
@@ -29,11 +31,13 @@ import {
 } from "../../authorities/task-tracker/claim-mutation.js"
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowOperation } from "../registry/operation.js"
+import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 import {
   AuthoritativeTaskClaimReleased,
   runTaskClaimReleaseProtocol,
   type TaskClaimReleaseDidNotConverge
 } from "../protocols/task-claim-release/protocol.js"
+import { observeTaskClaim } from "../protocols/task-claim-observation/protocol.js"
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
@@ -63,6 +67,9 @@ export interface WorkflowInterpreterService {
     | TrackerAdapterReadError
     | TrackerReadError
   >
+  readonly readTaskClaim: (
+    operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+  ) => Effect.Effect<TaskClaimObservationResult, JournalAppendError>
   readonly releaseTaskClaim: (
     operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
   ) => Effect.Effect<
@@ -106,6 +113,26 @@ export const AuthoritativeTaskClaimAcquired = Schema.TaggedStruct("Authoritative
   claim: ActiveTaskClaim
 })
 
+export const AuthoritativeTaskClaimObserved = Schema.TaggedStruct("AuthoritativeTaskClaimObserved", {
+  observation: TaskClaimObservation
+})
+
+export const TaskClaimObservationUnreadable = Schema.TaggedStruct("TaskClaimObservationUnreadable", {
+  attempts: Schema.Literal(taskClaimObservationAttemptBound),
+  taskId: TaskId
+})
+
+export const TaskClaimObservationSimulated = Schema.TaggedStruct("TaskClaimObservationSimulated", {
+  operation: WorkflowOperation.cases.ReadTaskClaim
+})
+
+const TaskClaimObservationResult = Schema.Union([
+  AuthoritativeTaskClaimObserved,
+  TaskClaimObservationUnreadable,
+  TaskClaimObservationSimulated
+])
+export type TaskClaimObservationResult = typeof TaskClaimObservationResult.Type
+
 /** Dry-run records intended ownership without claiming or reading claim state. */
 export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct("TaskClaimAcquisitionSimulated", {
   operation: WorkflowOperation.cases.AcquireTaskClaim
@@ -146,6 +173,17 @@ export const acquireTaskClaimThrough = (
 ) =>
   runTaskClaimAcquisitionProtocol(tracker, operation.acquisition).pipe(
     Effect.map((claim) => AuthoritativeTaskClaimAcquired.make({ claim }))
+  )
+
+export const observeTaskClaimThrough = (
+  tracker: TrackerMutationService,
+  operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+) =>
+  observeTaskClaim(tracker, operation.taskId).pipe(
+    Effect.match({
+      onFailure: ({ attempts, taskId }) => TaskClaimObservationUnreadable.make({ attempts, taskId }),
+      onSuccess: (observation) => AuthoritativeTaskClaimObserved.make({ observation })
+    })
   )
 
 export const releaseTaskClaimThrough = (

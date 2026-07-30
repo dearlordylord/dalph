@@ -129,6 +129,7 @@ export {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
   TaskWorktreeReadyEvent,
@@ -305,9 +306,11 @@ export {
   causalGraphProjection,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
+  TaskClaimAcquisitionAuthority,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

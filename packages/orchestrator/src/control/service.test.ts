@@ -24,13 +24,19 @@ const command = {
 } as const
 
 describe("ControlService", () => {
-  it.effect("records explicit pause and unpause directions without claiming work resumed", () =>
+  it.effect("records explicit pause, unpause, and claim-reacquisition commands without applying workflow effects", () =>
     Effect.gen(function* () {
       const control = yield* ControlService
       const journal = yield* JournalStore
       const inputs = [
         { _tag: "RequestRunPause", commandId: ControlCommandId.make("command-2"), runId },
         { _tag: "RequestRunUnpause", commandId: ControlCommandId.make("command-3"), runId },
+        {
+          _tag: "RequestTaskClaimReacquisition",
+          commandId: ControlCommandId.make("command-reacquire"),
+          runId,
+          taskId: TaskId.make("task-a")
+        },
         command,
         {
           _tag: "RequestTaskUnpause",
@@ -47,7 +53,8 @@ describe("ControlService", () => {
         { _tag: "ControlCommandRecorded", command: { ...inputs[0], operatorId }, version: workflowJournalEventVersion },
         { _tag: "ControlCommandRecorded", command: { ...inputs[1], operatorId }, version: workflowJournalEventVersion },
         { _tag: "ControlCommandRecorded", command: { ...inputs[2], operatorId }, version: workflowJournalEventVersion },
-        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: workflowJournalEventVersion }
+        { _tag: "ControlCommandRecorded", command: { ...inputs[3], operatorId }, version: workflowJournalEventVersion },
+        { _tag: "ControlCommandRecorded", command: { ...inputs[4], operatorId }, version: workflowJournalEventVersion }
       ])
       const reduced = reduceWorkflowJournalHistory(runId, records)
       expect(reduced._tag).toBe("ValidWorkflowJournalHistory")

@@ -14,6 +14,8 @@ import {
 } from "@dalph/contracts"
 import {
   AuthenticatedOperatorIdentity,
+  ClaimOwner,
+  ClaimToken,
   ControlCommand,
   ControlCommandId,
   ControlCommandRecordedEvent,
@@ -21,12 +23,17 @@ import {
   deriveIntegrationFrontier,
   describeJournalEvent,
   JournalPosition,
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
+  UnclaimedTask,
   type JournalRecord,
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
@@ -34,6 +41,7 @@ import {
   WorkflowRunTerminatedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   acceptedResultRestartsIntoIntegrationAuthoredCassette,
@@ -56,6 +64,9 @@ import {
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
+
+const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
+  new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
@@ -92,7 +103,8 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
         heldResponsibilityPositions: new Set(),
-        integrationTarget: Option.none()
+        integrationTarget: Option.none(),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).explanations
     ).toContainEqual(
       expect.objectContaining({
@@ -114,7 +126,8 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
             repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
             ref: IntegrationTargetRef.make("refs/heads/master")
           })
-        )
+        ),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).transitions
     ).toContainEqual(
       expect.objectContaining({
@@ -155,7 +168,7 @@ it.effect("starts a queued accepted result in the same live coordinator process"
     const uninterrupted = AuthoredScenarioCassette.make({
       ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
       name: "accepted result starts without coordinator restart",
-      story: [...withoutDeath.slice(0, -5), ...withoutDeath.slice(-1)]
+      story: [...withoutDeath.slice(0, -7), ...withoutDeath.slice(-1)]
     })
 
     const run = yield* runAuthoredScenarioCassette(uninterrupted)
@@ -641,7 +654,9 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
                   body: "Complete task A.",
                   taskId: TaskId.make("A"),
                   title: "Complete A"
-                } as const
+                } as const,
+                { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: TaskId.make("A") } } as const,
+                { _tag: "TaskClaimCurrentReadReturned", taskId: TaskId.make("A") } as const
               ]
             : [])
         ])
@@ -868,7 +883,7 @@ it.effect(
       )
 
       expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
-      expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([aAttemptId])
+      expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([])
       expect(
         run.records.flatMap(({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
@@ -1221,6 +1236,232 @@ it.effect("derives failed task-work results and safely suspended orchestration e
   })
 )
 
+it.effect("records a foreign claim from an authored recovery story and safely suspends only its attempt", () =>
+  Effect.gen(function* () {
+    const foreignClaim = {
+      _tag: "ActiveTaskClaim",
+      operationId: OperationId.make("foreign-cassette-claim"),
+      owner: ClaimOwner.make("another-owner"),
+      taskId: TaskId.make("A"),
+      token: ClaimToken.make("another-owner-token")
+    } as const
+    const expected = singleton.story.at(-1)
+    if (expected?._tag !== "ExpectedBehavior") return yield* Effect.die("singleton has no terminal assertions")
+    const storyBeforeAssertions = singleton.story
+      .slice(0, -1)
+      .flatMap((item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
+          ? [{ _tag: "CoordinatorProcessDies" as const }]
+          : [item]
+      )
+    const foreignClaimStory = {
+      ...singleton,
+      name: "a foreign claim safely suspends the affected recovered attempt",
+      story: [
+        ...storyBeforeAssertions,
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement the accepted singleton behavior.",
+          taskId: "A",
+          title: "Implement singleton"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimReadReturned", observation: foreignClaim },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+          request: "Suspend"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },
+        {
+          ...expected,
+          orchestration: [
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+          ],
+          protocol: [
+            { _tag: "TaskClaimAcquired", taskId: "A" },
+            { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+            { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+            { _tag: "TaskClaimObserved", claimState: "Foreign", taskId: "A" }
+          ],
+          taskWork: { ...expected.taskWork, results: [] }
+        }
+      ]
+    }
+
+    const run = yield* runAuthoredScenarioCassette(foreignClaimStory)
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "TaskClaimObserved",
+      claimState: "Foreign",
+      taskId: "A"
+    })
+    expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "TaskTrackerFactsObserved",
+        evidence: expect.objectContaining({ _tag: "FocusedTaskClaimFacts", observation: foreignClaim })
+      })
+    )
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+
+    const unreadableClaimStory = {
+      ...foreignClaimStory,
+      name: "three unreadable claim responses safely suspend the affected recovered attempt",
+      story: foreignClaimStory.story.reduce<ReadonlyArray<unknown>>((story, item) => {
+        if (item._tag === "TaskClaimReadReturned") {
+          return [
+            ...story,
+            { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+            { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+            { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" }
+          ]
+        }
+        if (item._tag === "ExpectedBehavior") {
+          return [
+            ...story,
+            {
+              ...item,
+              protocol: [
+                { _tag: "TaskClaimAcquired", taskId: "A" },
+                { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskClaimReadExhausted", taskId: "A" }
+              ]
+            }
+          ]
+        }
+        return [...story, item]
+      }, [])
+    }
+    const unreadableRun = yield* runAuthoredScenarioCassette(unreadableClaimStory)
+    expect(unreadableRun.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "TaskClaimReadExhausted",
+      taskId: "A"
+    })
+    expect(unreadableRun.records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
+    const unreadableRecorded = yield* projectRecordedCassette(unreadableRun.records)
+    expect(unreadableRecorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "TaskTrackerFactsObserved",
+        evidence: expect.objectContaining({ _tag: "FocusedTaskClaimFactsUnreadable" })
+      })
+    )
+    expect(
+      verifyRecordedCassetteRoundTrip(unreadableRun.records, unreadableRecorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+    expect(renderAuthoredCassetteLyrics(unreadableRun.cassette)).toContain(
+      "The task tracker cannot read the claim for task A."
+    )
+
+    const commandId = ControlCommandId.make("cassette-reacquire-missing-A")
+    const missingClaimStory = {
+      ...foreignClaimStory,
+      name: "an operator replaces a missing claim with a fresh claim identity",
+      story: [
+        ...storyBeforeAssertions,
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement the accepted singleton behavior.",
+          taskId: "A",
+          title: "Implement singleton"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: TaskId.make("A") }) },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+          request: "Suspend"
+        },
+        {
+          _tag: "OperatorRequestsTaskClaimReacquisition",
+          commandId,
+          operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+          taskId: "A"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },
+        { ...expected, orchestration: null, protocol: null }
+      ]
+    }
+    const decodedMissingClaimStory = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(
+      missingClaimStory
+    ).pipe(Effect.orDie)
+    const reacquiredRun = yield* runAuthoredScenarioCassette(decodedMissingClaimStory)
+    const claimIntents = reacquiredRun.records.flatMap(({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" ? [event.operation] : []
+    )
+    expect(claimIntents).toHaveLength(2)
+    expect(claimIntents[1]).toMatchObject({ authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId } })
+    expect(claimIntents[1]?.acquisition.operationId).not.toBe(claimIntents[0]?.acquisition.operationId)
+    expect(claimIntents[1]?.acquisition.token).not.toBe(claimIntents[0]?.acquisition.token)
+    expect(
+      reacquiredRun.records.some(
+        ({ event }) =>
+          event._tag === "ControlCommandRecorded" &&
+          event.command._tag === "RequestTaskClaimReacquisition" &&
+          event.command.commandId === commandId
+      )
+    ).toBe(true)
+    expect(reacquiredRun.observedBehavior.taskWorkResults).toContainEqual({
+      _tag: "PlannedWorkForTaskCompleted",
+      taskId: "A"
+    })
+    expect(renderAuthoredCassetteLyrics(decodedMissingClaimStory)).toContain(
+      `Operator cassette-operator requests a replacement claim for task A with command ${commandId}.`
+    )
+
+    const foreignConflictStory = {
+      ...foreignClaimStory,
+      name: "an operator request preserves a foreign claim conflict",
+      story: [
+        ...foreignClaimStory.story.slice(0, -3),
+        {
+          _tag: "OperatorRequestsTaskClaimReacquisition",
+          commandId: ControlCommandId.make("cassette-reacquire-foreign-A"),
+          operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+          taskId: "A"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        expected
+      ]
+    }
+    expect(yield* runAuthoredScenarioCassette(foreignConflictStory).pipe(Effect.flip)).toMatchObject({
+      _tag: "TrackerMutation.TaskClaimConflict",
+      attempted: { taskId: "A" },
+      observed: foreignClaim
+    })
+  })
+)
+
 it.effect("fails typed expected-behavior assertions and renders the applied capacity item", () =>
   Effect.gen(function* () {
     const wrongOutcomes = {
@@ -1277,6 +1518,30 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
       "The story expects Dalph to acquire the claim for task A."
     )
+    const allProtocolCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...run.cassette,
+      story: run.cassette.story.map((item) =>
+        item._tag === "ExpectedBehavior"
+          ? {
+              ...item,
+              protocol: [
+                { _tag: "TaskClaimAcquired", taskId: "A" },
+                { _tag: "TaskClaimReleased", taskId: "A" },
+                { _tag: "TaskClaimObserved", claimState: "Missing", taskId: "A" },
+                { _tag: "TaskClaimReadExhausted", taskId: "A" },
+                { _tag: "TaskClaimReacquisitionRequested", commandId: "render-reacquisition", taskId: "A" },
+                { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
+              ]
+            }
+          : item
+      )
+    })
+    const allProtocolLyrics = renderAuthoredCassetteLyrics(allProtocolCassette)
+    expect(allProtocolLyrics).toContain("release its exact claim")
+    expect(allProtocolLyrics).toContain("record missing claim authority")
+    expect(allProtocolLyrics).toContain("exhaust the bounded claim read")
+    expect(allProtocolLyrics).toContain("render-reacquisition")
   })
 )
 
@@ -1449,6 +1714,10 @@ it.effect(
       if (acquiredClaimEntry?._tag !== "TaskClaimAcquired") {
         return yield* Effect.die("missing acquired claim entry")
       }
+      const runBeganEntry = projected.entries.find((entry) => entry._tag === "WorkflowRunBegan")
+      if (runBeganEntry?._tag !== "WorkflowRunBegan") {
+        return yield* Effect.die("missing workflow run entry")
+      }
       const acceptedResult = AcceptedResult.make({
         commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
       })
@@ -1478,6 +1747,15 @@ it.effect(
           _tag: "ControlCommandRecorded",
           command: ControlCommand.cases.RequestTaskUnpause.make({
             commandId: ControlCommandId.make("rename-task-unpause-command"),
+            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
+            runId: run.runId,
+            taskId: TaskId.make("A")
+          })
+        },
+        {
+          _tag: "ControlCommandRecorded",
+          command: ControlCommand.cases.RequestTaskClaimReacquisition.make({
+            commandId: ControlCommandId.make("rename-task-claim-reacquisition-command"),
             operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
             runId: run.runId,
             taskId: TaskId.make("A")
@@ -1539,6 +1817,68 @@ it.effect(
         { _tag: "TaskClaimReleaseIntended" as const, operation: claimReleaseOperation },
         { _tag: "TaskClaimReleased" as const, release: claimReleaseOperation.release }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const rejectedClaimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition: {
+          operationId: OperationId.make(`cassette-rejected-claim:${run.runId}`),
+          owner: ClaimOwner.make("cassette-owner"),
+          taskId: TaskId.make("A"),
+          token: ClaimToken.make(`cassette-rejected-token:${run.runId}`)
+        },
+        predecessorOperationIds: []
+      })
+      const rejectedClaimEntries = [
+        { _tag: "TaskClaimAcquisitionIntended" as const, operation: rejectedClaimOperation },
+        {
+          _tag: "TaskClaimAcquisitionRejected" as const,
+          observed: {
+            _tag: "ActiveTaskClaim" as const,
+            operationId: OperationId.make(`cassette-foreign-claim:${run.runId}`),
+            owner: ClaimOwner.make("foreign-owner"),
+            taskId: TaskId.make("A"),
+            token: ClaimToken.make(`cassette-foreign-token:${run.runId}`)
+          },
+          operationId: rejectedClaimOperation.acquisition.operationId,
+          reason: "ForeignClaim" as const
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const claimRead = makeTaskClaimObservationOperation(
+        OperationId.make(`cassette-claim-read:${run.runId}`),
+        runBeganEntry.target,
+        acquiredClaimEntry.claim.taskId,
+        [acquiredClaimEntry.claim.operationId]
+      )
+      const unreadableClaimRead = makeTaskClaimObservationOperation(
+        OperationId.make(`cassette-unreadable-claim-read:${run.runId}`),
+        runBeganEntry.target,
+        acquiredClaimEntry.claim.taskId,
+        [claimRead.operationId]
+      )
+      const claimObservationEntries = [
+        {
+          _tag: "TaskTrackerReadInitiated" as const,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          operation: claimRead
+        },
+        {
+          _tag: "TaskTrackerFactsObserved" as const,
+          evidence: makeFocusedTaskClaimFactsObserved(claimRead, acquiredClaimEntry.claim),
+          occurrenceClassification: "NonActionOccurrence" as const,
+          originatingActionOperationId: claimRead.operationId
+        },
+        {
+          _tag: "TaskTrackerReadInitiated" as const,
+          initiatedBy: { _tag: "DalphCoordinator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          operation: unreadableClaimRead
+        },
+        {
+          _tag: "TaskTrackerFactsObserved" as const,
+          evidence: makeFocusedTaskClaimFactsUnreadable(unreadableClaimRead),
+          occurrenceClassification: "NonActionOccurrence" as const,
+          originatingActionOperationId: unreadableClaimRead.operationId
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const recorded = RecordedCassette.make({
         ...projected,
         entries: [
@@ -1554,6 +1894,8 @@ it.effect(
           },
           ...integrationEntries,
           ...claimReleaseEntries,
+          ...rejectedClaimEntries,
+          ...claimObservationEntries,
           ...entriesWithAcceptedResult.slice(insertionIndex)
         ]
       })
@@ -1565,7 +1907,8 @@ it.effect(
           { from: "rename-command", to: "renamed-command" },
           { from: "rename-run-unpause-command", to: "renamed-run-unpause-command" },
           { from: "rename-task-pause-command", to: "renamed-task-pause-command" },
-          { from: "rename-task-unpause-command", to: "renamed-task-unpause-command" }
+          { from: "rename-task-unpause-command", to: "renamed-task-unpause-command" },
+          { from: "rename-task-claim-reacquisition-command", to: "renamed-task-claim-reacquisition-command" }
         ],
         operationIds: [
           ...Array.from({ length: 7 }, (_unused, ordinal) => ({
@@ -1611,6 +1954,7 @@ it.effect(
         TaskAttemptPlanned: true,
         TaskClaimAcquired: true,
         TaskClaimAcquisitionIntended: true,
+        TaskClaimAcquisitionRejected: true,
         TaskClaimReleaseIntended: true,
         TaskClaimReleased: true,
         TaskTrackerFactsObserved: true,
@@ -1623,6 +1967,7 @@ it.effect(
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
         AcquireTaskClaim: true,
+        ReadTaskClaim: true,
         ReleaseTaskClaim: true,
         ReadTaskWorkSpecification: true,
         ReadTrackerGraph: true,
@@ -1631,6 +1976,8 @@ it.effect(
       } satisfies Record<WorkflowOperation["_tag"], true>
       const observationVariants = {
         CompleteTaskTrackerFacts: true,
+        FocusedTaskClaimFacts: true,
+        FocusedTaskClaimFactsUnreadable: true,
         FocusedTaskWorkSpecificationFacts: true,
         UnchangedTaskTrackerFactsReconfirmed: true
       } satisfies Record<TaskTrackerFactsObservation["_tag"], true>

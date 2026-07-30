@@ -35,6 +35,7 @@ const provider = Layer.effect(
     const requests = yield* Ref.make(0)
     return WorkflowInterpreter.of({
       acquireTaskClaim: unused,
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,

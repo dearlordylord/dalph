@@ -48,12 +48,46 @@ const worktreeEvidence = (
   return { _tag: "TaskWorktreeReady", attemptId: plannedAttempt.attemptId, taskId: plannedAttempt.taskId }
 }
 
+const claimObservationEvidence = (
+  event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>,
+  priorAcquiredClaimByTask: ReadonlyMap<
+    TaskId,
+    Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
+  >
+): ReadonlyArray<ProtocolEvidence> => {
+  if (event.observation._tag === "FocusedTaskClaimFactsUnreadable") {
+    return [{ _tag: "TaskClaimReadExhausted", taskId: event.observation.coverage.taskId }]
+  }
+  if (event.observation._tag !== "FocusedTaskClaimFacts") return []
+  const observation = event.observation.observation
+  if (observation._tag === "UnclaimedTask") {
+    return [{ _tag: "TaskClaimObserved", claimState: "Missing", taskId: observation.taskId }]
+  }
+  const expected = priorAcquiredClaimByTask.get(observation.taskId)
+  const exact =
+    expected !== undefined &&
+    expected.operationId === observation.operationId &&
+    expected.owner === observation.owner &&
+    expected.token === observation.token
+  return [{ _tag: "TaskClaimObserved", claimState: exact ? "Exact" : "Foreign", taskId: observation.taskId }]
+}
+
 const protocolEvidenceFor = (
   event: JournalRecord["event"],
-  worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
+  worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>,
+  priorAcquiredClaimByTask: ReadonlyMap<
+    TaskId,
+    Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
+  >
 ): ReadonlyArray<ProtocolEvidence> => {
+  if (event._tag === "ControlCommandRecorded" && event.command._tag === "RequestTaskClaimReacquisition") {
+    return [
+      { _tag: "TaskClaimReacquisitionRequested", commandId: event.command.commandId, taskId: event.command.taskId }
+    ]
+  }
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimAcquired", taskId: event.claim.taskId }]
   if (event._tag === "TaskClaimReleased") return [{ _tag: "TaskClaimReleased", taskId: event.release.claim.taskId }]
+  if (event._tag === "TaskTrackerFactsObserved") return claimObservationEvidence(event, priorAcquiredClaimByTask)
   if (event._tag === "TaskAttemptPlanned") {
     return [
       {
@@ -137,7 +171,16 @@ const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): Comple
   return {
     orchestrationEvidence: records.flatMap(({ event }) => orchestrationEvidenceFor(event)),
     plannedWorkUndertakenFor,
-    protocolEvidence: records.flatMap(({ event }) => protocolEvidenceFor(event, worktreeAttemptByOperation)),
+    protocolEvidence: records.flatMap(({ event }, index) => {
+      const priorAcquiredClaimByTask = new Map(
+        records
+          .slice(0, index)
+          .flatMap(({ event: prior }) =>
+            prior._tag === "TaskClaimAcquired" ? [[prior.claim.taskId, prior.claim] as const] : []
+          )
+      )
+      return protocolEvidenceFor(event, worktreeAttemptByOperation, priorAcquiredClaimByTask)
+    }),
     taskWorkResults: records.flatMap(({ event }) => taskWorkResultFor(event, taskByAttempt))
   }
 }

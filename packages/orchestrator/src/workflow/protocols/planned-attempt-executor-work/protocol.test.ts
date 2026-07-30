@@ -50,7 +50,8 @@ import {
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
 import { makeTaskAdmissionController } from "../../../coordination/admission/controller.js"
 import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
-import { WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
+import { AuthoritativeTaskClaimObserved, WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
+import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
@@ -86,6 +87,10 @@ const currentFactsProviderLayer = Layer.succeed(
   WorkflowInterpreter,
   WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("unused"),
+    readTaskClaim: () =>
+      Effect.succeed(
+        AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId: plannedAttempt.taskId }) })
+      ),
     readTrackerGraph: () => Effect.succeed(currentGraph),
     readTaskWorkSpecification: () => Effect.succeed(currentSpecification),
     reconcileTaskWorktree: () => Effect.die("unused"),
@@ -247,6 +252,7 @@ it.effect("continues an exact planned attempt through the recovered source capab
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
@@ -479,6 +485,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),

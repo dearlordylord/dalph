@@ -32,6 +32,7 @@ import {
   selectStartableIntegrationResponsibilities,
   startQueuedIntegration
 } from "./protocol.js"
+
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -47,9 +48,16 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { TaskAttemptPlannedEvent, taskTrackerReadIntent } from "../../registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent
+} from "../../registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
@@ -70,11 +78,18 @@ import { trustedPlannedAttemptRecoveryAuthorityLayer } from "../../../coordinati
 import { WorkflowInterpreter, WorkflowTrace } from "../../../workflow/interpretation/interpreter.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
+  makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
+
+const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
+  new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
 const runId = RunId.make("integration-admission-run")
 const integrationTarget = IntegrationTarget.make({
@@ -101,6 +116,14 @@ const plannedAttempt = (taskId: "A" | "B" | "C", ordinal: number) =>
 const acceptedResult = (commitDigit: string) =>
   AcceptedResult.make({ commit: GitCommitSha.make(commitDigit.repeat(40)) })
 
+const claimFor = (attempt: PlannedTaskAttempt) =>
+  ActiveTaskClaim.make({
+    operationId: OperationId.make(`claim:${attempt.attemptId}`),
+    owner: ClaimOwner.make("integration-test-owner"),
+    taskId: attempt.taskId,
+    token: ClaimToken.make(`claim-token:${attempt.attemptId}`)
+  })
+
 const beginRun = Effect.gen(function* () {
   const journal = yield* JournalStore
   yield* journal.beginRun(
@@ -113,6 +136,20 @@ const beginRun = Effect.gen(function* () {
 const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedResult) =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
+    const claim = claimFor(attempt)
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({
+        operation: makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] }),
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.operationId),
+      TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+    )
     yield* journal.append(
       runId,
       attemptPlanRecordKey(attempt.attemptId),
@@ -120,7 +157,7 @@ const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedRes
         operation: makeTaskAttemptPlanOperation({
           operationId: OperationId.make(`plan:${attempt.attemptId}`),
           plannedAttempt: attempt,
-          predecessorOperationIds: []
+          predecessorOperationIds: [claim.operationId]
         }),
         version: workflowJournalEventVersion
       })
@@ -305,12 +342,14 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
     const frontier = deriveIntegrationFrontier(reconstructed.state, {
       currentTrackerTaskIds: new Set([firstAttempt.taskId, secondAttempt.taskId]),
       heldResponsibilityPositions: new Set(),
-      integrationTarget: Option.some(integrationTarget)
+      integrationTarget: Option.some(integrationTarget),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(firstAttempt.attemptId, secondAttempt.attemptId)
     })
     expect(deriveIntegrationFrontier(reconstructed.state).explanations).toContainEqual({
-      _tag: "IntegrationConfigurationWait",
+      _tag: "IntegrationTaskClaimConstraint",
+      claimState: "Unobserved",
       taskId: firstAttempt.taskId,
-      wakeCondition: "IntegrationTargetConfigured"
+      wakeCondition: "TaskClaimFactsObserved"
     })
     expect(frontier.transitions).toMatchObject([
       {
@@ -321,6 +360,19 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
     expect(frontier.transitions).toHaveLength(1)
 
     const recovery = yield* makeRunRecoveryActivation(runId, integrationTarget)
+    for (const attempt of [firstAttempt, secondAttempt]) {
+      const read = makeTaskClaimObservationOperation(
+        OperationId.make(`post-restart-claim:${attempt.attemptId}`),
+        FixtureTarget.make("integration-admission-target"),
+        attempt.taskId
+      )
+      yield* journal.append(runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(read.operationId),
+        taskTrackerFactsObservedEvent(read.operationId, makeFocusedTaskClaimFactsObserved(read, claimFor(attempt)))
+      )
+    }
     const firstTransition = (yield* recovery.readFrontier).transitions[0]
     if (firstTransition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
       return yield* Effect.die("expected queue reconciliation")
@@ -398,6 +450,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused"),
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
@@ -462,7 +515,8 @@ it.effect("acquires, releases, and reacquires the process-local target around on
       deriveIntegrationFrontier(runState.state, {
         currentTrackerTaskIds: new Set([started.plannedAttempt.taskId]),
         heldResponsibilityPositions: new Set(),
-        integrationTarget: Option.some(integrationTarget)
+        integrationTarget: Option.some(integrationTarget),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(started.plannedAttempt.attemptId)
       }).transitions
     ).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }))
     yield* resources.acquire(started)
@@ -596,11 +650,29 @@ it.effect("fails closed without current tracker facts and orders authorized inte
       ],
       transitions: []
     })
+    const foreignClaimFrontier = deriveIntegrationFrontier(queuedRun.state, {
+      currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
+      heldResponsibilityPositions: new Set(),
+      integrationTarget: Option.some(integrationTarget),
+      taskClaimAuthorityByAttemptId: new Map([
+        [a.attemptId, { _tag: "Foreign" as const }],
+        [b.attemptId, { _tag: "Exact" as const }]
+      ])
+    })
+    expect(deriveIntegrationAdmission(queuedRun.state.workflowHistory.records).responsibilities).toHaveLength(2)
+    expect(foreignClaimFrontier.transitions).toEqual([])
+    expect(foreignClaimFrontier.explanations).toContainEqual({
+      _tag: "IntegrationTaskClaimConstraint",
+      claimState: "Foreign",
+      taskId: a.taskId,
+      wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+    })
     expect(
       deriveIntegrationFrontier(queuedRun.state, {
         currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
         heldResponsibilityPositions: new Set(),
-        integrationTarget: Option.some(integrationTarget)
+        integrationTarget: Option.some(integrationTarget),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(a.attemptId, b.attemptId)
       })
     ).toMatchObject({
       explanations: [{ _tag: "IntegrationTargetWait", taskId: "B" }],
@@ -622,7 +694,8 @@ it.effect("fails closed without current tracker facts and orders authorized inte
       deriveIntegrationFrontier(startedRun.state, {
         currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
         heldResponsibilityPositions: new Set([queuedA.queuedAt]),
-        integrationTarget: Option.some(integrationTarget)
+        integrationTarget: Option.some(integrationTarget),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(a.attemptId, b.attemptId)
       })
     ).toMatchObject({
       explanations: [

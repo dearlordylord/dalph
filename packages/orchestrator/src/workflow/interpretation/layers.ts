@@ -5,9 +5,11 @@ import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.
 import { controlledTrackerMutationLayer, TrackerMutation } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   acquireTaskClaimThrough,
+  observeTaskClaimThrough,
   releaseTaskClaimThrough,
   TaskClaimAcquisitionSimulated,
   TaskClaimReleaseSimulated,
+  TaskClaimObservationSimulated,
   WorkflowInterpreter
 } from "./interpreter.js"
 import { TaskWorktreeReconciliationSimulated } from "../protocols/worktree-reconciliation/protocol.js"
@@ -24,6 +26,11 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
         operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
       ) {
         return yield* reader.read(operation.target)
+      })
+      const readTaskClaim = Effect.fn(`WorkflowInterpreter.${operationPrefix}.readTaskClaim`)(function* (
+        operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+      ) {
+        return yield* observeTaskClaimThrough(tracker, operation)
       })
       const readTaskWorkSpecification = Effect.fn(`WorkflowInterpreter.${operationPrefix}.readTaskWorkSpecification`)(
         function* (operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type) {
@@ -44,6 +51,7 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
       })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
+        readTaskClaim,
         readTrackerGraph,
         readTaskWorkSpecification,
         releaseTaskClaim,
@@ -65,6 +73,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterp
       return WorkflowInterpreter.of({
         acquireTaskClaim: (operation, onIntentRecorded: Effect.Effect<void> = Effect.void) =>
           onIntentRecorded.pipe(Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))),
+        readTaskClaim: (operation) => Effect.succeed(TaskClaimObservationSimulated.make({ operation })),
         readTrackerGraph: (operation) => reader.read(operation.target),
         readTaskWorkSpecification: (operation) => reader.readTaskWorkSpecification(operation.target, operation.taskId),
         releaseTaskClaim: (operation) => Effect.succeed(TaskClaimReleaseSimulated.make({ release: operation.release })),

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Schema } from "effect"
 import {
   ControlCommandRecordedEvent,
@@ -11,6 +12,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent,
   taskTrackerReadIntent,
   taskTrackerFactsObservedEvent,
   type WorkflowJournalEvent,
@@ -139,6 +141,13 @@ const recordTaskBoundaryEntry = (
       return { _tag: "TaskClaimAcquired", claim: event.claim }
     case "TaskClaimAcquisitionIntended":
       return { _tag: "TaskClaimAcquisitionIntended", operation: event.operation }
+    case "TaskClaimAcquisitionRejected":
+      return {
+        _tag: "TaskClaimAcquisitionRejected",
+        observed: event.observed,
+        operationId: event.operationId,
+        reason: event.reason
+      }
   }
 }
 
@@ -187,6 +196,7 @@ const eventForTaskBoundaryEntry = (
         | "TaskAttemptPlanned"
         | "TaskClaimAcquired"
         | "TaskClaimAcquisitionIntended"
+        | "TaskClaimAcquisitionRejected"
         | "TaskClaimReleaseIntended"
         | "TaskClaimReleased"
         | "IntegrationResponsibilityBegan"
@@ -209,6 +219,13 @@ const eventForTaskBoundaryEntry = (
     case "TaskClaimAcquisitionIntended":
       return TaskClaimAcquisitionIntendedEvent.make({
         operation: entry.operation,
+        version: workflowJournalEventVersion
+      })
+    case "TaskClaimAcquisitionRejected":
+      return TaskClaimAcquisitionRejectedEvent.make({
+        observed: entry.observed,
+        operationId: entry.operationId,
+        reason: entry.reason,
         version: workflowJournalEventVersion
       })
   }
@@ -384,12 +401,34 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     ? `Dalph observed ${entry.evidence._tag} through tracker read ${entry.originatingActionOperationId}.`
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
+type RecordedClaimAcquisitionEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: "TaskClaimAcquired" | "TaskClaimAcquisitionIntended" | "TaskClaimAcquisitionRejected" }
+>
+
+const isRecordedClaimAcquisitionEntry = (entry: RecordedCassetteEntry): entry is RecordedClaimAcquisitionEntry =>
+  entry._tag === "TaskClaimAcquired" ||
+  entry._tag === "TaskClaimAcquisitionIntended" ||
+  entry._tag === "TaskClaimAcquisitionRejected"
+
+const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): string => {
+  switch (entry._tag) {
+    case "TaskClaimAcquired":
+      return `The task tracker showed Dalph's exact claim for task ${entry.claim.taskId}.`
+    case "TaskClaimAcquisitionIntended":
+      return `Dalph intended to claim task ${entry.operation.acquisition.taskId}.`
+    case "TaskClaimAcquisitionRejected":
+      return `The task tracker preserved foreign claim ${entry.observed.operationId} for task ${entry.observed.taskId}.`
+  }
+}
+
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
     RecordedExecutorEntry | RecordedRunEntry | RecordedTrackerEntry | { readonly _tag: "ControlCommandRecorded" }
   >
 ): string => {
+  if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
   if (isRecordedClaimReleaseEntry(entry)) return lyricForClaimReleaseEntry(entry)
   if (isRecordedIntegrationEntry(entry)) {
     return entry._tag === "IntegrationResponsibilityBegan"
@@ -397,14 +436,7 @@ const lyricForTaskBoundaryEntry = (
       : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
   if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
-  switch (entry._tag) {
-    case "TaskAttemptPlanned":
-      return `Dalph planned attempt ${entry.operation.plannedAttempt.attemptId} for task ${entry.operation.plannedAttempt.taskId}.`
-    case "TaskClaimAcquired":
-      return `The task tracker showed Dalph's exact claim for task ${entry.claim.taskId}.`
-    case "TaskClaimAcquisitionIntended":
-      return `Dalph intended to claim task ${entry.operation.acquisition.taskId}.`
-  }
+  return `Dalph planned attempt ${entry.operation.plannedAttempt.attemptId} for task ${entry.operation.plannedAttempt.taskId}.`
 }
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {

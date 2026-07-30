@@ -10,6 +10,7 @@ import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 export const ControlCommandRequest = Schema.TaggedUnion({
   RequestRunPause: { commandId: ControlCommandId, runId: RunId },
   RequestRunUnpause: { commandId: ControlCommandId, runId: RunId },
+  RequestTaskClaimReacquisition: { commandId: ControlCommandId, runId: RunId, taskId: TaskId },
   RequestTaskPause: { commandId: ControlCommandId, runId: RunId, taskId: TaskId },
   RequestTaskUnpause: { commandId: ControlCommandId, runId: RunId, taskId: TaskId }
 })
@@ -22,6 +23,12 @@ export type ControlCommandRequest = typeof ControlCommandRequest.Type
 export const ControlCommand = Schema.TaggedUnion({
   RequestRunPause: { commandId: ControlCommandId, operatorId: AuthenticatedOperatorIdentity, runId: RunId },
   RequestRunUnpause: { commandId: ControlCommandId, operatorId: AuthenticatedOperatorIdentity, runId: RunId },
+  RequestTaskClaimReacquisition: {
+    commandId: ControlCommandId,
+    operatorId: AuthenticatedOperatorIdentity,
+    runId: RunId,
+    taskId: TaskId
+  },
   RequestTaskPause: {
     commandId: ControlCommandId,
     operatorId: AuthenticatedOperatorIdentity,

@@ -28,13 +28,13 @@ const graphTasksFrom = (observation: CompleteTaskTrackerFactsObserved): Readonly
   }))
 }
 
-type GraphFactsObservation = Exclude<
+type GraphFactsObservation = Extract<
   TaskTrackerFactsObservation,
-  { readonly _tag: "FocusedTaskWorkSpecificationFacts" }
+  { readonly _tag: "CompleteTaskTrackerFacts" | "UnchangedTaskTrackerFactsReconfirmed" }
 >
 
 const isGraphFactsObservation = (observation: TaskTrackerFactsObservation): observation is GraphFactsObservation =>
-  observation._tag !== "FocusedTaskWorkSpecificationFacts"
+  observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
 
 /** Journaled tracker facts cannot reconstruct the knowledge promised by one completed read. */
 export class TaskTrackerKnowledgeUnavailable extends Schema.TaggedErrorClass<TaskTrackerKnowledgeUnavailable>()(

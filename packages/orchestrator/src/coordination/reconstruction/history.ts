@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- The total fold mutates only local validation indexes. */
+/* eslint-disable functional/immutable-data, max-lines -- The chronological validator owns its local indexes and cross-event invariants. */
 import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { type OperationId } from "../../workflow/identity.js"
@@ -25,6 +25,11 @@ import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-f
 import { validateRunPolicyHistory } from "./run-policy-history.js"
 import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
+import {
+  latestTaskClaimReacquisitionCommand,
+  taskClaimReacquisitionOperationId
+} from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 
 const finalArrayElementOffset = -1
 
@@ -202,6 +207,73 @@ const validateClaim = (
     acquired.token !== intended.token
   ) {
     identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
+  }
+}
+
+const validateClaimRejection = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (record.event._tag !== "TaskClaimAcquisitionRejected") return
+  const rejected = record.event
+  const intent = records.find(
+    ({ event, position }) =>
+      position < record.position &&
+      event._tag === "TaskClaimAcquisitionIntended" &&
+      event.operation.acquisition.operationId === rejected.operationId
+  )?.event
+  /* v8 ignore next -- @preserve The event descriptor separately reports a rejection without its required intent. */
+  if (intent?._tag !== "TaskClaimAcquisitionIntended") return
+  const attempted = ActiveTaskClaim.make(intent.operation.acquisition)
+  if (rejected.observed.taskId !== attempted.taskId || isExactTaskClaim(rejected.observed, attempted)) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `rejected task claim ${rejected.operationId} does not prove a foreign claim for ${attempted.taskId}`
+    )
+  }
+}
+
+const matchingReacquisitionCommand = (record: JournalRecord, runId: RunId, records: ReadonlyArray<JournalRecord>) => {
+  /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
+  if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
+  const { acquisition } = record.event.operation
+  const expectedClaim = records.findLast(
+    ({ event, position }) =>
+      position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
+  )?.event
+  /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined command result. */
+  const command =
+    expectedClaim?._tag === "TaskClaimAcquired"
+      ? latestTaskClaimReacquisitionCommand(records, runId, acquisition.taskId, expectedClaim.claim, record.position)
+      : undefined
+  /* v8 ignore stop -- @preserve */
+  return command?._tag === "ControlCommandRecorded" ? command.command : undefined
+}
+
+const validateClaimReacquisitionIntent = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (record.event._tag !== "TaskClaimAcquisitionIntended") return
+  const { acquisition, authority } = record.event.operation
+  if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return
+  const command = matchingReacquisitionCommand(record, runId, records)
+  const matchesAuthority =
+    command?.commandId === authority.commandId &&
+    taskClaimReacquisitionOperationId(command.commandId) === acquisition.operationId
+  if (!matchesAuthority) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `task-claim reacquisition ${acquisition.operationId} has no prior matching authenticated command`
+    )
   }
 }
 
@@ -407,7 +479,9 @@ export const reduceWorkflowJournalHistory = (
     }
     validateOperationEvent(record, runId, indexes, issues)
     validatePlan(record, runId, indexes, issues)
+    validateClaimReacquisitionIntent(record, runId, records, issues)
     validateClaim(record, runId, records, issues)
+    validateClaimRejection(record, runId, records, issues)
     validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
     validateTrackerObservation(record, runId, records, issues)
     validateReconfirmationReference(record, runId, indexes, issues)

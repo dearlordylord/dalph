@@ -116,6 +116,8 @@ const reducePauseState = (records: ReadonlyArray<JournalRecord>): ReconstructedP
       case "RequestRunUnpause":
         runPaused = false
         break
+      case "RequestTaskClaimReacquisition":
+        break
       case "RequestTaskPause":
         pausedTaskIds.add(event.command.taskId)
         break

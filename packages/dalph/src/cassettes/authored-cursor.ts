@@ -11,6 +11,24 @@ export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass
 ) {}
 
 type CursorFailure = AuthoredCassetteInteractionMismatch
+type ClaimedStoryItem<A extends StoryItem> =
+  | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
+  | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
+type AuthoredTaskClaimReadItem =
+  | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
+  | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
+  | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
+
+const AuthoredTaskClaimReadItem = Schema.Union([
+  AuthoredCassetteStoryItem.cases.TaskClaimReadFailed,
+  AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned,
+  AuthoredCassetteStoryItem.cases.TaskClaimReadReturned
+])
+
+const isTaskClaimReadItem = (item: StoryItem | undefined): item is AuthoredTaskClaimReadItem =>
+  item?._tag === "TaskClaimReadFailed" ||
+  item?._tag === "TaskClaimCurrentReadReturned" ||
+  item?._tag === "TaskClaimReadReturned"
 
 export interface StoryCursor {
   readonly awaitCoordinatorProcessDeath: Effect.Effect<
@@ -28,6 +46,9 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
   >
+  readonly consumeClaimReacquisitionRequest: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition.Type>
+  >
   readonly consumeRunCoordinator: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.RunCoordinator.Type,
     CursorFailure
@@ -35,6 +56,13 @@ export interface StoryCursor {
   readonly consumeTaskWorkSpecification: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type,
     CursorFailure
+  >
+  readonly consumeTaskClaimRead: Effect.Effect<
+    Option.Option<
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
+    >
   >
   readonly consumeTerminalAssertions: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type,
@@ -50,20 +78,27 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const position = yield* Ref.make(0)
   const coordinatorProcessDeath =
     yield* Deferred.make<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+  const claimNext = <A extends StoryItem>(
+    predicate: (item: StoryItem | undefined) => item is A
+  ): Effect.Effect<ClaimedStoryItem<A>> =>
+    Ref.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
+      const item = story[index]
+      return predicate(item)
+        ? [{ _tag: "Claimed" as const, index, item }, index + 1]
+        : [{ _tag: "Mismatch" as const, index, item }, index]
+    })
   const consume = (tag: StoryItem["_tag"]) =>
     Effect.gen(function* () {
-      const index = yield* Ref.get(position)
-      const item = story[index]
-      if (item?._tag !== tag) {
+      const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag)
+      if (claimed._tag === "Mismatch") {
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: tag,
           /* v8 ignore next -- The terminal assertion item keeps a decoded story non-empty until execution ends. */
-          expected: item?._tag ?? "EndOfStory",
-          storyPosition: index
+          expected: claimed.item?._tag ?? "EndOfStory",
+          storyPosition: claimed.index
         })
       }
-      yield* Ref.set(position, index + 1)
-      return item
+      return claimed.item
     })
   const consumeDalphSelection = consume("DalphSelects").pipe(
     Effect.flatMap((item) =>
@@ -83,23 +118,37 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   )
   const consumeCapacityChange = Effect.gen(function* () {
-    const index = yield* Ref.get(position)
-    const item = story[index]
-    if (item?._tag !== "SetTaskExecutionCapacity") return Option.none()
-    yield* Ref.set(position, index + 1)
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type =>
+        item?._tag === "SetTaskExecutionCapacity"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
-      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity)(item).pipe(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity)(claimed.item).pipe(
         Effect.orDie
       )
     )
   })
+  const consumeClaimReacquisitionRequest = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition.Type =>
+        item?._tag === "OperatorRequestsTaskClaimReacquisition"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
-    const index = yield* Ref.get(position)
-    const item = story[index]
-    if (item?._tag !== "CoordinatorProcessDies") return
-    yield* Ref.set(position, index + 1)
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
+        item?._tag === "CoordinatorProcessDies"
+    )
+    if (claimed._tag === "Mismatch") return
     const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(
-      item
+      claimed.item
     ).pipe(Effect.orDie)
     yield* Deferred.succeed(coordinatorProcessDeath, decoded)
     return yield* Effect.never
@@ -116,32 +165,40 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
+  const consumeTaskClaimRead = Effect.gen(function* () {
+    const claimed = yield* claimNext(isTaskClaimReadItem)
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
+  })
   const consumeTerminalAssertions = consume("ExpectedBehavior").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
     )
   )
   const consumeTrackerGraph = Effect.gen(function* () {
-    const index = yield* Ref.get(position)
-    const item = story[index]
-    if (item?._tag !== "TrackerGraphReadFailed" && item?._tag !== "TrackerGraphReadReturned") {
+    const claimed = yield* claimNext(
+      (item): item is AuthoredTrackerGraphReadResult =>
+        item?._tag === "TrackerGraphReadFailed" || item?._tag === "TrackerGraphReadReturned"
+    )
+    if (claimed._tag === "Mismatch") {
       return yield* new AuthoredCassetteInteractionMismatch({
         actual: "TrackerGraphReadFailed | TrackerGraphReadReturned",
         /* v8 ignore next -- A decoded story retains its terminal assertion after any graph interaction. */
-        expected: item?._tag ?? "EndOfStory",
-        storyPosition: index
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
       })
     }
-    yield* Ref.set(position, index + 1)
-    return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(item).pipe(Effect.orDie)
+    return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   return {
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
+    consumeClaimReacquisitionRequest,
     consumeDalphSelection,
     consumeExecutorReport,
     consumeInitialPolicy,
     consumeRunCoordinator,
+    consumeTaskClaimRead,
     consumeTaskWorkSpecification,
     consumeTerminalAssertions,
     consumeTrackerGraph,

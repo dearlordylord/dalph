@@ -12,6 +12,8 @@ import { workflowJournalEventVersion } from "../kernel/event.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { type TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import type { WorkflowOperation } from "../registry/operation.js"
+import { TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
+import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 
 const completeFactEvidenceFields = {
   completeness: Schema.Literal("Complete"),
@@ -26,6 +28,7 @@ export const CompleteTargetClosureCoverage = Schema.TaggedStruct("CompleteTarget
   target: TrackerTarget
 })
 const ExactTaskWorkSpecificationCoverage = Schema.TaggedStruct("ExactTaskWorkSpecification", { taskId: TaskId })
+const ExactTaskClaimCoverage = Schema.TaggedStruct("ExactTaskClaim", { taskId: TaskId })
 
 /** The task identities returned for one complete task-tracker target closure. */
 export const TaskIdentitiesObserved = Schema.TaggedStruct("TaskIdentities", {
@@ -286,10 +289,40 @@ export const FocusedTaskWorkSpecificationFactsObserved = Schema.TaggedStruct("Fo
 )
 export type FocusedTaskWorkSpecificationFactsObserved = typeof FocusedTaskWorkSpecificationFactsObserved.Type
 
+/** One bounded logical read established the tracker's current exact claim fact. */
+export const FocusedTaskClaimFactsObserved = Schema.TaggedStruct("FocusedTaskClaimFacts", {
+  completeness: Schema.Literal("Complete"),
+  consistency: Schema.Literal("Atomic"),
+  coverage: ExactTaskClaimCoverage,
+  freshness: Schema.TaggedStruct("ObservedDuringLogicalRead", { operationId: OperationId }),
+  observation: TaskClaimObservation,
+  operationId: OperationId,
+  target: TrackerTarget
+}).check(
+  Schema.makeFilter((facts) =>
+    facts.freshness.operationId !== facts.operationId || facts.coverage.taskId !== facts.observation.taskId
+      ? "focused claim coverage and freshness must name the exact logical read and task"
+      : undefined
+  )
+)
+export type FocusedTaskClaimFactsObserved = typeof FocusedTaskClaimFactsObserved.Type
+
+/** Three reads could not establish any current claim fact for the exact task. */
+export const FocusedTaskClaimFactsUnreadable = Schema.TaggedStruct("FocusedTaskClaimFactsUnreadable", {
+  attempts: Schema.Literal(taskClaimObservationAttemptBound),
+  completeness: Schema.Literal("Unreadable"),
+  coverage: ExactTaskClaimCoverage,
+  operationId: OperationId,
+  target: TrackerTarget
+})
+export type FocusedTaskClaimFactsUnreadable = typeof FocusedTaskClaimFactsUnreadable.Type
+
 export const TaskTrackerFactsObservation = Schema.Union([
   CompleteTaskTrackerFactsObserved,
   UnchangedTaskTrackerFactsReconfirmed,
-  FocusedTaskWorkSpecificationFactsObserved
+  FocusedTaskWorkSpecificationFactsObserved,
+  FocusedTaskClaimFactsObserved,
+  FocusedTaskClaimFactsUnreadable
 ])
 export type TaskTrackerFactsObservation = typeof TaskTrackerFactsObservation.Type
 
@@ -384,6 +417,31 @@ export const makeFocusedTaskWorkSpecificationFactsObserved = (
       taskId: specification.taskId,
       title: specification.title
     }),
+    operationId: operation.operationId,
+    target: operation.target
+  })
+
+export const makeFocusedTaskClaimFactsObserved = (
+  operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type,
+  observation: TaskClaimObservation
+): FocusedTaskClaimFactsObserved =>
+  FocusedTaskClaimFactsObserved.make({
+    completeness: "Complete",
+    consistency: "Atomic",
+    coverage: ExactTaskClaimCoverage.make({ taskId: operation.taskId }),
+    freshness: { _tag: "ObservedDuringLogicalRead", operationId: operation.operationId },
+    observation,
+    operationId: operation.operationId,
+    target: operation.target
+  })
+
+export const makeFocusedTaskClaimFactsUnreadable = (
+  operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+): FocusedTaskClaimFactsUnreadable =>
+  FocusedTaskClaimFactsUnreadable.make({
+    attempts: 3,
+    completeness: "Unreadable",
+    coverage: ExactTaskClaimCoverage.make({ taskId: operation.taskId }),
     operationId: operation.operationId,
     target: operation.target
   })

@@ -144,6 +144,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -205,6 +206,7 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -262,6 +264,7 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -318,6 +321,7 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () =>
             Ref.update(trackerReads, (count) => count + 1).pipe(
               Effect.andThen(Effect.die("tracker read occurred after Run termination"))
@@ -413,6 +417,7 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("unused"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Effect.succeed(snapshot),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
@@ -480,6 +485,7 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     )
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("unused"),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: () => Effect.succeed(snapshot),
       readTaskWorkSpecification: (operation) =>
         Effect.succeed(
@@ -549,6 +555,7 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: (operation) =>
         Effect.succeed(operation.operationId === "fresh-operation-1" ? emptySnapshot : snapshot),
       readTaskWorkSpecification: (operation) =>

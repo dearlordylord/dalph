@@ -670,6 +670,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       }
       const interpreter = WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("startup authority reread must not reach task claiming"),
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
         readTaskWorkSpecification: () => Effect.die("startup must not read task-work specifications"),
         reconcileTaskWorktree: () => Effect.die("startup authority reread must not reach Git"),

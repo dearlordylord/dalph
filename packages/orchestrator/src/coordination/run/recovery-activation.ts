@@ -1,12 +1,12 @@
 /* eslint-disable max-lines -- Fresh and authoritative activation must share one recovery authority boundary. */
-import { Context, Effect, Exit, Layer, Option, Queue } from "effect"
+import { Context, Effect, Exit, Layer, Option, Queue, Schema } from "effect"
 import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "../activation/coordinator.js"
 import {
   type AttemptId,
   type IntegrationTarget,
   type PlannedTaskAttempt,
   type RunId,
-  type TaskId,
+  TaskId,
   PlannedAttemptExecutor,
   plannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport
@@ -26,7 +26,7 @@ import {
   requestPlannedAttemptExecutorSuspension
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
-  causalClaimForAttempt,
+  authorizedClaimForAttempt,
   PlannedAttemptRecoveryAuthority,
   type PlannedAttemptRecoveryAuthorityError
 } from "./recovery-authority.js"
@@ -65,14 +65,26 @@ import {
 } from "../admission/integration-target-resource.js"
 import { runIntegrationTransition } from "./integration-transition-runtime.js"
 import { OperationId } from "../../workflow/identity.js"
+import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import {
+  latestTaskClaimReacquisitionCommand,
+  taskClaimReacquisitionOperationId
+} from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+
 import {
   makeTaskClaimReleaseOperation,
+  makeTaskClaimObservationOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
 import type { TraceOutputError } from "../../presentation/trace-output.js"
+import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
+import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
+
+const finalRecordOffset = -1
 
 type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]: Effect.Error<ReturnType<WorkflowInterpreterService[Key]>>
@@ -92,10 +104,84 @@ export type RunRecoveryActivationError =
   | JournalAppendError
   | JournalStoreError
   | PlannedAttemptRecoveryAuthorityError
+  | TaskClaimReacquisitionPlannerUnavailable
+  | TaskClaimReacquisitionPlanningFailed
   | TraceOutputError
 
+/** A selected explicit reacquisition has no configured identity planner. */
+export class TaskClaimReacquisitionPlannerUnavailable extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlannerUnavailable>()(
+  "TaskClaimReacquisitionPlannerUnavailable",
+  { taskId: TaskId }
+) {}
+
+/** The configured planner could not allocate the replacement claim identity. */
+export class TaskClaimReacquisitionPlanningFailed extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlanningFailed>()(
+  "TaskClaimReacquisitionPlanningFailed",
+  { detail: Schema.String, taskId: TaskId }
+) {}
+
+/* v8 ignore start -- @preserve Planner failure rendering is a defensive fallback around a typed Effect boundary. */
+const planningFailureDetail = (failure: unknown): string =>
+  typeof failure === "object" && failure !== null && "_tag" in failure
+    ? String(failure._tag)
+    : "TaskClaimAcquisitionPlanner.plan failed"
+/* v8 ignore stop -- @preserve */
+
+const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimReacquisition")(function* (input: {
+  readonly execution: OwnedTransitionExecution
+  readonly interpreter: WorkflowInterpreterService
+  readonly journal: JournalStore["Service"]
+  readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
+  readonly runId: RunId
+  readonly trace: Option.Option<WorkflowTrace["Service"]>
+  readonly transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>
+}) {
+  const planner = yield* Option.match(input.planner, {
+    onNone: () => Effect.fail(new TaskClaimReacquisitionPlannerUnavailable({ taskId: input.transition.taskId })),
+    onSome: Effect.succeed
+  })
+  const records = yield* input.journal.read(input.runId)
+  const priorClaim = records.findLast(
+    ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === input.transition.taskId
+  )?.event
+  const observation = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "FocusedTaskClaimFacts" ||
+        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      event.observation.coverage.taskId === input.transition.taskId
+  )?.event
+  const operationId = taskClaimReacquisitionOperationId(input.transition.commandId)
+  const operation = makeTaskClaimAcquisitionOperation({
+    acquisition: yield* planner.plan(operationId, input.transition.taskId).pipe(
+      Effect.mapError(
+        /* v8 ignore next -- @preserve The unavailable-planner path is tested; provider-specific planner failures are wrapped here. */
+        (failure) =>
+          new TaskClaimReacquisitionPlanningFailed({
+            detail: planningFailureDetail(failure),
+            taskId: input.transition.taskId
+          })
+      )
+    ),
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: input.transition.commandId },
+    predecessorOperationIds: [
+      /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
+      ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
+      /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
+      ...(observation?._tag === "TaskTrackerFactsObserved" ? [observation.operationId] : [])
+    ]
+  })
+  if (Option.isSome(input.trace)) {
+    yield* input.trace.value.emit(OperationSelected.make({ operation }))
+  }
+  yield* input.interpreter.acquireTaskClaim(operation, input.execution.recordIntent(operationId))
+})
+
 /** Derives which journaled responsibilities are still unfinished. */
-const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): ReadonlyArray<ResponsibilityFreshFacts> => {
+const deriveJournalResponsibilityFacts = (
+  runState: ReconstructedRunState,
+  activationBaselinePosition: Option.Option<JournalPosition> = Option.none()
+): ReadonlyArray<ResponsibilityFreshFacts> => {
   const records = runState.workflowHistory.records
   const latestTaskGraph = latestReconstructedTaskGraph(runState.graphKnowledge)
   const taskLeftMembership = (taskId: TaskId): boolean =>
@@ -123,13 +209,23 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
   return runState.responsibility.entries.map((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") {
       const settled = settledOperationIds.has(workflowResponsibilityOperationId(responsibility))
+      const expectedClaim =
+        responsibility._tag === "TaskClaimReleaseResponsibility"
+          ? responsibility.operation.release.claim
+          : responsibility._tag === "TaskWorktreeResponsibility"
+            ? authorizedClaimForAttempt(records, responsibility.operation.plannedAttempt)?.claim
+            : undefined
+      const claimAuthority =
+        responsibility._tag === "TaskClaimResponsibility"
+          ? undefined
+          : currentTaskClaimAuthority(records, responsibility.taskId, expectedClaim, activationBaselinePosition)
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
         disposition: !settled
-          ? responsibility._tag === "TaskClaimReleaseResponsibility"
-            ? ResponsibilityDisposition.Ready()
-            : taskLeftMembership(responsibility.taskId)
-              ? ResponsibilityDisposition.TaskMembershipConstraint()
+          ? taskLeftMembership(responsibility.taskId)
+            ? ResponsibilityDisposition.TaskMembershipConstraint()
+            : claimAuthority !== undefined && claimAuthority._tag !== "Exact"
+              ? ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: claimAuthority._tag })
               : ResponsibilityDisposition.Ready()
           : ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
         responsibility
@@ -145,7 +241,101 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
     const safelySuspended =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended"
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
-    const acquiredClaim = causalClaimForAttempt(records, responsibility.plannedAttempt.attemptId)
+    const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
+    const currentClaimRecord = records.findLast(
+      ({ event, position }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "FocusedTaskClaimFacts" ||
+          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+        event.observation.coverage.taskId === responsibility.plannedAttempt.taskId &&
+        positionIsAfter(position, activationBaselinePosition)
+    )
+    const currentClaimFacts = currentClaimRecord?.event
+    const committedReacquisitionIntent = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" &&
+        event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority" &&
+        event.operation.acquisition.taskId === responsibility.plannedAttempt.taskId
+    )
+    const committedReacquisition =
+      committedReacquisitionIntent?.event._tag === "TaskClaimAcquisitionIntended" &&
+      committedReacquisitionIntent.event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority"
+        ? {
+            commandId: committedReacquisitionIntent.event.operation.authority.commandId,
+            operation: committedReacquisitionIntent.event.operation
+          }
+        : undefined
+    const committedReacquisitionOutcome =
+      committedReacquisition !== undefined
+        ? records.findLast(
+            ({ event }) =>
+              (event._tag === "TaskClaimAcquired" &&
+                event.claim.operationId === committedReacquisition.operation.acquisition.operationId) ||
+              (event._tag === "TaskClaimAcquisitionRejected" &&
+                event.operationId === committedReacquisition.operation.acquisition.operationId)
+          )
+        : undefined
+    const committedReacquisitionCommand =
+      committedReacquisition !== undefined &&
+      (committedReacquisitionOutcome === undefined ||
+        currentClaimRecord === undefined ||
+        currentClaimRecord.position < committedReacquisitionOutcome.position)
+        ? records.findLast(
+            ({ event }) =>
+              event._tag === "ControlCommandRecorded" &&
+              event.command._tag === "RequestTaskClaimReacquisition" &&
+              event.command.commandId === committedReacquisition.commandId
+          )?.event
+        : undefined
+    const reacquisitionCommand =
+      committedReacquisitionCommand?._tag === "ControlCommandRecorded"
+        ? committedReacquisitionCommand
+        : currentClaimRecord === undefined || acquiredClaim?._tag !== "TaskClaimAcquired"
+          ? undefined
+          : latestTaskClaimReacquisitionCommand(
+              records,
+              responsibility.plannedAttempt.runId,
+              responsibility.plannedAttempt.taskId,
+              acquiredClaim.claim,
+              /* v8 ignore next -- @preserve Recovery responsibility derivation always reads a non-empty run journal. */
+              records.at(finalRecordOffset)?.position ?? currentClaimRecord.position
+            )
+    const reacquisitionCommandId =
+      reacquisitionCommand?._tag === "ControlCommandRecorded" ? reacquisitionCommand.command.commandId : undefined
+    const reacquisitionOperationId =
+      reacquisitionCommandId === undefined ? undefined : taskClaimReacquisitionOperationId(reacquisitionCommandId)
+    const reacquisitionIntentExists =
+      reacquisitionOperationId !== undefined &&
+      records.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" &&
+          event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority" &&
+          event.operation.authority.commandId === reacquisitionCommandId &&
+          event.operation.acquisition.operationId === reacquisitionOperationId
+      )
+    const reacquisitionOutcomeRecord =
+      reacquisitionOperationId === undefined
+        ? undefined
+        : records.findLast(
+            ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.operationId === reacquisitionOperationId
+          )
+    const claimConstraint =
+      reacquisitionOutcomeRecord !== undefined &&
+      currentClaimRecord !== undefined &&
+      reacquisitionOutcomeRecord.position > currentClaimRecord.position
+        ? undefined
+        : currentClaimFacts?._tag === "TaskTrackerFactsObserved"
+          ? currentClaimFacts.observation._tag === "FocusedTaskClaimFactsUnreadable"
+            ? ResponsibilityDisposition.TaskClaimUnreadableWait()
+            : currentClaimFacts.observation._tag === "FocusedTaskClaimFacts" &&
+                acquiredClaim?._tag === "TaskClaimAcquired"
+              ? currentClaimFacts.observation.observation._tag === "UnclaimedTask"
+                ? ResponsibilityDisposition.TaskClaimMissingConstraint()
+                : isExactTaskClaim(currentClaimFacts.observation.observation, acquiredClaim.claim)
+                  ? undefined
+                  : ResponsibilityDisposition.TaskForeignClaimIsolation()
+              : undefined
+          : undefined
     const externalSuccessRelease =
       acquiredClaim?._tag === "TaskClaimAcquired"
         ? makeTaskClaimReleaseOperation({
@@ -166,6 +356,18 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
           )
     const externalSuccessReleaseSettled =
       externalSuccessRelease === undefined ? true : settledOperationIds.has(externalSuccessRelease.release.operationId)
+    const claimCanBeReacquired =
+      currentClaimFacts?._tag === "TaskTrackerFactsObserved" &&
+      currentClaimFacts.observation._tag === "FocusedTaskClaimFacts" &&
+      acquiredClaim?._tag === "TaskClaimAcquired" &&
+      (currentClaimFacts.observation.observation._tag === "UnclaimedTask" ||
+        !isExactTaskClaim(currentClaimFacts.observation.observation, acquiredClaim.claim))
+    const requestedReacquisition =
+      claimCanBeReacquired && reacquisitionCommand?._tag === "ControlCommandRecorded" && !reacquisitionIntentExists
+        ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
+            commandId: reacquisitionCommand.command.commandId
+          })
+        : undefined
     const disposition =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Terminal"
         ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
@@ -185,20 +387,24 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
                     ? ResponsibilityDisposition.TaskExternalSuccessConstraint()
                     : ResponsibilityDisposition.TaskExternalSuccessReleaseNeeded({ operation: externalSuccessRelease })
                 : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-              : Option.isSome(changedSpecification)
+              : claimConstraint !== undefined
                 ? safelySuspended
-                  ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
-                      observedFingerprint: changedSpecification.value.fingerprint,
-                      plannedFingerprint: responsibility.plannedAttempt.taskRevision
-                    })
+                  ? (requestedReacquisition ?? claimConstraint)
                   : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-                : safelySuspended && paused
-                  ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
-                      correlation: report.report.correlation
-                    })
-                  : paused
-                    ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-                    : ResponsibilityDisposition.Ready()
+                : Option.isSome(changedSpecification)
+                  ? safelySuspended
+                    ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
+                        observedFingerprint: changedSpecification.value.fingerprint,
+                        plannedFingerprint: responsibility.plannedAttempt.taskRevision
+                      })
+                    : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+                  : safelySuspended && paused
+                    ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
+                        correlation: report.report.correlation
+                      })
+                    : paused
+                      ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+                      : ResponsibilityDisposition.Ready()
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
   })
 }
@@ -241,7 +447,9 @@ type ObservedOperationTransition = Extract<
   {
     readonly _tag:
       | "ObservePlannedAttemptContinuationGraph"
+      | "ObservePlannedAttemptContinuationClaim"
       | "ObservePlannedAttemptContinuationSpecification"
+      | "ObserveResponsibleTaskClaim"
       | "ReleaseExternallyCompletedTaskClaim"
   }
 >
@@ -250,7 +458,9 @@ const isObservedOperationTransition = (
   transition: RunnableFrontierTransition
 ): transition is ObservedOperationTransition =>
   transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+  transition._tag === "ObservePlannedAttemptContinuationClaim" ||
   transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
+  transition._tag === "ObserveResponsibleTaskClaim" ||
   transition._tag === "ReleaseExternallyCompletedTaskClaim"
 
 const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
@@ -258,8 +468,11 @@ const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
   if (began?.event._tag === "WorkflowRunBegan") return began.event.target
   const historicalGraph = records.findLast(
     ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" && event.observation._tag !== "FocusedTaskWorkSpecificationFacts"
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
   )
+  /* v8 ignore next -- @preserve The selecting predicate above permits only TaskTrackerFactsObserved graph records. */
   return historicalGraph?.event._tag === "TaskTrackerFactsObserved"
     ? historicalGraph.event.observation.target
     : undefined
@@ -280,7 +493,11 @@ const decisionWithoutCurrentGraph = (
       })
     }
   }
-  const baseline = Option.getOrElse(activationBaselinePosition, () => 0)
+  const baseline = Option.getOrElse(
+    activationBaselinePosition,
+    /* v8 ignore next -- @preserve Recovery activations always establish a baseline before continuation reads. */
+    () => 0
+  )
   return {
     transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
       operation: makeTrackerGraphObservationOperation(
@@ -294,6 +511,73 @@ const decisionWithoutCurrentGraph = (
   }
 }
 
+const decisionAfterCurrentSpecification = (
+  transition: Extract<RunnableFrontierTransition, { readonly _tag: "ContinuePlannedAttemptExecutorWork" }>,
+  planOperationId: OperationId | undefined,
+  records: ReadonlyArray<JournalRecord>,
+  currentGraphObservation: CurrentGraphObservation,
+  currentSpecificationRecord: JournalRecord
+): ContinuationDecision => {
+  const plannedAttempt = transition.plannedAttempt
+  const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)
+  const authorizedClaimRecord =
+    authorizedClaim === undefined
+      ? undefined
+      : records.findLast(
+          ({ event }) =>
+            event._tag === "TaskClaimAcquired" && event.claim.operationId === authorizedClaim.claim.operationId
+        )
+  const claimObservationCutoff = Math.max(
+    currentSpecificationRecord.position,
+    authorizedClaimRecord?.position ?? currentSpecificationRecord.position
+  )
+  const currentClaimRecord = records.findLast(
+    ({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "FocusedTaskClaimFacts" ||
+        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      event.observation.coverage.taskId === plannedAttempt.taskId &&
+      position > claimObservationCutoff
+  )
+  if (currentClaimRecord !== undefined) return { transition }
+  return {
+    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+      operation: makeTaskClaimObservationOperation(
+        OperationId.make(`continuation:${plannedAttempt.attemptId}:after:${claimObservationCutoff}:claim`),
+        currentGraphObservation.event.observation.target,
+        plannedAttempt.taskId,
+        [
+          ...(planOperationId === undefined ? [] : [planOperationId]),
+          currentGraphObservation.event.operationId,
+          /* v8 ignore next -- @preserve The selecting predicate narrows this record to TaskTrackerFactsObserved. */
+          ...(currentSpecificationRecord.event._tag === "TaskTrackerFactsObserved"
+            ? [currentSpecificationRecord.event.operationId]
+            : [])
+        ]
+      ),
+      plannedAttempt
+    })
+  }
+}
+
+const decisionWithoutCurrentSpecification = (
+  plannedAttempt: PlannedTaskAttempt,
+  planOperationId: OperationId | undefined,
+  currentGraphObservation: CurrentGraphObservation
+): ContinuationDecision => ({
+  transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+    operation: makeTaskWorkSpecificationObservationOperation(
+      OperationId.make(
+        `continuation:${plannedAttempt.attemptId}:after:${currentGraphObservation.position}:specification`
+      ),
+      currentGraphObservation.event.observation.target,
+      plannedAttempt.taskId,
+      [...(planOperationId === undefined ? [] : [planOperationId]), currentGraphObservation.event.operationId]
+    ),
+    plannedAttempt
+  })
+})
+
 const continuationDecisionFor = (
   transition: RunnableFrontierTransition,
   records: ReadonlyArray<JournalRecord>,
@@ -306,6 +590,7 @@ const continuationDecisionFor = (
     ({ event }) =>
       event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
   )?.event
+  /* v8 ignore next -- @preserve A recovered executor-work responsibility always has its journaled task plan. */
   const planOperationId = plan?._tag === "TaskAttemptPlanned" ? plan.operation.operationId : undefined
   if (currentGraphObservation === undefined) {
     return decisionWithoutCurrentGraph(plannedAttempt, planOperationId, records, activationBaselinePosition)
@@ -317,20 +602,16 @@ const continuationDecisionFor = (
       event.observation.factFamily.taskId === plannedAttempt.taskId &&
       position > currentGraphObservation.position
   )
-  if (currentSpecificationRecord !== undefined) return { transition }
-  return {
-    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
-      operation: makeTaskWorkSpecificationObservationOperation(
-        OperationId.make(
-          `continuation:${plannedAttempt.attemptId}:after:${currentGraphObservation.position}:specification`
-        ),
-        currentGraphObservation.event.observation.target,
-        plannedAttempt.taskId,
-        [...(planOperationId === undefined ? [] : [planOperationId]), currentGraphObservation.event.operationId]
-      ),
-      plannedAttempt
-    })
+  if (currentSpecificationRecord !== undefined) {
+    return decisionAfterCurrentSpecification(
+      transition,
+      planOperationId,
+      records,
+      currentGraphObservation,
+      currentSpecificationRecord
+    )
   }
+  return decisionWithoutCurrentSpecification(plannedAttempt, planOperationId, currentGraphObservation)
 }
 
 const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
@@ -340,6 +621,7 @@ const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
   "IntegrationTrackerFactsWait",
   "IntegrationTargetWait",
   "PlannedAttemptTaskLifecycleConstraint",
+  "PlannedAttemptTaskClaimConstraint",
   "PlannedAttemptTaskExternalSuccessConstraint",
   "PlannedAttemptTaskMembershipConstraint",
   "PlannedAttemptTaskSpecificationChangeConstraint",
@@ -348,8 +630,11 @@ const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
 
 const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
   "AcquireStartedIntegrationTarget",
+  "CommitTaskClaimReacquisitionIntent",
   "ObservePlannedAttemptContinuationGraph",
+  "ObservePlannedAttemptContinuationClaim",
   "ObservePlannedAttemptContinuationSpecification",
+  "ObserveResponsibleTaskClaim",
   "QueueAcceptedResultIntegrationResponsibility",
   "ReleaseExternallyCompletedTaskClaim",
   "ReleaseStartedIntegrationTarget",
@@ -367,7 +652,8 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const hasCurrentCompleteGraphObservation = runState.workflowHistory.records.some(
     ({ event, position }) =>
       event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
       positionIsAfter(position, activationBaselinePosition)
   )
   const currentTrackerTaskIds = Option.match(latestReconstructedTaskGraph(runState.graphKnowledge), {
@@ -377,12 +663,13 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(runState)
+    responsibilityFacts: deriveJournalResponsibilityFacts(runState, activationBaselinePosition)
   })
   const currentGraphRecord = runState.workflowHistory.records.findLast(
     ({ event, position }) =>
       event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
       positionIsAfter(position, activationBaselinePosition)
   )
   const currentGraphObservation =
@@ -400,8 +687,48 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const integration = deriveIntegrationFrontier(runState, {
     ...(yield* integrationResources.snapshot),
     currentTrackerTaskIds,
-    integrationTarget
+    integrationTarget,
+    taskClaimAuthorityByAttemptId: new Map(
+      runState.workflowHistory.records.flatMap(({ event }) => {
+        if (event._tag !== "TaskAttemptPlanned") return []
+        const { plannedAttempt } = event.operation
+        return [
+          [
+            plannedAttempt.attemptId,
+            currentTaskClaimAuthority(
+              runState.workflowHistory.records,
+              plannedAttempt.taskId,
+              authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
+              activationBaselinePosition
+            )
+          ] as const
+        ]
+      })
+    )
   })
+  const unobservedClaimTaskIds = [...ordinary.explanations, ...integration.explanations].flatMap((explanation) =>
+    (explanation._tag === "WorkflowOperationTaskClaimConstraint" ||
+      explanation._tag === "IntegrationTaskClaimConstraint") &&
+    explanation.claimState === "Unobserved"
+      ? [explanation.taskId]
+      : []
+  )
+  const claimObservationTransitions =
+    currentGraphObservation === undefined
+      ? []
+      : [...new Set(unobservedClaimTaskIds)]
+          .sort()
+          .map((taskId) =>
+            RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+              operation: makeTaskClaimObservationOperation(
+                OperationId.make(`responsibility:${taskId}:after:${currentGraphObservation.position}:claim`),
+                currentGraphObservation.event.observation.target,
+                taskId,
+                [currentGraphObservation.event.operationId]
+              ),
+              taskId
+            })
+          )
   return {
     explanations: [
       ...ordinary.explanations,
@@ -409,6 +736,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
       ...integration.explanations
     ],
     transitions: [
+      ...claimObservationTransitions,
       ...integration.transitions,
       ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition]))
     ]
@@ -523,6 +851,7 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
     const journal = yield* JournalStore
     const workflowInterpreter = Context.getOption(yield* Effect.context<never>(), WorkflowInterpreter)
     const workflowTrace = Context.getOption(yield* Effect.context<never>(), WorkflowTrace)
+    const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
     const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
     const integrationResources = yield* makeIntegrationTargetResourceController()
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
@@ -544,6 +873,10 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
           yield* workflowTrace.value.emit(OperationSelected.make({ operation: transition.operation }))
         }
         switch (transition._tag) {
+          case "ObservePlannedAttemptContinuationClaim":
+          case "ObserveResponsibleTaskClaim":
+            yield* interpreter.readTaskClaim(transition.operation)
+            return
           case "ObservePlannedAttemptContinuationGraph":
             yield* interpreter.readTrackerGraph(transition.operation)
             return
@@ -555,6 +888,24 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
             return
         }
       })
+    /* v8 ignore start -- @preserve The shared reacquisition runtime is exercised through recovered activation. */
+    const runClaimReacquisition = (
+      transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>,
+      execution: OwnedTransitionExecution
+    ) =>
+      runTaskClaimReacquisition({
+        execution,
+        interpreter: Option.getOrThrowWith(
+          workflowInterpreter,
+          () => new Error("fresh journal activation has no workflow interpreter")
+        ),
+        journal,
+        planner: claimPlanner,
+        runId,
+        trace: workflowTrace,
+        transition
+      })
+    /* v8 ignore stop -- @preserve */
     return RunRecoveryActivation.of({
       _tag: "JournaledFreshRunActivation",
       continueFreshPlannedAttemptExecutorWork: continueAttempt,
@@ -571,27 +922,32 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       reconstructedPlannedAttemptPositions: [],
       runId,
       runTransition: (transition, execution) =>
-        transition._tag === "ObservePlannedAttemptContinuationGraph" ||
-        transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
-        transition._tag === "ReleaseExternallyCompletedTaskClaim"
-          ? runObservedOperation(transition)
-          : transition._tag === "SuspendPlannedAttemptExecutorWork"
-            ? requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
-                Effect.provideService(PlannedAttemptExecutor, executor),
-                Effect.provideService(JournalStore, journal),
-                Effect.flatMap((report) =>
-                  report._tag === "SafelySuspended" || report._tag === "Terminal"
-                    ? execution.releasePlannedAttemptExecutorWorkPosition(
-                        plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-                      )
-                    : Effect.void
+        /* v8 ignore next -- @preserve Fresh activation cannot receive an explicit recovery-only reacquisition transition. */
+        transition._tag === "CommitTaskClaimReacquisitionIntent"
+          ? runClaimReacquisition(transition, execution)
+          : transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+              transition._tag === "ObservePlannedAttemptContinuationClaim" ||
+              transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
+              transition._tag === "ObserveResponsibleTaskClaim" ||
+              transition._tag === "ReleaseExternallyCompletedTaskClaim"
+            ? runObservedOperation(transition)
+            : transition._tag === "SuspendPlannedAttemptExecutorWork"
+              ? requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
+                  Effect.provideService(PlannedAttemptExecutor, executor),
+                  Effect.provideService(JournalStore, journal),
+                  Effect.flatMap((report) =>
+                    report._tag === "SafelySuspended" || report._tag === "Terminal"
+                      ? execution.releasePlannedAttemptExecutorWorkPosition(
+                          plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+                        )
+                      : Effect.void
+                  )
                 )
-              )
-            : provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
-                Effect.flatMap((handled) =>
-                  handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
-                )
-              ),
+              : provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
+                  Effect.flatMap((handled) =>
+                    handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
+                  )
+                ),
       waitForNextExecutorWake: Effect.void
     })
   }
@@ -616,6 +972,7 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   const plannedAttemptExecutor = yield* PlannedAttemptExecutor
   const workflowInterpreter = yield* WorkflowInterpreter
   const workflowTrace = yield* WorkflowTrace
+  const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
   const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
   const provideDependencies = <A, E>(
     effect: Effect.Effect<A, E, JournalStore | WorkflowInterpreter | WorkflowTrace>
@@ -657,6 +1014,10 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   ) {
     yield* workflowTrace.emit(OperationSelected.make({ operation: transition.operation }))
     switch (transition._tag) {
+      case "ObservePlannedAttemptContinuationClaim":
+      case "ObserveResponsibleTaskClaim":
+        yield* workflowInterpreter.readTaskClaim(transition.operation)
+        return
       case "ObservePlannedAttemptContinuationGraph":
         yield* workflowInterpreter.readTrackerGraph(transition.operation)
         return
@@ -668,6 +1029,19 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
         return
     }
   })
+  const runClaimReacquisition = (
+    transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>,
+    execution: OwnedTransitionExecution
+  ) =>
+    runTaskClaimReacquisition({
+      execution,
+      interpreter: workflowInterpreter,
+      journal,
+      planner: claimPlanner,
+      runId,
+      trace: Option.some(workflowTrace),
+      transition
+    })
   const runExecutorTransition = Effect.fn("RunRecoveryActivation.runExecutorTransition")(function* (
     transition: Extract<
       RunnableFrontierTransition,
@@ -676,7 +1050,9 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     execution: OwnedTransitionExecution
   ) {
     const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-    yield* recoveryAuthority.verify(transition.plannedAttempt)
+    if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
+      yield* recoveryAuthority.verify(transition.plannedAttempt)
+    }
     if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
       yield* execution.bindPlannedAttemptExecutorPosition(correlation)
     }
@@ -694,6 +1070,10 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     execution: OwnedTransitionExecution
   ) {
     if (yield* runIntegrationTransition(transition, integrationResources)) return
+    if (transition._tag === "CommitTaskClaimReacquisitionIntent") {
+      yield* runClaimReacquisition(transition, execution)
+      return
+    }
     if (isObservedOperationTransition(transition)) {
       yield* runObservedOperation(transition)
       return

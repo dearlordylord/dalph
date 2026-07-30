@@ -39,6 +39,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
@@ -57,15 +58,25 @@ import {
   workflowResponsibilityOperationId
 } from "./state.js"
 import { reconstructRunState } from "./reduce.js"
-import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   causalGraphProjection,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   WorkflowOperation
 } from "../../workflow/registry/operation.js"
+import {
+  latestTaskClaimReacquisitionCommand,
+  taskClaimReacquisitionOperationId
+} from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+import {
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
 
 const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
@@ -358,6 +369,334 @@ it("reconstructs all pause commands and responsibility identities", () => {
     return
   expect(workflowResponsibilityOperationId(claimResponsibility)).toBe(claim.acquisition.operationId)
   expect(workflowResponsibilityOperationId(worktreeResponsibility)).toBe(worktree.operationId)
+})
+
+it("requires a prior matching authenticated command for a reacquisition intent", () => {
+  const command = ControlCommand.cases.RequestTaskClaimReacquisition.make({
+    commandId: ControlCommandId.make("history-reacquire"),
+    operatorId: AuthenticatedOperatorIdentity.make("operator"),
+    runId,
+    taskId
+  })
+  const operation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: taskClaimReacquisitionOperationId(command.commandId),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("history-replacement-token")
+    },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId },
+    predecessorOperationIds: []
+  })
+  const intent = {
+    event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
+    key: intentRecordKey(operation.acquisition.operationId)
+  } as const
+  const lossRead = makeTaskClaimObservationOperation(OperationId.make("history-loss-read"), target, taskId, [
+    claim.acquisition.operationId
+  ])
+  const lossRows = [
+    ...eventRows.slice(0, 4),
+    { event: taskTrackerReadIntent(lossRead), key: intentRecordKey(lossRead.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        lossRead.operationId,
+        makeFocusedTaskClaimFactsObserved(lossRead, UnclaimedTask.make({ taskId }))
+      ),
+      key: outcomeRecordKey(lossRead.operationId)
+    }
+  ] as const
+
+  const authorized = recordsFrom([
+    ...lossRows,
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    intent
+  ])
+  const unauthorized = recordsFrom([...lossRows, intent])
+  const staleIdentityOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      ...operation.acquisition,
+      operationId: claim.acquisition.operationId,
+      token: claim.acquisition.token
+    },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId },
+    predecessorOperationIds: []
+  })
+  const staleIdentity = recordsFrom([
+    ...lossRows,
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    {
+      event: TaskClaimAcquisitionIntendedEvent.make({
+        operation: staleIdentityOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(staleIdentityOperation.acquisition.operationId)
+    }
+  ])
+  const prefixCollision = makeTaskClaimAcquisitionOperation({
+    acquisition: { ...operation.acquisition, operationId: OperationId.make("task-claim-reacquisition:not-a-command") },
+    predecessorOperationIds: []
+  })
+  const exactRead = makeTaskClaimObservationOperation(OperationId.make("history-exact-read"), target, taskId)
+  const laterLossRead = makeTaskClaimObservationOperation(OperationId.make("history-later-loss-read"), target, taskId)
+  const staleCommandRows = (observation: JournalRecord["event"]) =>
+    recordsFrom([
+      ...eventRows.slice(0, 4),
+      { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
+      { event: observation, key: outcomeRecordKey(exactRead.operationId) },
+      {
+        event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+        key: controlCommandRecordKey(command.commandId)
+      },
+      { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
+      {
+        event: taskTrackerFactsObservedEvent(
+          laterLossRead.operationId,
+          makeFocusedTaskClaimFactsObserved(laterLossRead, UnclaimedTask.make({ taskId }))
+        ),
+        key: outcomeRecordKey(laterLossRead.operationId)
+      },
+      intent
+    ])
+  const restoredThenLost = recordsFrom([
+    ...lossRows,
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        exactRead.operationId,
+        makeFocusedTaskClaimFactsObserved(exactRead, ActiveTaskClaim.make(claim.acquisition))
+      ),
+      key: outcomeRecordKey(exactRead.operationId)
+    },
+    { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        laterLossRead.operationId,
+        makeFocusedTaskClaimFactsObserved(laterLossRead, UnclaimedTask.make({ taskId }))
+      ),
+      key: outcomeRecordKey(laterLossRead.operationId)
+    },
+    intent
+  ])
+  const restoredClaimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("history-restored-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("history-restored-token")
+    },
+    predecessorOperationIds: [lossRead.operationId]
+  })
+  const acquiredThenLost = recordsFrom([
+    ...lossRows,
+    {
+      event: TaskClaimAcquisitionIntendedEvent.make({
+        operation: restoredClaimOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(restoredClaimOperation.acquisition.operationId)
+    },
+    {
+      event: TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(restoredClaimOperation.acquisition),
+        version: workflowJournalEventVersion
+      }),
+      key: outcomeRecordKey(restoredClaimOperation.acquisition.operationId)
+    },
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        laterLossRead.operationId,
+        makeFocusedTaskClaimFactsObserved(laterLossRead, UnclaimedTask.make({ taskId }))
+      ),
+      key: outcomeRecordKey(laterLossRead.operationId)
+    },
+    intent
+  ])
+  const acquiredAfterCommand = recordsFrom([
+    ...lossRows,
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    {
+      event: TaskClaimAcquisitionIntendedEvent.make({
+        operation: restoredClaimOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(restoredClaimOperation.acquisition.operationId)
+    },
+    {
+      event: TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(restoredClaimOperation.acquisition),
+        version: workflowJournalEventVersion
+      }),
+      key: outcomeRecordKey(restoredClaimOperation.acquisition.operationId)
+    },
+    intent
+  ])
+  const foreignClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("history-foreign-claim"),
+    owner: ClaimOwner.make("foreign-owner"),
+    taskId,
+    token: ClaimToken.make("history-foreign-token")
+  })
+  const foreignRead = makeTaskClaimObservationOperation(OperationId.make("history-foreign-read"), target, taskId)
+  const foreignConfirmation = makeTaskClaimObservationOperation(
+    OperationId.make("history-foreign-confirmation"),
+    target,
+    taskId
+  )
+  const confirmedForeignEpisode = recordsFrom([
+    ...eventRows.slice(0, 4),
+    { event: taskTrackerReadIntent(foreignRead), key: intentRecordKey(foreignRead.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        foreignRead.operationId,
+        makeFocusedTaskClaimFactsObserved(foreignRead, foreignClaim)
+      ),
+      key: outcomeRecordKey(foreignRead.operationId)
+    },
+    {
+      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
+      key: controlCommandRecordKey(command.commandId)
+    },
+    { event: taskTrackerReadIntent(foreignConfirmation), key: intentRecordKey(foreignConfirmation.operationId) },
+    {
+      event: taskTrackerFactsObservedEvent(
+        foreignConfirmation.operationId,
+        makeFocusedTaskClaimFactsObserved(foreignConfirmation, foreignClaim)
+      ),
+      key: outcomeRecordKey(foreignConfirmation.operationId)
+    },
+    intent
+  ])
+
+  expect(reduceWorkflowJournalHistory(runId, authorized)._tag).toBe("ValidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, unauthorized)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({
+        detail: `task-claim reacquisition ${operation.acquisition.operationId} has no prior matching authenticated command`
+      })
+    ]
+  })
+  expect(reduceWorkflowJournalHistory(runId, staleIdentity)._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(
+    reduceWorkflowJournalHistory(
+      runId,
+      staleCommandRows(
+        taskTrackerFactsObservedEvent(
+          exactRead.operationId,
+          makeFocusedTaskClaimFactsObserved(exactRead, ActiveTaskClaim.make(claim.acquisition))
+        )
+      )
+    )
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+    ]
+  })
+  expect(reduceWorkflowJournalHistory(runId, restoredThenLost)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+    ]
+  })
+  expect(reduceWorkflowJournalHistory(runId, acquiredThenLost)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+    ]
+  })
+  expect(
+    latestTaskClaimReacquisitionCommand(
+      acquiredThenLost,
+      runId,
+      taskId,
+      ActiveTaskClaim.make(restoredClaimOperation.acquisition),
+      acquiredThenLost.at(-1)?.position ?? JournalPosition.make(0)
+    )
+  ).toBeUndefined()
+  const exactRejection = recordsFrom([
+    {
+      event: TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion }),
+      key: intentRecordKey(claim.acquisition.operationId)
+    },
+    {
+      event: TaskClaimAcquisitionRejectedEvent.make({
+        observed: ActiveTaskClaim.make(claim.acquisition),
+        operationId: claim.acquisition.operationId,
+        reason: "ForeignClaim",
+        version: workflowJournalEventVersion
+      }),
+      key: outcomeRecordKey(claim.acquisition.operationId)
+    }
+  ])
+  expect(reduceWorkflowJournalHistory(runId, exactRejection)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("does not prove a foreign claim") })
+    ])
+  })
+  expect(reduceWorkflowJournalHistory(runId, acquiredAfterCommand)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+    ]
+  })
+  expect(reduceWorkflowJournalHistory(runId, confirmedForeignEpisode)._tag).toBe("ValidWorkflowJournalHistory")
+  expect(
+    latestTaskClaimReacquisitionCommand(
+      acquiredAfterCommand,
+      runId,
+      taskId,
+      ActiveTaskClaim.make(restoredClaimOperation.acquisition),
+      acquiredAfterCommand.at(-1)?.position ?? JournalPosition.make(0)
+    )
+  ).toBeUndefined()
+  expect(
+    reduceWorkflowJournalHistory(
+      runId,
+      staleCommandRows(
+        taskTrackerFactsObservedEvent(exactRead.operationId, makeFocusedTaskClaimFactsUnreadable(exactRead))
+      )
+    )
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+    ]
+  })
+  expect(
+    reduceWorkflowJournalHistory(
+      runId,
+      recordsFrom([
+        {
+          event: TaskClaimAcquisitionIntendedEvent.make({
+            operation: prefixCollision,
+            version: workflowJournalEventVersion
+          }),
+          key: intentRecordKey(prefixCollision.acquisition.operationId)
+        }
+      ])
+    )._tag
+  ).toBe("ValidWorkflowJournalHistory")
 })
 
 it("rejects commands and executor correlations bound to another run", () => {

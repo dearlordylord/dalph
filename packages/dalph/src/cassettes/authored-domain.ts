@@ -10,13 +10,16 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  AuthenticatedOperatorIdentity,
   ClaimOwner,
+  ControlCommandId,
   InitialControlPolicy,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,
   TaskLifecycle,
   TaskWorkCapacity,
+  TaskClaimObservation,
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
@@ -44,6 +47,7 @@ export type AuthoredTaskWorkSpecification = typeof AuthoredTaskWorkSpecification
 
 export const AuthoredCassetteDecision = Schema.TaggedUnion({
   AcquireTaskClaim: { taskId: TaskId },
+  ReadTaskClaim: { taskId: TaskId },
   ReadTaskWorkSpecification: { taskId: TaskId },
   ReadTrackerGraph: { target: TrackerTarget },
   ReleaseTaskClaim: { taskId: TaskId },
@@ -102,6 +106,9 @@ export const AuthoredProtocolEvidence = Schema.TaggedUnion({
   TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
   TaskClaimAcquired: { taskId: TaskId },
   TaskClaimReleased: { taskId: TaskId },
+  TaskClaimObserved: { claimState: Schema.Literals(["Exact", "Foreign", "Missing"]), taskId: TaskId },
+  TaskClaimReadExhausted: { taskId: TaskId },
+  TaskClaimReacquisitionRequested: { commandId: ControlCommandId, taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
@@ -166,9 +173,17 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     report: AuthoredPlannedAttemptExecutorReport,
     request: Schema.Literals(["StartOrContinue", "Suspend"])
   },
+  OperatorRequestsTaskClaimReacquisition: {
+    commandId: ControlCommandId,
+    operatorId: AuthenticatedOperatorIdentity,
+    taskId: TaskId
+  },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
+  TaskClaimCurrentReadReturned: { taskId: TaskId },
+  TaskClaimReadReturned: { observation: TaskClaimObservation },
   TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
   TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
 })
@@ -189,11 +204,23 @@ const defineStoryItemOwners = <
 ): Registrations => registrations
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
-  CassetteControl: ["InitialControlPolicy", "RunCoordinator", "SetTaskExecutionCapacity"],
+  CassetteControl: [
+    "InitialControlPolicy",
+    "OperatorRequestsTaskClaimReacquisition",
+    "RunCoordinator",
+    "SetTaskExecutionCapacity"
+  ],
   CassetteLifecycle: ["CoordinatorProcessDies"],
   DalphOperationTrace: ["DalphSelects"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
-  TaskTracker: ["TaskWorkSpecificationReadReturned", "TrackerGraphReadFailed", "TrackerGraphReadReturned"],
+  TaskTracker: [
+    "TaskClaimReadFailed",
+    "TaskClaimCurrentReadReturned",
+    "TaskClaimReadReturned",
+    "TaskWorkSpecificationReadReturned",
+    "TrackerGraphReadFailed",
+    "TrackerGraphReadReturned"
+  ],
   TerminalAssertion: ["ExpectedBehavior"]
 })
 

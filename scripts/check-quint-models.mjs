@@ -74,7 +74,12 @@ const taskFactReconciliationInvariants = [
   "specificationOffersEveryExactChoice",
   "externalSuccessPreventsDuplicateDelivery",
   "externalSuccessReleasesOnlyAfterSafeSuspension",
-  "externalSuccessSettlesAfterExactClaimRelease"
+  "externalSuccessSettlesAfterExactClaimRelease",
+  "replacementClaimRequiresCommandAndIntent",
+  "replacementClaimIdentityIsFresh",
+  "foreignClaimIsNeverChanged",
+  "unreadableClaimCannotAuthorizeReplacement",
+  "claimConstraintPreservesIndependentEligibility"
 ]
 
 await run("task-fact reconciliation model typecheck", [
@@ -97,6 +102,10 @@ await run("task-fact reconciliation sampled model", [
   "lifecycleWaitReached",
   "specificationChoicesReached",
   "externalSuccessSettledReached",
+  "foreignClaimWaitReached",
+  "missingClaimWaitReached",
+  "unreadableClaimWaitReached",
+  "replacementClaimObserved",
   "--max-steps",
   "12",
   "--max-samples",

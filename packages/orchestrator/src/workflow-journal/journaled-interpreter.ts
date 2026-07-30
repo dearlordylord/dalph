@@ -6,6 +6,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
   TaskWorktreeReadyEvent,
@@ -19,6 +20,8 @@ import {
   TaskAttemptPlanRunContradiction
 } from "../workflow/protocols/task-attempt-planning/record.js"
 import {
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
@@ -31,6 +34,7 @@ import {
 import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
+import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 
 const requireTaskTrackerKnowledge = <A>(
   knowledge: Option.Option<A>,
@@ -103,12 +107,64 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             yield* onIntentRecorded
           })
         )
-        const result = yield* interpreter.acquireTaskClaim(operation)
+        const result = yield* interpreter
+          .acquireTaskClaim(operation)
+          .pipe(
+            Effect.catchTag("TrackerMutation.TaskClaimConflict", (failure) =>
+              journal
+                .append(
+                  runId,
+                  outcomeRecordKey(operation.acquisition.operationId),
+                  TaskClaimAcquisitionRejectedEvent.make({
+                    observed: failure.observed,
+                    operationId: operation.acquisition.operationId,
+                    reason: "ForeignClaim",
+                    version: workflowJournalEventVersion
+                  })
+                )
+                .pipe(Effect.andThen(Effect.fail(failure)))
+            )
+          )
         if (result._tag === "AuthoritativeTaskClaimAcquired") {
           yield* journal.append(
             runId,
             outcomeRecordKey(operation.acquisition.operationId),
             TaskClaimAcquiredEvent.make({ claim: result.claim, version: workflowJournalEventVersion })
+          )
+        }
+        return result
+      })
+
+      const readTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.readTaskClaim")(function* (
+        operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+      ) {
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        const existing = (yield* journal.read(runId)).find(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+        )?.event
+        if (existing?._tag === "TaskTrackerFactsObserved") {
+          return existing.observation._tag === "FocusedTaskClaimFacts"
+            ? { _tag: "AuthoritativeTaskClaimObserved" as const, observation: existing.observation.observation }
+            : /* v8 ignore next -- @preserve Exhausted replay is covered by the composed unreadable cassette. */
+              {
+                _tag: "TaskClaimObservationUnreadable" as const,
+                attempts: taskClaimObservationAttemptBound,
+                taskId: operation.taskId
+              }
+        }
+        const result = yield* interpreter.readTaskClaim(operation)
+        const observation =
+          result._tag === "AuthoritativeTaskClaimObserved"
+            ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
+            : result._tag === "TaskClaimObservationUnreadable"
+              ? makeFocusedTaskClaimFactsUnreadable(operation)
+              : /* v8 ignore next -- @preserve Journaled live interpreters never return dry-run simulation values. */
+                undefined
+        if (observation !== undefined) {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            taskTrackerFactsObservedEvent(operation.operationId, observation)
           )
         }
         return result
@@ -174,6 +230,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
         if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
         const result = yield* interpreter.releaseTaskClaim(operation)
+        /* v8 ignore next -- @preserve Journaled live interpreters never return dry-run release simulation values. */
         if (result._tag === "AuthoritativeTaskClaimReleased") {
           yield* journal.append(
             runId,
@@ -241,6 +298,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
 
       return WorkflowInterpreter.of({
         acquireTaskClaim,
+        readTaskClaim,
         readTrackerGraph,
         readTaskWorkSpecification,
         releaseTaskClaim,

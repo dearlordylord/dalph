@@ -222,6 +222,7 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: () => Effect.die("restart construction does not call the tracker"),
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Effect.die("restart construction does not call the tracker"),
           readTaskWorkSpecification: () => Effect.die("restart construction does not call the tracker"),
           reconcileTaskWorktree: () => Effect.die("restart construction does not call Git"),

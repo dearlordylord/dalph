@@ -78,6 +78,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
     WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: () => Effect.die("unused"),
       readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: () =>
@@ -145,6 +146,7 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
     WorkflowInterpreter,
     WorkflowInterpreter.of({
       acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: () => Effect.succeed(snapshot),
       readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),

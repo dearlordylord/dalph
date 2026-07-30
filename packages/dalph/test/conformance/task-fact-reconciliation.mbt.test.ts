@@ -17,6 +17,7 @@ import {
   ClaimOwner,
   ClaimToken,
   deriveRunnableFrontier,
+  ControlCommandId,
   JournalPosition,
   makeTaskClaimReleaseOperation,
   OperationId,
@@ -39,6 +40,10 @@ const responsibility = {
   beganAt: JournalPosition.make(1),
   plannedAttempt
 }
+const independentTask = {
+  taskId: TaskId.make("task-facts-independent-C"),
+  taskRevision: TaskRevision.make("independent-fingerprint")
+}
 const exactClaim = ActiveTaskClaim.make({
   operationId: OperationId.make("acquire-task-facts-claim"),
   owner: ClaimOwner.make("task-facts-owner"),
@@ -56,16 +61,28 @@ type Constraint =
   | "LifecycleConstraint"
   | "SpecificationConstraint"
   | "ExternalSuccessConstraint"
+  | "MissingClaimConstraint"
+  | "ForeignClaimConstraint"
+  | "UnreadableClaimConstraint"
 type Status = "Running" | "SafelySuspended"
+type ClaimState = "ExactClaim" | "MissingClaim" | "ForeignClaim" | "UnreadableClaim" | "ReplacementClaim"
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     constraint: Schema.Unknown,
+    claimState: Schema.Unknown,
     decision: Schema.Unknown,
     dependantsReleasedByFreshGraph: Schema.Boolean,
     duplicateDeliveryPrevented: Schema.Boolean,
     exactClaimHeld: Schema.Boolean,
+    lastClaimMutationTarget: Schema.Unknown,
+    independentTaskEligible: Schema.Boolean,
+    independentTaskSelected: Schema.Boolean,
+    originalClaimIdentity: Schema.Unknown,
+    currentClaimIdentity: Schema.Unknown,
     positionHeld: Schema.Boolean,
+    reacquisitionCommandRecorded: Schema.Boolean,
+    replacementIntentRecorded: Schema.Boolean,
     status: Schema.Unknown,
     wipPreserved: Schema.Boolean
   })
@@ -74,24 +91,44 @@ const SpecProjection = Schema.Struct({
 const variantTag = (value: unknown): string =>
   typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
 
-const decisionFromProductionFrontier = (constraint: Constraint, status: Status, exactClaimHeld: boolean): string => {
+const quintInt = (value: unknown): number =>
+  typeof value === "object" && value !== null && "#bigint" in value ? Number(value["#bigint"]) : Number(value)
+
+const decisionFromProductionFrontier = (
+  constraint: Constraint,
+  status: Status,
+  exactClaimHeld: boolean,
+  reacquisitionCommandRecorded: boolean,
+  replacementIntentRecorded: boolean
+): string => {
+  if (replacementIntentRecorded && constraint === "MissingClaimConstraint") return "ObserveReplacementClaim"
   const disposition =
     status === "Running" && constraint !== "NoConstraint"
       ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-      : constraint === "NoConstraint"
-        ? ResponsibilityDisposition.Ready()
-        : constraint === "MembershipConstraint"
-          ? ResponsibilityDisposition.TaskMembershipConstraint()
-          : constraint === "LifecycleConstraint"
-            ? ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" })
-            : constraint === "SpecificationConstraint"
-              ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
-                  observedFingerprint: TaskRevision.make("observed-fingerprint"),
-                  plannedFingerprint: plannedAttempt.taskRevision
-                })
-              : exactClaimHeld
-                ? ResponsibilityDisposition.TaskExternalSuccessReleaseNeeded({ operation: exactRelease })
-                : ResponsibilityDisposition.TaskExternalSuccessSettled()
+      : constraint === "MissingClaimConstraint" && reacquisitionCommandRecorded
+        ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
+            commandId: ControlCommandId.make("task-facts-reacquisition")
+          })
+        : constraint === "NoConstraint"
+          ? ResponsibilityDisposition.Ready()
+          : constraint === "MembershipConstraint"
+            ? ResponsibilityDisposition.TaskMembershipConstraint()
+            : constraint === "LifecycleConstraint"
+              ? ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" })
+              : constraint === "SpecificationConstraint"
+                ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
+                    observedFingerprint: TaskRevision.make("observed-fingerprint"),
+                    plannedFingerprint: plannedAttempt.taskRevision
+                  })
+                : constraint === "MissingClaimConstraint"
+                  ? ResponsibilityDisposition.TaskClaimMissingConstraint()
+                  : constraint === "ForeignClaimConstraint"
+                    ? ResponsibilityDisposition.TaskForeignClaimIsolation()
+                    : constraint === "UnreadableClaimConstraint"
+                      ? ResponsibilityDisposition.TaskClaimUnreadableWait()
+                      : exactClaimHeld
+                        ? ResponsibilityDisposition.TaskExternalSuccessReleaseNeeded({ operation: exactRelease })
+                        : ResponsibilityDisposition.TaskExternalSuccessSettled()
   const frontier = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: { entries: [responsibility] },
@@ -101,6 +138,7 @@ const decisionFromProductionFrontier = (constraint: Constraint, status: Status, 
   if (transition?._tag === "ContinuePlannedAttemptExecutorWork") return "ContinueWork"
   if (transition?._tag === "SuspendPlannedAttemptExecutorWork") return "RequestSafeSuspension"
   if (transition?._tag === "ReleaseExternallyCompletedTaskClaim") return "ReleaseExactClaim"
+  if (transition?._tag === "CommitTaskClaimReacquisitionIntent") return "AllocateReplacementClaim"
   const explanation = frontier.explanations[0]
   if (explanation?._tag === "PlannedAttemptTaskMembershipConstraint") return "MembershipWait"
   if (explanation?._tag === "PlannedAttemptTaskLifecycleConstraint") return "LifecycleWait"
@@ -114,6 +152,11 @@ const decisionFromProductionFrontier = (constraint: Constraint, status: Status, 
     return "SpecificationChoices"
   }
   if (explanation?._tag === "PlannedAttemptTaskExternalSuccessSettled") return "ExternalSuccessSettled"
+  if (explanation?._tag === "PlannedAttemptTaskClaimConstraint") {
+    if (explanation.claimState === "Missing") return "MissingClaimWait"
+    if (explanation.claimState === "Foreign") return "ForeignClaimWait"
+    return "UnreadableClaimWait"
+  }
   throw new Error("production frontier did not derive one task-fact reconciliation decision")
 }
 
@@ -123,11 +166,21 @@ const taskFactReconciliationDriver = defineDriver(
     observeExternalSuccess: {},
     observeFreshLifecycleReopen: {},
     observeIncompleteMembershipRead: {},
+    observeMissingClaim: {},
+    observeForeignClaim: {},
+    observeUnreadableClaim: {},
     observeLifecycleClosure: {},
     observeMembershipLoss: {},
     observeSpecificationChange: {},
+    observeExactReplacementClaim: {},
+    planReplacementClaim: {},
+    recordForeignClaimReacquisitionCommand: {},
+    recordMissingClaimReacquisitionCommand: {},
+    rejectForeignClaimReacquisition: {},
+    requestOwnedClaimMutation: {},
     releaseExactClaim: {},
-    reportSafelySuspended: {}
+    reportSafelySuspended: {},
+    selectIndependentTask: {}
   },
   () => {
     let constraint: Constraint = "NoConstraint"
@@ -135,6 +188,12 @@ const taskFactReconciliationDriver = defineDriver(
     let exactClaimHeld = true
     let dependantsReleasedByFreshGraph = false
     let duplicateDeliveryPrevented = false
+    let claimState: ClaimState = "ExactClaim"
+    let reacquisitionCommandRecorded = false
+    let replacementIntentRecorded = false
+    let lastClaimMutationTarget = "NoClaimMutation"
+    let independentTaskSelected = false
+    let currentClaimIdentity = 1
     const observe = (next: Exclude<Constraint, "NoConstraint">) =>
       Effect.sync(() => {
         constraint = next
@@ -151,6 +210,12 @@ const taskFactReconciliationDriver = defineDriver(
           exactClaimHeld = true
           dependantsReleasedByFreshGraph = false
           duplicateDeliveryPrevented = false
+          claimState = "ExactClaim"
+          reacquisitionCommandRecorded = false
+          replacementIntentRecorded = false
+          lastClaimMutationTarget = "NoClaimMutation"
+          independentTaskSelected = false
+          currentClaimIdentity = 1
         }),
       observeExternalSuccess: () => observe("ExternalSuccessConstraint"),
       observeFreshLifecycleReopen: () =>
@@ -158,9 +223,51 @@ const taskFactReconciliationDriver = defineDriver(
           constraint = "NoConstraint"
         }),
       observeIncompleteMembershipRead: () => Effect.void,
+      observeMissingClaim: () =>
+        Effect.sync(() => {
+          constraint = "MissingClaimConstraint"
+          claimState = "MissingClaim"
+          exactClaimHeld = false
+        }),
+      observeForeignClaim: () =>
+        Effect.sync(() => {
+          constraint = "ForeignClaimConstraint"
+          claimState = "ForeignClaim"
+          exactClaimHeld = false
+          lastClaimMutationTarget = "NoClaimMutation"
+        }),
+      observeUnreadableClaim: () =>
+        Effect.sync(() => {
+          constraint = "UnreadableClaimConstraint"
+          claimState = "UnreadableClaim"
+        }),
       observeLifecycleClosure: () => observe("LifecycleConstraint"),
       observeMembershipLoss: () => observe("MembershipConstraint"),
       observeSpecificationChange: () => observe("SpecificationConstraint"),
+      observeExactReplacementClaim: () =>
+        Effect.sync(() => {
+          constraint = "NoConstraint"
+        }),
+      planReplacementClaim: () =>
+        Effect.sync(() => {
+          claimState = "ReplacementClaim"
+          exactClaimHeld = true
+          replacementIntentRecorded = true
+          currentClaimIdentity = 2
+        }),
+      recordForeignClaimReacquisitionCommand: () =>
+        Effect.sync(() => {
+          reacquisitionCommandRecorded = true
+        }),
+      recordMissingClaimReacquisitionCommand: () =>
+        Effect.sync(() => {
+          reacquisitionCommandRecorded = true
+        }),
+      rejectForeignClaimReacquisition: () => Effect.void,
+      requestOwnedClaimMutation: () =>
+        Effect.sync(() => {
+          lastClaimMutationTarget = "OwnedClaimMutation"
+        }),
       releaseExactClaim: () =>
         Effect.sync(() => {
           exactClaimHeld = false
@@ -169,14 +276,46 @@ const taskFactReconciliationDriver = defineDriver(
         Effect.sync(() => {
           status = "SafelySuspended"
         }),
+      selectIndependentTask: () =>
+        Effect.sync(() => {
+          const disposition =
+            constraint === "MissingClaimConstraint"
+              ? ResponsibilityDisposition.TaskClaimMissingConstraint()
+              : constraint === "ForeignClaimConstraint"
+                ? ResponsibilityDisposition.TaskForeignClaimIsolation()
+                : ResponsibilityDisposition.TaskClaimUnreadableWait()
+          const frontier = deriveRunnableFrontier({
+            freshEligibleTasks: [independentTask],
+            responsibility: { entries: [responsibility] },
+            responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
+          })
+          independentTaskSelected = frontier.transitions.some(
+            (transition) =>
+              transition._tag === "CommitFreshTaskClaimIntent" && transition.taskId === independentTask.taskId
+          )
+        }),
       getState: () =>
         Effect.sync(() => ({
           constraint,
-          decision: decisionFromProductionFrontier(constraint, status, exactClaimHeld),
+          claimState,
+          decision: decisionFromProductionFrontier(
+            constraint,
+            status,
+            exactClaimHeld,
+            reacquisitionCommandRecorded,
+            replacementIntentRecorded
+          ),
           dependantsReleasedByFreshGraph,
           duplicateDeliveryPrevented,
           exactClaimHeld,
+          lastClaimMutationTarget,
+          independentTaskEligible: true,
+          independentTaskSelected,
+          originalClaimIdentity: 1,
+          currentClaimIdentity,
           positionHeld: status === "Running",
+          reacquisitionCommandRecorded,
+          replacementIntentRecorded,
           status,
           wipPreserved: true
         }))
@@ -199,19 +338,31 @@ quintIt(
         Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
           Effect.map(({ state }) => ({
             ...state,
+            claimState: variantTag(state.claimState),
             constraint: variantTag(state.constraint),
+            currentClaimIdentity: quintInt(state.currentClaimIdentity),
             decision: variantTag(state.decision),
+            lastClaimMutationTarget: variantTag(state.lastClaimMutationTarget),
+            originalClaimIdentity: quintInt(state.originalClaimIdentity),
             status: variantTag(state.status)
           })),
           Effect.orDie
         ),
       (spec, implementation) =>
         spec.constraint === implementation.constraint &&
+        spec.claimState === implementation.claimState &&
         spec.decision === implementation.decision &&
         spec.dependantsReleasedByFreshGraph === implementation.dependantsReleasedByFreshGraph &&
         spec.duplicateDeliveryPrevented === implementation.duplicateDeliveryPrevented &&
         spec.exactClaimHeld === implementation.exactClaimHeld &&
+        spec.lastClaimMutationTarget === implementation.lastClaimMutationTarget &&
+        spec.independentTaskEligible === implementation.independentTaskEligible &&
+        spec.independentTaskSelected === implementation.independentTaskSelected &&
+        spec.originalClaimIdentity === implementation.originalClaimIdentity &&
+        spec.currentClaimIdentity === implementation.currentClaimIdentity &&
         spec.positionHeld === implementation.positionHeld &&
+        spec.reacquisitionCommandRecorded === implementation.reacquisitionCommandRecorded &&
+        spec.replacementIntentRecorded === implementation.replacementIntentRecorded &&
         spec.status === implementation.status &&
         spec.wipPreserved === implementation.wipPreserved
     )

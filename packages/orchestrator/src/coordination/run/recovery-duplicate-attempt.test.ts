@@ -94,6 +94,7 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: () => failIfCalled("task tracker claim"),
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () => failIfCalled("task tracker read"),
         readTaskWorkSpecification: () => failIfCalled("task-work specification read"),
         reconcileTaskWorktree: () => failIfCalled("Git worktree"),

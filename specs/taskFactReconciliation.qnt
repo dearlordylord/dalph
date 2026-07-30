@@ -1,5 +1,5 @@
-// Models issue #136's subject-local decisions after current tracker facts
-// change while one exact planned attempt owns unfinished executor work.
+// Models issues #136 and #137's subject-local decisions after current tracker
+// facts change while one exact planned attempt owns unfinished executor work.
 module taskFactReconciliation {
   type Constraint =
     | NoConstraint
@@ -7,6 +7,9 @@ module taskFactReconciliation {
     | LifecycleConstraint
     | SpecificationConstraint
     | ExternalSuccessConstraint
+    | MissingClaimConstraint
+    | ForeignClaimConstraint
+    | UnreadableClaimConstraint
 
   type Decision =
     | ContinueWork
@@ -16,8 +19,15 @@ module taskFactReconciliation {
     | SpecificationChoices
     | ReleaseExactClaim
     | ExternalSuccessSettled
+    | MissingClaimWait
+    | ForeignClaimWait
+    | UnreadableClaimWait
+    | AllocateReplacementClaim
+    | ObserveReplacementClaim
 
   type Status = Running | SafelySuspended
+  type ClaimState = ExactClaim | MissingClaim | ForeignClaim | UnreadableClaim | ReplacementClaim
+  type ClaimMutationTarget = NoClaimMutation | OwnedClaimMutation | ForeignClaimMutation
 
   type State = {
     status: Status,
@@ -28,6 +38,14 @@ module taskFactReconciliation {
     wipPreserved: bool,
     dependantsReleasedByFreshGraph: bool,
     duplicateDeliveryPrevented: bool,
+    claimState: ClaimState,
+    reacquisitionCommandRecorded: bool,
+    replacementIntentRecorded: bool,
+    lastClaimMutationTarget: ClaimMutationTarget,
+    independentTaskEligible: bool,
+    independentTaskSelected: bool,
+    originalClaimIdentity: int,
+    currentClaimIdentity: int,
   }
 
   var state: State
@@ -63,10 +81,43 @@ module taskFactReconciliation {
         state.dependantsReleasedByFreshGraph,
       }
 
+  val replacementClaimRequiresCommandAndIntent: bool =
+    state.claimState != ReplacementClaim
+      or and {
+        state.reacquisitionCommandRecorded,
+        state.replacementIntentRecorded,
+      }
+
+  val foreignClaimIsNeverChanged: bool =
+    state.claimState != ForeignClaim or state.lastClaimMutationTarget != ForeignClaimMutation
+
+  val unreadableClaimCannotAuthorizeReplacement: bool =
+    state.claimState != UnreadableClaim
+      or and {
+        not(state.reacquisitionCommandRecorded),
+        not(state.replacementIntentRecorded),
+      }
+
+  val claimConstraintPreservesIndependentEligibility: bool =
+    not(
+      state.constraint == MissingClaimConstraint
+        or state.constraint == ForeignClaimConstraint
+        or state.constraint == UnreadableClaimConstraint
+    ) or state.independentTaskEligible
+
+  val replacementClaimIdentityIsFresh: bool =
+    state.claimState != ReplacementClaim
+      or state.currentClaimIdentity != state.originalClaimIdentity
+
   val membershipWaitReached: bool = state.decision == MembershipWait
   val lifecycleWaitReached: bool = state.decision == LifecycleWait
   val specificationChoicesReached: bool = state.decision == SpecificationChoices
   val externalSuccessSettledReached: bool = state.decision == ExternalSuccessSettled
+  val foreignClaimWaitReached: bool = state.decision == ForeignClaimWait
+  val missingClaimWaitReached: bool = state.decision == MissingClaimWait
+  val unreadableClaimWaitReached: bool = state.decision == UnreadableClaimWait
+  val replacementClaimObserved: bool =
+    state.claimState == ReplacementClaim and state.decision == ContinueWork
 
   action init: bool = all {
     state' = {
@@ -78,6 +129,14 @@ module taskFactReconciliation {
       wipPreserved: true,
       dependantsReleasedByFreshGraph: false,
       duplicateDeliveryPrevented: false,
+      claimState: ExactClaim,
+      reacquisitionCommandRecorded: false,
+      replacementIntentRecorded: false,
+      lastClaimMutationTarget: NoClaimMutation,
+      independentTaskEligible: true,
+      independentTaskSelected: false,
+      originalClaimIdentity: 1,
+      currentClaimIdentity: 1,
     }
   }
 
@@ -129,6 +188,42 @@ module taskFactReconciliation {
     state' = state,
   }
 
+  action observeMissingClaim: bool = all {
+    state.status == Running,
+    state.decision == ContinueWork,
+    state' = {
+      ...state,
+      constraint: MissingClaimConstraint,
+      decision: RequestSafeSuspension,
+      claimState: MissingClaim,
+      exactClaimHeld: false,
+    },
+  }
+
+  action observeForeignClaim: bool = all {
+    state.status == Running,
+    state.decision == ContinueWork,
+    state' = {
+      ...state,
+      constraint: ForeignClaimConstraint,
+      decision: RequestSafeSuspension,
+      claimState: ForeignClaim,
+      exactClaimHeld: false,
+      lastClaimMutationTarget: NoClaimMutation,
+    },
+  }
+
+  action observeUnreadableClaim: bool = all {
+    state.status == Running,
+    state.decision == ContinueWork,
+    state' = {
+      ...state,
+      constraint: UnreadableClaimConstraint,
+      decision: RequestSafeSuspension,
+      claimState: UnreadableClaim,
+    },
+  }
+
   action reportSafelySuspended: bool = all {
     state.status == Running,
     state.decision == RequestSafeSuspension,
@@ -139,8 +234,62 @@ module taskFactReconciliation {
         if (state.constraint == MembershipConstraint) MembershipWait
         else if (state.constraint == LifecycleConstraint) LifecycleWait
         else if (state.constraint == SpecificationConstraint) SpecificationChoices
-        else ReleaseExactClaim,
+        else if (state.constraint == ExternalSuccessConstraint) ReleaseExactClaim
+        else if (state.constraint == MissingClaimConstraint) MissingClaimWait
+        else if (state.constraint == ForeignClaimConstraint) ForeignClaimWait
+        else UnreadableClaimWait,
       positionHeld: false,
+    },
+  }
+
+  action recordMissingClaimReacquisitionCommand: bool = all {
+    state.status == SafelySuspended,
+    state.decision == MissingClaimWait,
+    state' = {
+      ...state,
+      decision: AllocateReplacementClaim,
+      reacquisitionCommandRecorded: true,
+    },
+  }
+
+  action recordForeignClaimReacquisitionCommand: bool = all {
+    state.status == SafelySuspended,
+    state.decision == ForeignClaimWait,
+    state' = {
+      ...state,
+      reacquisitionCommandRecorded: true,
+    },
+  }
+
+  action rejectForeignClaimReacquisition: bool = all {
+    state.status == SafelySuspended,
+    state.decision == ForeignClaimWait,
+    state.reacquisitionCommandRecorded,
+    state' = state,
+  }
+
+  action planReplacementClaim: bool = all {
+    state.status == SafelySuspended,
+    state.decision == AllocateReplacementClaim,
+    state.reacquisitionCommandRecorded,
+    state' = {
+      ...state,
+      decision: ObserveReplacementClaim,
+      claimState: ReplacementClaim,
+      exactClaimHeld: true,
+      replacementIntentRecorded: true,
+      currentClaimIdentity: state.originalClaimIdentity + 1,
+    },
+  }
+
+  action observeExactReplacementClaim: bool = all {
+    state.status == SafelySuspended,
+    state.decision == ObserveReplacementClaim,
+    state.claimState == ReplacementClaim,
+    state' = {
+      ...state,
+      constraint: NoConstraint,
+      decision: ContinueWork,
     },
   }
 
@@ -165,14 +314,37 @@ module taskFactReconciliation {
     },
   }
 
+  action selectIndependentTask: bool = all {
+    state.independentTaskEligible,
+    state.constraint == MissingClaimConstraint
+      or state.constraint == ForeignClaimConstraint
+      or state.constraint == UnreadableClaimConstraint,
+    state' = { ...state, independentTaskSelected: true },
+  }
+
+  action requestOwnedClaimMutation: bool = all {
+    state.claimState == ExactClaim or state.claimState == ReplacementClaim,
+    state' = { ...state, lastClaimMutationTarget: OwnedClaimMutation },
+  }
+
   action step: bool = any {
     observeMembershipLoss,
     observeLifecycleClosure,
     observeSpecificationChange,
     observeExternalSuccess,
     observeIncompleteMembershipRead,
+    observeMissingClaim,
+    observeForeignClaim,
+    observeUnreadableClaim,
     reportSafelySuspended,
+    recordMissingClaimReacquisitionCommand,
+    recordForeignClaimReacquisitionCommand,
+    rejectForeignClaimReacquisition,
+    planReplacementClaim,
+    observeExactReplacementClaim,
     observeFreshLifecycleReopen,
     releaseExactClaim,
+    selectIndependentTask,
+    requestOwnedClaimMutation,
   }
 }

@@ -54,6 +54,7 @@ export const renameWorkflowOperation = (
           operationId: renamed(operation.release.operationId, maps.operationIds)
         }
       }
+    case "ReadTaskClaim":
     case "ReadTaskWorkSpecification":
     case "ReadTrackerGraph":
       return {

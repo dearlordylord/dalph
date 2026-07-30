@@ -40,4 +40,54 @@ module taskFactReconciliationTest {
           and changedFactsPreserveWip
       )
   }
+
+  run foreignClaimStopsOnlyA = {
+    init
+      .then(observeForeignClaim)
+      .then(reportSafelySuspended)
+      .then(recordForeignClaimReacquisitionCommand)
+      .then(rejectForeignClaimReacquisition)
+      .then(selectIndependentTask)
+      .expect(
+        foreignClaimWaitReached
+          and foreignClaimIsNeverChanged
+          and claimConstraintPreservesIndependentEligibility
+          and state.independentTaskSelected
+      )
+  }
+
+  run missingClaimRequiresCommand = {
+    init
+      .then(observeMissingClaim)
+      .then(reportSafelySuspended)
+      .then(selectIndependentTask)
+      .expect(
+        missingClaimWaitReached
+          and not(state.replacementIntentRecorded)
+          and claimConstraintPreservesIndependentEligibility
+          and state.independentTaskSelected
+      )
+      .then(recordMissingClaimReacquisitionCommand)
+      .then(planReplacementClaim)
+      .then(observeExactReplacementClaim)
+      .expect(
+        replacementClaimObserved
+          and replacementClaimRequiresCommandAndIntent
+          and replacementClaimIdentityIsFresh
+      )
+  }
+
+  run unreadableClaimCannotAuthorizeProgressOrLoss = {
+    init
+      .then(observeUnreadableClaim)
+      .then(reportSafelySuspended)
+      .then(selectIndependentTask)
+      .expect(
+        unreadableClaimWaitReached
+          and unreadableClaimCannotAuthorizeReplacement
+          and state.exactClaimHeld
+          and claimConstraintPreservesIndependentEligibility
+          and state.independentTaskSelected
+      )
+  }
 }

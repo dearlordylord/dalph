@@ -103,7 +103,8 @@ const hasLaterGraphForTarget = (
     .some(
       ({ event }) =>
         event._tag === "TaskTrackerFactsObserved" &&
-        event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
         taskTrackerTargetKey(event.observation.target) === targetKey
     )
 
@@ -115,7 +116,11 @@ const unclaimedEntriesForRecord = (
   recordIndex: number
 ): ReadonlyArray<TaskClaimAcquisitionNeeded> => {
   const event = record.event
-  if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag === "FocusedTaskWorkSpecificationFacts")
+  if (
+    event._tag !== "TaskTrackerFactsObserved" ||
+    (event.observation._tag !== "CompleteTaskTrackerFacts" &&
+      event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed")
+  )
     return []
   const observationOperation = graphReadIntentFor(records, event.operationId)
   if (observationOperation === undefined) return []
@@ -219,6 +224,12 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
   const unplannedClaims = records.flatMap<RunRecoveryFrontierEntry>(({ event }) => {
     if (event._tag !== "TaskClaimAcquisitionIntended" || plannedTaskIds.has(event.operation.acquisition.taskId))
       return []
+    const rejected = records.some(
+      ({ event: candidate }) =>
+        candidate._tag === "TaskClaimAcquisitionRejected" &&
+        candidate.operationId === event.operation.acquisition.operationId
+    )
+    if (rejected) return []
     const acquired = records.some(
       ({ event: candidate }) =>
         candidate._tag === "TaskClaimAcquired" &&

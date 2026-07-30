@@ -44,6 +44,7 @@ export const TaskTrackerReadInitiated = Schema.TaggedStruct("TaskTrackerReadInit
   ...initiatedActionFields,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   operation: Schema.Union([
+    WorkflowOperation.cases.ReadTaskClaim,
     WorkflowOperation.cases.ReadTrackerGraph,
     WorkflowOperation.cases.ReadTaskWorkSpecification
   ]),
@@ -309,6 +310,7 @@ const nonProjectedJournalEventKinds = {
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
+  TaskClaimAcquisitionRejected: true,
   TaskClaimReleaseIntended: true,
   TaskClaimReleased: true,
   TaskWorktreeReady: true,

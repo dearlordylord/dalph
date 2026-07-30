@@ -75,6 +75,7 @@ import {
 import { InitialControlPolicy } from "../../control/policy.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
@@ -128,6 +129,7 @@ it.effect("routes generic recovery transitions including exact claim-release int
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -176,6 +178,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
               ...AuthoritativeTaskClaimAcquired.make({ claim: { _tag: "ActiveTaskClaim", ...operation.acquisition } })
             })
           ),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,
@@ -240,6 +243,7 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -305,6 +309,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -375,6 +380,7 @@ it.effect("fresh-run journal facts expose membership constraints without recover
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -465,6 +471,7 @@ it.effect("routes journaled fresh fact reads, exact claim release, and suspensio
         WorkflowInterpreter,
         WorkflowInterpreter.of({
           acquireTaskClaim: unused,
+          readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTrackerGraph: () => Ref.update(calls, (items) => [...items, "graph"]).pipe(Effect.as(graph.snapshot)),
           readTaskWorkSpecification: () =>
             Ref.update(calls, (items) => [...items, "specification"]).pipe(Effect.as(specification)),
@@ -555,6 +562,7 @@ it.effect("runs a journaled fresh read when no optional trace output is installe
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: () =>
           Effect.suspend(() => {
             const projection = projectTrackerSnapshot({ revision: "journaled-fresh-without-trace-graph", tasks: [] })
@@ -858,7 +866,8 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       intentRecordKey(externalRelease.release.operationId),
       TaskClaimReleaseIntendedEvent.make({ operation: externalRelease, version: workflowJournalEventVersion })
     )
-    expect(yield* recovery.readFrontier).toEqual({
+    const releaseFrontier = yield* recovery.readFrontier
+    expect(releaseFrontier).toEqual({
       explanations: [
         claimSettlement,
         {
@@ -866,10 +875,43 @@ it.effect("a task leaving complete membership safely suspends its executor work 
           correlation: { attemptId: plannedAttempt.attemptId, runId },
           taskId,
           wakeCondition: "ExactTaskClaimDispositionApplied"
+        },
+        {
+          _tag: "WorkflowOperationTaskClaimConstraint",
+          claimState: "Unobserved",
+          operationId: externalRelease.release.operationId,
+          taskId,
+          wakeCondition: "TaskClaimFactsObserved"
         }
       ],
-      transitions: [{ _tag: "ReconcileTaskClaimRelease", operationId: externalRelease.release.operationId, taskId }]
+      transitions: [
+        expect.objectContaining({
+          _tag: "ObserveResponsibleTaskClaim",
+          operation: expect.objectContaining({ taskId }),
+          taskId
+        })
+      ]
     })
+    const selectedRead = releaseFrontier.transitions[0]
+    if (selectedRead?._tag !== "ObserveResponsibleTaskClaim") {
+      return yield* Effect.die("expected exact claim reread before release")
+    }
+    yield* journal.append(
+      runId,
+      intentRecordKey(selectedRead.operation.operationId),
+      taskTrackerReadIntent(selectedRead.operation)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(selectedRead.operation.operationId),
+      taskTrackerFactsObservedEvent(
+        selectedRead.operation.operationId,
+        makeFocusedTaskClaimFactsObserved(selectedRead.operation, { _tag: "ActiveTaskClaim", ...claim.acquisition })
+      )
+    )
+    expect((yield* recovery.readFrontier).transitions).toEqual([
+      { _tag: "ReconcileTaskClaimRelease", operationId: externalRelease.release.operationId, taskId }
+    ])
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
@@ -878,6 +920,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
@@ -935,6 +978,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
         Ref.update(calls, (current) => [...current, `claim:${operation.acquisition.operationId}`]).pipe(
           Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })
         ),
+      readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: (operation) =>
@@ -1010,6 +1054,7 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
       WorkflowInterpreter,
       WorkflowInterpreter.of({
         acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,

@@ -35,10 +35,11 @@ inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
 
 **Operator**:
-The singleton human actor that intentionally applies a Pause or Unpause
-direction through Dalph. V1 has no authentication boundary, operator identity,
-roles, or multi-operator attribution.
-_Avoid_: Authenticated operator identity, claim owner, provider user
+The authenticated human actor that intentionally applies a Pause, Unpause, or
+task-claim reacquisition direction through Dalph. The control boundary records
+the exact operator identity supplied by its authentication substrate; that
+identity is neither a task-claim owner nor a provider user.
+_Avoid_: Claim owner, provider user
 
 **Workflow occurrence**:
 One concrete happening relevant to a Dalph run. Constructing a command,
@@ -430,6 +431,14 @@ A fresh task-tracker claim observation proves that the exact intended owner and
 token currently own the task. It does not prove that the task remains open or
 inside the run's current task-tracker target closure.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
+
+**Explicit task-claim reacquisition authority**:
+The durable authority linking one replacement task-claim acquisition intent to
+one earlier authenticated Operator command for that Run and task. A fresh
+tracker observation after a coordinator restart does not erase an unconsumed
+command. The authority is represented explicitly on the acquisition operation;
+an `OperationId` spelling or an earlier claim token cannot imply it.
+_Avoid_: Operation-ID prefix, stale claim token, automatic reacquisition
 
 **Completion claim**:
 The temporary task-tracker record that replaces one exact active task claim

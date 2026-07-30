@@ -2,6 +2,8 @@ import { Context, Effect, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { type AttemptId, type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
+  ControlService,
+  controlServiceLayer,
   CoordinatorOwnership,
   controlledTrackerMutationLayerFrom,
   deterministicOperationIdAllocatorLayer,
@@ -36,7 +38,12 @@ import {
   type AuthoredObservedBehavior,
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
-import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
+import {
+  controlledExecutorLayer,
+  controlledTrace,
+  controlledTrackerGraphReaderLayer,
+  controlledTrackerMutationLayer
+} from "./authored-adapters.js"
 import { makeStoryCursor } from "./authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 
@@ -73,7 +80,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         )
       )
       const journalLayer = Layer.succeed(JournalStore, Context.get(sharedContext, JournalStore))
-      const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(sharedContext, TrackerMutation))
+      const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
       const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
@@ -98,6 +105,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         TaskWorkCapacityControl,
         Effect.gen(function* () {
           const control = yield* TaskWorkCapacityControl
+          const controlService = yield* ControlService
           return TaskWorkCapacityControl.of({
             ...control,
             read: (requestedRunId) =>
@@ -113,12 +121,23 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
                     })
                     .pipe(Effect.orDie)
                 }
+                const reacquisition = yield* cursor.consumeClaimReacquisitionRequest
+                if (Option.isSome(reacquisition)) {
+                  yield* controlService
+                    .record(reacquisition.value.operatorId, {
+                      _tag: "RequestTaskClaimReacquisition",
+                      commandId: reacquisition.value.commandId,
+                      runId: requestedRunId,
+                      taskId: reacquisition.value.taskId
+                    })
+                    .pipe(Effect.orDie)
+                }
                 yield* cursor.pauseAtCoordinatorProcessDeath
                 return yield* control.read(requestedRunId)
               })
           })
         })
-      ).pipe(Layer.provide(baseControlPolicyLayer))
+      ).pipe(Layer.provide(Layer.merge(baseControlPolicyLayer, controlServiceLayer)), Layer.provide(journalLayer))
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer).pipe(
         Layer.provide(journalLayer)
       )
@@ -175,6 +194,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         })
       ).pipe(Layer.provide(recoveryAuthorityLayer))
       const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId)
+      const recoveryPlanningLayer = planningLayer("recovery")
       const recoveryStartupLayer = startupRecoveryLayer(runId, command.integrationTarget).pipe(
         Layer.provide(interpreterLayer),
         Layer.provide(observedRecoveryAuthorityLayer),
@@ -182,9 +202,10 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         Layer.provide(recoveryExecutorLayer),
         Layer.provide(journalLayer),
         Layer.provide(coordinatorOwnershipLayer),
-        Layer.provide(Layer.succeed(WorkflowTrace, trace))
+        Layer.provide(Layer.succeed(WorkflowTrace, trace)),
+        Layer.provide(recoveryPlanningLayer)
       )
-      const recoveryWorkflowLayer = Layer.merge(recoveryStartupLayer, planningLayer("recovery"))
+      const recoveryWorkflowLayer = Layer.merge(recoveryStartupLayer, recoveryPlanningLayer)
 
       const records = yield* Effect.scoped(
         Effect.gen(function* () {

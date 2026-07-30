@@ -132,6 +132,14 @@ const renameControlCommand = (command: ControlCommand, maps: IdentityRenamingMap
         operatorId: preserveCassetteValue(command.operatorId),
         runId: renamed(command.runId, maps.runIds)
       })
+    case "RequestTaskClaimReacquisition":
+      return completeFields<typeof command>({
+        _tag: "RequestTaskClaimReacquisition",
+        commandId: renamed(command.commandId, maps.controlCommandIds),
+        operatorId: preserveCassetteValue(command.operatorId),
+        runId: renamed(command.runId, maps.runIds),
+        taskId: preserveCassetteValue(command.taskId)
+      })
     case "RequestTaskPause":
       return completeFields<typeof command>({
         _tag: "RequestTaskPause",
@@ -240,6 +248,30 @@ const renameTrackerFactsObservation = (
         operationId: renamed(observation.operationId, maps.operationIds),
         target: preserveCassetteValue(observation.target)
       })
+    case "FocusedTaskClaimFacts":
+      return completeFields<typeof observation>({
+        ...observation,
+        freshness: {
+          ...observation.freshness,
+          operationId: renamed(observation.freshness.operationId, maps.operationIds)
+        },
+        observation:
+          observation.observation._tag === "ActiveTaskClaim"
+            ? {
+                ...observation.observation,
+                operationId: renamed(observation.observation.operationId, maps.operationIds),
+                token: renamed(observation.observation.token, maps.claimTokens)
+              }
+            : preserveCassetteValue(observation.observation),
+        operationId: renamed(observation.operationId, maps.operationIds),
+        target: preserveCassetteValue(observation.target)
+      })
+    case "FocusedTaskClaimFactsUnreadable":
+      return completeFields<typeof observation>({
+        ...observation,
+        operationId: renamed(observation.operationId, maps.operationIds),
+        target: preserveCassetteValue(observation.target)
+      })
     case "UnchangedTaskTrackerFactsReconfirmed":
       return completeFields<typeof observation>({
         _tag: "UnchangedTaskTrackerFactsReconfirmed",
@@ -319,6 +351,19 @@ const renameRecordedCassetteEntry = (
             taskId: preserveCassetteValue(claimEntry.claim.taskId),
             token: renamed(claimEntry.claim.token, maps.claimTokens)
           })
+        }),
+      TaskClaimAcquisitionRejected: (rejectedEntry) =>
+        completeFields<typeof rejectedEntry>({
+          _tag: "TaskClaimAcquisitionRejected",
+          observed: completeFields<typeof rejectedEntry.observed>({
+            _tag: "ActiveTaskClaim",
+            operationId: renamed(rejectedEntry.observed.operationId, maps.operationIds),
+            owner: preserveCassetteValue(rejectedEntry.observed.owner),
+            taskId: preserveCassetteValue(rejectedEntry.observed.taskId),
+            token: renamed(rejectedEntry.observed.token, maps.claimTokens)
+          }),
+          operationId: renamed(rejectedEntry.operationId, maps.operationIds),
+          reason: preserveCassetteValue(rejectedEntry.reason)
         }),
       TaskClaimReleased: (releaseEntry) =>
         completeFields<typeof releaseEntry>({

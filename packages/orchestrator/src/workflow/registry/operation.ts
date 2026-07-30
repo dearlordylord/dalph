@@ -5,6 +5,7 @@ import { PlannedTaskAttempt, TaskId as TaskIdSchema } from "@dalph/contracts"
 import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
+import { ControlCommandId } from "../../control/identity.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -37,8 +38,27 @@ const ReadTaskWorkSpecificationOperation = Schema.TaggedStruct("ReadTaskWorkSpec
   taskId: TaskIdSchema
 }).check(Schema.makeFilter(withoutSelfPredecessor))
 
+/** Reads the tracker's current exact claim record for one responsible task. */
+const ReadTaskClaimOperation = Schema.TaggedStruct("ReadTaskClaim", {
+  operationId: OperationId,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  target: TrackerTargetSchema,
+  taskId: TaskIdSchema
+}).check(Schema.makeFilter(withoutSelfPredecessor))
+
+/**
+ * The durable authority for one claim acquisition. Ordinary task selection and
+ * an authenticated operator request are distinct domain phenomena.
+ */
+export const TaskClaimAcquisitionAuthority = Schema.TaggedUnion({
+  ExplicitTaskClaimReacquisitionAuthority: { commandId: ControlCommandId },
+  TaskSelectionAuthority: {}
+})
+export type TaskClaimAcquisitionAuthority = typeof TaskClaimAcquisitionAuthority.Type
+
 const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
   acquisition: TaskClaimAcquisition,
+  authority: TaskClaimAcquisitionAuthority,
   predecessorOperationIds: CausalPredecessorOperationIds
 }).check(
   Schema.makeFilter((operation) =>
@@ -85,6 +105,7 @@ export const WorkflowOperation = Object.assign(
   Schema.Union([
     ReadTrackerGraphOperation,
     ReadTaskWorkSpecificationOperation,
+    ReadTaskClaimOperation,
     AcquireTaskClaimOperation,
     ReleaseTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
@@ -96,6 +117,7 @@ export const WorkflowOperation = Object.assign(
       ReleaseTaskClaim: ReleaseTaskClaimOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
+      ReadTaskClaim: ReadTaskClaimOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation,
       ReadTaskWorkSpecification: ReadTaskWorkSpecificationOperation
     }
@@ -162,12 +184,27 @@ export const makeTaskWorkSpecificationObservationOperation = (
     taskId
   })
 
+export const makeTaskClaimObservationOperation = (
+  operationId: OperationId,
+  target: TrackerTarget,
+  taskId: TaskId,
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
+): typeof WorkflowOperation.cases.ReadTaskClaim.Type =>
+  WorkflowOperation.cases.ReadTaskClaim.make({
+    operationId,
+    predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
+    target,
+    taskId
+  })
+
 export const makeTaskClaimAcquisitionOperation = (fields: {
   readonly acquisition: TaskClaimAcquisition
+  readonly authority?: TaskClaimAcquisitionAuthority
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
   WorkflowOperation.cases.AcquireTaskClaim.make({
     acquisition: fields.acquisition,
+    authority: fields.authority ?? TaskClaimAcquisitionAuthority.cases.TaskSelectionAuthority.make({}),
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
 

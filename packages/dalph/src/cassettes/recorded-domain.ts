@@ -61,6 +61,11 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   TaskAttemptPlanned: { operation: WorkflowOperation.cases.RecordTaskAttemptPlan },
   TaskClaimAcquired: { claim: ActiveTaskClaim },
   TaskClaimAcquisitionIntended: { operation: WorkflowOperation.cases.AcquireTaskClaim },
+  TaskClaimAcquisitionRejected: {
+    observed: ActiveTaskClaim,
+    operationId: OperationId,
+    reason: Schema.Literal("ForeignClaim")
+  },
   TaskClaimReleaseIntended: { operation: WorkflowOperation.cases.ReleaseTaskClaim },
   TaskClaimReleased: { release: TaskClaimRelease },
   TaskTrackerFactsObserved: {
@@ -71,6 +76,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   TaskTrackerReadInitiated: {
     ...initiatedByCoordinator,
     operation: Schema.Union([
+      WorkflowOperation.cases.ReadTaskClaim,
       WorkflowOperation.cases.ReadTrackerGraph,
       WorkflowOperation.cases.ReadTaskWorkSpecification
     ])

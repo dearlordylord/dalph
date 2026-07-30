@@ -60,6 +60,7 @@ export const WorkflowRunTerminatedEvent = Schema.TaggedStruct("WorkflowRunTermin
 })
 
 const TaskTrackerReadOperation = Schema.Union([
+  WorkflowOperationSchema.cases.ReadTaskClaim,
   WorkflowOperationSchema.cases.ReadTrackerGraph,
   WorkflowOperationSchema.cases.ReadTaskWorkSpecification
 ])
@@ -76,6 +77,14 @@ export const TaskClaimAcquisitionIntendedEvent = Schema.TaggedStruct("TaskClaimA
 
 export const TaskClaimAcquiredEvent = Schema.TaggedStruct("TaskClaimAcquired", {
   claim: ActiveTaskClaim,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+/** Atomic acquisition definitely preserved a different exact tracker claim. */
+export const TaskClaimAcquisitionRejectedEvent = Schema.TaggedStruct("TaskClaimAcquisitionRejected", {
+  observed: ActiveTaskClaim,
+  operationId: OperationId,
+  reason: Schema.Literal("ForeignClaim"),
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
@@ -117,6 +126,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskTrackerFactsObservedEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
   TaskAttemptPlannedEvent,

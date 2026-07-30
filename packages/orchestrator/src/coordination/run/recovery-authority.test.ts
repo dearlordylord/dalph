@@ -1,6 +1,6 @@
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import {
@@ -63,6 +63,7 @@ import {
   PlannedAttemptRecoveryAuthorityMismatch,
   PlannedAttemptRecoveryAuthorityUnreadable
 } from "./recovery-authority.js"
+import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import {
   controlledTrackerMutationLayer,
   TaskClaimReadFailure,
@@ -220,6 +221,60 @@ it.effect("rereads the exact tracker claim and Git worktree before recovery", ()
   }).pipe(Effect.provide(layer))
 )
 
+it.effect("uses only a replacement claim authorized by a prior authenticated reacquisition command", () =>
+  Effect.gen(function* () {
+    const tracker = yield* TrackerMutation
+    yield* tracker.acquireTaskClaim(acquisition)
+    yield* recordCausalHistory
+    yield* tracker.releaseTaskClaim({
+      claim: { _tag: "ActiveTaskClaim", ...acquisition },
+      operationId: acquisition.operationId
+    })
+
+    const command = ControlCommand.cases.RequestTaskClaimReacquisition.make({
+      commandId: ControlCommandId.make("authority-reacquire"),
+      operatorId: AuthenticatedOperatorIdentity.make("authority-operator"),
+      runId,
+      taskId: plannedAttempt.taskId
+    })
+    const replacement = {
+      operationId: taskClaimReacquisitionOperationId(command.commandId),
+      owner: ClaimOwner.make("dalph"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("authority-replacement-token")
+    }
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      controlCommandRecordKey(command.commandId),
+      ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(replacement.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({
+        operation: makeTaskClaimAcquisitionOperation({
+          acquisition: replacement,
+          authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId },
+          predecessorOperationIds: [acquisition.operationId]
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* tracker.acquireTaskClaim(replacement)
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(replacement.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: { _tag: "ActiveTaskClaim", ...replacement },
+        version: workflowJournalEventVersion
+      })
+    )
+
+    yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt)
+  }).pipe(Effect.provide(layer))
+)
+
 it.effect("rejects a changed tracker claim and an absent planned worktree", () =>
   Effect.gen(function* () {
     yield* recordCausalHistory
@@ -262,6 +317,37 @@ it.effect("preserves tracker read failures as unreadable authority", () =>
             readTaskClaim: (taskId) => Effect.fail(new TaskClaimReadFailure({ detail: "tracker unavailable", taskId })),
             releaseTaskClaim: () => Effect.die("unused")
           })
+        )
+      )
+    )
+  )
+)
+
+it.effect("recovers after two transient tracker claim read failures", () =>
+  Effect.gen(function* () {
+    yield* recordCausalHistory
+    yield* (yield* PlannedAttemptRecoveryAuthority).verify(plannedAttempt)
+  }).pipe(
+    Effect.provide(
+      authorityLayer(
+        Layer.effect(
+          TrackerMutation,
+          Ref.make(0).pipe(
+            Effect.map((reads) =>
+              TrackerMutation.of({
+                acquireTaskClaim: () => Effect.die("unused"),
+                readTaskClaim: (taskId) =>
+                  Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+                    Effect.flatMap((count) =>
+                      count < 2
+                        ? new TaskClaimReadFailure({ detail: `transient-${count + 1}`, taskId })
+                        : Effect.succeed({ _tag: "ActiveTaskClaim" as const, ...acquisition })
+                    )
+                  ),
+                releaseTaskClaim: () => Effect.die("unused")
+              })
+            )
+          )
         )
       )
     )

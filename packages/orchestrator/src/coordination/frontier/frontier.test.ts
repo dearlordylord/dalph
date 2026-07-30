@@ -12,7 +12,8 @@ import {
   TaskRevision,
   WorktreeLocator,
   PlannedAttemptExecutorReport,
-  PlannedAttemptExecutorResult
+  PlannedAttemptExecutorResult,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -458,6 +459,61 @@ it("keeps a removed task's executor responsibility behind a task-membership cons
     ],
     transitions: []
   })
+})
+
+it("explains missing, foreign, and unreadable claims without selecting task work", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const dispositions = [
+    ResponsibilityDisposition.TaskClaimMissingConstraint(),
+    ResponsibilityDisposition.TaskForeignClaimIsolation(),
+    ResponsibilityDisposition.TaskClaimUnreadableWait()
+  ]
+  expect(
+    dispositions.map((disposition) =>
+      deriveRunnableFrontier({
+        freshEligibleTasks: [freshTask(taskC)],
+        responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+        responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
+      })
+    )
+  ).toEqual([
+    {
+      explanations: [
+        {
+          _tag: "PlannedAttemptTaskClaimConstraint",
+          claimState: "Missing",
+          correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+          taskId: taskA,
+          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+        }
+      ],
+      transitions: [{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }]
+    },
+    {
+      explanations: [
+        {
+          _tag: "PlannedAttemptTaskClaimConstraint",
+          claimState: "Foreign",
+          correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+          taskId: taskA,
+          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+        }
+      ],
+      transitions: [{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }]
+    },
+    {
+      explanations: [
+        {
+          _tag: "PlannedAttemptTaskClaimConstraint",
+          claimState: "Unreadable",
+          correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+          taskId: taskA,
+          wakeCondition: "TaskClaimFactsObserved"
+        }
+      ],
+      transitions: [{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }]
+    }
+  ])
 })
 
 it("explains each task-authority constraint without changing the planned attempt", () => {

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The closed transition/explanation algebra and its exhaustive mapping share one owner. */
 import { Data, Match, Option } from "effect"
 import {
   type IntegrationTarget,
@@ -22,6 +23,7 @@ import type {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type { ControlCommandId } from "../../control/identity.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.js"
@@ -29,6 +31,7 @@ export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.j
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   CommitFreshTaskClaimIntent: { readonly taskId: TaskId; readonly taskRevision: TaskRevision }
+  CommitTaskClaimReacquisitionIntent: { readonly commandId: ControlCommandId; readonly taskId: TaskId }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
@@ -39,6 +42,14 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   ObservePlannedAttemptContinuationSpecification: {
     readonly operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
     readonly plannedAttempt: PlannedTaskAttempt
+  }
+  ObservePlannedAttemptContinuationClaim: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  ObserveResponsibleTaskClaim: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly taskId: TaskId
   }
   SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
@@ -85,6 +96,11 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
   IntegrationConfigurationWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetConfigured" }
+  IntegrationTaskClaimConstraint: {
+    readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
+    readonly taskId: TaskId
+    readonly wakeCondition: "ExplicitTaskClaimReacquisitionRequested" | "TaskClaimFactsObserved"
+  }
   IntegrationInProgress: { readonly taskId: TaskId }
   IntegrationTrackerFactsWait: { readonly taskId: TaskId; readonly wakeCondition: "TaskTrackerFactsObserved" }
   IntegrationTargetWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetReleased" }
@@ -120,6 +136,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
   }
+  PlannedAttemptTaskClaimConstraint: {
+    readonly claimState: "Foreign" | "Missing" | "Unreadable"
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+    readonly wakeCondition: "ExplicitTaskClaimReacquisitionRequested" | "TaskClaimFactsObserved"
+  }
   PlannedAttemptTaskSpecificationChangeConstraint: {
     readonly availableResolutions: readonly [
       "ContinueExistingAttempt",
@@ -154,6 +176,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly operationId: OperationId
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  WorkflowOperationTaskClaimConstraint: {
+    readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+    readonly wakeCondition: "ExplicitTaskClaimReacquisitionRequested" | "TaskClaimFactsObserved"
   }
   UnreadableFactWait: {
     readonly boundary: "Executor" | "Git" | "TaskTracker"
@@ -240,6 +268,36 @@ const executorDecisionFor = (
       TaskExternalSuccessSettled: () => ({
         explanation: FrontierExplanation.PlannedAttemptTaskExternalSuccessSettled({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      TaskClaimMissingConstraint: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskClaimConstraint({
+          claimState: "Missing",
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+        })
+      }),
+      TaskClaimUnreadableWait: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskClaimConstraint({
+          claimState: "Unreadable",
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskClaimFactsObserved"
+        })
+      }),
+      TaskForeignClaimIsolation: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskClaimConstraint({
+          claimState: "Foreign",
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+        })
+      }),
+      TaskClaimReacquisitionRequested: ({ commandId }) => ({
+        transition: RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
+          commandId,
           taskId: facts.responsibility.plannedAttempt.taskId
         })
       }),
@@ -336,6 +394,17 @@ const operationDecisionFor = (
           operationId: workflowResponsibilityOperationId(facts.responsibility),
           taskId: workflowResponsibilityTaskId(facts.responsibility),
           wakeCondition: "TaskTrackerFactsObserved"
+        })
+      }),
+      WorkflowOperationTaskClaimConstraint: ({ claimState }) => ({
+        explanation: FrontierExplanation.WorkflowOperationTaskClaimConstraint({
+          claimState,
+          operationId: workflowResponsibilityOperationId(facts.responsibility),
+          taskId: workflowResponsibilityTaskId(facts.responsibility),
+          wakeCondition:
+            claimState === "Missing" || claimState === "Foreign"
+              ? "ExplicitTaskClaimReacquisitionRequested"
+              : "TaskClaimFactsObserved"
         })
       }),
       UnreadableFactWait: ({ boundary }) => ({
