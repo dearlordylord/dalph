@@ -97,7 +97,7 @@ it.effect("runs the maintained singleton through production activation and stops
       "The story expects the planned work for task A to complete."
     )
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
-      "The story expects no planned work undertaken for task B."
+      "The story expects Dalph not to assume executor-work responsibility for any planned attempt belonging to task B."
     )
   })
 )
@@ -467,7 +467,7 @@ it.effect("requires orchestration evidence when task-work results cannot disting
   })
 )
 
-it.effect("rejects reordered evidence within either present authored assertion lens", () =>
+it.effect("rejects missing, reordered, or additional evidence within either present authored assertion lens", () =>
   Effect.gen(function* () {
     const completeOrchestration = [
       { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
@@ -479,24 +479,34 @@ it.effect("rejects reordered evidence within either present authored assertion l
       { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
       { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
     ]
-    const withReordered = (lens: "orchestration" | "protocol") => ({
+    const withEvidence = (lens: "orchestration" | "protocol", evidence: ReadonlyArray<unknown>) => ({
       ...singleton,
       story: singleton.story.map((item) =>
         item._tag === "ExpectedBehavior"
           ? {
               ...item,
-              orchestration: lens === "orchestration" ? [...completeOrchestration].reverse() : null,
-              protocol: lens === "protocol" ? [...completeProtocol].reverse() : null
+              orchestration: lens === "orchestration" ? evidence : null,
+              protocol: lens === "protocol" ? evidence : null
             }
           : item
       )
     })
 
-    expect((yield* runAuthoredScenarioCassette(withReordered("orchestration")).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteBehaviorMismatch"
-    )
-    expect((yield* runAuthoredScenarioCassette(withReordered("protocol")).pipe(Effect.flip))._tag).toBe(
-      "AuthoredCassetteBehaviorMismatch"
+    yield* Effect.forEach(
+      [
+        withEvidence("orchestration", completeOrchestration.slice(0, -1)),
+        withEvidence("orchestration", [...completeOrchestration].reverse()),
+        withEvidence("orchestration", [...completeOrchestration, completeOrchestration[0]]),
+        withEvidence("protocol", completeProtocol.slice(0, -1)),
+        withEvidence("protocol", [...completeProtocol].reverse()),
+        withEvidence("protocol", [...completeProtocol, completeProtocol[0]])
+      ],
+      (input) =>
+        runAuthoredScenarioCassette(input).pipe(
+          Effect.flip,
+          Effect.tap((failure) => Effect.sync(() => expect(failure._tag).toBe("AuthoredCassetteBehaviorMismatch")))
+        ),
+      { discard: true }
     )
   })
 )

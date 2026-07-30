@@ -81,7 +81,8 @@ mismatch in another.
 Acceptance tests:
 
 - `matches optional orchestration and protocol evidence in exact order`
-- `rejects reordered evidence within either present authored assertion lens`
+- `rejects missing, reordered, or additional evidence within either present
+  authored assertion lens`
 - `requires orchestration evidence when task-work results cannot distinguish
   attempts`
 
@@ -92,5 +93,5 @@ Acceptance tests:
 | A maintainer describes the task work without protocol evidence | The specialist assertion omits attempt identity and lower-level evidence while explicit interactions remain chronological | `runs the maintained singleton through production activation and describes only its task-work result`; `keeps explicit story interactions chronological when lower-level evidence is omitted` |
 | A maintainer describes the task work without protocol evidence | Any executor-work responsibility for B contradicts the declared absence even without a B report | `rejects no-work-undertaken when Dalph assumed executor-work responsibility for that task` |
 | A maintainer asks for lower-level evidence | Present orchestration and protocol lenses match their complete projections independently | `matches optional orchestration and protocol evidence in exact order` |
-| A maintainer asks for lower-level evidence | Reordering evidence in either present lens fails | `rejects reordered evidence within either present authored assertion lens` |
+| A maintainer asks for lower-level evidence | Missing, reordered, or additional evidence in either present lens fails | `rejects missing, reordered, or additional evidence within either present authored assertion lens` |
 | A maintainer asks for lower-level evidence | Repeated task-level results require exact-attempt orchestration evidence | `requires orchestration evidence when task-work results cannot distinguish attempts` |

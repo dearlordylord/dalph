@@ -30,7 +30,10 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
 const expectedBehaviorLyric = (item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>) =>
   [
     ...item.taskWork.results.map(taskWorkResultLyric),
-    ...item.taskWork.absences.map(({ taskId }) => `The story expects no planned work undertaken for task ${taskId}.`),
+    ...item.taskWork.absences.map(
+      ({ taskId }) =>
+        `The story expects Dalph not to assume executor-work responsibility for any planned attempt belonging to task ${taskId}.`
+    ),
     ...(item.orchestration === null ? [] : item.orchestration.map(orchestrationEvidenceLyric)),
     ...(item.protocol === null ? [] : item.protocol.map(protocolEvidenceLyric))
   ].join("\n")
