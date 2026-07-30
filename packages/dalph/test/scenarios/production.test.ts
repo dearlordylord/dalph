@@ -13,7 +13,6 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import { NodeServices } from "@effect/platform-node"
@@ -345,6 +344,11 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
       yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
       const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
       const runId = RunId.make("production-fake-run")
+      const currentSpecification = makeTaskWorkSpecification({
+        body: "Complete A.",
+        taskId: TaskId.make("A"),
+        title: "Complete A"
+      })
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("production-fake-attempt"),
         baseSha,
@@ -352,10 +356,17 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         executor: TaskExecutorLocator.make("executor:production-controlled-fake"),
         runId,
         taskId: TaskId.make("A"),
-        taskRevision: TaskRevision.make("revision-A"),
+        taskRevision: currentSpecification.fingerprint,
         worktree: WorktreeLocator.make(`${directory}/worktree`)
       })
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+      const projected = projectTrackerSnapshot({
+        revision: "production-current-observation",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      const currentSnapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       yield* git.runInWorktree(directory, [
         "worktree",
@@ -473,8 +484,8 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
           Layer.succeed(
             TrackerGraphReader,
             TrackerGraphReader.of({
-              read: () => Effect.die("unused"),
-              readTaskWorkSpecification: () => Effect.die("unused")
+              read: () => Effect.succeed(currentSnapshot),
+              readTaskWorkSpecification: () => Effect.succeed(currentSpecification)
             })
           )
         ),

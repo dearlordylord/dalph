@@ -401,7 +401,8 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
         readTrackerGraph: () => Effect.die("unused"),
         readTaskWorkSpecification: () => Effect.die("unused"),
         reconcileTaskWorktree: () => Effect.die("unused"),
-        recordTaskAttemptPlan: () => Effect.die("unused")
+        recordTaskAttemptPlan: () => Effect.die("unused"),
+        releaseTaskClaim: () => Effect.die("unused")
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))

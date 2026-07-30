@@ -3,7 +3,6 @@ import {
   type AttemptId,
   type GitCommitSha,
   type PlannedAttemptExecutorReport,
-  type PlannedTaskAttempt,
   type RunId,
   type TaskBranchRef,
   type TaskExecutorLocator,
@@ -41,12 +40,17 @@ import {
   preserveRecordedRunPolicyChange,
   preserveRecordedRunTermination
 } from "./recorded-policy-renaming.js"
+import {
+  type RecordedOperationIdentityMaps,
+  renamePlannedAttempt,
+  renameWorkflowOperation
+} from "./recorded-operation-renaming.js"
 
 const identityRenamingMap = <Identity extends string>(
   renamings: ReadonlyArray<{ readonly from: Identity; readonly to: Identity }>
 ) => new Map(renamings.map(({ from, to }) => [from, to]))
 
-type IdentityRenamingMaps = {
+type IdentityRenamingMaps = RecordedOperationIdentityMaps & {
   readonly [Family in keyof CassetteIdentityRenamingType]: ReadonlyMap<
     CassetteIdentityRenamingType[Family][number]["from"],
     CassetteIdentityRenamingType[Family][number]["to"]
@@ -110,75 +114,7 @@ const completeFields = <Value>(value: CompleteFields<Value>): Value => value
 
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
-const unreachable = (value: never): never => value
-
 const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>): Identity => map.get(value) ?? value
-
-const renamePredecessors = (predecessors: ReadonlyArray<OperationId>, maps: IdentityRenamingMaps) =>
-  predecessors.map((operationId) => renamed(operationId, maps.operationIds))
-
-const renamePlannedAttempt = (attempt: PlannedTaskAttempt, maps: IdentityRenamingMaps): PlannedTaskAttempt =>
-  completeFields<PlannedTaskAttempt>({
-    attemptId: renamed(attempt.attemptId, maps.attemptIds),
-    baseSha: preserveCassetteValue(attempt.baseSha),
-    branch: renamed(attempt.branch, maps.taskBranchRefs),
-    executor: preserveCassetteValue(attempt.executor),
-    runId: renamed(attempt.runId, maps.runIds),
-    taskId: preserveCassetteValue(attempt.taskId),
-    taskRevision: preserveCassetteValue(attempt.taskRevision),
-    worktree: renamed(attempt.worktree, maps.worktreeLocators)
-  })
-
-function renameWorkflowOperation<Operation extends WorkflowOperation>(
-  operation: Operation,
-  maps: IdentityRenamingMaps
-): Operation
-function renameWorkflowOperation(operation: WorkflowOperation, maps: IdentityRenamingMaps): WorkflowOperation {
-  switch (operation._tag) {
-    case "AcquireTaskClaim":
-      return completeFields<typeof operation>({
-        _tag: "AcquireTaskClaim",
-        acquisition: completeFields<typeof operation.acquisition>({
-          operationId: renamed(operation.acquisition.operationId, maps.operationIds),
-          owner: preserveCassetteValue(operation.acquisition.owner),
-          taskId: preserveCassetteValue(operation.acquisition.taskId),
-          token: renamed(operation.acquisition.token, maps.claimTokens)
-        }),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      })
-    case "ReadTaskWorkSpecification":
-      return completeFields<typeof operation>({
-        _tag: "ReadTaskWorkSpecification",
-        operationId: renamed(operation.operationId, maps.operationIds),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
-        target: preserveCassetteValue(operation.target),
-        taskId: preserveCassetteValue(operation.taskId)
-      })
-    case "ReadTrackerGraph":
-      return completeFields<typeof operation>({
-        _tag: "ReadTrackerGraph",
-        operationId: renamed(operation.operationId, maps.operationIds),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
-        readShape: preserveCassetteValue(operation.readShape),
-        target: preserveCassetteValue(operation.target)
-      })
-    case "RecordTaskAttemptPlan":
-      return completeFields<typeof operation>({
-        _tag: "RecordTaskAttemptPlan",
-        operationId: renamed(operation.operationId, maps.operationIds),
-        plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      })
-    case "ReconcileTaskWorktree":
-      return completeFields<typeof operation>({
-        _tag: "ReconcileTaskWorktree",
-        operationId: renamed(operation.operationId, maps.operationIds),
-        plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      })
-  }
-  return unreachable(operation)
-}
 
 const renameControlCommand = (command: ControlCommand, maps: IdentityRenamingMaps): ControlCommand => {
   switch (command._tag) {
@@ -213,7 +149,6 @@ const renameControlCommand = (command: ControlCommand, maps: IdentityRenamingMap
         taskId: preserveCassetteValue(command.taskId)
       })
   }
-  return unreachable(command)
 }
 
 const renameExecutorReport = (
@@ -236,7 +171,6 @@ const renameExecutorReport = (
         result: preserveCassetteValue(report.result)
       })
   }
-  return unreachable(report)
 }
 
 type CompleteFactFamilies = Extract<
@@ -315,7 +249,6 @@ const renameTrackerFactsObservation = (
         target: preserveCassetteValue(observation.target)
       })
   }
-  return unreachable(observation)
 }
 
 type RecordedOperationEntry = Extract<RecordedCassetteEntryType, { readonly operation: WorkflowOperation }>
@@ -385,6 +318,20 @@ const renameRecordedCassetteEntry = (
             owner: preserveCassetteValue(claimEntry.claim.owner),
             taskId: preserveCassetteValue(claimEntry.claim.taskId),
             token: renamed(claimEntry.claim.token, maps.claimTokens)
+          })
+        }),
+      TaskClaimReleased: (releaseEntry) =>
+        completeFields<typeof releaseEntry>({
+          _tag: "TaskClaimReleased",
+          release: completeFields<typeof releaseEntry.release>({
+            claim: completeFields<typeof releaseEntry.release.claim>({
+              _tag: "ActiveTaskClaim",
+              operationId: renamed(releaseEntry.release.claim.operationId, maps.operationIds),
+              owner: preserveCassetteValue(releaseEntry.release.claim.owner),
+              taskId: preserveCassetteValue(releaseEntry.release.claim.taskId),
+              token: renamed(releaseEntry.release.claim.token, maps.claimTokens)
+            }),
+            operationId: renamed(releaseEntry.release.operationId, maps.operationIds)
           })
         }),
       TaskTrackerFactsObserved: (observationEntry) =>

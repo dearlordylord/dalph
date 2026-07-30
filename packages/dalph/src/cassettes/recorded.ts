@@ -13,8 +13,6 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent,
   taskTrackerFactsObservedEvent,
-  TaskWorktreeReadyEvent,
-  TaskWorktreeReconciliationIntendedEvent,
   type WorkflowJournalEvent,
   WorkflowActor,
   workflowJournalEventVersion,
@@ -28,6 +26,7 @@ import {
   recordedCassetteVersion
 } from "./recorded-domain.js"
 import { renameRecordedCassette } from "./recorded-renaming.js"
+import { appliedOccurrencePosition, semanticJson, semanticState } from "./recorded-semantic-state.js"
 import {
   eventForRunEntry,
   isJournalRunEntry,
@@ -36,6 +35,16 @@ import {
   recordedRunEntryFor,
   type RecordedRunEntry
 } from "./recorded-run-mapping.js"
+import {
+  eventForClaimReleaseEntry,
+  eventForWorktreeEntry,
+  isRecordedClaimReleaseEntry,
+  isRecordedWorktreeEntry,
+  lyricForClaimReleaseEntry,
+  lyricForWorktreeEntry,
+  recordClaimReleaseEntry,
+  recordWorktreeEntry
+} from "./recorded-task-boundary-mapping.js"
 
 const coordinator = () => WorkflowActor.cases.DalphCoordinator.make({})
 
@@ -88,6 +97,11 @@ type RecordedIntegrationEntry = Extract<
   { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }
 >
 
+const isRecordedIntegrationEntry = <Value extends { readonly _tag: string }>(
+  value: Value
+): value is Extract<Value, { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }> =>
+  value._tag === "IntegrationResponsibilityBegan" || value._tag === "IntegrationStarted"
+
 const recordIntegrationEntry = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }>
 ): RecordedIntegrationEntry => ({
@@ -115,20 +129,16 @@ const recordTaskBoundaryEntry = (
     }
   >
 ): RecordedCassetteEntry => {
+  if (isRecordedClaimReleaseEntry(event)) return recordClaimReleaseEntry(event)
+  if (isRecordedIntegrationEntry(event)) return recordIntegrationEntry(event)
+  if (isRecordedWorktreeEntry(event)) return recordWorktreeEntry(event)
   switch (event._tag) {
-    case "IntegrationResponsibilityBegan":
-    case "IntegrationStarted":
-      return recordIntegrationEntry(event)
     case "TaskAttemptPlanned":
       return { _tag: "TaskAttemptPlanned", operation: event.operation }
     case "TaskClaimAcquired":
       return { _tag: "TaskClaimAcquired", claim: event.claim }
     case "TaskClaimAcquisitionIntended":
       return { _tag: "TaskClaimAcquisitionIntended", operation: event.operation }
-    case "TaskWorktreeReady":
-      return { _tag: "TaskWorktreeReady", operationId: event.operationId, proof: event.proof }
-    case "TaskWorktreeReconciliationIntended":
-      return { _tag: "TaskWorktreeReconciliationIntended", operation: event.operation }
   }
 }
 
@@ -177,6 +187,8 @@ const eventForTaskBoundaryEntry = (
         | "TaskAttemptPlanned"
         | "TaskClaimAcquired"
         | "TaskClaimAcquisitionIntended"
+        | "TaskClaimReleaseIntended"
+        | "TaskClaimReleased"
         | "IntegrationResponsibilityBegan"
         | "IntegrationStarted"
         | "TaskWorktreeReady"
@@ -186,27 +198,16 @@ const eventForTaskBoundaryEntry = (
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number
 ): WorkflowJournalEvent => {
+  if (isRecordedClaimReleaseEntry(entry)) return eventForClaimReleaseEntry(entry)
+  if (isRecordedIntegrationEntry(entry)) return eventForIntegrationEntry(entry, entries, index)
+  if (isRecordedWorktreeEntry(entry)) return eventForWorktreeEntry(entry)
   switch (entry._tag) {
-    case "IntegrationResponsibilityBegan":
-    case "IntegrationStarted":
-      return eventForIntegrationEntry(entry, entries, index)
     case "TaskAttemptPlanned":
       return TaskAttemptPlannedEvent.make({ operation: entry.operation, version: workflowJournalEventVersion })
     case "TaskClaimAcquired":
       return TaskClaimAcquiredEvent.make({ claim: entry.claim, version: workflowJournalEventVersion })
     case "TaskClaimAcquisitionIntended":
       return TaskClaimAcquisitionIntendedEvent.make({
-        operation: entry.operation,
-        version: workflowJournalEventVersion
-      })
-    case "TaskWorktreeReady":
-      return TaskWorktreeReadyEvent.make({
-        operationId: entry.operationId,
-        proof: entry.proof,
-        version: workflowJournalEventVersion
-      })
-    case "TaskWorktreeReconciliationIntended":
-      return TaskWorktreeReconciliationIntendedEvent.make({
         operation: entry.operation,
         version: workflowJournalEventVersion
       })
@@ -307,41 +308,10 @@ const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord
 export const foldRecordedCassette = (cassette: RecordedCassetteType) =>
   reduceWorkflowJournalHistory(cassette.runId, recordsFor(cassette))
 
-const semanticJson = (value: unknown): string => JSON.stringify(value)
-
-const semanticResponsibility = (
-  history: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
-) =>
-  history.runState.responsibility.entries
-    .map((entry) => {
-      switch (entry._tag) {
-        case "PlannedAttemptExecutorWorkResponsibility":
-          return { _tag: entry._tag, plannedAttempt: entry.plannedAttempt }
-        case "TaskClaimResponsibility":
-          return { _tag: entry._tag, acquisition: entry.acquisition, taskId: entry.taskId }
-        case "TaskWorktreeResponsibility":
-          return { _tag: entry._tag, operation: entry.operation, taskId: entry.taskId }
-      }
-    })
-    .toSorted((left, right) => semanticJson(left).localeCompare(semanticJson(right)))
-
-const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
-  history._tag === "InvalidWorkflowJournalHistory"
-    ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
-    : {
-        graphKnowledge: history.runState.graphKnowledge,
-        pause: history.runState.pause,
-        responsibility: semanticResponsibility(history),
-        runId: history.runId
-      }
-
 const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
     : history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
-
-const appliedOccurrencePosition = (history: ReturnType<typeof reduceWorkflowJournalHistory>): number =>
-  history._tag === "InvalidWorkflowJournalHistory" ? 0 : history.runState.workflowHistory.records.length
 
 export interface RecordedCassetteCheckpoint {
   readonly appliedOccurrencePositionEquivalent: boolean
@@ -420,6 +390,13 @@ const lyricForTaskBoundaryEntry = (
     RecordedExecutorEntry | RecordedRunEntry | RecordedTrackerEntry | { readonly _tag: "ControlCommandRecorded" }
   >
 ): string => {
+  if (isRecordedClaimReleaseEntry(entry)) return lyricForClaimReleaseEntry(entry)
+  if (isRecordedIntegrationEntry(entry)) {
+    return entry._tag === "IntegrationResponsibilityBegan"
+      ? `Dalph coordinator queued accepted commit ${entry.acceptedResult.commit} for integration.`
+      : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
+  }
+  if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
   switch (entry._tag) {
     case "TaskAttemptPlanned":
       return `Dalph planned attempt ${entry.operation.plannedAttempt.attemptId} for task ${entry.operation.plannedAttempt.taskId}.`
@@ -427,14 +404,6 @@ const lyricForTaskBoundaryEntry = (
       return `The task tracker showed Dalph's exact claim for task ${entry.claim.taskId}.`
     case "TaskClaimAcquisitionIntended":
       return `Dalph intended to claim task ${entry.operation.acquisition.taskId}.`
-    case "TaskWorktreeReady":
-      return `Git showed worktree ${entry.proof.worktree} ready at ${entry.proof.headSha}.`
-    case "TaskWorktreeReconciliationIntended":
-      return `Dalph recorded its intent to reconcile the worktree for attempt ${entry.operation.plannedAttempt.attemptId}.`
-    case "IntegrationResponsibilityBegan":
-      return `Dalph coordinator queued accepted commit ${entry.acceptedResult.commit} for integration.`
-    case "IntegrationStarted":
-      return `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
 }
 

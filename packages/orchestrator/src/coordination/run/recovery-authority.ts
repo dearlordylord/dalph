@@ -48,7 +48,8 @@ const causalPredecessorClosure = (
   return visit(operation.predecessorOperationIds, new Set())
 }
 
-const causalClaimForAttempt = (
+/** Finds the exact acquired claim in one planned attempt's causal history. */
+export const causalClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   attemptId: AttemptId
 ): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {

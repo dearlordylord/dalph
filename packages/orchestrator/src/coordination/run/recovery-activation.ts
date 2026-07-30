@@ -13,14 +13,23 @@ import {
 } from "@dalph/contracts"
 import { type TaskWorkCapacity } from "../admission/capacity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
-import { JournalStore, type JournalAppendError, type JournalStoreError } from "../../workflow-journal/store.js"
+import {
+  JournalStore,
+  type JournalAppendError,
+  type JournalRecord,
+  type JournalStoreError
+} from "../../workflow-journal/store.js"
 import { workflowJournalTransitionRuleFor } from "../reconstruction/history-transition.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   continuePlannedAttemptExecutorWork,
   requestPlannedAttemptExecutorSuspension
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
-import { PlannedAttemptRecoveryAuthority, type PlannedAttemptRecoveryAuthorityError } from "./recovery-authority.js"
+import {
+  causalClaimForAttempt,
+  PlannedAttemptRecoveryAuthority,
+  type PlannedAttemptRecoveryAuthorityError
+} from "./recovery-authority.js"
 import {
   type ReconstructedRunState,
   reconstructedTaskIsPaused,
@@ -31,18 +40,22 @@ import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   deriveRunnableFrontier,
+  FrontierExplanation,
   ResponsibilityDisposition,
-  type RunnableFrontier,
-  type RunnableFrontierTransition
+  RunnableFrontierTransition,
+  type RunnableFrontier
 } from "../frontier/frontier.js"
 import { recoverRunnableTransition } from "../frontier/recovery.js"
 import { makeTaskAdmissionController } from "../admission/controller.js"
-import type {
+import {
   WorkflowInterpreter,
-  WorkflowInterpreterService,
+  type WorkflowInterpreterService,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
-import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
+import {
+  latestReconstructedTaskGraph,
+  reconstructedTaskWorkSpecificationFor
+} from "../reconstruction/graph-knowledge.js"
 import { type AcceptedResultNotDurable } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 import {
@@ -51,6 +64,14 @@ import {
   makeIntegrationTargetResourceController
 } from "../admission/integration-target-resource.js"
 import { runIntegrationTransition } from "./integration-transition-runtime.js"
+import { OperationId } from "../../workflow/identity.js"
+import {
+  makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
+import type { TraceOutputError } from "../../presentation/trace-output.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 type InterpreterError = {
@@ -71,6 +92,7 @@ export type RunRecoveryActivationError =
   | JournalAppendError
   | JournalStoreError
   | PlannedAttemptRecoveryAuthorityError
+  | TraceOutputError
 
 /** Derives which journaled responsibilities are still unfinished. */
 const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): ReadonlyArray<ResponsibilityFreshFacts> => {
@@ -78,6 +100,17 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
   const latestTaskGraph = latestReconstructedTaskGraph(runState.graphKnowledge)
   const taskLeftMembership = (taskId: TaskId): boolean =>
     Option.isSome(latestTaskGraph) && !latestTaskGraph.value.taskIds().includes(taskId)
+  const taskTerminalWithoutSuccess = (taskId: TaskId): boolean =>
+    Option.getOrUndefined(Option.flatMap(latestTaskGraph, (graph) => graph.lifecycleOf(taskId)))?._tag ===
+    "TerminalWithoutSuccess"
+  const taskCompletedSuccessfully = (taskId: TaskId): boolean =>
+    Option.getOrUndefined(Option.flatMap(latestTaskGraph, (graph) => graph.lifecycleOf(taskId)))?._tag ===
+    "CompletedSuccessfully"
+  const changedTaskSpecification = (plannedAttempt: PlannedTaskAttempt) =>
+    Option.filter(
+      reconstructedTaskWorkSpecificationFor(runState.graphKnowledge, plannedAttempt.taskId),
+      ({ fingerprint }) => fingerprint !== plannedAttempt.taskRevision
+    )
   const settledOperationIds = new Set(
     records.flatMap(({ event }) => {
       const transition = workflowJournalTransitionRuleFor(event._tag)
@@ -89,12 +122,15 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
   )
   return runState.responsibility.entries.map((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") {
+      const settled = settledOperationIds.has(workflowResponsibilityOperationId(responsibility))
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
-        disposition: !settledOperationIds.has(workflowResponsibilityOperationId(responsibility))
-          ? taskLeftMembership(responsibility.taskId)
-            ? ResponsibilityDisposition.TaskMembershipConstraint()
-            : ResponsibilityDisposition.Ready()
+        disposition: !settled
+          ? responsibility._tag === "TaskClaimReleaseResponsibility"
+            ? ResponsibilityDisposition.Ready()
+            : taskLeftMembership(responsibility.taskId)
+              ? ResponsibilityDisposition.TaskMembershipConstraint()
+              : ResponsibilityDisposition.Ready()
           : ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
         responsibility
       }
@@ -106,18 +142,63 @@ const deriveJournalResponsibilityFacts = (runState: ReconstructedRunState): Read
         event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
     )?.event
     const paused = reconstructedTaskIsPaused(runState.pause, responsibility.plannedAttempt.taskId)
+    const safelySuspended =
+      report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended"
+    const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
+    const acquiredClaim = causalClaimForAttempt(records, responsibility.plannedAttempt.attemptId)
+    const externalSuccessRelease =
+      acquiredClaim?._tag === "TaskClaimAcquired"
+        ? makeTaskClaimReleaseOperation({
+            predecessorOperationIds: [acquiredClaim.claim.operationId],
+            release: {
+              claim: acquiredClaim.claim,
+              operationId: OperationId.make(`external-success-release:${acquiredClaim.claim.operationId}`)
+            }
+          })
+        : undefined
+    const externalSuccessReleaseIntended =
+      externalSuccessRelease === undefined
+        ? false
+        : records.some(
+            ({ event }) =>
+              event._tag === "TaskClaimReleaseIntended" &&
+              event.operation.release.operationId === externalSuccessRelease.release.operationId
+          )
+    const externalSuccessReleaseSettled =
+      externalSuccessRelease === undefined ? true : settledOperationIds.has(externalSuccessRelease.release.operationId)
     const disposition =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Terminal"
         ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
         : taskLeftMembership(responsibility.plannedAttempt.taskId)
-          ? ResponsibilityDisposition.TaskMembershipConstraint()
-          : report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended" && paused
-            ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
-                correlation: report.report.correlation
-              })
-            : paused
-              ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-              : ResponsibilityDisposition.Ready()
+          ? safelySuspended
+            ? ResponsibilityDisposition.TaskMembershipConstraint()
+            : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+          : taskTerminalWithoutSuccess(responsibility.plannedAttempt.taskId)
+            ? safelySuspended
+              ? ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" })
+              : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+            : taskCompletedSuccessfully(responsibility.plannedAttempt.taskId)
+              ? safelySuspended
+                ? externalSuccessRelease === undefined || externalSuccessReleaseSettled
+                  ? ResponsibilityDisposition.TaskExternalSuccessSettled()
+                  : externalSuccessReleaseIntended
+                    ? ResponsibilityDisposition.TaskExternalSuccessConstraint()
+                    : ResponsibilityDisposition.TaskExternalSuccessReleaseNeeded({ operation: externalSuccessRelease })
+                : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+              : Option.isSome(changedSpecification)
+                ? safelySuspended
+                  ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
+                      observedFingerprint: changedSpecification.value.fingerprint,
+                      plannedFingerprint: responsibility.plannedAttempt.taskRevision
+                    })
+                  : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+                : safelySuspended && paused
+                  ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
+                      correlation: report.report.correlation
+                    })
+                  : paused
+                    ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+                    : ResponsibilityDisposition.Ready()
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
   })
 }
@@ -145,6 +226,137 @@ const latestJournalPosition = (
 const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
   Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
 
+type CurrentGraphObservation = {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
+  readonly position: JournalPosition
+}
+
+type ContinuationDecision = {
+  readonly explanation?: FrontierExplanation
+  readonly transition?: RunnableFrontierTransition
+}
+
+type ObservedOperationTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "ObservePlannedAttemptContinuationGraph"
+      | "ObservePlannedAttemptContinuationSpecification"
+      | "ReleaseExternallyCompletedTaskClaim"
+  }
+>
+
+const isObservedOperationTransition = (
+  transition: RunnableFrontierTransition
+): transition is ObservedOperationTransition =>
+  transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+  transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
+  transition._tag === "ReleaseExternallyCompletedTaskClaim"
+
+const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (began?.event._tag === "WorkflowRunBegan") return began.event.target
+  const historicalGraph = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" && event.observation._tag !== "FocusedTaskWorkSpecificationFacts"
+  )
+  return historicalGraph?.event._tag === "TaskTrackerFactsObserved"
+    ? historicalGraph.event.observation.target
+    : undefined
+}
+
+const decisionWithoutCurrentGraph = (
+  plannedAttempt: PlannedTaskAttempt,
+  planOperationId: OperationId | undefined,
+  records: ReadonlyArray<JournalRecord>,
+  activationBaselinePosition: Option.Option<JournalPosition>
+): ContinuationDecision => {
+  const target = continuationTarget(records)
+  if (target === undefined) {
+    return {
+      explanation: FrontierExplanation.PlannedAttemptExecutorWorkTypedIssue({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+        reason: "MissingFreshFacts"
+      })
+    }
+  }
+  const baseline = Option.getOrElse(activationBaselinePosition, () => 0)
+  return {
+    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+      operation: makeTrackerGraphObservationOperation(
+        OperationId.make(`continuation:${plannedAttempt.attemptId}:after:${baseline}:graph`),
+        target,
+        planOperationId === undefined ? [] : [planOperationId],
+        [plannedAttempt.taskId]
+      ),
+      plannedAttempt
+    })
+  }
+}
+
+const continuationDecisionFor = (
+  transition: RunnableFrontierTransition,
+  records: ReadonlyArray<JournalRecord>,
+  currentGraphObservation: CurrentGraphObservation | undefined,
+  activationBaselinePosition: Option.Option<JournalPosition>
+): ContinuationDecision => {
+  if (transition._tag !== "ContinuePlannedAttemptExecutorWork") return { transition }
+  const plannedAttempt = transition.plannedAttempt
+  const plan = records.find(
+    ({ event }) =>
+      event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )?.event
+  const planOperationId = plan?._tag === "TaskAttemptPlanned" ? plan.operation.operationId : undefined
+  if (currentGraphObservation === undefined) {
+    return decisionWithoutCurrentGraph(plannedAttempt, planOperationId, records, activationBaselinePosition)
+  }
+  const currentSpecificationRecord = records.findLast(
+    ({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === plannedAttempt.taskId &&
+      position > currentGraphObservation.position
+  )
+  if (currentSpecificationRecord !== undefined) return { transition }
+  return {
+    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+      operation: makeTaskWorkSpecificationObservationOperation(
+        OperationId.make(
+          `continuation:${plannedAttempt.attemptId}:after:${currentGraphObservation.position}:specification`
+        ),
+        currentGraphObservation.event.observation.target,
+        plannedAttempt.taskId,
+        [...(planOperationId === undefined ? [] : [planOperationId]), currentGraphObservation.event.operationId]
+      ),
+      plannedAttempt
+    })
+  }
+}
+
+const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
+  "IntegrationDependencyWait",
+  "IntegrationConfigurationWait",
+  "IntegrationInProgress",
+  "IntegrationTrackerFactsWait",
+  "IntegrationTargetWait",
+  "PlannedAttemptTaskLifecycleConstraint",
+  "PlannedAttemptTaskExternalSuccessConstraint",
+  "PlannedAttemptTaskMembershipConstraint",
+  "PlannedAttemptTaskSpecificationChangeConstraint",
+  "WorkflowOperationTaskMembershipConstraint"
+])
+
+const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
+  "AcquireStartedIntegrationTarget",
+  "ObservePlannedAttemptContinuationGraph",
+  "ObservePlannedAttemptContinuationSpecification",
+  "QueueAcceptedResultIntegrationResponsibility",
+  "ReleaseExternallyCompletedTaskClaim",
+  "ReleaseStartedIntegrationTarget",
+  "SuspendPlannedAttemptExecutorWork",
+  "StartQueuedIntegration"
+])
+
 const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
@@ -167,14 +379,39 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
     responsibility: runState.responsibility,
     responsibilityFacts: deriveJournalResponsibilityFacts(runState)
   })
+  const currentGraphRecord = runState.workflowHistory.records.findLast(
+    ({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+      positionIsAfter(position, activationBaselinePosition)
+  )
+  const currentGraphObservation =
+    currentGraphRecord?.event._tag === "TaskTrackerFactsObserved"
+      ? { event: currentGraphRecord.event, position: currentGraphRecord.position }
+      : undefined
+  const continuationDecisions = ordinary.transitions.map((transition) =>
+    continuationDecisionFor(
+      transition,
+      runState.workflowHistory.records,
+      currentGraphObservation,
+      activationBaselinePosition
+    )
+  )
   const integration = deriveIntegrationFrontier(runState, {
     ...(yield* integrationResources.snapshot),
     currentTrackerTaskIds,
     integrationTarget
   })
   return {
-    explanations: [...ordinary.explanations, ...integration.explanations],
-    transitions: [...integration.transitions, ...ordinary.transitions]
+    explanations: [
+      ...ordinary.explanations,
+      ...continuationDecisions.flatMap(({ explanation }) => (explanation === undefined ? [] : [explanation])),
+      ...integration.explanations
+    ],
+    transitions: [
+      ...integration.transitions,
+      ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition]))
+    ]
   }
 })
 
@@ -191,23 +428,8 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
     activationBaselinePosition
   )
   return {
-    explanations: frontier.explanations.filter(
-      ({ _tag }) =>
-        _tag === "IntegrationDependencyWait" ||
-        _tag === "IntegrationConfigurationWait" ||
-        _tag === "IntegrationInProgress" ||
-        _tag === "IntegrationTrackerFactsWait" ||
-        _tag === "IntegrationTargetWait" ||
-        _tag === "PlannedAttemptTaskMembershipConstraint" ||
-        _tag === "WorkflowOperationTaskMembershipConstraint"
-    ),
-    transitions: frontier.transitions.filter(
-      ({ _tag }) =>
-        _tag === "AcquireStartedIntegrationTarget" ||
-        _tag === "QueueAcceptedResultIntegrationResponsibility" ||
-        _tag === "ReleaseStartedIntegrationTarget" ||
-        _tag === "StartQueuedIntegration"
-    )
+    explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
+    transitions: frontier.transitions.filter(({ _tag }) => journaledFreshTransitionTags.has(_tag))
   }
 })
 
@@ -299,6 +521,8 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
   function* (runId: RunId, integrationTarget: Option.Option<IntegrationTarget>) {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* JournalStore
+    const workflowInterpreter = Context.getOption(yield* Effect.context<never>(), WorkflowInterpreter)
+    const workflowTrace = Context.getOption(yield* Effect.context<never>(), WorkflowTrace)
     const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
     const integrationResources = yield* makeIntegrationTargetResourceController()
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
@@ -308,6 +532,29 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
         Effect.provideService(PlannedAttemptExecutor, executor),
         Effect.provideService(JournalStore, journal)
       )
+    const runObservedOperation = (
+      transition: ObservedOperationTransition
+    ): Effect.Effect<void, RunRecoveryActivationError> =>
+      Effect.gen(function* () {
+        const interpreter = Option.getOrUndefined(workflowInterpreter)
+        if (interpreter === undefined) {
+          return yield* Effect.die(`fresh journal activation cannot interpret ${transition._tag}`)
+        }
+        if (Option.isSome(workflowTrace)) {
+          yield* workflowTrace.value.emit(OperationSelected.make({ operation: transition.operation }))
+        }
+        switch (transition._tag) {
+          case "ObservePlannedAttemptContinuationGraph":
+            yield* interpreter.readTrackerGraph(transition.operation)
+            return
+          case "ObservePlannedAttemptContinuationSpecification":
+            yield* interpreter.readTaskWorkSpecification(transition.operation)
+            return
+          case "ReleaseExternallyCompletedTaskClaim":
+            yield* interpreter.releaseTaskClaim(transition.operation)
+            return
+        }
+      })
     return RunRecoveryActivation.of({
       _tag: "JournaledFreshRunActivation",
       continueFreshPlannedAttemptExecutorWork: continueAttempt,
@@ -323,12 +570,28 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       ),
       reconstructedPlannedAttemptPositions: [],
       runId,
-      runTransition: (transition) =>
-        provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
-          Effect.flatMap((handled) =>
-            handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
-          )
-        ),
+      runTransition: (transition, execution) =>
+        transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+        transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
+        transition._tag === "ReleaseExternallyCompletedTaskClaim"
+          ? runObservedOperation(transition)
+          : transition._tag === "SuspendPlannedAttemptExecutorWork"
+            ? requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
+                Effect.provideService(PlannedAttemptExecutor, executor),
+                Effect.provideService(JournalStore, journal),
+                Effect.flatMap((report) =>
+                  report._tag === "SafelySuspended" || report._tag === "Terminal"
+                    ? execution.releasePlannedAttemptExecutorWorkPosition(
+                        plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+                      )
+                    : Effect.void
+                )
+              )
+            : provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
+                Effect.flatMap((handled) =>
+                  handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
+                )
+              ),
       waitForNextExecutorWake: Effect.void
     })
   }
@@ -351,6 +614,8 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   const dependencies = yield* Effect.context<JournalStore | WorkflowInterpreter | WorkflowTrace>()
   const integrationResources = yield* makeIntegrationTargetResourceController()
   const plannedAttemptExecutor = yield* PlannedAttemptExecutor
+  const workflowInterpreter = yield* WorkflowInterpreter
+  const workflowTrace = yield* WorkflowTrace
   const recoveryAuthority = yield* PlannedAttemptRecoveryAuthority
   const provideDependencies = <A, E>(
     effect: Effect.Effect<A, E, JournalStore | WorkflowInterpreter | WorkflowTrace>
@@ -387,28 +652,57 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     return yield* readRecoveredFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
   })
   const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
+  const runObservedOperation = Effect.fn("RunRecoveryActivation.runObservedOperation")(function* (
+    transition: ObservedOperationTransition
+  ) {
+    yield* workflowTrace.emit(OperationSelected.make({ operation: transition.operation }))
+    switch (transition._tag) {
+      case "ObservePlannedAttemptContinuationGraph":
+        yield* workflowInterpreter.readTrackerGraph(transition.operation)
+        return
+      case "ObservePlannedAttemptContinuationSpecification":
+        yield* workflowInterpreter.readTaskWorkSpecification(transition.operation)
+        return
+      case "ReleaseExternallyCompletedTaskClaim":
+        yield* workflowInterpreter.releaseTaskClaim(transition.operation)
+        return
+    }
+  })
+  const runExecutorTransition = Effect.fn("RunRecoveryActivation.runExecutorTransition")(function* (
+    transition: Extract<
+      RunnableFrontierTransition,
+      { readonly _tag: "ContinuePlannedAttemptExecutorWork" | "SuspendPlannedAttemptExecutorWork" }
+    >,
+    execution: OwnedTransitionExecution
+  ) {
+    const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+    yield* recoveryAuthority.verify(transition.plannedAttempt)
+    if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
+      yield* execution.bindPlannedAttemptExecutorPosition(correlation)
+    }
+    const report = yield* (
+      transition._tag === "ContinuePlannedAttemptExecutorWork"
+        ? continuePlannedAttemptExecutorWork(transition.plannedAttempt)
+        : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt)
+    ).pipe(Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor))
+    if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
+      yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
+    }
+  })
   const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
     transition: RunnableFrontierTransition,
     execution: OwnedTransitionExecution
   ) {
     if (yield* runIntegrationTransition(transition, integrationResources)) return
+    if (isObservedOperationTransition(transition)) {
+      yield* runObservedOperation(transition)
+      return
+    }
     if (
       transition._tag === "ContinuePlannedAttemptExecutorWork" ||
       transition._tag === "SuspendPlannedAttemptExecutorWork"
     ) {
-      const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-      yield* recoveryAuthority.verify(transition.plannedAttempt)
-      if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
-        yield* execution.bindPlannedAttemptExecutorPosition(correlation)
-      }
-      const report = yield* (
-        transition._tag === "ContinuePlannedAttemptExecutorWork"
-          ? continuePlannedAttemptExecutorWork(transition.plannedAttempt)
-          : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt)
-      ).pipe(Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor))
-      if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
-        yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
-      }
+      yield* runExecutorTransition(transition, execution)
       return
     }
     yield* recoverRunnableTransition(runId, transition)

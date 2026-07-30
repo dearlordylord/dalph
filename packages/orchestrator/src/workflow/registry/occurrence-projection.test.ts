@@ -673,7 +673,8 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
         readTaskWorkSpecification: () => Effect.die("startup must not read task-work specifications"),
         reconcileTaskWorktree: () => Effect.die("startup authority reread must not reach Git"),
-        recordTaskAttemptPlan: () => Effect.die("startup authority reread must not reach attempt planning")
+        recordTaskAttemptPlan: () => Effect.die("startup authority reread must not reach attempt planning"),
+        releaseTaskClaim: () => Effect.die("startup authority reread must not release a tracker claim")
       })
       const journal = JournalStore.of({
         append: () => Effect.die("startup authority reread must not append"),

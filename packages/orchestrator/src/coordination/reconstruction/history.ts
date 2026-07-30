@@ -24,6 +24,7 @@ import {
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { validateRunPolicyHistory } from "./run-policy-history.js"
 import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
+import { validateTaskClaimRelease } from "./claim-release-history.js"
 
 const finalArrayElementOffset = -1
 
@@ -407,6 +408,7 @@ export const reduceWorkflowJournalHistory = (
     validateOperationEvent(record, runId, indexes, issues)
     validatePlan(record, runId, indexes, issues)
     validateClaim(record, runId, records, issues)
+    validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
     validateTrackerObservation(record, runId, records, issues)
     validateReconfirmationReference(record, runId, indexes, issues)
     validateExecutorEvent(record, runId, indexes, issues)

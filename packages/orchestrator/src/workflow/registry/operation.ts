@@ -4,7 +4,7 @@ import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { PlannedTaskAttempt, TaskId as TaskIdSchema } from "@dalph/contracts"
 import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
-import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
+import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -49,6 +49,22 @@ const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
   )
 )
 
+const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  release: TaskClaimRelease
+}).check(
+  Schema.makeFilter((operation) => {
+    const selfPredecessor = withoutSelfPredecessor({
+      operationId: operation.release.operationId,
+      predecessorOperationIds: operation.predecessorOperationIds
+    })
+    if (selfPredecessor !== undefined) return selfPredecessor
+    return operation.predecessorOperationIds.includes(operation.release.claim.operationId)
+      ? undefined
+      : { issue: "a claim release must causally name the exact claim acquisition", path: ["predecessorOperationIds"] }
+  })
+)
+
 const RecordTaskAttemptPlanOperation = Schema.TaggedStruct("RecordTaskAttemptPlan", {
   operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt,
@@ -70,12 +86,14 @@ export const WorkflowOperation = Object.assign(
     ReadTrackerGraphOperation,
     ReadTaskWorkSpecificationOperation,
     AcquireTaskClaimOperation,
+    ReleaseTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
     ReconcileTaskWorktreeOperation
   ]),
   {
     cases: {
       AcquireTaskClaim: AcquireTaskClaimOperation,
+      ReleaseTaskClaim: ReleaseTaskClaimOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadTrackerGraph: ReadTrackerGraphOperation,
@@ -91,7 +109,11 @@ interface CausalGraphEntry {
 }
 
 export const workflowOperationId = (operation: WorkflowOperation): OperationId =>
-  operation._tag === "AcquireTaskClaim" ? operation.acquisition.operationId : operation.operationId
+  operation._tag === "AcquireTaskClaim"
+    ? operation.acquisition.operationId
+    : operation._tag === "ReleaseTaskClaim"
+      ? operation.release.operationId
+      : operation.operationId
 
 const orderedBefore = -1
 const orderedSame = 0
@@ -146,6 +168,15 @@ export const makeTaskClaimAcquisitionOperation = (fields: {
 }): typeof WorkflowOperation.cases.AcquireTaskClaim.Type =>
   WorkflowOperation.cases.AcquireTaskClaim.make({
     acquisition: fields.acquisition,
+    predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
+  })
+
+export const makeTaskClaimReleaseOperation = (fields: {
+  readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  readonly release: TaskClaimRelease
+}): typeof WorkflowOperation.cases.ReleaseTaskClaim.Type =>
+  WorkflowOperation.cases.ReleaseTaskClaim.make({
+    ...fields,
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
 

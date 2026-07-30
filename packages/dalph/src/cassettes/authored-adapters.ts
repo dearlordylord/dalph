@@ -78,6 +78,8 @@ const actualDecision = (item: TraceItem): CassetteDecision | undefined => {
       return AuthoredCassetteDecision.cases.ReadTaskWorkSpecification.make({ taskId: item.operation.taskId })
     case "ReadTrackerGraph":
       return AuthoredCassetteDecision.cases.ReadTrackerGraph.make({ target: item.operation.target })
+    case "ReleaseTaskClaim":
+      return AuthoredCassetteDecision.cases.ReleaseTaskClaim.make({ taskId: item.operation.release.claim.taskId })
     case "ReconcileTaskWorktree":
       return AuthoredCassetteDecision.cases.ReconcileTaskWorktree.make({
         attemptId: item.operation.plannedAttempt.attemptId,

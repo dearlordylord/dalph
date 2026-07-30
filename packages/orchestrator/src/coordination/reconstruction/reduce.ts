@@ -37,6 +37,13 @@ const taskBoundaryResponsibility = (record: JournalRecord): WorkflowResponsibili
       taskId: event.operation.acquisition.taskId
     })
   }
+  if (event._tag === "TaskClaimReleaseIntended") {
+    return WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+      beganAt: record.position,
+      operation: event.operation,
+      taskId: event.operation.release.claim.taskId
+    })
+  }
   if (event._tag === "TaskWorktreeReconciliationIntended") {
     return WorkflowResponsibilityEntry.cases.TaskWorktreeResponsibility.make({
       beganAt: record.position,

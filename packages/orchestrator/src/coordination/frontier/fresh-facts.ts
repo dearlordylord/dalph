@@ -1,10 +1,12 @@
 import { Data } from "effect"
 import {
   type TaskId,
+  type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
@@ -15,7 +17,15 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
+  TaskExternalSuccessConstraint: Record<never, never>
+  TaskExternalSuccessReleaseNeeded: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
+  TaskExternalSuccessSettled: Record<never, never>
+  TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
   TaskMembershipConstraint: Record<never, never>
+  TaskSpecificationChangeConstraint: {
+    readonly observedFingerprint: TaskRevision
+    readonly plannedFingerprint: TaskRevision
+  }
   ForeignClaimIsolation: Record<never, never>
   MissingClaim: Record<never, never>
   Paused: Record<never, never>
@@ -34,7 +44,12 @@ type PlannedAttemptExecutorDisposition = Extract<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "TaskExternalSuccessConstraint"
+      | "TaskExternalSuccessReleaseNeeded"
+      | "TaskExternalSuccessSettled"
+      | "TaskLifecycleConstraint"
       | "TaskMembershipConstraint"
+      | "TaskSpecificationChangeConstraint"
       | "Ready"
   }
 >
@@ -46,6 +61,11 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "TaskExternalSuccessConstraint"
+      | "TaskExternalSuccessReleaseNeeded"
+      | "TaskExternalSuccessSettled"
+      | "TaskLifecycleConstraint"
+      | "TaskSpecificationChangeConstraint"
   }
 >
 

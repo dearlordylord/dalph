@@ -91,7 +91,8 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
             })
           })
         ),
-      recordTaskAttemptPlan: () => Effect.die("journal wrapper owns this")
+      recordTaskAttemptPlan: () => Effect.die("journal wrapper owns this"),
+      releaseTaskClaim: () => Effect.die("unused")
     })
   )
   const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))
@@ -147,7 +148,8 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
       readTrackerGraph: () => Effect.succeed(snapshot),
       readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
-      recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
+      recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation })),
+      releaseTaskClaim: () => Effect.die("unused")
     })
   )
   const testLayer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))

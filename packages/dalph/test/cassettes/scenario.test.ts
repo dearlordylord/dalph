@@ -21,6 +21,8 @@ import {
   deriveIntegrationFrontier,
   describeJournalEvent,
   JournalPosition,
+  makeTaskClaimReleaseOperation,
+  OperationId,
   PlannedAttemptExecutorReportOrdinal,
   RunPolicyRevision,
   TrackerRevision,
@@ -629,7 +631,17 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
                 { _tag: "SetTaskExecutionCapacity", capacity: TaskWorkCapacity.make(1) } as const,
                 { _tag: "CoordinatorProcessDies" } as const,
                 { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
-                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const
+                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const,
+                {
+                  _tag: "DalphSelects",
+                  operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") }
+                } as const,
+                {
+                  _tag: "TaskWorkSpecificationReadReturned",
+                  body: "Complete task A.",
+                  taskId: TaskId.make("A"),
+                  title: "Complete A"
+                } as const
               ]
             : [])
         ])
@@ -695,175 +707,342 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
   })
 )
 
-it.effect("continues independent B while recovered A has a target-membership constraint", () =>
-  Effect.gen(function* () {
-    const target = "localized-constraint-target"
-    const aAttemptId = AttemptId.make("attempt:A:0")
-    const bAttemptId = AttemptId.make("attempt:B:0")
-    const initialGraph = {
-      revision: TrackerRevision.make("localized-constraint-initial"),
-      tasks: [
-        { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
-        {
-          id: TaskId.make("B"),
-          lifecycle: { _tag: "Open" } as const,
-          parentTaskId: null,
-          prerequisiteIds: [TaskId.make("A")]
-        }
-      ]
-    }
-    const localizedGraph = {
-      revision: TrackerRevision.make("pipeline-A-left-target"),
-      tasks: [{ id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }]
-    }
-    const localizedCassette = {
-      _tag: "AuthoredScenarioCassette",
-      name: "A leaves the target while independent B continues",
-      schemaVersion: 1,
-      startingFacts: {
-        executorWork: "NoPriorReport",
-        journal: "Empty",
-        taskClaims: [],
-        taskWorkSpecifications: [
-          { body: "Complete task A.", taskId: TaskId.make("A"), title: "Complete A" },
-          { body: "Complete independent task B.", taskId: TaskId.make("B"), title: "Complete B" }
-        ],
-        trackerGraph: initialGraph,
-        worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
-      },
-      story: [
-        { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } },
-        {
-          _tag: "RunCoordinator",
-          baseSha: "3333333333333333333333333333333333333333",
-          claimOwner: "localized-constraint-owner",
-          claimTokenPrefix: "localized-constraint-claim",
-          executor: "executor:controlled-fake",
-          integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
-          target,
-          worktreeRoot: "/dalph/cassettes/localized-constraint"
+it.effect(
+  "safely suspends changed A while independent B continues for membership, specification, lifecycle, and external success",
+  () =>
+    Effect.gen(function* () {
+      const target = "localized-constraint-target"
+      const aAttemptId = AttemptId.make("attempt:A:0")
+      const bAttemptId = AttemptId.make("attempt:B:0")
+      const initialGraph = {
+        revision: TrackerRevision.make("localized-constraint-initial"),
+        tasks: [
+          { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
+          {
+            id: TaskId.make("B"),
+            lifecycle: { _tag: "Open" } as const,
+            parentTaskId: null,
+            prerequisiteIds: [TaskId.make("A")]
+          }
+        ]
+      }
+      const localizedGraph = {
+        revision: TrackerRevision.make("pipeline-A-left-target"),
+        tasks: [{ id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }]
+      }
+      const localizedCassette = {
+        _tag: "AuthoredScenarioCassette",
+        name: "A leaves the target while independent B continues",
+        schemaVersion: 1,
+        startingFacts: {
+          executorWork: "NoPriorReport",
+          journal: "Empty",
+          taskClaims: [],
+          taskWorkSpecifications: [
+            { body: "Complete task A.", taskId: TaskId.make("A"), title: "Complete A" },
+            { body: "Complete independent task B.", taskId: TaskId.make("B"), title: "Complete B" }
+          ],
+          trackerGraph: initialGraph,
+          worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
         },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") } },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") } },
-        {
-          _tag: "TaskWorkSpecificationReadReturned",
-          body: "Complete task A.",
-          taskId: TaskId.make("A"),
-          title: "Complete A"
-        },
-        {
-          _tag: "DalphSelects",
-          operation: { _tag: "RecordTaskAttemptPlan", attemptId: aAttemptId, taskId: TaskId.make("A") }
-        },
-        {
-          _tag: "DalphSelects",
-          operation: { _tag: "ReconcileTaskWorktree", attemptId: aAttemptId, taskId: TaskId.make("A") }
-        },
-        {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Running", attemptId: aAttemptId },
-          request: "StartOrContinue"
-        },
-        { _tag: "CoordinatorProcessDies" },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
-        {
-          _tag: "TaskWorkSpecificationReadReturned",
-          body: "Complete independent task B.",
-          taskId: TaskId.make("B"),
-          title: "Complete B"
-        },
-        {
-          _tag: "DalphSelects",
-          operation: { _tag: "RecordTaskAttemptPlan", attemptId: bAttemptId, taskId: TaskId.make("B") }
-        },
-        {
-          _tag: "DalphSelects",
-          operation: { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") }
-        },
-        {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Running", attemptId: bAttemptId },
-          request: "StartOrContinue"
-        },
-        {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
-          request: "StartOrContinue"
-        },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-        {
-          _tag: "ExpectedBehavior",
-          orchestration: [
-            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: aAttemptId, taskId: TaskId.make("A") },
-            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "Running" },
-            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: bAttemptId, taskId: TaskId.make("B") },
-            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "Running" },
-            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "TerminalCompleted" }
-          ] as const,
-          protocol: null,
-          taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: TaskId.make("B") }] }
-        }
-      ]
-    }
+        story: [
+          { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } },
+          {
+            _tag: "RunCoordinator",
+            baseSha: "3333333333333333333333333333333333333333",
+            claimOwner: "localized-constraint-owner",
+            claimTokenPrefix: "localized-constraint-claim",
+            executor: "executor:controlled-fake",
+            integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
+            target,
+            worktreeRoot: "/dalph/cassettes/localized-constraint"
+          },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+          { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") } },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") } },
+          {
+            _tag: "TaskWorkSpecificationReadReturned",
+            body: "Complete task A.",
+            taskId: TaskId.make("A"),
+            title: "Complete A"
+          },
+          {
+            _tag: "DalphSelects",
+            operation: { _tag: "RecordTaskAttemptPlan", attemptId: aAttemptId, taskId: TaskId.make("A") }
+          },
+          {
+            _tag: "DalphSelects",
+            operation: { _tag: "ReconcileTaskWorktree", attemptId: aAttemptId, taskId: TaskId.make("A") }
+          },
+          {
+            _tag: "PlannedAttemptExecutorWorkReported",
+            report: { _tag: "Running", attemptId: aAttemptId },
+            request: "StartOrContinue"
+          },
+          { _tag: "CoordinatorProcessDies" },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+          {
+            _tag: "PlannedAttemptExecutorWorkReported",
+            report: { _tag: "SafelySuspended", attemptId: aAttemptId },
+            request: "Suspend"
+          },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+          { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
+          {
+            _tag: "TaskWorkSpecificationReadReturned",
+            body: "Complete independent task B.",
+            taskId: TaskId.make("B"),
+            title: "Complete B"
+          },
+          {
+            _tag: "DalphSelects",
+            operation: { _tag: "RecordTaskAttemptPlan", attemptId: bAttemptId, taskId: TaskId.make("B") }
+          },
+          {
+            _tag: "DalphSelects",
+            operation: { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") }
+          },
+          {
+            _tag: "PlannedAttemptExecutorWorkReported",
+            report: { _tag: "Running", attemptId: bAttemptId },
+            request: "StartOrContinue"
+          },
+          {
+            _tag: "PlannedAttemptExecutorWorkReported",
+            report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
+            request: "StartOrContinue"
+          },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+          {
+            _tag: "ExpectedBehavior",
+            orchestration: [
+              {
+                _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+                attemptId: aAttemptId,
+                taskId: TaskId.make("A")
+              },
+              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "Running" },
+              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "SafelySuspended" },
+              {
+                _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+                attemptId: bAttemptId,
+                taskId: TaskId.make("B")
+              },
+              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "Running" },
+              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "TerminalCompleted" }
+            ] as const,
+            protocol: null,
+            taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: TaskId.make("B") }] }
+          }
+        ]
+      }
 
-    const run = yield* runAuthoredScenarioCassette(localizedCassette)
-    const recorded = yield* projectRecordedCassette(run.records)
-    const membershipObservedAt = run.records.findIndex(
-      ({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" &&
-        event.observation._tag === "CompleteTaskTrackerFacts" &&
-        event.observation.factFamilies.some(
-          (family) =>
-            family._tag === "TaskTargetMembership" &&
-            family.memberTaskIds.length === 1 &&
-            family.memberTaskIds[0] === TaskId.make("B")
+      const run = yield* runAuthoredScenarioCassette(localizedCassette)
+      const recorded = yield* projectRecordedCassette(run.records)
+      const membershipObservedAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            (family) =>
+              family._tag === "TaskTargetMembership" &&
+              family.memberTaskIds.length === 1 &&
+              family.memberTaskIds[0] === TaskId.make("B")
+          )
+      )
+      const bResponsibilityAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+
+      expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+      expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([aAttemptId])
+      expect(
+        run.records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
+            ? [event.report._tag]
+            : []
         )
-    )
-    const bResponsibilityAt = run.records.findIndex(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-        event.plannedAttempt.taskId === TaskId.make("B")
-    )
+      ).toEqual(["Running", "SafelySuspended"])
+      expect(membershipObservedAt).toBeGreaterThan(0)
+      expect(bResponsibilityAt).toBeGreaterThan(membershipObservedAt)
+      expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+      expect(
+        recorded.entries.some(
+          (entry) =>
+            entry._tag === "PlannedAttemptExecutorWorkReported" &&
+            entry.report.correlation.attemptId === aAttemptId &&
+            entry.report._tag === "Terminal"
+        )
+      ).toBe(false)
+      expect(renderRecordedCassetteLyrics(recorded)).toContain(
+        `The executor reported Terminal for attempt ${bAttemptId}.`
+      )
+      expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
-    expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([])
-    expect(
-      run.records.flatMap(({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
-          ? [event.report._tag]
-          : []
+      const externallyCompletedGraph = {
+        revision: TrackerRevision.make("pipeline-A-completed-externally"),
+        tasks: [
+          {
+            id: TaskId.make("A"),
+            lifecycle: { _tag: "CompletedSuccessfully" } as const,
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          {
+            id: TaskId.make("B"),
+            lifecycle: { _tag: "Open" } as const,
+            parentTaskId: null,
+            prerequisiteIds: [TaskId.make("A")]
+          }
+        ]
+      }
+      const externalSuccessStory = localizedCassette.story.map((item) =>
+        item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
+          ? { ...item, graph: externallyCompletedGraph }
+          : item
       )
-    ).toEqual(["Running"])
-    expect(membershipObservedAt).toBeGreaterThan(0)
-    expect(bResponsibilityAt).toBeGreaterThan(membershipObservedAt)
-    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-    expect(
-      recorded.entries.some(
-        (entry) =>
-          entry._tag === "PlannedAttemptExecutorWorkReported" &&
-          entry.report.correlation.attemptId === aAttemptId &&
-          entry.report._tag === "Terminal"
+      const externalSuspensionAt = externalSuccessStory.findIndex(
+        (item) =>
+          item._tag === "PlannedAttemptExecutorWorkReported" &&
+          "report" in item &&
+          item.report._tag === "SafelySuspended" &&
+          item.report.attemptId === aAttemptId
       )
-    ).toBe(false)
-    expect(renderRecordedCassetteLyrics(recorded)).toContain(
-      `The executor reported Terminal for attempt ${bAttemptId}.`
-    )
-    expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
-  })
+      const externalSuccessCassette = {
+        ...localizedCassette,
+        name: "A completes externally while its exact claim and WIP remain",
+        story: [
+          ...externalSuccessStory.slice(0, externalSuspensionAt + 1),
+          { _tag: "DalphSelects" as const, operation: { _tag: "ReleaseTaskClaim" as const, taskId: TaskId.make("A") } },
+          ...externalSuccessStory.slice(externalSuspensionAt + 1)
+        ]
+      }
+      const externalSuccessRun = yield* runAuthoredScenarioCassette(externalSuccessCassette)
+      const claimReleaseEvents = externalSuccessRun.records.filter(
+        ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
+      )
+      expect(claimReleaseEvents.map(({ event }) => event._tag)).toEqual([
+        "TaskClaimReleaseIntended",
+        "TaskClaimReleased"
+      ])
+      expect(
+        externalSuccessRun.records.some(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" &&
+            event.report.correlation.attemptId === aAttemptId &&
+            event.report._tag === "Terminal"
+        )
+      ).toBe(false)
+      expect(
+        externalSuccessRun.records.some(
+          ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
+        )
+      ).toBe(false)
+      expect(externalSuccessRun.observedBehavior.taskWorkResults).toEqual([
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+      ])
+
+      const changedInstructionsGraph = {
+        revision: TrackerRevision.make("pipeline-A-instructions-changed"),
+        tasks: [
+          { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
+          { id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      }
+      const changedGraphStory = localizedCassette.story.map((item) =>
+        item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
+          ? { ...item, graph: changedInstructionsGraph }
+          : item
+      )
+      const firstChangedGraphAt = changedGraphStory.findIndex(
+        (item) => item._tag === "TrackerGraphReadReturned" && item.graph === changedInstructionsGraph
+      )
+      const changedInstructionsCassette = {
+        ...localizedCassette,
+        name: "A instructions change while independent B continues",
+        story: [
+          ...changedGraphStory.slice(0, firstChangedGraphAt + 1),
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: TaskId.make("A") }
+          },
+          {
+            _tag: "TaskWorkSpecificationReadReturned" as const,
+            body: "Complete changed task A without pretending the old attempt incorporated this text.",
+            taskId: TaskId.make("A"),
+            title: "Complete changed A"
+          },
+          ...changedGraphStory.slice(firstChangedGraphAt + 1)
+        ]
+      }
+      const changedInstructionsRun = yield* runAuthoredScenarioCassette(changedInstructionsCassette)
+      expect(
+        changedInstructionsRun.records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
+            ? [event.report._tag]
+            : []
+        )
+      ).toEqual(["Running", "SafelySuspended"])
+      expect(
+        changedInstructionsRun.records.some(
+          ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
+        )
+      ).toBe(false)
+      expect(changedInstructionsRun.observedBehavior.taskWorkResults).toEqual([
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+      ])
+
+      const terminalWithoutSuccessGraph = {
+        revision: TrackerRevision.make("pipeline-A-terminal-without-success"),
+        tasks: [
+          {
+            id: TaskId.make("A"),
+            lifecycle: { _tag: "TerminalWithoutSuccess" } as const,
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          { id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      }
+      const lifecycleCassette = {
+        ...localizedCassette,
+        name: "A closes without success while independent B continues",
+        story: localizedCassette.story.map((item) =>
+          item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
+            ? { ...item, graph: terminalWithoutSuccessGraph }
+            : item
+        )
+      }
+      const lifecycleRun = yield* runAuthoredScenarioCassette(lifecycleCassette)
+      expect(
+        lifecycleRun.records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
+            ? [event.report._tag]
+            : []
+        )
+      ).toEqual(["Running", "SafelySuspended"])
+      expect(
+        lifecycleRun.records.some(
+          ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
+        )
+      ).toBe(false)
+      expect(lifecycleRun.observedBehavior.taskWorkResults).toEqual([
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+      ])
+    })
 )
 
 it.effect("rejects cassette-local contradictions and leaves an authority mismatch to its ordinary boundary", () =>
@@ -1006,13 +1185,17 @@ it.effect("derives failed task-work results and safely suspended orchestration e
       "The story expects the planned work for task A to fail."
     )
 
+    const suspendedGraph = { revision: TrackerRevision.make("singleton-A-left-target-after-suspension"), tasks: [] }
     const safelySuspended = {
       ...singleton,
-      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item) => {
+      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item, index, source) => {
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
           return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
+        if (item._tag === "TrackerGraphReadReturned" && source[index + 1]?._tag === "ExpectedBehavior") {
+          return [...story, { ...item, graph: suspendedGraph }]
+        }
         if (item._tag === "ExpectedBehavior") {
           return [
             ...story,
@@ -1158,13 +1341,17 @@ it.effect("rejects missing, reordered, or additional evidence within either pres
 
 it.effect("rejects no-work-undertaken when Dalph assumed executor-work responsibility for that task", () =>
   Effect.gen(function* () {
+    const suspendedGraph = { revision: TrackerRevision.make("singleton-A-left-target-before-absence-check"), tasks: [] }
     const contradictedAbsence = {
       ...singleton,
-      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item) => {
+      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item, index, source) => {
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
           return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
+        if (item._tag === "TrackerGraphReadReturned" && source[index + 1]?._tag === "ExpectedBehavior") {
+          return [...story, { ...item, graph: suspendedGraph }]
+        }
         if (item._tag === "ExpectedBehavior") {
           return [
             ...story,
@@ -1258,6 +1445,10 @@ it.effect(
       if (executorResponsibilityEntry?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
         return yield* Effect.die("missing executor responsibility entry")
       }
+      const acquiredClaimEntry = projected.entries.find((entry) => entry._tag === "TaskClaimAcquired")
+      if (acquiredClaimEntry?._tag !== "TaskClaimAcquired") {
+        return yield* Effect.die("missing acquired claim entry")
+      }
       const acceptedResult = AcceptedResult.make({
         commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
       })
@@ -1340,6 +1531,14 @@ it.effect(
           plannedAttempt: executorResponsibilityEntry.plannedAttempt
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const claimReleaseOperation = makeTaskClaimReleaseOperation({
+        predecessorOperationIds: [acquiredClaimEntry.claim.operationId],
+        release: { claim: acquiredClaimEntry.claim, operationId: OperationId.make(`cassette-release:${run.runId}`) }
+      })
+      const claimReleaseEntries = [
+        { _tag: "TaskClaimReleaseIntended" as const, operation: claimReleaseOperation },
+        { _tag: "TaskClaimReleased" as const, release: claimReleaseOperation.release }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const recorded = RecordedCassette.make({
         ...projected,
         entries: [
@@ -1354,6 +1553,7 @@ it.effect(
             revision: RunPolicyRevision.make(2)
           },
           ...integrationEntries,
+          ...claimReleaseEntries,
           ...entriesWithAcceptedResult.slice(insertionIndex)
         ]
       })
@@ -1367,10 +1567,13 @@ it.effect(
           { from: "rename-task-pause-command", to: "renamed-task-pause-command" },
           { from: "rename-task-unpause-command", to: "renamed-task-unpause-command" }
         ],
-        operationIds: Array.from({ length: 7 }, (_unused, ordinal) => ({
-          from: `cassette:${run.runId}:operation:${ordinal}`,
-          to: `renamed-operation:${ordinal}`
-        })),
+        operationIds: [
+          ...Array.from({ length: 7 }, (_unused, ordinal) => ({
+            from: `cassette:${run.runId}:operation:${ordinal}`,
+            to: `renamed-operation:${ordinal}`
+          })),
+          { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" }
+        ],
         runIds: [{ from: run.runId, to: "renamed-run" }],
         taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
@@ -1378,7 +1581,11 @@ it.effect(
       const renamed = yield* renameRecordedCassette(recorded, renaming)
       const recordedHistory = foldRecordedCassette(recorded)
       if (recordedHistory._tag !== "ValidWorkflowJournalHistory") {
-        return yield* Effect.die("alpha-renaming fixture must remain valid before renaming")
+        return yield* Effect.die(
+          `alpha-renaming fixture must remain valid before renaming: ${recordedHistory.issues
+            .map((issue) => JSON.stringify(issue))
+            .join("; ")}`
+        )
       }
       const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
         recordedHistory.records,
@@ -1404,6 +1611,8 @@ it.effect(
         TaskAttemptPlanned: true,
         TaskClaimAcquired: true,
         TaskClaimAcquisitionIntended: true,
+        TaskClaimReleaseIntended: true,
+        TaskClaimReleased: true,
         TaskTrackerFactsObserved: true,
         TaskTrackerReadInitiated: true,
         TaskWorktreeReady: true,
@@ -1414,6 +1623,7 @@ it.effect(
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
         AcquireTaskClaim: true,
+        ReleaseTaskClaim: true,
         ReadTaskWorkSpecification: true,
         ReadTrackerGraph: true,
         RecordTaskAttemptPlan: true,

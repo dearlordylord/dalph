@@ -3,7 +3,13 @@ import { Effect, Layer } from "effect"
 import { TaskAttemptPlanRecordingSimulated } from "../protocols/task-attempt-planning/record.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
 import { controlledTrackerMutationLayer, TrackerMutation } from "../../authorities/task-tracker/claim-mutation.js"
-import { acquireTaskClaimThrough, TaskClaimAcquisitionSimulated, WorkflowInterpreter } from "./interpreter.js"
+import {
+  acquireTaskClaimThrough,
+  releaseTaskClaimThrough,
+  TaskClaimAcquisitionSimulated,
+  TaskClaimReleaseSimulated,
+  WorkflowInterpreter
+} from "./interpreter.js"
 import { TaskWorktreeReconciliationSimulated } from "../protocols/worktree-reconciliation/protocol.js"
 import type { WorkflowOperation } from "../registry/operation.js"
 
@@ -31,10 +37,16 @@ export const makeLiveWorkflowInterpreterLayer = (operationPrefix: "ProductionBas
         yield* onIntentRecorded
         return yield* acquireTaskClaimThrough(tracker, operation)
       })
+      const releaseTaskClaim = Effect.fn(`WorkflowInterpreter.${operationPrefix}.releaseTaskClaim`)(function* (
+        operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+      ) {
+        return yield* releaseTaskClaimThrough(tracker, operation)
+      })
       return WorkflowInterpreter.of({
         acquireTaskClaim,
         readTrackerGraph,
         readTaskWorkSpecification,
+        releaseTaskClaim,
         reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
         recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })
@@ -55,6 +67,7 @@ export const makeDryRunWorkflowInterpreterLayer = (): Layer.Layer<WorkflowInterp
           onIntentRecorded.pipe(Effect.as(TaskClaimAcquisitionSimulated.make({ operation }))),
         readTrackerGraph: (operation) => reader.read(operation.target),
         readTaskWorkSpecification: (operation) => reader.readTaskWorkSpecification(operation.target, operation.taskId),
+        releaseTaskClaim: (operation) => Effect.succeed(TaskClaimReleaseSimulated.make({ release: operation.release })),
         reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
         recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
       })

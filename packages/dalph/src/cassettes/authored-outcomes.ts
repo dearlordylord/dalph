@@ -53,6 +53,7 @@ const protocolEvidenceFor = (
   worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
 ): ReadonlyArray<ProtocolEvidence> => {
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimAcquired", taskId: event.claim.taskId }]
+  if (event._tag === "TaskClaimReleased") return [{ _tag: "TaskClaimReleased", taskId: event.release.claim.taskId }]
   if (event._tag === "TaskAttemptPlanned") {
     return [
       {

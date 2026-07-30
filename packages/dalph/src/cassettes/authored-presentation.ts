@@ -34,6 +34,8 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
   switch (evidence._tag) {
     case "TaskClaimAcquired":
       return `The story expects Dalph to acquire the claim for task ${evidence.taskId}.`
+    case "TaskClaimReleased":
+      return `The story expects Dalph to release its exact claim for task ${evidence.taskId}.`
     case "TaskAttemptPlanned":
       return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
     case "TaskWorktreeReady":

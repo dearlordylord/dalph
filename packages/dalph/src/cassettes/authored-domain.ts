@@ -46,6 +46,7 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
   AcquireTaskClaim: { taskId: TaskId },
   ReadTaskWorkSpecification: { taskId: TaskId },
   ReadTrackerGraph: { target: TrackerTarget },
+  ReleaseTaskClaim: { taskId: TaskId },
   ReconcileTaskWorktree: { attemptId: AttemptId, taskId: TaskId },
   RecordTaskAttemptPlan: { attemptId: AttemptId, taskId: TaskId }
 })
@@ -100,6 +101,7 @@ export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence
 export const AuthoredProtocolEvidence = Schema.TaggedUnion({
   TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
   TaskClaimAcquired: { taskId: TaskId },
+  TaskClaimReleased: { taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type

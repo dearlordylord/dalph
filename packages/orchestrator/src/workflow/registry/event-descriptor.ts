@@ -199,6 +199,22 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         requiredPredecessorKey: intentRecordKey(event.claim.operationId),
         requiredPredecessorKinds: ["TaskClaimAcquisitionIntended"]
       })
+    case "TaskClaimReleaseIntended":
+      return operationEvent({
+        expectedKey: intentRecordKey(event.operation.release.operationId),
+        operationId: event.operation.release.operationId,
+        relatedOperationIds: [event.operation.release.operationId, event.operation.release.claim.operationId],
+        requiredOperationIds: event.operation.predecessorOperationIds
+      })
+    case "TaskClaimReleased":
+      return operationEvent({
+        expectedKey: outcomeRecordKey(event.release.operationId),
+        operationId: event.release.operationId,
+        relatedOperationIds: [event.release.operationId, event.release.claim.operationId],
+        requiredOperationIds: [event.release.operationId],
+        requiredPredecessorKey: intentRecordKey(event.release.operationId),
+        requiredPredecessorKinds: ["TaskClaimReleaseIntended"]
+      })
     case "TaskAttemptPlanned":
       return operationEvent({
         expectedKey: attemptPlanRecordKey(event.operation.plannedAttempt.attemptId),

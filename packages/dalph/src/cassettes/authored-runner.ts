@@ -142,7 +142,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const freshWorkflowLayer = Layer.mergeAll(
         interpreterLayer,
         journaledFreshRunRecoveryActivationLayer(runId, command.integrationTarget).pipe(
-          Layer.provide(freshExecutorLayer)
+          Layer.provide(freshExecutorLayer),
+          Layer.provide(interpreterLayer)
         ),
         integrationTargetSelectionLayer(command.integrationTarget),
         planningLayer("fresh"),

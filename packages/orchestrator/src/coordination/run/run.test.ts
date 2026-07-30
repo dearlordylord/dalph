@@ -147,7 +147,8 @@ effectIt.effect("starts a production Run by recording its identity before readin
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
-          recordTaskAttemptPlan: () => Effect.die("unused")
+          recordTaskAttemptPlan: () => Effect.die("unused"),
+          releaseTaskClaim: () => Effect.die("unused")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -207,7 +208,8 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
-          recordTaskAttemptPlan: () => Effect.die("unused")
+          recordTaskAttemptPlan: () => Effect.die("unused"),
+          releaseTaskClaim: () => Effect.die("unused")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -263,7 +265,8 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
           readTrackerGraph: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
-          recordTaskAttemptPlan: () => Effect.die("unused")
+          recordTaskAttemptPlan: () => Effect.die("unused"),
+          releaseTaskClaim: () => Effect.die("unused")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -321,7 +324,8 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
             ),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
-          recordTaskAttemptPlan: () => Effect.die("unused")
+          recordTaskAttemptPlan: () => Effect.die("unused"),
+          releaseTaskClaim: () => Effect.die("unused")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -412,7 +416,8 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
           readTrackerGraph: () => Effect.succeed(snapshot),
           readTaskWorkSpecification: () => Effect.die("unused"),
           reconcileTaskWorktree: () => Effect.die("unused"),
-          recordTaskAttemptPlan: () => Effect.die("unused")
+          recordTaskAttemptPlan: () => Effect.die("unused"),
+          releaseTaskClaim: () => Effect.die("unused")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -481,7 +486,8 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
           makeTaskWorkSpecification({ body: "Workflow task body", taskId: operation.taskId, title: "Workflow task" })
         ),
       reconcileTaskWorktree: () => Effect.die("unused"),
-      recordTaskAttemptPlan: () => Effect.die("unused")
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
     })
 
     yield* runRecoveredWorkflow(target).pipe(
@@ -561,7 +567,8 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
             }
           })
         ),
-      recordTaskAttemptPlan: () => Effect.succeed(TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt }))
+      recordTaskAttemptPlan: () => Effect.succeed(TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt })),
+      releaseTaskClaim: () => Effect.die("unused")
     })
     const frontierReads = yield* Ref.make(0)
     const recovery = RunRecoveryActivation.of({

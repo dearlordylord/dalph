@@ -68,6 +68,53 @@ await run("planned-attempt executor exhaustive model", [
   "1"
 ])
 
+const taskFactReconciliationInvariants = [
+  "positionHeldUntilSafeSuspension",
+  "changedFactsPreserveWip",
+  "specificationOffersEveryExactChoice",
+  "externalSuccessPreventsDuplicateDelivery",
+  "externalSuccessReleasesOnlyAfterSafeSuspension",
+  "externalSuccessSettlesAfterExactClaimRelease"
+]
+
+await run("task-fact reconciliation model typecheck", [
+  "typecheck",
+  "specs/taskFactReconciliation.qnt"
+])
+await run("task-fact reconciliation deterministic tests", [
+  "test",
+  "specs/taskFactReconciliation_test.qnt",
+  "--main",
+  "taskFactReconciliationTest"
+])
+await run("task-fact reconciliation sampled model", [
+  "run",
+  "specs/taskFactReconciliation.qnt",
+  "--invariants",
+  ...taskFactReconciliationInvariants,
+  "--witnesses",
+  "membershipWaitReached",
+  "lifecycleWaitReached",
+  "specificationChoicesReached",
+  "externalSuccessSettledReached",
+  "--max-steps",
+  "12",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("task-fact reconciliation exhaustive model", [
+  "verify",
+  "specs/taskFactReconciliation.qnt",
+  "--invariants",
+  ...taskFactReconciliationInvariants,
+  "--max-steps",
+  "12",
+  "--verbosity",
+  "1"
+])
+
 const acceptedResultIntegrationInvariants = [
   "cancellationExactlyQueued",
   "queuePositionsAreUnique",

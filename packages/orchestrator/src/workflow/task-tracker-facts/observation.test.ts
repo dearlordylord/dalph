@@ -674,7 +674,8 @@ it("appends one canonical observation for each logical provider read", async () 
       readTrackerGraph: () => Effect.succeed(providerSnapshot),
       readTaskWorkSpecification: () => Effect.die("unused"),
       reconcileTaskWorktree: () => Effect.die("unused"),
-      recordTaskAttemptPlan: () => Effect.die("unused")
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
     })
   )
   const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalStoreLayer))
@@ -758,7 +759,8 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
       readTrackerGraph: () => Effect.die("replay must not call the graph provider"),
       readTaskWorkSpecification: () => Effect.die("replay must not call the focused provider"),
       reconcileTaskWorktree: () => Effect.die("unused"),
-      recordTaskAttemptPlan: () => Effect.die("unused")
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
     })
   )
   const store = memoryJournalStoreLayer
@@ -800,7 +802,8 @@ it("replays a focused read from its canonical journal observation without callin
             return specification
           }),
         reconcileTaskWorktree: () => Effect.die("unused"),
-        recordTaskAttemptPlan: () => Effect.die("unused")
+        recordTaskAttemptPlan: () => Effect.die("unused"),
+        releaseTaskClaim: () => Effect.die("unused")
       })
     })
   )

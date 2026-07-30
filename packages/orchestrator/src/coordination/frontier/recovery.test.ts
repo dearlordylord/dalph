@@ -1,11 +1,15 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
-import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
+import {
+  controlledFakePlannedAttemptExecutorLayer,
+  makeControlledFakePlannedAttemptExecutorLayer
+} from "../../../test/controlled-planned-attempt-executor.js"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -23,6 +27,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { JournalStore } from "../../workflow-journal/store.js"
@@ -30,6 +35,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
   taskTrackerReadIntent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
@@ -37,6 +43,7 @@ import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-
 import {
   activateRecoveredResponsibilities,
   journaledFreshRunRecoveryActivationLayer,
+  makeJournaledFreshRunRecoveryActivation,
   makeRunRecoveryActivation,
   RunRecoveryActivation
 } from "../run/recovery-activation.js"
@@ -45,7 +52,9 @@ import { RunnableFrontierTransition } from "./frontier.js"
 import { recoverRunnableTransition } from "./recovery.js"
 import {
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimReleaseOperation,
   makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
   makeTaskWorktreeReconciliationOperation
 } from "../../workflow/registry/operation.js"
@@ -55,29 +64,63 @@ import {
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
+import { makeOwnedTransitionExecutionFixture, type OwnedTransitionExecution } from "../activation/coordinator.js"
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
 
-it.effect("routes every recovered transition variant through its exact empty-history handler", () => {
+it.effect("routes generic recovery transitions including exact claim-release intent", () => {
   const runId = RunId.make("runnable-transition-routing")
   const taskId = TaskId.make("runnable-transition-task")
   const operationId = OperationId.make("runnable-transition-operation")
-  const transitions = [
-    RunnableFrontierTransition.CheckTaskClaim({ operationId, taskId }),
-    RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId,
-      taskRevision: TaskRevision.make("runnable-transition-revision")
-    }),
-    RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId, taskId }),
-    RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId }),
-    RunnableFrontierTransition.ReconcileTaskWorktree({ operationId, taskId })
-  ]
-
   return Effect.gen(function* () {
+    const claim = ActiveTaskClaim.make({
+      operationId: OperationId.make("runnable-transition-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("runnable-transition-token")
+    })
+    const release = makeTaskClaimReleaseOperation({
+      predecessorOperationIds: [claim.operationId],
+      release: { claim, operationId: OperationId.make("runnable-transition-release") }
+    })
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      intentRecordKey(release.release.operationId),
+      TaskClaimReleaseIntendedEvent.make({ operation: release, version: workflowJournalEventVersion })
+    )
+    const transitions = [
+      RunnableFrontierTransition.CheckTaskClaim({ operationId, taskId }),
+      RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision: TaskRevision.make("runnable-transition-revision")
+      }),
+      RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId, taskId }),
+      RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId }),
+      RunnableFrontierTransition.ReconcileTaskClaimRelease({ operationId: release.release.operationId, taskId }),
+      RunnableFrontierTransition.ReconcileTaskClaimRelease({
+        operationId: OperationId.make("missing-release-intent"),
+        taskId
+      }),
+      RunnableFrontierTransition.ReconcileTaskWorktree({ operationId, taskId })
+    ]
     const results = yield* Effect.forEach(transitions, (transition) => recoverRunnableTransition(runId, transition))
     expect(results).toEqual(Array.from({ length: transitions.length }))
   }).pipe(
@@ -88,7 +131,9 @@ it.effect("routes every recovered transition variant through its exact empty-his
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: (operation) =>
+          Effect.succeed(AuthoritativeTaskClaimReleased.make({ release: operation.release }))
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -134,7 +179,8 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       readTrackerGraph: unused,
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: unused,
-      recordTaskAttemptPlan: unused
+      recordTaskAttemptPlan: unused,
+      releaseTaskClaim: unused
     })
     yield* activateRecoveredResponsibilities(runId, TaskWorkCapacity.make(1)).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter),
@@ -143,6 +189,66 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer)
     )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("keeps recovered executor work stopped when no tracker target can authorize a fresh read", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("missing-continuation-target-run")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("missing-continuation-target-attempt"),
+      baseSha: GitCommitSha.make("3".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/missing-continuation-target"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId: TaskId.make("missing-continuation-target-task"),
+      taskRevision: TaskRevision.make("missing-continuation-target-revision"),
+      worktree: WorktreeLocator.make("/tmp/missing-continuation-target")
+    })
+    const plan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("missing-continuation-target-plan"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+
+    const recovery = yield* makeRunRecoveryActivation(runId)
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        {
+          _tag: "PlannedAttemptExecutorWorkTypedIssue",
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          reason: "MissingFreshFacts"
+        }
+      ],
+      transitions: []
+    })
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provide(trustedPlannedAttemptRecoveryAuthorityLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      })
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
 )
 
 it.effect("a responsible task leaving complete membership becomes a task-local constraint", () =>
@@ -202,7 +308,8 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
@@ -263,11 +370,239 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     Effect.provide(
       journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      })
+    )
   )
 })
 
-it.effect("an executor responsibility leaving complete membership becomes an executor-local constraint", () =>
+it.effect("routes journaled fresh fact reads, exact claim release, and suspension through their boundaries", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("journaled-fresh-transition-routing")
+    const taskId = TaskId.make("journaled-fresh-task")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("journaled-fresh-attempt"),
+      baseSha: GitCommitSha.make("4".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/journaled-fresh-attempt"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make("journaled-fresh-revision"),
+      worktree: WorktreeLocator.make("/tmp/journaled-fresh-attempt")
+    })
+    const target = FixtureTarget.make("journaled-fresh-target")
+    const graph = projectTrackerSnapshot({
+      revision: "journaled-fresh-graph",
+      tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+    })
+    if (graph._tag !== "Valid") return yield* Effect.die("expected valid journaled fresh graph")
+    const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
+    const claim = ActiveTaskClaim.make({
+      operationId: OperationId.make("journaled-fresh-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("journaled-fresh-token")
+    })
+    const release = makeTaskClaimReleaseOperation({
+      predecessorOperationIds: [claim.operationId],
+      release: { claim, operationId: OperationId.make("journaled-fresh-release") }
+    })
+    const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("journaled-fresh-graph-read"), target)
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("journaled-fresh-specification-read"),
+      target,
+      taskId
+    )
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const releasedPositions = yield* Ref.make(0)
+    const execution = makeOwnedTransitionExecutionFixture({
+      bindPlannedAttemptExecutorPosition: () => Effect.void,
+      recordIntent: () => Effect.void,
+      releasePlannedAttemptExecutorWorkPosition: () => Ref.update(releasedPositions, (count) => count + 1)
+    })
+    yield* Effect.gen(function* () {
+      const recovery = yield* makeJournaledFreshRunRecoveryActivation(runId)
+      if (recovery._tag !== "JournaledFreshRunActivation") {
+        return yield* Effect.die("expected journaled fresh activation")
+      }
+      yield* recovery.runTransition(
+        RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+          operation: graphOperation,
+          plannedAttempt
+        }),
+        execution
+      )
+      yield* recovery.runTransition(
+        RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+          operation: specificationOperation,
+          plannedAttempt
+        }),
+        execution
+      )
+      yield* recovery.runTransition(
+        RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation: release }),
+        execution
+      )
+      yield* recovery.runTransition(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt }),
+        execution
+      )
+      yield* recovery.runTransition(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt }),
+        execution
+      )
+    }).pipe(
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: unused,
+          readTrackerGraph: () => Ref.update(calls, (items) => [...items, "graph"]).pipe(Effect.as(graph.snapshot)),
+          readTaskWorkSpecification: () =>
+            Ref.update(calls, (items) => [...items, "specification"]).pipe(Effect.as(specification)),
+          reconcileTaskWorktree: unused,
+          recordTaskAttemptPlan: unused,
+          releaseTaskClaim: (operation) =>
+            Ref.update(calls, (items) => [...items, "release"]).pipe(
+              Effect.as(AuthoritativeTaskClaimReleased.make({ release: operation.release }))
+            )
+        })
+      )
+    )
+
+    expect(yield* Ref.get(calls)).toEqual(["graph", "specification", "release"])
+    expect(yield* Ref.get(releasedPositions)).toBe(1)
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(
+      makeControlledFakePlannedAttemptExecutorLayer([
+        {
+          _tag: "Suspend",
+          correlation: {
+            attemptId: AttemptId.make("journaled-fresh-attempt"),
+            runId: RunId.make("journaled-fresh-transition-routing")
+          },
+          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            correlation: {
+              attemptId: AttemptId.make("journaled-fresh-attempt"),
+              runId: RunId.make("journaled-fresh-transition-routing")
+            }
+          })
+        },
+        {
+          _tag: "Suspend",
+          correlation: {
+            attemptId: AttemptId.make("journaled-fresh-attempt"),
+            runId: RunId.make("journaled-fresh-transition-routing")
+          },
+          report: PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: {
+              attemptId: AttemptId.make("journaled-fresh-attempt"),
+              runId: RunId.make("journaled-fresh-transition-routing")
+            }
+          })
+        }
+      ])
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
+)
+
+it.effect("runs a journaled fresh read when no optional trace output is installed", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("journaled-fresh-without-trace")
+    const taskId = TaskId.make("journaled-fresh-without-trace-task")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("journaled-fresh-without-trace-attempt"),
+      baseSha: GitCommitSha.make("5".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/journaled-fresh-without-trace"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make("journaled-fresh-without-trace-revision"),
+      worktree: WorktreeLocator.make("/tmp/journaled-fresh-without-trace")
+    })
+    const recovery = yield* makeJournaledFreshRunRecoveryActivation(runId)
+    if (recovery._tag !== "JournaledFreshRunActivation") {
+      return yield* Effect.die("expected journaled fresh activation")
+    }
+    yield* recovery.runTransition(
+      RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+        operation: makeTrackerGraphObservationOperation(
+          OperationId.make("journaled-fresh-without-trace-read"),
+          FixtureTarget.make("journaled-fresh-without-trace-target")
+        ),
+        plannedAttempt
+      }),
+      makeOwnedTransitionExecutionFixture({
+        bindPlannedAttemptExecutorPosition: () => Effect.void,
+        recordIntent: () => Effect.void,
+        releasePlannedAttemptExecutorWorkPosition: () => Effect.void
+      })
+    )
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: () =>
+          Effect.suspend(() => {
+            const projection = projectTrackerSnapshot({ revision: "journaled-fresh-without-trace-graph", tasks: [] })
+            return projection._tag === "Valid" ? Effect.succeed(projection.snapshot) : Effect.die("invalid empty graph")
+          }),
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      })
+    )
+  )
+)
+
+it.effect("fails closed when journaled fresh recovery has no interpreter for a selected read", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("journaled-fresh-without-interpreter")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("journaled-fresh-without-interpreter-attempt"),
+      baseSha: GitCommitSha.make("6".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/journaled-fresh-without-interpreter"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId: TaskId.make("journaled-fresh-without-interpreter-task"),
+      taskRevision: TaskRevision.make("journaled-fresh-without-interpreter-revision"),
+      worktree: WorktreeLocator.make("/tmp/journaled-fresh-without-interpreter")
+    })
+    const recovery = yield* makeJournaledFreshRunRecoveryActivation(runId)
+    if (recovery._tag !== "JournaledFreshRunActivation") {
+      return yield* Effect.die("expected journaled fresh activation")
+    }
+    const exit = yield* recovery
+      .runTransition(
+        RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+          operation: makeTrackerGraphObservationOperation(
+            OperationId.make("journaled-fresh-without-interpreter-read"),
+            FixtureTarget.make("journaled-fresh-without-interpreter-target")
+          ),
+          plannedAttempt
+        }),
+        {} as OwnedTransitionExecution
+      )
+      .pipe(Effect.exit)
+    expect(exit._tag).toBe("Failure")
+  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(controlledFakePlannedAttemptExecutorLayer))
+)
+
+it.effect("a task leaving complete membership safely suspends its executor work before the local constraint", () =>
   Effect.gen(function* () {
     const runId = RunId.make("executor-membership-constraint-run")
     const taskId = TaskId.make("removed-executor-task")
@@ -281,16 +616,44 @@ it.effect("an executor responsibility leaving complete membership becomes an exe
       taskRevision: TaskRevision.make("removed-executor-revision"),
       worktree: WorktreeLocator.make("/worktrees/removed-executor-attempt")
     })
+    const claim = makeTaskClaimAcquisitionOperation({
+      acquisition: {
+        operationId: OperationId.make("removed-executor-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("removed-executor-token")
+      },
+      predecessorOperationIds: []
+    })
     const plan = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("removed-executor-plan"),
       plannedAttempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [claim.acquisition.operationId]
     })
+    const claimSettlement = {
+      _tag: "Settlement" as const,
+      operationId: claim.acquisition.operationId,
+      outcome: "ResponsibilityCompleted" as const,
+      taskId
+    }
     const graphRead = makeTrackerGraphObservationOperation(
       OperationId.make("executor-membership-removal-read"),
       FixtureTarget.make("executor-membership-constraint-target")
     )
     const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: { _tag: "ActiveTaskClaim", ...claim.acquisition },
+        version: workflowJournalEventVersion
+      })
+    )
     yield* journal.append(
       runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
@@ -312,8 +675,26 @@ it.effect("an executor responsibility leaving complete membership becomes an exe
     )
 
     const recovery = yield* makeRunRecoveryActivation(runId)
+    const beforeSuspension = yield* recovery.readFrontier
+    expect(beforeSuspension).toEqual({
+      explanations: [claimSettlement],
+      transitions: [{ _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }]
+    })
+    const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: reportOrdinal,
+        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId }
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
     expect(yield* recovery.readFrontier).toEqual({
       explanations: [
+        claimSettlement,
         {
           _tag: "PlannedAttemptTaskMembershipConstraint",
           correlation: { attemptId: plannedAttempt.attemptId, runId },
@@ -322,6 +703,172 @@ it.effect("an executor responsibility leaving complete membership becomes an exe
         }
       ],
       transitions: []
+    })
+    const closedRead = makeTrackerGraphObservationOperation(
+      OperationId.make("executor-lifecycle-close-read"),
+      FixtureTarget.make("executor-membership-constraint-target")
+    )
+    const closedProjection = projectTrackerSnapshot({
+      revision: TrackerRevision.make("executor-task-terminal-without-success"),
+      tasks: [
+        {
+          id: taskId,
+          lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+    if (closedProjection._tag !== "Valid") return yield* Effect.die("expected valid closed task graph")
+    yield* journal.append(runId, intentRecordKey(closedRead.operationId), taskTrackerReadIntent(closedRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(closedRead.operationId),
+      taskTrackerFactsObservedEvent(
+        closedRead.operationId,
+        makeCompleteTaskTrackerFactsObserved(closedRead, closedProjection.snapshot)
+      )
+    )
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        claimSettlement,
+        {
+          _tag: "PlannedAttemptTaskLifecycleConstraint",
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          lifecycle: "TerminalWithoutSuccess",
+          taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        }
+      ],
+      transitions: []
+    })
+    const reopenedRead = makeTrackerGraphObservationOperation(
+      OperationId.make("executor-lifecycle-reopen-read"),
+      FixtureTarget.make("executor-membership-constraint-target")
+    )
+    yield* journal.append(runId, intentRecordKey(reopenedRead.operationId), taskTrackerReadIntent(reopenedRead))
+    const reopenedObservation = yield* journal.append(
+      runId,
+      outcomeRecordKey(reopenedRead.operationId),
+      taskTrackerGraphFactsObserved(reopenedRead, {
+        revision: TrackerRevision.make("executor-task-reopened"),
+        taskIds: [taskId]
+      })
+    )
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [claimSettlement],
+      transitions: [
+        {
+          _tag: "ObservePlannedAttemptContinuationSpecification",
+          operation: {
+            _tag: "ReadTaskWorkSpecification",
+            operationId: OperationId.make(
+              `continuation:${plannedAttempt.attemptId}:after:${reopenedObservation.position}:specification`
+            ),
+            predecessorOperationIds: [reopenedRead.operationId, plan.operationId],
+            target: FixtureTarget.make("executor-membership-constraint-target"),
+            taskId
+          },
+          plannedAttempt
+        }
+      ]
+    })
+    const changedSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("executor-changed-specification-read"),
+      FixtureTarget.make("executor-membership-constraint-target"),
+      taskId
+    )
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Use the newly authored implementation instructions.",
+      taskId,
+      title: "Changed implementation"
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(changedSpecificationRead.operationId),
+      taskTrackerReadIntent(changedSpecificationRead)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(changedSpecificationRead.operationId),
+      taskTrackerFactsObservedEvent(
+        changedSpecificationRead.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(changedSpecificationRead, changedSpecification)
+      )
+    )
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        claimSettlement,
+        {
+          _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
+          availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          observedFingerprint: changedSpecification.fingerprint,
+          plannedFingerprint: plannedAttempt.taskRevision,
+          taskId,
+          wakeCondition: "TaskResolutionApplied"
+        }
+      ],
+      transitions: []
+    })
+    const externallyCompletedRead = makeTrackerGraphObservationOperation(
+      OperationId.make("executor-external-success-read"),
+      FixtureTarget.make("executor-membership-constraint-target")
+    )
+    const externallyCompletedProjection = projectTrackerSnapshot({
+      revision: TrackerRevision.make("executor-task-completed-externally"),
+      tasks: [
+        {
+          id: taskId,
+          lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+    if (externallyCompletedProjection._tag !== "Valid") {
+      return yield* Effect.die("expected valid externally completed task graph")
+    }
+    yield* journal.append(
+      runId,
+      intentRecordKey(externallyCompletedRead.operationId),
+      taskTrackerReadIntent(externallyCompletedRead)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(externallyCompletedRead.operationId),
+      taskTrackerFactsObservedEvent(
+        externallyCompletedRead.operationId,
+        makeCompleteTaskTrackerFactsObserved(externallyCompletedRead, externallyCompletedProjection.snapshot)
+      )
+    )
+    const externalRelease = makeTaskClaimReleaseOperation({
+      predecessorOperationIds: [claim.acquisition.operationId],
+      release: {
+        claim: { _tag: "ActiveTaskClaim", ...claim.acquisition },
+        operationId: OperationId.make(`external-success-release:${claim.acquisition.operationId}`)
+      }
+    })
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [claimSettlement],
+      transitions: [{ _tag: "ReleaseExternallyCompletedTaskClaim", operation: externalRelease }]
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(externalRelease.release.operationId),
+      TaskClaimReleaseIntendedEvent.make({ operation: externalRelease, version: workflowJournalEventVersion })
+    )
+    expect(yield* recovery.readFrontier).toEqual({
+      explanations: [
+        claimSettlement,
+        {
+          _tag: "PlannedAttemptTaskExternalSuccessConstraint",
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          taskId,
+          wakeCondition: "ExactTaskClaimDispositionApplied"
+        }
+      ],
+      transitions: [{ _tag: "ReconcileTaskClaimRelease", operationId: externalRelease.release.operationId, taskId }]
     })
   }).pipe(
     Effect.provide(memoryJournalStoreLayer),
@@ -334,7 +881,8 @@ it.effect("an executor responsibility leaving complete membership becomes an exe
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
@@ -393,7 +941,8 @@ it.effect("replays the exact durable claim and worktree intents", () => {
         Ref.update(calls, (current) => [...current, `worktree:${operation.operationId}`]).pipe(
           Effect.as({ _tag: "TaskWorktreeReconciliationSimulated", operation })
         ),
-      recordTaskAttemptPlan: unused
+      recordTaskAttemptPlan: unused,
+      releaseTaskClaim: unused
     })
     yield* recoverRunnableTransition(
       runId,
@@ -464,7 +1013,8 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
         readTrackerGraph: unused,
         readTaskWorkSpecification: unused,
         reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))

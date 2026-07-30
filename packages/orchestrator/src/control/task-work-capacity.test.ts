@@ -225,7 +225,8 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
           readTrackerGraph: () => Effect.die("restart construction does not call the tracker"),
           readTaskWorkSpecification: () => Effect.die("restart construction does not call the tracker"),
           reconcileTaskWorktree: () => Effect.die("restart construction does not call Git"),
-          recordTaskAttemptPlan: () => Effect.die("restart construction does not plan another attempt")
+          recordTaskAttemptPlan: () => Effect.die("restart construction does not plan another attempt"),
+          releaseTaskClaim: () => Effect.die("restart construction does not release a tracker claim")
         })
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))

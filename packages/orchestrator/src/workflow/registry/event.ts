@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { ControlCommandRecordedEvent } from "../../control/command.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
-import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import {
   PlannedAttemptExecutorWorkReportedEvent,
@@ -79,6 +79,18 @@ export const TaskClaimAcquiredEvent = Schema.TaggedStruct("TaskClaimAcquired", {
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+/** Dalph durably intends to delete only the embedded exact tracker claim. */
+export const TaskClaimReleaseIntendedEvent = Schema.TaggedStruct("TaskClaimReleaseIntended", {
+  operation: WorkflowOperationSchema.cases.ReleaseTaskClaim,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+/** A fresh tracker read proved the intended exact claim is absent. */
+export const TaskClaimReleasedEvent = Schema.TaggedStruct("TaskClaimReleased", {
+  release: TaskClaimRelease,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
 export const TaskAttemptPlannedEvent = Schema.TaggedStruct("TaskAttemptPlanned", {
   operation: WorkflowOperationSchema.cases.RecordTaskAttemptPlan,
   version: Schema.Literal(workflowJournalEventVersion)
@@ -105,6 +117,8 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskTrackerFactsObservedEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
+  TaskClaimReleaseIntendedEvent,
+  TaskClaimReleasedEvent,
   TaskAttemptPlannedEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,

@@ -21,7 +21,7 @@ import {
   TrackerMutation,
   UnclaimedTask
 } from "../claim-mutation.js"
-import type { TaskClaimAcquisition } from "../claim-mutation.js"
+import type { TaskClaimAcquisition, TaskClaimRelease } from "../claim-mutation.js"
 
 const githubTaskIdEncodingVersion = "t1."
 const GithubTaskCoordinates = Schema.Tuple([GithubRepositoryNodeId, GithubIssueNodeId])
@@ -229,7 +229,8 @@ export const githubTrackerMutationLayer = Layer.effect(
       return ActiveTaskClaim.make(acquisition)
     })
 
-    const releaseTaskClaim = Effect.fn("GithubTrackerMutation.releaseTaskClaim")(function* (claim: ActiveTaskClaim) {
+    const releaseTaskClaim = Effect.fn("GithubTrackerMutation.releaseTaskClaim")(function* (release: TaskClaimRelease) {
+      const claim = release.claim
       const current = yield* readGithubClaim(claim.taskId)
       if (current._tag !== "Active" || !isExactTaskClaim(current.observation, claim)) {
         return yield* new TaskClaimOwnershipConflict({ attempted: claim, observed: current.observation })
@@ -238,12 +239,12 @@ export const githubTrackerMutationLayer = Layer.effect(
         .execute(
           GithubGraphqlRequest.cases.DeleteClaimLabel.make({
             labelNodeId: current.labelId,
-            operationId: claim.operationId
+            operationId: release.operationId
           })
         )
-        .pipe(Effect.mapError((cause) => new TaskClaimReleaseFailure({ claim, detail: cause.detail })))
+        .pipe(Effect.mapError((cause) => new TaskClaimReleaseFailure({ release, detail: cause.detail })))
       yield* Schema.decodeUnknownEffect(DeleteClaimLabelResponse)(response.body).pipe(
-        Effect.mapError((cause) => new TaskClaimReleaseFailure({ claim, detail: String(cause) }))
+        Effect.mapError((cause) => new TaskClaimReleaseFailure({ release, detail: String(cause) }))
       )
     })
 

@@ -97,7 +97,8 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
         readTrackerGraph: () => failIfCalled("task tracker read"),
         readTaskWorkSpecification: () => failIfCalled("task-work specification read"),
         reconcileTaskWorktree: () => failIfCalled("Git worktree"),
-        recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording")
+        recordTaskAttemptPlan: () => failIfCalled("task-attempt plan recording"),
+        releaseTaskClaim: () => failIfCalled("task tracker claim release")
       })
     ),
     Layer.succeed(

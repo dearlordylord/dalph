@@ -309,6 +309,8 @@ const nonProjectedJournalEventKinds = {
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
+  TaskClaimReleaseIntended: true,
+  TaskClaimReleased: true,
   TaskWorktreeReady: true,
   TaskWorktreeReconciliationIntended: true,
   WorkflowRunBegan: true,

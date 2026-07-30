@@ -6,7 +6,6 @@ import {
   type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import { type OperationId } from "../../workflow/identity.js"
@@ -22,8 +21,10 @@ import type {
   StartedIntegrationResponsibility,
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
+import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
+export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.js"
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
@@ -31,8 +32,18 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ObservePlannedAttemptContinuationGraph: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  ObservePlannedAttemptContinuationSpecification: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
   SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
+  ReconcileTaskClaimRelease: { readonly operationId: OperationId; readonly taskId: TaskId }
+  ReleaseExternallyCompletedTaskClaim: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
   ReconcileTaskWorktree: { readonly operationId: OperationId; readonly taskId: TaskId }
   QueueAcceptedResultIntegrationResponsibility: {
     readonly accepted: UnqueuedAcceptedResult
@@ -48,15 +59,13 @@ export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransi
 export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId =>
   transition._tag === "QueueAcceptedResultIntegrationResponsibility"
     ? transition.accepted.plannedAttempt.taskId
-    : transition._tag === "StartQueuedIntegration" ||
-        transition._tag === "AcquireStartedIntegrationTarget" ||
-        transition._tag === "ReleaseStartedIntegrationTarget"
-      ? transition.responsibility.plannedAttempt.taskId
-      : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-          transition._tag === "SuspendPlannedAttemptExecutorWork" ||
-          transition._tag === "StartPlannedAttemptExecutorWork"
-        ? transition.plannedAttempt.taskId
-        : transition.taskId
+    : transition._tag === "ReleaseExternallyCompletedTaskClaim"
+      ? transition.operation.release.claim.taskId
+      : "responsibility" in transition
+        ? transition.responsibility.plannedAttempt.taskId
+        : "plannedAttempt" in transition
+          ? transition.plannedAttempt.taskId
+          : transition.taskId
 
 export const runnableTransitionOperationId = (transition: RunnableFrontierTransition): OperationId | undefined =>
   "operationId" in transition ? transition.operationId : undefined
@@ -95,6 +104,33 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  PlannedAttemptTaskLifecycleConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly lifecycle: "TerminalWithoutSuccess"
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  PlannedAttemptTaskExternalSuccessConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+    readonly wakeCondition: "ExactTaskClaimDispositionApplied"
+  }
+  PlannedAttemptTaskExternalSuccessSettled: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+  }
+  PlannedAttemptTaskSpecificationChangeConstraint: {
+    readonly availableResolutions: readonly [
+      "ContinueExistingAttempt",
+      "RestartTaskImplementation",
+      "StopTaskImplementation"
+    ]
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly observedFingerprint: TaskRevision
+    readonly plannedFingerprint: TaskRevision
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskResolutionApplied"
   }
   FinalOutcome: {
     readonly operationId: OperationId
@@ -140,68 +176,10 @@ export interface RunnableFrontier {
   readonly transitions: ReadonlyArray<RunnableFrontierTransition>
 }
 
-export type RunFinalityDecision = Data.TaggedEnum<{
-  RunMayTerminate: Record<never, never>
-  RunMustRemainActive: { readonly reason: "RunnableTransition" | "TrackerTargetUnsettled" | "UnsettledResponsibility" }
-}>
-
-export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
-
 const workflowResponsibilityTaskId = (responsibility: WorkflowResponsibilityEntry): TaskId =>
   responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
     ? responsibility.plannedAttempt.taskId
     : responsibility.taskId
-
-/** Run termination requires tracker settlement and no runnable or unsettled responsibility. */
-export const deriveRunFinalityDecision = (
-  frontier: RunnableFrontier,
-  responsibility: WorkflowResponsibilityState,
-  trackerTargetSettled: boolean
-): RunFinalityDecision => {
-  if (frontier.transitions.length > 0) {
-    return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
-  }
-  if (
-    frontier.explanations.some(
-      ({ _tag }) =>
-        _tag === "IntegrationDependencyWait" ||
-        _tag === "IntegrationInProgress" ||
-        _tag === "IntegrationTrackerFactsWait" ||
-        _tag === "IntegrationTargetWait" ||
-        _tag === "IntegrationConfigurationWait"
-    )
-  ) {
-    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-  }
-  const terminalOperationIds = new Set(
-    frontier.explanations.flatMap((explanation) =>
-      explanation._tag === "FinalOutcome" || explanation._tag === "Relinquishment" || explanation._tag === "Settlement"
-        ? [explanation.operationId]
-        : []
-    )
-  )
-  const terminalPlannedAttempts = new Set(
-    frontier.explanations.flatMap((explanation) =>
-      explanation._tag === "PlannedAttemptExecutorWorkTerminal"
-        ? [plannedAttemptExecutorCorrelationKey(explanation.report.correlation)]
-        : []
-    )
-  )
-  if (
-    responsibility.entries.some((entry) =>
-      entry._tag === "PlannedAttemptExecutorWorkResponsibility"
-        ? !terminalPlannedAttempts.has(
-            plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(entry.plannedAttempt))
-          )
-        : !terminalOperationIds.has(workflowResponsibilityOperationId(entry))
-    )
-  ) {
-    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-  }
-  return trackerTargetSettled
-    ? RunFinalityDecision.RunMayTerminate()
-    : RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-}
 
 const readyTransition = (
   facts: Extract<ResponsibilityFreshFacts, { readonly _tag: "WorkflowOperationFreshFacts" }>
@@ -211,6 +189,11 @@ const readyTransition = (
       TaskClaimResponsibility: ({ acquisition }) =>
         RunnableFrontierTransition.CheckTaskClaim({
           operationId: acquisition.operationId,
+          taskId: workflowResponsibilityTaskId(facts.responsibility)
+        }),
+      TaskClaimReleaseResponsibility: ({ operation }) =>
+        RunnableFrontierTransition.ReconcileTaskClaimRelease({
+          operationId: operation.release.operationId,
           taskId: workflowResponsibilityTaskId(facts.responsibility)
         }),
       TaskWorktreeResponsibility: ({ operation }) =>
@@ -242,6 +225,40 @@ const executorDecisionFor = (
       PlannedAttemptExecutorSuspensionRequested: () => ({
         transition: RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({
           plannedAttempt: facts.responsibility.plannedAttempt
+        })
+      }),
+      TaskExternalSuccessConstraint: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskExternalSuccessConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "ExactTaskClaimDispositionApplied"
+        })
+      }),
+      TaskExternalSuccessReleaseNeeded: ({ operation }) => ({
+        transition: RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation })
+      }),
+      TaskExternalSuccessSettled: () => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskExternalSuccessSettled({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      TaskLifecycleConstraint: ({ lifecycle }) => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskLifecycleConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          lifecycle,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        })
+      }),
+      TaskSpecificationChangeConstraint: ({ observedFingerprint, plannedFingerprint }) => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskSpecificationChangeConstraint({
+          availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          observedFingerprint,
+          plannedFingerprint,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskResolutionApplied"
         })
       }),
       TaskMembershipConstraint: () => ({

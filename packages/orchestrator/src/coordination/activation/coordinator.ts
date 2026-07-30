@@ -65,6 +65,16 @@ export interface OwnedTransitionExecution {
   ) => Effect.Effect<void>
 }
 
+type OwnedTransitionExecutionFixture = Pick<
+  OwnedTransitionExecution,
+  "bindPlannedAttemptExecutorPosition" | "recordIntent" | "releasePlannedAttemptExecutorWorkPosition"
+>
+
+/** Package-internal test fixture for exercising transition routing without a live activation coordinator. */
+export const makeOwnedTransitionExecutionFixture = (
+  execution: OwnedTransitionExecutionFixture
+): OwnedTransitionExecution => ({ ...execution, [OwnedTransitionExecutionTypeId]: OwnedTransitionExecutionTypeId })
+
 type ActivationCoordinatorCheckpointFailure = Data.TaggedEnum<{
   InterruptActivation: Record<never, never>
   RejectDuplicateOwnership: Record<never, never>

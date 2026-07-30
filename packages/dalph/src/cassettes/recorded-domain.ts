@@ -21,6 +21,7 @@ import {
   TrackerTarget,
   RunPolicyRevision,
   TaskWorkCapacity,
+  TaskClaimRelease,
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation
@@ -60,6 +61,8 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   TaskAttemptPlanned: { operation: WorkflowOperation.cases.RecordTaskAttemptPlan },
   TaskClaimAcquired: { claim: ActiveTaskClaim },
   TaskClaimAcquisitionIntended: { operation: WorkflowOperation.cases.AcquireTaskClaim },
+  TaskClaimReleaseIntended: { operation: WorkflowOperation.cases.ReleaseTaskClaim },
+  TaskClaimReleased: { release: TaskClaimRelease },
   TaskTrackerFactsObserved: {
     evidence: TaskTrackerFactsObservation,
     ...nonActionOccurrence,

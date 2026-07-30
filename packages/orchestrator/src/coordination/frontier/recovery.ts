@@ -28,6 +28,20 @@ const recoverWorktree = Effect.fn("WorkflowRecovery.recoverWorktree")(function* 
   }
 })
 
+const recoverClaimRelease = Effect.fn("WorkflowRecovery.recoverClaimRelease")(function* (
+  runId: RunId,
+  operationId: string
+) {
+  const journal = yield* JournalStore
+  const interpreter = yield* WorkflowInterpreter
+  const intent = (yield* journal.read(runId)).find(
+    ({ event }) => event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === operationId
+  )?.event
+  if (intent?._tag === "TaskClaimReleaseIntended") {
+    yield* interpreter.releaseTaskClaim(intent.operation)
+  }
+})
+
 /** Executes the one generic already-intended operation selected after reconstruction. */
 export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunnableTransition")(function* (
   runId: RunId,
@@ -37,6 +51,9 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
     case "CheckTaskClaim":
     case "ReconcileTaskClaim":
       yield* recoverClaim(runId, transition.operationId)
+      return
+    case "ReconcileTaskClaimRelease":
+      yield* recoverClaimRelease(runId, transition.operationId)
       return
     case "ReconcileTaskWorktree":
       yield* recoverWorktree(runId, transition.operationId)
@@ -50,6 +67,9 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
     case "ContinuePlannedAttemptExecutorWork":
     case "QueueAcceptedResultIntegrationResponsibility":
     case "ReleaseStartedIntegrationTarget":
+    case "ReleaseExternallyCompletedTaskClaim":
+    case "ObservePlannedAttemptContinuationGraph":
+    case "ObservePlannedAttemptContinuationSpecification":
     case "SuspendPlannedAttemptExecutorWork":
     case "StartPlannedAttemptExecutorWork":
       return

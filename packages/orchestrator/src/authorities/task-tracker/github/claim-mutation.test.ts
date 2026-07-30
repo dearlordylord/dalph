@@ -139,10 +139,12 @@ it.effect("deletes only the exact GitHub label node owned by the release token",
   Effect.gen(function* () {
     const tracker = yield* TrackerMutation
     const first = yield* tracker.acquireTaskClaim(acquisition("first", "first-token"))
-    yield* tracker.releaseTaskClaim(first)
+    yield* tracker.releaseTaskClaim({ claim: first, operationId: OperationId.make("release-first") })
     const second = yield* tracker.acquireTaskClaim(acquisition("second", "second-token"))
 
-    yield* tracker.releaseTaskClaim(first).pipe(Effect.flip)
+    yield* tracker
+      .releaseTaskClaim({ claim: first, operationId: OperationId.make("release-stale-first") })
+      .pipe(Effect.flip)
 
     expect(yield* tracker.readTaskClaim(taskId)).toEqual(second)
   }).pipe(Effect.provide(layer))
@@ -330,7 +332,9 @@ it.effect("fails release when ownership is absent or deletion is ambiguous", () 
     )
     const ownershipFailure = yield* Effect.gen(function* () {
       const tracker = yield* TrackerMutation
-      return yield* tracker.releaseTaskClaim(claim).pipe(Effect.flip)
+      return yield* tracker
+        .releaseTaskClaim({ claim, operationId: OperationId.make("release-absent") })
+        .pipe(Effect.flip)
     }).pipe(Effect.provide(unclaimedLayer))
     expect(ownershipFailure).toBeInstanceOf(TaskClaimOwnershipConflict)
 
@@ -348,7 +352,9 @@ it.effect("fails release when ownership is absent or deletion is ambiguous", () 
       )
       const failure = yield* Effect.gen(function* () {
         const tracker = yield* TrackerMutation
-        return yield* tracker.releaseTaskClaim(claim).pipe(Effect.flip)
+        return yield* tracker
+          .releaseTaskClaim({ claim, operationId: OperationId.make("release-ambiguous") })
+          .pipe(Effect.flip)
       }).pipe(Effect.provide(deleteLayer))
       expect(failure).toBeInstanceOf(TaskClaimReleaseFailure)
     }

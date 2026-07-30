@@ -24,6 +24,11 @@ export type BestAvailableDurableGraphKnowledge = typeof BestAvailableDurableGrap
 /** One exact workflow subject whose obligation remains outstanding. */
 const WorkflowResponsibilityEntryShape = Schema.TaggedUnion({
   TaskClaimResponsibility: { acquisition: TaskClaimAcquisition, beganAt: JournalPosition, taskId: TaskId },
+  TaskClaimReleaseResponsibility: {
+    beganAt: JournalPosition,
+    operation: WorkflowOperation.cases.ReleaseTaskClaim,
+    taskId: TaskId
+  },
   TaskWorktreeResponsibility: {
     beganAt: JournalPosition,
     operation: WorkflowOperation.cases.ReconcileTaskWorktree,
@@ -35,7 +40,11 @@ export const WorkflowResponsibilityEntry = WorkflowResponsibilityEntryShape.chec
   Schema.makeFilter((entry) => {
     if (entry._tag === "PlannedAttemptExecutorWorkResponsibility") return undefined
     const embeddedTaskId =
-      entry._tag === "TaskClaimResponsibility" ? entry.acquisition.taskId : entry.operation.plannedAttempt.taskId
+      entry._tag === "TaskClaimResponsibility"
+        ? entry.acquisition.taskId
+        : entry._tag === "TaskClaimReleaseResponsibility"
+          ? entry.operation.release.claim.taskId
+          : entry.operation.plannedAttempt.taskId
     if (embeddedTaskId !== entry.taskId) {
       return "responsibility task identity must match its exact operation subject"
     }
@@ -51,7 +60,11 @@ export type WorkflowOperationResponsibility = Exclude<
 
 /** The exact operation identity shared by reconstruction and frontier rules. */
 export const workflowResponsibilityOperationId = (entry: WorkflowOperationResponsibility): OperationId =>
-  entry._tag === "TaskClaimResponsibility" ? entry.acquisition.operationId : entry.operation.operationId
+  entry._tag === "TaskClaimResponsibility"
+    ? entry.acquisition.operationId
+    : entry._tag === "TaskClaimReleaseResponsibility"
+      ? entry.operation.release.operationId
+      : entry.operation.operationId
 
 /** Process-local comparison key for either an operation or planned-attempt responsibility. */
 export const workflowResponsibilityKey = (entry: WorkflowResponsibilityEntry): string =>

@@ -26,6 +26,13 @@ export const ActiveTaskClaim = Schema.TaggedStruct("ActiveTaskClaim", {
 })
 export type ActiveTaskClaim = typeof ActiveTaskClaim.Type
 
+/**
+ * Requests deletion of one exact tracker claim under a release-specific
+ * operation identity. The embedded claim remains the capability being removed.
+ */
+export const TaskClaimRelease = Schema.Struct({ claim: ActiveTaskClaim, operationId: OperationId })
+export type TaskClaimRelease = typeof TaskClaimRelease.Type
+
 /** Proves that the task tracker currently records no claim for one task. */
 export const UnclaimedTask = Schema.TaggedStruct("UnclaimedTask", { taskId: TaskId })
 export type UnclaimedTask = typeof UnclaimedTask.Type
@@ -63,7 +70,7 @@ export class TaskClaimReadFailure extends Schema.TaggedErrorClass<TaskClaimReadF
 /** A release request returned without proving whether the exact claim was deleted. */
 export class TaskClaimReleaseFailure extends Schema.TaggedErrorClass<TaskClaimReleaseFailure>()(
   "TrackerMutation.TaskClaimReleaseFailure",
-  { claim: ActiveTaskClaim, detail: Schema.String }
+  { release: TaskClaimRelease, detail: Schema.String }
 ) {}
 
 export interface TrackerMutationService {
@@ -75,7 +82,7 @@ export interface TrackerMutationService {
   >
   readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
   readonly releaseTaskClaim: (
-    claim: ActiveTaskClaim
+    release: TaskClaimRelease
   ) => Effect.Effect<
     void,
     CoordinatorOwnershipError | TaskClaimOwnershipConflict | TaskClaimReadFailure | TaskClaimReleaseFailure
@@ -130,8 +137,9 @@ export const controlledTrackerMutationLayerFrom = (initialClaims: ReadonlyArray<
           : yield* new TaskClaimConflict({ attempted: acquisition, observed: result.claim })
       })
       const releaseTaskClaim = Effect.fn("TrackerMutation.Controlled.releaseTaskClaim")(function* (
-        attempted: ActiveTaskClaim
+        release: TaskClaimRelease
       ) {
+        const attempted = release.claim
         type ReleaseResult =
           | { readonly _tag: "Released" }
           | { readonly _tag: "Conflict"; readonly observed: TaskClaimObservation }

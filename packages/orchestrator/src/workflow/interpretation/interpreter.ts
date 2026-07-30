@@ -22,11 +22,18 @@ import {
   type TaskClaimConflict,
   type TaskClaimOwnershipConflict,
   type TaskClaimReadFailure,
+  TaskClaimRelease,
+  type TaskClaimReleaseFailure,
   type TaskClaimRequestFailure,
   type TrackerMutationService
 } from "../../authorities/task-tracker/claim-mutation.js"
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowOperation } from "../registry/operation.js"
+import {
+  AuthoritativeTaskClaimReleased,
+  runTaskClaimReleaseProtocol,
+  type TaskClaimReleaseDidNotConverge
+} from "../protocols/task-claim-release/protocol.js"
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
@@ -55,6 +62,17 @@ export interface WorkflowInterpreterService {
     | TaskTrackerKnowledgeUnavailable
     | TrackerAdapterReadError
     | TrackerReadError
+  >
+  readonly releaseTaskClaim: (
+    operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+  ) => Effect.Effect<
+    TaskClaimReleaseResult,
+    | CoordinatorOwnershipError
+    | JournalAppendError
+    | TaskClaimOwnershipConflict
+    | TaskClaimReadFailure
+    | TaskClaimReleaseDidNotConverge
+    | TaskClaimReleaseFailure
   >
   readonly readTaskWorkSpecification: (
     operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
@@ -96,6 +114,12 @@ export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct("TaskClaimAcqui
 const TaskClaimAcquisitionResult = Schema.Union([AuthoritativeTaskClaimAcquired, TaskClaimAcquisitionSimulated])
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
+/** Dry-run records an exact release without changing or reading tracker state. */
+export const TaskClaimReleaseSimulated = Schema.TaggedStruct("TaskClaimReleaseSimulated", { release: TaskClaimRelease })
+
+const TaskClaimReleaseResult = Schema.Union([AuthoritativeTaskClaimReleased, TaskClaimReleaseSimulated])
+type TaskClaimReleaseResult = typeof TaskClaimReleaseResult.Type
+
 /** Generic traces stop at the complete-attempt executor boundary. */
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
@@ -123,3 +147,8 @@ export const acquireTaskClaimThrough = (
   runTaskClaimAcquisitionProtocol(tracker, operation.acquisition).pipe(
     Effect.map((claim) => AuthoritativeTaskClaimAcquired.make({ claim }))
   )
+
+export const releaseTaskClaimThrough = (
+  tracker: TrackerMutationService,
+  operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+) => runTaskClaimReleaseProtocol(tracker, operation.release)

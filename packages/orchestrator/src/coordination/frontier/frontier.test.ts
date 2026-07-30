@@ -28,8 +28,11 @@ import {
 } from "./frontier.js"
 import { makeSelectedTransitionIdentity } from "../activation/selected-transition.js"
 import { makeTaskAdmissionController, type NextAdmissionDecision } from "../admission/controller.js"
-import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
-import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
+import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
+import {
+  makeTaskClaimReleaseOperation,
+  makeTaskWorktreeReconciliationOperation
+} from "../../workflow/registry/operation.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
@@ -108,6 +111,36 @@ it("orders owned work by earliest outstanding journal position before task ident
   })
 
   expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB, taskA])
+})
+
+it("reconciles an already-intended exact claim release as its own responsibility", () => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("frontier-release-acquisition"),
+    owner: ClaimOwner.make("frontier-release-owner"),
+    taskId: taskA,
+    token: ClaimToken.make("frontier-release-token")
+  })
+  const operation = makeTaskClaimReleaseOperation({
+    predecessorOperationIds: [claim.operationId],
+    release: { claim, operationId: OperationId.make("frontier-release") }
+  })
+  const responsibility = WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+    beganAt: JournalPosition.make(2),
+    operation,
+    taskId: taskA
+  })
+
+  expect(
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+      responsibilityFacts: [
+        { _tag: "WorkflowOperationFreshFacts", disposition: ResponsibilityDisposition.Ready(), responsibility }
+      ]
+    }).transitions
+  ).toEqual([
+    RunnableFrontierTransition.ReconcileTaskClaimRelease({ operationId: operation.release.operationId, taskId: taskA })
+  ])
 })
 
 it("retains a terminal executor report for the exact planned attempt", () => {
@@ -425,6 +458,59 @@ it("keeps a removed task's executor responsibility behind a task-membership cons
     ],
     transitions: []
   })
+})
+
+it("explains each task-authority constraint without changing the planned attempt", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+  const correlation = { attemptId: responsibility.plannedAttempt.attemptId, runId: responsibility.plannedAttempt.runId }
+  const changedFingerprint = TaskRevision.make("changed-authored-fingerprint")
+  const cases = [
+    {
+      disposition: ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" }),
+      explanation: {
+        _tag: "PlannedAttemptTaskLifecycleConstraint",
+        correlation,
+        lifecycle: "TerminalWithoutSuccess",
+        taskId: taskA,
+        wakeCondition: "TaskTrackerFactsObserved"
+      }
+    },
+    {
+      disposition: ResponsibilityDisposition.TaskExternalSuccessConstraint(),
+      explanation: {
+        _tag: "PlannedAttemptTaskExternalSuccessConstraint",
+        correlation,
+        taskId: taskA,
+        wakeCondition: "ExactTaskClaimDispositionApplied"
+      }
+    },
+    {
+      disposition: ResponsibilityDisposition.TaskSpecificationChangeConstraint({
+        observedFingerprint: changedFingerprint,
+        plannedFingerprint: responsibility.plannedAttempt.taskRevision
+      }),
+      explanation: {
+        _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
+        availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+        correlation,
+        observedFingerprint: changedFingerprint,
+        plannedFingerprint: responsibility.plannedAttempt.taskRevision,
+        taskId: taskA,
+        wakeCondition: "TaskResolutionApplied"
+      }
+    }
+  ] as const
+
+  for (const { disposition, explanation } of cases) {
+    expect(
+      deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: state,
+        responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
+      })
+    ).toEqual({ explanations: [explanation], transitions: [] })
+  }
 })
 
 it.effect("rejects binding, cancellation, and release for positions it does not own", () =>

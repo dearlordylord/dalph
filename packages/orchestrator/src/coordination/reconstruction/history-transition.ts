@@ -9,6 +9,8 @@ type WorkflowJournalTransitionRule =
 const transitionRuleByEventKind: Partial<Record<JournalEventTag, WorkflowJournalTransitionRule>> = {
   TaskClaimAcquired: { _tag: "Outcome", requiredIntent: "TaskClaimAcquisitionIntended" },
   TaskClaimAcquisitionIntended: { _tag: "Intent" },
+  TaskClaimReleaseIntended: { _tag: "Intent" },
+  TaskClaimReleased: { _tag: "Outcome", requiredIntent: "TaskClaimReleaseIntended" },
   TaskWorktreeReady: { _tag: "Outcome", requiredIntent: "TaskWorktreeReconciliationIntended" },
   TaskWorktreeReconciliationIntended: { _tag: "Intent" },
   TaskTrackerReadIntentRecorded: { _tag: "Intent" },

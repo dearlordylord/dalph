@@ -6,6 +6,8 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
+  TaskClaimReleasedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
@@ -28,6 +30,7 @@ import {
 } from "../coordination/reconstruction/graph-knowledge.js"
 import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
+import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 
 const requireTaskTrackerKnowledge = <A>(
   knowledge: Option.Option<A>,
@@ -157,6 +160,30 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
       })
 
+      const releaseTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.releaseTaskClaim")(function* (
+        operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+      ) {
+        yield* journal.append(
+          runId,
+          intentRecordKey(operation.release.operationId),
+          TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+        )
+        const existing = (yield* journal.read(runId)).some(
+          ({ event }) =>
+            event._tag === "TaskClaimReleased" && event.release.operationId === operation.release.operationId
+        )
+        if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
+        const result = yield* interpreter.releaseTaskClaim(operation)
+        if (result._tag === "AuthoritativeTaskClaimReleased") {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.release.operationId),
+            TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
+          )
+        }
+        return result
+      })
+
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
         operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
       ) {
@@ -216,6 +243,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         acquireTaskClaim,
         readTrackerGraph,
         readTaskWorkSpecification,
+        releaseTaskClaim,
         reconcileTaskWorktree,
         recordTaskAttemptPlan
       })

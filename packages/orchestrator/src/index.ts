@@ -129,6 +129,8 @@ export {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
+  TaskClaimReleasedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorkCapacityChangedEvent,
@@ -186,6 +188,11 @@ export {
   TaskClaimAcquisitionDidNotConverge
 } from "./workflow/protocols/task-claim-acquisition/protocol.js"
 export {
+  AuthoritativeTaskClaimReleased,
+  runTaskClaimReleaseProtocol,
+  TaskClaimReleaseDidNotConverge
+} from "./workflow/protocols/task-claim-release/protocol.js"
+export {
   GraphProjectionError,
   ProjectionIssue,
   projectTaskDagWire,
@@ -232,6 +239,7 @@ export {
   TaskClaimObservation,
   TaskClaimOwnershipConflict,
   TaskClaimReadFailure,
+  TaskClaimRelease,
   TaskClaimReleaseFailure,
   TaskClaimRequestFailure,
   TrackerMutation,
@@ -297,6 +305,7 @@ export {
   causalGraphProjection,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimReleaseOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   WorkflowOperation,

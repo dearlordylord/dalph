@@ -178,7 +178,7 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
     }
     const claim = yield* tracker.acquireTaskClaim(acquisition)
     expect((yield* tracker.readTaskClaim(task.id))._tag).toBe("ActiveTaskClaim")
-    yield* tracker.releaseTaskClaim(claim)
+    yield* tracker.releaseTaskClaim({ claim, operationId: PublicApi.OperationId.make("release-owned-claim") })
     expect((yield* tracker.readTaskClaim(task.id))._tag).toBe("UnclaimedTask")
 
     const git = yield* GitWorktree
