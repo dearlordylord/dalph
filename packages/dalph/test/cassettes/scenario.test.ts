@@ -578,6 +578,176 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
   })
 )
 
+it.effect("continues independent B while recovered A has a target-membership constraint", () =>
+  Effect.gen(function* () {
+    const target = "localized-constraint-target"
+    const aAttemptId = AttemptId.make("attempt:A:0")
+    const bAttemptId = AttemptId.make("attempt:B:0")
+    const initialGraph = {
+      revision: TrackerRevision.make("localized-constraint-initial"),
+      tasks: [
+        { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
+        {
+          id: TaskId.make("B"),
+          lifecycle: { _tag: "Open" } as const,
+          parentTaskId: null,
+          prerequisiteIds: [TaskId.make("A")]
+        }
+      ]
+    }
+    const localizedGraph = {
+      revision: TrackerRevision.make("pipeline-A-left-target"),
+      tasks: [{ id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }]
+    }
+    const localizedCassette = {
+      _tag: "AuthoredScenarioCassette",
+      name: "A leaves the target while independent B continues",
+      schemaVersion: 1,
+      startingFacts: {
+        executorWork: "NoPriorReport",
+        journal: "Empty",
+        taskClaims: [],
+        taskWorkSpecifications: [
+          { body: "Complete task A.", taskId: TaskId.make("A"), title: "Complete A" },
+          { body: "Complete independent task B.", taskId: TaskId.make("B"), title: "Complete B" }
+        ],
+        trackerGraph: initialGraph,
+        worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+      },
+      story: [
+        { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } },
+        {
+          _tag: "RunCoordinator",
+          baseSha: "3333333333333333333333333333333333333333",
+          claimOwner: "localized-constraint-owner",
+          claimTokenPrefix: "localized-constraint-claim",
+          executor: "executor:controlled-fake",
+          target,
+          worktreeRoot: "/dalph/cassettes/localized-constraint"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Complete task A.",
+          taskId: TaskId.make("A"),
+          title: "Complete A"
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: aAttemptId, taskId: TaskId.make("A") }
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: aAttemptId, taskId: TaskId.make("A") }
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Running", attemptId: aAttemptId },
+          request: "StartOrContinue"
+        },
+        { _tag: "CoordinatorProcessDies" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Complete independent task B.",
+          taskId: TaskId.make("B"),
+          title: "Complete B"
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: bAttemptId, taskId: TaskId.make("B") }
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") }
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Running", attemptId: bAttemptId },
+          request: "StartOrContinue"
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        {
+          _tag: "ExpectedBehavior",
+          orchestration: [
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: aAttemptId, taskId: TaskId.make("A") },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "Running" },
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: bAttemptId, taskId: TaskId.make("B") },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "Running" },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "TerminalCompleted" }
+          ] as const,
+          protocol: null,
+          taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: TaskId.make("B") }] }
+        }
+      ]
+    }
+
+    const run = yield* runAuthoredScenarioCassette(localizedCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const membershipObservedAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies.some(
+          (family) =>
+            family._tag === "TaskTargetMembership" &&
+            family.memberTaskIds.length === 1 &&
+            family.memberTaskIds[0] === TaskId.make("B")
+        )
+    )
+    const bResponsibilityAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.taskId === TaskId.make("B")
+    )
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.recoveryAuthorityVerifiedAttemptIds).toEqual([])
+    expect(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
+          ? [event.report._tag]
+          : []
+      )
+    ).toEqual(["Running"])
+    expect(membershipObservedAt).toBeGreaterThan(0)
+    expect(bResponsibilityAt).toBeGreaterThan(membershipObservedAt)
+    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    expect(
+      recorded.entries.some(
+        (entry) =>
+          entry._tag === "PlannedAttemptExecutorWorkReported" &&
+          entry.report.correlation.attemptId === aAttemptId &&
+          entry.report._tag === "Terminal"
+      )
+    ).toBe(false)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain(
+      `The executor reported Terminal for attempt ${bAttemptId}.`
+    )
+    expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
+  })
+)
+
 it.effect("rejects cassette-local contradictions and leaves an authority mismatch to its ordinary boundary", () =>
   Effect.gen(function* () {
     const inconsistentGraph = {
