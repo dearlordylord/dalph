@@ -23,9 +23,9 @@ import {
   RecordedCassette,
   type RecordedCassette as RecordedCassetteType,
   type RecordedCassetteEntry,
-  recordedCassetteVersion,
-  renameRecordedCassette
+  recordedCassetteVersion
 } from "./recorded-domain.js"
+import { renameRecordedCassette } from "./recorded-renaming.js"
 
 const coordinator = () => WorkflowActor.cases.DalphCoordinator.make({})
 
