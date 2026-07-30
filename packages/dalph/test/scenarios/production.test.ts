@@ -32,6 +32,7 @@ import {
   InitialControlPolicy,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecification,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   nodeGitCommandLayer,
@@ -54,6 +55,7 @@ import {
   taskTrackerReadIntent,
   TaskWorkCapacity,
   TaskClaimAcquisitionPlanner,
+  taskRevisionFor,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TrackerGraphReader,
@@ -68,6 +70,100 @@ import { ConfigProvider, Effect, FileSystem, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+
+it.effect("continues a fresh production task after its claim is journaled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-fresh-task-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+      yield* fileSystem.writeFileString(`${directory}/README.md`, "fresh production task\n")
+      yield* git.runInWorktree(directory, ["add", "README.md"])
+      yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+      const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+      const target = FixtureTarget.make("production-fresh-task-target")
+      const runId = yield* freshWorkflowRunId(target)
+      const projected = projectTrackerSnapshot({
+        revision: "production-fresh-task-snapshot",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      const snapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
+      const task = Option.getOrThrow(Option.fromUndefinedOr(snapshot.eligibleTasks()[0]))
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("production-fresh-task-attempt"),
+        baseSha,
+        branch: TaskBranchRef.make("refs/heads/dalph/production-fresh-task-attempt"),
+        executor: TaskExecutorLocator.make("executor:production-controlled-fake"),
+        runId,
+        taskId: task.id,
+        taskRevision: taskRevisionFor(task),
+        worktree: WorktreeLocator.make(`${directory}/worktree`)
+      })
+      const specificationReads = yield* Ref.make(0)
+      const trackerReaderLayer = Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: () => Effect.succeed(snapshot),
+          readTaskWorkSpecification: (_target, taskId) =>
+            Ref.update(specificationReads, (count) => count + 1).pipe(
+              Effect.as(makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" }))
+            )
+        })
+      )
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        controlledTrackerMutationLayer
+      ).pipe(
+        Layer.provide(trackerReaderLayer),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const nextOperation = yield* Ref.make(0)
+
+      yield* runWorkflow(
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        runId
+      ).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-fresh-task-operation-${value}`))
+              )
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({
+            plan: (operationId, taskId) =>
+              Effect.succeed({
+                operationId,
+                owner: ClaimOwner.make("dalph"),
+                taskId,
+                token: ClaimToken.make("production-fresh-task-token")
+              })
+          })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.succeed(plannedAttempt) })
+        ),
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      expect(yield* Ref.get(specificationReads)).toBe(1)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("rejects a second fresh production start for the same Run before any tracker read", () =>
   Effect.scoped(

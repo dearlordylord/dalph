@@ -208,31 +208,32 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
  * Fresh-run composition that records coarse executor responsibility and
  * reports while exposing no recovered transitions.
  */
-export const journaledFreshRunRecoveryActivationLayer = (runId: RunId) =>
-  Layer.effect(
-    RunRecoveryActivation,
-    Effect.gen(function* () {
-      const executor = yield* PlannedAttemptExecutor
-      const journal = yield* JournalStore
-      const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
-        Effect.provideService(effect, JournalStore, journal)
-      return RunRecoveryActivation.of({
-        _tag: "SyntheticFreshOnlyActivation",
-        continuePlannedAttemptExecutorWork: (plannedAttempt) =>
-          continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-            Effect.provideService(PlannedAttemptExecutor, executor),
-            Effect.provideService(JournalStore, journal)
-          ),
-        readFinalityFrontier: provideJournal(readRecoveredFrontier(runId)),
-        readFrontier: provideJournal(readRecoveredMembershipConstraintFrontier(runId)),
-        readResponsibility: provideJournal(
-          readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
+export const makeJournaledFreshRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeJournaledFreshSource")(
+  function* (runId: RunId) {
+    const executor = yield* PlannedAttemptExecutor
+    const journal = yield* JournalStore
+    const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
+      Effect.provideService(effect, JournalStore, journal)
+    return RunRecoveryActivation.of({
+      _tag: "SyntheticFreshOnlyActivation",
+      continuePlannedAttemptExecutorWork: (plannedAttempt) =>
+        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.provideService(JournalStore, journal)
         ),
-        reconstructedPlannedAttemptPositions: [],
-        waitForNextExecutorWake: Effect.void
-      })
+      readFinalityFrontier: provideJournal(readRecoveredFrontier(runId)),
+      readFrontier: provideJournal(readRecoveredMembershipConstraintFrontier(runId)),
+      readResponsibility: provideJournal(
+        readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
+      ),
+      reconstructedPlannedAttemptPositions: [],
+      waitForNextExecutorWake: Effect.void
     })
-  )
+  }
+)
+
+export const journaledFreshRunRecoveryActivationLayer = (runId: RunId) =>
+  Layer.effect(RunRecoveryActivation, makeJournaledFreshRunRecoveryActivation(runId))
 
 export const makeRunRecoveryActivation = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
   runId: RunId

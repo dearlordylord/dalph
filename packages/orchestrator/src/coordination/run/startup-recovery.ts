@@ -7,6 +7,7 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import { PlannedAttemptRecoveryAuthority } from "./recovery-authority.js"
 import {
   hasUnfinishedRunResponsibility,
+  makeJournaledFreshRunRecoveryActivation,
   makeRunRecoveryActivation,
   RunRecoveryActivation
 } from "./recovery-activation.js"
@@ -72,7 +73,13 @@ export const startupRecoveryLayer = (runId: RunId) =>
           ]
         })
       }
-      const recovery = yield* makeRunRecoveryActivation(runId)
+      const currentRun = reductions.find(
+        (reduction) => reduction._tag === "ValidWorkflowJournalHistory" && reduction.runId === runId
+      )
+      const recovery =
+        currentRun === undefined
+          ? yield* makeJournaledFreshRunRecoveryActivation(runId)
+          : yield* makeRunRecoveryActivation(runId)
       return Context.empty().pipe(
         Context.add(WorkflowInterpreter, interpreter),
         Context.add(RunRecoveryActivation, recovery),
