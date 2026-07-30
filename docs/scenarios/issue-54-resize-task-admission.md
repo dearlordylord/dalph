@@ -99,8 +99,9 @@ Acceptance tests:
 
 - `restart reconstructs the latest applied capacity and both unfinished task
   positions` exercises journal reduction and recovered controller creation.
-- `recovered responsibilities retain priority over fresh tasks after
-  contraction` proves selection through the ordinary activation loop.
+- `gives a resumed responsibility the next released position before fresh
+  work` proves the ordinary frontier/admission seam retains recovered
+  responsibility priority when occupied usage reaches the ceiling.
 
 ## A lost response cannot apply a stale policy change twice
 
