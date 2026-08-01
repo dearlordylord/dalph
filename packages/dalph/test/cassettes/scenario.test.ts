@@ -17,6 +17,8 @@ import {
 } from "@dalph/contracts"
 import {
   AttemptWorktreeLost,
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
   ClaimOwner,
   ClaimToken,
   CompetingWorktreeRegistrations,
@@ -29,6 +31,11 @@ import {
   describeJournalEvent,
   ForeignWorktreeRegistration,
   JournalPosition,
+  IntegrationCandidateId,
+  IntegrationCandidateResourceLocator,
+  IntegrationSessionId,
+  IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateGitValidationAttemptOrdinal,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeTaskClaimAcquisitionOperation,
@@ -234,18 +241,466 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
       entries: recorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
     })
     expect(foldRecordedCassette(withoutIntegrationOrigin)._tag).toBe("InvalidWorkflowJournalHistory")
+
+    const candidateRun = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
+    const candidateRecorded = yield* projectRecordedCassette(candidateRun.records)
+
+    for (const omitted of [
+      "IntegrationCandidateConstructionIntended",
+      "IntegrationCandidateAgentReported",
+      "IntegrationCandidateGitObserved"
+    ] as const) {
+      expect(
+        foldRecordedCassette(
+          RecordedCassette.make({
+            ...candidateRecorded,
+            entries: candidateRecorded.entries.filter(({ _tag }) => _tag !== omitted)
+          })
+        )._tag
+      ).toBe("InvalidWorkflowJournalHistory")
+    }
+
+    const foreignRunId = RunId.make("foreign-candidate-run")
+    for (const mismatchTag of [
+      "IntegrationCandidateConstructionIntended",
+      "IntegrationCandidateAgentReported",
+      "IntegrationCandidateGitObserved"
+    ] as const) {
+      const mismatched = RecordedCassette.make({
+        ...candidateRecorded,
+        entries: candidateRecorded.entries.map((entry) => {
+          if (entry._tag !== mismatchTag) return entry
+          if (entry._tag === "IntegrationCandidateConstructionIntended") {
+            return {
+              ...entry,
+              correlation: { ...entry.correlation, runId: foreignRunId },
+              plannedAttempt: { ...entry.plannedAttempt, runId: foreignRunId }
+            }
+          }
+          if (entry._tag === "IntegrationCandidateAgentReported") {
+            return { ...entry, expectedCorrelation: { ...entry.expectedCorrelation, runId: foreignRunId } }
+          }
+          return { ...entry, correlation: { ...entry.correlation, runId: foreignRunId } }
+        })
+      })
+      expect(foldRecordedCassette(mismatched)._tag).toBe("InvalidWorkflowJournalHistory")
+    }
+    const mismatchedIntentCorrelation = RecordedCassette.make({
+      ...candidateRecorded,
+      entries: candidateRecorded.entries.map((entry) =>
+        entry._tag === "IntegrationCandidateConstructionIntended"
+          ? { ...entry, correlation: { ...entry.correlation, attemptId: AttemptId.make("foreign-candidate-attempt") } }
+          : entry
+      )
+    })
+    expect(foldRecordedCassette(mismatchedIntentCorrelation)._tag).toBe("InvalidWorkflowJournalHistory")
+  })
+)
+
+it.effect("round-trips pending Git failure and correction-limit candidate evidence", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const normalizedRecorded = RecordedCassette.make({
+      ...recorded,
+      entries: recorded.entries
+        .filter((entry) => entry._tag !== "IntegrationCandidateAgentReported" || entry.report._tag !== "Conflict")
+        .map((entry) =>
+          entry._tag === "IntegrationCandidateAgentReported"
+            ? { ...entry, ordinal: IntegrationCandidateAgentReportOrdinal.make(1) }
+            : entry
+        )
+    })
+    const intent = normalizedRecorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateConstructionIntended")
+    const report = normalizedRecorded.entries.find(
+      (entry) => entry._tag === "IntegrationCandidateAgentReported" && entry.report._tag === "Submitted"
+    )
+    const observed = normalizedRecorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateGitObserved")
+    if (
+      intent?._tag !== "IntegrationCandidateConstructionIntended" ||
+      report?._tag !== "IntegrationCandidateAgentReported" ||
+      report.report._tag !== "Submitted" ||
+      observed?._tag !== "IntegrationCandidateGitObserved"
+    )
+      return yield* Effect.die("accepted-result fixture must construct one candidate")
+
+    const withoutCandidateOutcome = normalizedRecorded.entries.filter(
+      ({ _tag }) => _tag !== "IntegrationCandidateGitObserved" && _tag !== "IntegrationCandidateConstructed"
+    )
+    const pending = RecordedCassette.make({
+      ...normalizedRecorded,
+      entries: [
+        ...withoutCandidateOutcome,
+        {
+          _tag: "IntegrationCandidateGitValidationFailed",
+          attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal.make(1),
+          candidateCommit: report.report.candidateCommit,
+          correlation: intent.correlation,
+          detail: "repository temporarily unreadable",
+          occurrenceClassification: "NonActionOccurrence"
+        }
+      ]
+    })
+    expect(foldRecordedCassette(pending)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(renderRecordedCassetteLyrics(pending)).toContain("Git could not validate submitted commit")
+
+    const correctedCommit = GitCommitSha.make("c".repeat(40))
+    const limited = RecordedCassette.make({
+      ...normalizedRecorded,
+      entries: [
+        ...withoutCandidateOutcome,
+        { ...observed, observation: { _tag: "Missing" } },
+        {
+          _tag: "IntegrationCandidateAgentReported",
+          expectedCorrelation: intent.correlation,
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: IntegrationCandidateAgentReportOrdinal.make(2),
+          report: { _tag: "Submitted", candidateCommit: correctedCommit, correlation: intent.correlation }
+        },
+        { ...observed, candidateCommit: correctedCommit, observation: { _tag: "Commit", directParents: [] } },
+        {
+          _tag: "IntegrationCandidateCorrectionLimitReached",
+          correctionCount: 1,
+          correctionLimit: CandidateCorrectionLimit.make(1),
+          correlation: intent.correlation,
+          occurrenceClassification: "NonActionOccurrence"
+        }
+      ]
+    })
+    const limitedHistory = foldRecordedCassette(limited)
+    expect(limitedHistory._tag).toBe("ValidWorkflowJournalHistory")
+    expect(renderRecordedCassetteLyrics(limited)).toContain("stopped after 1 correction attempts")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...limited,
+          entries: limited.entries.filter(({ _tag }) => _tag !== "IntegrationCandidateGitObserved")
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...limited,
+          entries: limited.entries.flatMap(
+            (entry): ReadonlyArray<RecordedCassetteEntry> =>
+              entry._tag === "IntegrationCandidateConstructionIntended"
+                ? [
+                    entry,
+                    {
+                      ...entry,
+                      correlation: {
+                        ...entry.correlation,
+                        candidateId: IntegrationCandidateId.make("second-candidate"),
+                        candidateResource: IntegrationCandidateResourceLocator.make("second-candidate-resource"),
+                        integrationSessionId: IntegrationSessionId.make("second-session")
+                      }
+                    }
+                  ]
+                : [entry]
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...limited,
+          entries: limited.entries.map((entry) =>
+            entry._tag === "IntegrationCandidateConstructionIntended"
+              ? { ...entry, correctionLimit: CandidateCorrectionLimit.make(2) }
+              : entry
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...limited,
+          entries: limited.entries.map((entry) =>
+            entry._tag === "IntegrationCandidateCorrectionLimitReached"
+              ? { ...entry, correctionLimit: CandidateCorrectionLimit.make(2) }
+              : entry
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...limited,
+          entries: limited.entries.map((entry) =>
+            entry._tag === "IntegrationCandidateGitObserved" && entry.candidateCommit === correctedCommit
+              ? {
+                  ...entry,
+                  observation: {
+                    _tag: "Commit" as const,
+                    directParents: [intent.correlation.expectedTargetHead, intent.correlation.acceptedResultCommit]
+                  }
+                }
+              : entry
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+
+    const candidateIntentOnly = normalizedRecorded.entries.filter(
+      (entry) =>
+        !entry._tag.startsWith("IntegrationCandidate") || entry._tag === "IntegrationCandidateConstructionIntended"
+    )
+    const continuationLimited = RecordedCassette.make({
+      ...normalizedRecorded,
+      entries: [
+        ...candidateIntentOnly,
+        {
+          _tag: "IntegrationCandidateAgentReported",
+          expectedCorrelation: intent.correlation,
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+          report: { _tag: "Working", correlation: intent.correlation }
+        },
+        {
+          _tag: "IntegrationCandidateAgentReported",
+          expectedCorrelation: intent.correlation,
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: IntegrationCandidateAgentReportOrdinal.make(2),
+          report: { _tag: "Conflict", correlation: intent.correlation }
+        },
+        {
+          _tag: "IntegrationCandidateContinuationLimitReached",
+          continuationCount: 2,
+          continuationLimit: CandidateContinuationLimit.make(2),
+          correlation: intent.correlation,
+          occurrenceClassification: "NonActionOccurrence"
+        }
+      ]
+    })
+    const continuationHistory = foldRecordedCassette(continuationLimited)
+    expect(continuationHistory._tag).toBe("ValidWorkflowJournalHistory")
+    expect(renderRecordedCassetteLyrics(continuationLimited)).toContain("2 automatic agent continuations")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...continuationLimited,
+          entries: continuationLimited.entries.map((entry) =>
+            entry._tag === "IntegrationCandidateContinuationLimitReached" ? { ...entry, continuationCount: 1 } : entry
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(
+        RecordedCassette.make({
+          ...continuationLimited,
+          entries: continuationLimited.entries.map((entry) =>
+            entry._tag === "IntegrationCandidateConstructionIntended"
+              ? { ...entry, continuationLimit: CandidateContinuationLimit.make(3) }
+              : entry
+          )
+        })
+      )._tag
+    ).toBe("InvalidWorkflowJournalHistory")
+
+    const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+      attemptIds: [],
+      claimTokens: [],
+      integrationCandidateIds: [{ from: intent.correlation.candidateId, to: "renamed-candidate" }],
+      integrationCandidateResourceLocators: [
+        { from: intent.correlation.candidateResource, to: "renamed-candidate-resource" }
+      ],
+      integrationSessionIds: [{ from: intent.correlation.integrationSessionId, to: "renamed-session" }],
+      operationIds: [],
+      runIds: [],
+      taskBranchRefs: [],
+      worktreeLocators: []
+    })
+    const renamed = yield* renameRecordedCassette(limited, renaming)
+    expect(foldRecordedCassette(yield* renameRecordedCassette(normalizedRecorded, renaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+    expect(foldRecordedCassette(yield* renameRecordedCassette(pending, renaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+    if (limitedHistory._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("fixture must remain valid")
+    const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
+      limitedHistory.records,
+      renamed,
+      invertCassetteIdentityRenaming(renaming)
+    )
+    expect(checkpoints.every(({ workflowHistoryEquivalent }) => workflowHistoryEquivalent)).toBe(true)
+    if (continuationHistory._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die("continuation fixture must remain valid")
+    }
+    const renamedContinuation = yield* renameRecordedCassette(continuationLimited, renaming)
+    const continuationCheckpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
+      continuationHistory.records,
+      renamedContinuation,
+      invertCassetteIdentityRenaming(renaming)
+    )
+    expect(continuationCheckpoints.every(({ workflowHistoryEquivalent }) => workflowHistoryEquivalent)).toBe(true)
+  })
+)
+
+it.effect("runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories", () =>
+  Effect.gen(function* () {
+    const conflict = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
+    const conflictRecorded = yield* projectRecordedCassette(conflict.records)
+    expect(
+      conflictRecorded.entries
+        .filter(({ _tag }) => _tag === "IntegrationCandidateAgentReported")
+        .map((entry) => (entry._tag === "IntegrationCandidateAgentReported" ? entry.report._tag : "unreachable"))
+    ).toEqual(["Conflict", "Submitted"])
+    expect(conflictRecorded.entries.some(({ _tag }) => _tag === "IntegrationCandidateConstructed")).toBe(true)
+
+    const corrected = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit
+    )
+    const correctedRecorded = yield* projectRecordedCassette(corrected.records)
+    expect(correctedRecorded.entries.filter(({ _tag }) => _tag === "IntegrationCandidateAgentReported")).toHaveLength(2)
+    expect(
+      correctedRecorded.entries.filter(({ _tag }) => _tag === "IntegrationCandidateGitValidationFailed")
+    ).toHaveLength(1)
+    expect(correctedRecorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateConstructed")).toMatchObject({
+      candidateCommit: "cccccccccccccccccccccccccccccccccccccccc"
+    })
+    expect(renderRecordedCassetteLyrics(correctedRecorded)).toContain("Git could not validate submitted commit")
+
+    const exhausted = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.candidateCorrectionExhaustion
+    )
+    const exhaustedRecorded = yield* projectRecordedCassette(exhausted.records)
+    expect(exhaustedRecorded.entries.some(({ _tag }) => _tag === "IntegrationCandidateCorrectionLimitReached")).toBe(
+      true
+    )
+    expect(exhaustedRecorded.entries.some(({ _tag }) => _tag === "IntegrationCandidateConstructed")).toBe(false)
+    expect(renderRecordedCassetteLyrics(exhaustedRecorded)).toContain("stopped after 1 correction attempts")
+
+    const contradiction = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.candidateCorrelationContradiction
+    )
+    const contradictionRecorded = yield* projectRecordedCassette(contradiction.records)
+    const contradictoryReport = contradictionRecorded.entries.find(
+      ({ _tag }) => _tag === "IntegrationCandidateAgentReported"
+    )
+    expect(contradictoryReport).toMatchObject({ report: { _tag: "Working" } })
+    expect(contradictionRecorded.entries.some(({ _tag }) => _tag === "IntegrationCandidateGitObserved")).toBe(false)
+    expect(renderRecordedCassetteLyrics(contradictionRecorded)).toContain("infrastructure correlation contradiction")
+  })
+)
+
+it.effect("round-trips every non-submitting integration-agent report", () =>
+  Effect.gen(function* () {
+    for (const reportTag of ["Conflict", "ExitedWithoutCandidate", "Working"] as const) {
+      let replacedReport = false
+      const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+        ...maintainedAuthoredCassetteCatalog.candidateConflictRecovery,
+        name: `accepted result reports ${reportTag}`,
+        story: maintainedAuthoredCassetteCatalog.candidateConflictRecovery.story.flatMap(
+          (item): ReadonlyArray<unknown> => {
+            if (item._tag === "IntegrationCandidateGitValidationReturned") return []
+            if (item._tag === "IntegrationCandidateAgentReported") {
+              if (replacedReport) return []
+              replacedReport = true
+              return [{ ...item, report: { _tag: reportTag } }]
+            }
+            if (item._tag === "ExpectedBehavior") {
+              return [
+                {
+                  ...item,
+                  orchestration:
+                    item.orchestration?.filter(({ _tag }) => _tag !== "IntegrationCandidateConstructed") ?? null
+                }
+              ]
+            }
+            return [item]
+          }
+        )
+      })
+      const run = yield* runAuthoredScenarioCassette(cassette)
+      const recorded = yield* projectRecordedCassette(run.records)
+      const report = recorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateAgentReported")
+      if (report?._tag !== "IntegrationCandidateAgentReported") {
+        return yield* Effect.die(`fixture must record ${reportTag}`)
+      }
+      expect(report.report._tag).toBe(reportTag)
+      expect(renderRecordedCassetteLyrics(recorded)).toContain(`reported ${reportTag}`)
+
+      const renamed = yield* renameRecordedCassette(
+        recorded,
+        yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+          attemptIds: [],
+          claimTokens: [],
+          integrationCandidateIds: [{ from: report.report.correlation.candidateId, to: `renamed-${reportTag}` }],
+          integrationCandidateResourceLocators: [
+            { from: report.report.correlation.candidateResource, to: `renamed-resource-${reportTag}` }
+          ],
+          integrationSessionIds: [
+            { from: report.report.correlation.integrationSessionId, to: `renamed-session-${reportTag}` }
+          ],
+          operationIds: [],
+          runIds: [],
+          taskBranchRefs: [],
+          worktreeLocators: []
+        })
+      )
+      expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+    }
+
+    let reportOrdinal = 0
+    const exhaustedCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.candidateConflictRecovery,
+      name: "accepted result exhausts automatic candidate continuation",
+      story: maintainedAuthoredCassetteCatalog.candidateConflictRecovery.story.flatMap(
+        (item): ReadonlyArray<unknown> => {
+          if (item._tag === "IntegrationCandidateGitValidationReturned") return []
+          if (item._tag === "IntegrationCandidateAgentReported") {
+            reportOrdinal += 1
+            return [{ ...item, report: { _tag: reportOrdinal === 1 ? "Conflict" : "Working" } }]
+          }
+          if (item._tag === "ExpectedBehavior") {
+            return [
+              {
+                ...item,
+                orchestration:
+                  item.orchestration?.filter(({ _tag }) => _tag !== "IntegrationCandidateConstructed") ?? null
+              }
+            ]
+          }
+          return [item]
+        }
+      )
+    })
+    const exhaustedRun = yield* runAuthoredScenarioCassette(exhaustedCassette)
+    const exhaustedRecorded = yield* projectRecordedCassette(exhaustedRun.records)
+    expect(
+      exhaustedRecorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateContinuationLimitReached")
+    ).toMatchObject({ continuationCount: 2, continuationLimit: 2 })
+    expect(renderRecordedCassetteLyrics(exhaustedRecorded)).toContain("2 automatic agent continuations")
   })
 )
 
 it.effect("starts a queued accepted result in the same live coordinator process", () =>
   Effect.gen(function* () {
-    const withoutDeath = acceptedResultRestartsIntoIntegrationAuthoredCassette.story.filter(
-      ({ _tag }) => _tag !== "CoordinatorProcessDies"
+    const source = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
+    const deathAt = source.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
+    const blockedGraphAt = source.findIndex(
+      (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === "accepted-result-new-blocker"
     )
+    const terminal = source.at(-1)
+    if (terminal?._tag !== "ExpectedBehavior") return yield* Effect.die("expected terminal assertion")
+    const withoutCandidateExpectation = {
+      ...terminal,
+      orchestration: terminal.orchestration?.filter(({ _tag }) => _tag !== "IntegrationCandidateConstructed") ?? null
+    }
     const uninterrupted = AuthoredScenarioCassette.make({
       ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
       name: "accepted result starts without coordinator restart",
-      story: [...withoutDeath.slice(0, -7), ...withoutDeath.slice(-1)]
+      story: [
+        ...source.slice(0, deathAt),
+        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 3),
+        withoutCandidateExpectation
+      ]
     })
 
     const run = yield* runAuthoredScenarioCassette(uninterrupted)
@@ -2157,6 +2612,9 @@ it.effect(
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
         claimTokens: [{ from: `cassette-claim:A:cassette:${run.runId}:operation:2`, to: "renamed-claim-token-A" }],
+        integrationCandidateIds: [],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
         operationIds: [
           ...Array.from({ length: 7 }, (_unused, ordinal) => ({
             from: `cassette:${run.runId}:operation:${ordinal}`,
@@ -2189,6 +2647,8 @@ it.effect(
       const allRenamings = [
         ...renaming.attemptIds,
         ...renaming.claimTokens,
+        ...renaming.integrationCandidateIds,
+        ...renaming.integrationSessionIds,
         ...renaming.operationIds,
         ...renaming.runIds,
         ...renaming.taskBranchRefs,
@@ -2199,6 +2659,13 @@ it.effect(
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
+        IntegrationCandidateAgentReported: true,
+        IntegrationCandidateConstructed: true,
+        IntegrationCandidateConstructionIntended: true,
+        IntegrationCandidateGitObserved: true,
+        IntegrationCandidateGitValidationFailed: true,
+        IntegrationCandidateCorrectionLimitReached: true,
+        IntegrationCandidateContinuationLimitReached: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
@@ -2242,7 +2709,9 @@ it.effect(
         expect(encodedAfter).not.toContain(`"${from}"`)
         expect(encodedAfter).toContain(`"${to}"`)
       }
-      expect(new Set(recorded.entries.map(({ _tag }) => _tag))).toEqual(new Set(Object.keys(entryVariants)))
+      expect(new Set(recorded.entries.map(({ _tag }) => _tag))).toEqual(
+        new Set(Object.keys(entryVariants).filter((tag) => !tag.startsWith("IntegrationCandidate")))
+      )
       expect(
         new Set(recorded.entries.flatMap((entry) => ("operation" in entry ? [entry.operation._tag] : [])))
       ).toEqual(new Set(Object.keys(operationVariants)))
@@ -2302,6 +2771,9 @@ it.effect("renames and renders every contradictory planned-worktree observation 
       yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [],
         claimTokens: [],
+        integrationCandidateIds: [],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
         operationIds: [],
         runIds: [],
         taskBranchRefs: [
@@ -2329,6 +2801,9 @@ it.effect("rejects identity renaming that repeats a source or destination", () =
   Effect.gen(function* () {
     const otherwiseEmptyRenaming = {
       claimTokens: [],
+      integrationCandidateIds: [],
+      integrationCandidateResourceLocators: [],
+      integrationSessionIds: [],
       operationIds: [],
       runIds: [],
       taskBranchRefs: [],

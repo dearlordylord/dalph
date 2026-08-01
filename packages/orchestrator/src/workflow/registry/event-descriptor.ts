@@ -15,6 +15,13 @@ import {
   intentRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
+  integrationCandidateAgentReportRecordKey,
+  integrationCandidateConstructedRecordKey,
+  integrationCandidateConstructionIntentRecordKey,
+  integrationCandidateGitObservationRecordKey,
+  integrationCandidateGitValidationFailureRecordKey,
+  integrationCandidateCorrectionLimitReachedRecordKey,
+  integrationCandidateContinuationLimitReachedRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
@@ -68,6 +75,11 @@ interface RunPolicyEventDescriptor {
   readonly expectedKey: JournalRecordKey
 }
 
+interface GenericEventDescriptor {
+  readonly _tag: "GenericEventDescriptor"
+  readonly expectedKey: JournalRecordKey
+}
+
 interface IntegrationEventDescriptor {
   readonly _tag: "IntegrationEventDescriptor"
   readonly attemptId: AttemptId
@@ -78,6 +90,7 @@ interface IntegrationEventDescriptor {
 
 type JournalEventDescriptor =
   | ControlDirectionEventDescriptor
+  | GenericEventDescriptor
   | IntegrationEventDescriptor
   | OperationEventDescriptor
   | PlannedAttemptExecutorEventDescriptor
@@ -185,6 +198,45 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         expectedKey: integrationStartedRecordKey(event.plannedAttempt.attemptId),
         responsibilityBeganAt: event.responsibilityBeganAt,
         runId: event.plannedAttempt.runId
+      }
+    case "IntegrationCandidateConstructionIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateConstructionIntentRecordKey(event.correlation)
+      }
+    case "IntegrationCandidateAgentReported":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateAgentReportRecordKey(event.expectedCorrelation, event.ordinal)
+      }
+    case "IntegrationCandidateGitObserved":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateGitObservationRecordKey(event.correlation, event.submissionAt)
+      }
+    case "IntegrationCandidateConstructed":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateConstructedRecordKey(event.correlation)
+      }
+    case "IntegrationCandidateGitValidationFailed":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateGitValidationFailureRecordKey(
+          event.correlation,
+          event.submissionAt,
+          event.attemptOrdinal
+        )
+      }
+    case "IntegrationCandidateCorrectionLimitReached":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateCorrectionLimitReachedRecordKey(event.correlation)
+      }
+    case "IntegrationCandidateContinuationLimitReached":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationCandidateContinuationLimitReachedRecordKey(event.correlation)
       }
     case "TaskTrackerReadIntentRecorded":
       return operationEvent({

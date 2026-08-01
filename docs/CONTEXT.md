@@ -486,6 +486,36 @@ responsibility waits on tracker prerequisites, and recreated empty after
 process restart. The journal never stores its ownership.
 _Avoid_: Integration responsibility, durable lock, queue position
 
+**Integration session**:
+The one resumable integration-agent responsibility bound to a started
+integration responsibility, its accepted result, expected target head, and
+persisted isolated candidate resource. That resource is distinct from the
+planned task worktree. A conflict, process restart, or invalid submitted object
+continues this identity; none authorizes a replacement session.
+_Avoid_: Process invocation, retry attempt, worktree tip, candidate commit
+
+**Integration candidate**:
+The first explicitly submitted commit that Git proves has exactly two ordered
+direct parents: the fixed expected target head first and the immutable accepted
+result second. Construction does not verify the contents, update the target
+ref, or complete the tracker task.
+_Avoid_: Worktree HEAD, agent success, verified candidate, promoted result
+
+**Pending candidate submission**:
+One explicit candidate commit awaiting a readable Git object-type and parent
+observation. An unreadable Git call preserves this submission for a later
+reread without asking the integration agent to resubmit it.
+_Avoid_: Missing object, invalid candidate, agent failure
+
+**Non-convergent candidate construction**:
+The durable disposition after either the separately selected positive
+correction limit or automatic agent-continuation limit is exhausted in one
+integration session. Dalph preserves the accepted result and isolated Git
+work, leaves the task incomplete, and releases the process-local
+integration-target resource for unrelated work. Production supplies both
+limits explicitly; Dalph does not silently choose them.
+_Avoid_: Failed task, discarded worktree, replacement session
+
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording
 operation as the observed reason Dalph may record that immutable decision. Its

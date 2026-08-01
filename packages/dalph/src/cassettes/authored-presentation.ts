@@ -23,6 +23,8 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
       return `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
     case "AcceptedResultIntegrationStarted":
       return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
+    case "IntegrationCandidateConstructed":
+      return `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
     case "PlannedAttemptExecutorWorkResponsibilityBegan":
       return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "PlannedAttemptExecutorWorkReported":
@@ -147,6 +149,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       return `Dalph selects ${item.operation._tag}.`
     case "GitWorktreeObservationChanged":
       return `Git changes the planned worktree observation to ${item.observation._tag}.`
+    case "IntegrationCandidateAgentReported":
+      return `The integration agent reports ${item.report._tag}.`
+    case "IntegrationCandidateGitValidationFailed":
+      return `Git cannot validate the explicitly submitted candidate: ${item.detail}`
+    case "IntegrationCandidateGitValidationReturned":
+      return `Git returns ${item.observation._tag} for the explicitly submitted candidate.`
     case "TaskWorkSpecificationReadReturned":
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":

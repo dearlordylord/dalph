@@ -136,7 +136,23 @@ const protocolEvidenceFor = (
   return []
 }
 
-const orchestrationEvidenceFor = (event: JournalRecord["event"]): ReadonlyArray<OrchestrationEvidence> => {
+const orchestrationEvidenceFor = (
+  event: JournalRecord["event"],
+  taskByAttempt: ReadonlyMap<AttemptId, TaskId>
+): ReadonlyArray<OrchestrationEvidence> => {
+  if (event._tag === "IntegrationCandidateConstructed") {
+    const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(event.correlation.attemptId)))
+    return [
+      {
+        _tag: "IntegrationCandidateConstructed",
+        acceptedResultCommit: event.correlation.acceptedResultCommit,
+        attemptId: event.correlation.attemptId,
+        candidateCommit: event.candidateCommit,
+        expectedTargetHead: event.correlation.expectedTargetHead,
+        taskId
+      }
+    ]
+  }
   if (event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted") {
     return [
       {
@@ -206,7 +222,7 @@ const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): Comple
     )
   ]
   return {
-    orchestrationEvidence: records.flatMap(({ event }) => orchestrationEvidenceFor(event)),
+    orchestrationEvidence: records.flatMap(({ event }) => orchestrationEvidenceFor(event, taskByAttempt)),
     plannedWorkUndertakenFor,
     protocolEvidence: records.flatMap(({ event }, index) => {
       const priorAcquiredClaimByTask = new Map(

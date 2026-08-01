@@ -50,6 +50,8 @@ import {
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   TaskAttemptPlannedEvent,
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent
@@ -59,6 +61,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
@@ -66,7 +69,10 @@ import { reduceWorkflowJournalHistory } from "../../../coordination/reconstructi
 import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
-import { runIntegrationTransition } from "../../../coordination/run/integration-transition-runtime.js"
+import {
+  IntegrationCandidateBoundaryUnavailable,
+  runIntegrationTransition
+} from "../../../coordination/run/integration-transition-runtime.js"
 import { runnableTransitionTaskId, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -79,6 +85,12 @@ import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-fac
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
+import { CandidateContinuationLimit, CandidateCorrectionLimit } from "../integration-candidate-construction/events.js"
+import {
+  IntegrationCandidateAgent,
+  IntegrationCandidateAgentReport
+} from "../integration-candidate-construction/protocol.js"
 
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
@@ -505,6 +517,33 @@ it.effect("acquires, releases, and reacquires the process-local target around on
     }
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
 
+    const candidateTransition = RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+      continuationLimit: CandidateContinuationLimit.make(2),
+      correctionLimit: CandidateCorrectionLimit.make(1),
+      lineage: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: attempt.baseSha,
+        targetHeadSha: GitCommitSha.make("f".repeat(40))
+      }),
+      responsibility: started
+    })
+    expect(yield* Effect.flip(runIntegrationTransition(candidateTransition, resources))).toEqual(
+      new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
+    )
+    expect(
+      yield* Effect.flip(
+        runIntegrationTransition(candidateTransition, resources).pipe(
+          Effect.provideService(
+            IntegrationCandidateAgent,
+            IntegrationCandidateAgent.of({
+              startOrContinue: (request) =>
+                Effect.succeed(IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation }))
+            })
+          )
+        )
+      )
+    ).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
+
     const runState = reconstructRunState(
       runId,
       yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId)))
@@ -704,5 +743,145 @@ it.effect("fails closed without current tracker facts and orders authorized inte
       ],
       transitions: []
     })
+    expect(
+      deriveIntegrationFrontier(startedRun.state, {
+        candidateCorrectionLimit: Option.some(CandidateCorrectionLimit.make(1)),
+        candidateContinuationLimit: Option.some(CandidateContinuationLimit.make(2)),
+        currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
+        heldResponsibilityPositions: new Set([queuedA.queuedAt]),
+        integrationTarget: Option.some(integrationTarget),
+        targetLineageByAttemptId: new Map([
+          [
+            a.attemptId,
+            TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: a.baseSha,
+              targetHeadSha: GitCommitSha.make("f".repeat(40))
+            })
+          ]
+        ]),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(a.attemptId, b.attemptId)
+      }).transitions
+    ).toContainEqual(
+      expect.objectContaining({
+        _tag: "ContinueStartedIntegrationCandidate",
+        responsibility: expect.objectContaining({ queuedAt: queuedA.queuedAt })
+      })
+    )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("rereads target lineage after restart instead of authorizing a candidate from stale evidence", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("C", 0)
+    const result = acceptedResult("d")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const staleRead = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("pre-restart-target-lineage"),
+      plannedAttempt: attempt,
+      predecessorOperationIds: []
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(staleRead.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: staleRead,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(staleRead.operationId),
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: attempt.baseSha,
+          targetHeadSha: GitCommitSha.make("e".repeat(40))
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: staleRead.operationId,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const recovery = yield* makeRunRecoveryActivation(
+      runId,
+      integrationTarget,
+      CandidateCorrectionLimit.make(1),
+      CandidateContinuationLimit.make(2)
+    )
+    const claimRead = makeTaskClaimObservationOperation(
+      OperationId.make("post-restart-stale-lineage-claim"),
+      FixtureTarget.make("integration-admission-target"),
+      attempt.taskId
+    )
+    yield* journal.append(runId, intentRecordKey(claimRead.operationId), taskTrackerReadIntent(claimRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claimRead.operationId),
+      taskTrackerFactsObservedEvent(
+        claimRead.operationId,
+        makeFocusedTaskClaimFactsObserved(claimRead, claimFor(attempt))
+      )
+    )
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("post-restart-stale-lineage-graph"),
+      FixtureTarget.make("integration-admission-target")
+    )
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerGraphFactsObserved(graphRead, {
+        revision: TrackerRevision.make("post-restart-stale-lineage-revision"),
+        taskIds: [attempt.taskId]
+      })
+    )
+
+    const acquisition = (yield* recovery.readFrontier).transitions.find(
+      ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
+    )
+    if (acquisition?._tag !== "AcquireStartedIntegrationTarget") {
+      return yield* Effect.die("expected restarted integration target acquisition")
+    }
+    yield* recovery.runTransition(acquisition, undefined as never)
+
+    const lineageRead = (yield* recovery.readFrontier).transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    expect(lineageRead).toMatchObject({
+      _tag: "ObservePlannedAttemptContinuationTargetLineage",
+      plannedAttempt: { attemptId: attempt.attemptId }
+    })
+    if (lineageRead?._tag === "ObservePlannedAttemptContinuationTargetLineage") {
+      expect(lineageRead.operation.operationId).not.toBe(staleRead.operationId)
+    }
+  }).pipe(
+    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+    Effect.provideService(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("unused"),
+        readTaskClaim: () => Effect.die("unused"),
+        readTaskWorktree: () => Effect.die("unused"),
+        readTargetLineage: () => Effect.die("unused"),
+        readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () => Effect.die("unused"),
+        reconcileTaskWorktree: () => Effect.die("unused"),
+        recordTaskAttemptPlan: () => Effect.die("unused"),
+        releaseTaskClaim: () => Effect.die("unused")
+      })
+    ),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
 )

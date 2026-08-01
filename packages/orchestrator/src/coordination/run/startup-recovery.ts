@@ -10,6 +10,12 @@ import {
   makeRunRecoveryActivation,
   RunRecoveryActivation
 } from "./recovery-activation.js"
+import {
+  type CandidateContinuationLimit,
+  type CandidateCorrectionLimit,
+  IntegrationCandidateAgent,
+  IntegrationCandidateGit
+} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   DuplicateUnfinishedTaskAttemptIssue,
@@ -41,7 +47,12 @@ const runBeganWithoutTermination = (
   !reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
 
 /** Discovers journaled work before exposing the production run environment. */
-export const startupRecoveryLayer = (runId: RunId, integrationTarget?: IntegrationTarget) =>
+export const startupRecoveryLayer = (
+  runId: RunId,
+  integrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit
+) =>
   Layer.effectContext(
     Effect.gen(function* () {
       yield* CoordinatorOwnership
@@ -50,6 +61,9 @@ export const startupRecoveryLayer = (runId: RunId, integrationTarget?: Integrati
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const taskWorkCapacityControl = yield* TaskWorkCapacityControl
+      const ambient = yield* Effect.context<never>()
+      const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
+      const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
       const scan = yield* journal.scan()
       const reductions = scan.runs.map((history) => reduceWorkflowJournalHistory(history.runId, history.records))
       const issues = [
@@ -79,9 +93,19 @@ export const startupRecoveryLayer = (runId: RunId, integrationTarget?: Integrati
       )
       const recovery =
         currentRun === undefined
-          ? yield* makeJournaledFreshRunRecoveryActivation(runId, integrationTarget)
-          : yield* makeRunRecoveryActivation(runId, integrationTarget)
-      const context = Context.empty().pipe(
+          ? yield* makeJournaledFreshRunRecoveryActivation(
+              runId,
+              integrationTarget,
+              candidateCorrectionLimit,
+              candidateContinuationLimit
+            )
+          : yield* makeRunRecoveryActivation(
+              runId,
+              integrationTarget,
+              candidateCorrectionLimit,
+              candidateContinuationLimit
+            )
+      let context = Context.empty().pipe(
         Context.add(WorkflowInterpreter, interpreter),
         Context.add(RunRecoveryActivation, recovery),
         Context.add(PlannedAttemptExecutor, executor),
@@ -89,6 +113,10 @@ export const startupRecoveryLayer = (runId: RunId, integrationTarget?: Integrati
         Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
         Context.add(WorkflowTrace, trace)
       )
+      if (candidateAgent._tag === "Some")
+        context = Context.add(context, IntegrationCandidateAgent, candidateAgent.value)
+      if (candidateGit._tag === "Some") context = Context.add(context, IntegrationCandidateGit, candidateGit.value)
+      /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
       return integrationTarget === undefined
         ? context
         : Context.add(context, IntegrationTargetSelection, integrationTarget)

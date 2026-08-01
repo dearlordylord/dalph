@@ -10,6 +10,11 @@ export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass
   { actual: Schema.String, expected: Schema.String, storyPosition: Schema.Int }
 ) {}
 
+export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.TaggedErrorClass<AuthoredIntegrationCandidateGitValidationFailure>()(
+  "AuthoredIntegrationCandidateGitValidationFailure",
+  { detail: Schema.String, storyPosition: Schema.Int }
+) {}
+
 type CursorFailure = AuthoredCassetteInteractionMismatch
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
@@ -31,6 +36,8 @@ const isTaskClaimReadItem = (item: StoryItem | undefined): item is AuthoredTaskC
   item?._tag === "TaskClaimReadReturned"
 
 export interface StoryCursor {
+  readonly atTerminalAssertions: Effect.Effect<boolean>
+  readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly awaitCoordinatorProcessDeath: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
   >
@@ -48,6 +55,13 @@ export interface StoryCursor {
   readonly consumeInitialPolicy: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
+  >
+  readonly consumeIntegrationCandidateAgentReport: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type>
+  >
+  readonly consumeIntegrationCandidateGitValidation: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type,
+    CursorFailure | AuthoredIntegrationCandidateGitValidationFailure
   >
   readonly consumeControlDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
@@ -84,6 +98,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const position = yield* Ref.make(0)
   const coordinatorProcessDeath =
     yield* Deferred.make<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+  const terminalAssertionsReached = yield* Deferred.make<void>()
   const claimNext = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A
   ): Effect.Effect<ClaimedStoryItem<A>> =>
@@ -92,7 +107,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       return predicate(item)
         ? [{ _tag: "Claimed" as const, index, item }, index + 1]
         : [{ _tag: "Mismatch" as const, index, item }, index]
-    })
+    }).pipe(
+      Effect.tap(() =>
+        Ref.get(position).pipe(
+          Effect.flatMap((index) =>
+            story[index]?._tag === "ExpectedBehavior"
+              ? Deferred.succeed(terminalAssertionsReached, undefined)
+              : Effect.void
+          )
+        )
+      )
+    )
   const consume = (tag: StoryItem["_tag"]) =>
     Effect.gen(function* () {
       const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag)
@@ -123,6 +148,46 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
     )
   )
+  const consumeIntegrationCandidateAgentReport = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type =>
+        item?._tag === "IntegrationCandidateAgentReported"
+    )
+    return claimed._tag === "Mismatch"
+      ? Option.none()
+      : Option.some(
+          yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported)(
+            claimed.item
+          ).pipe(Effect.orDie)
+        )
+  })
+  const consumeIntegrationCandidateGitValidation = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is
+        | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationFailed.Type
+        | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type =>
+        item?._tag === "IntegrationCandidateGitValidationFailed" ||
+        item?._tag === "IntegrationCandidateGitValidationReturned"
+    )
+    /* v8 ignore next -- @preserve Candidate Git mismatch uses the same claimNext mismatch projection exercised by other authored boundaries. */
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "IntegrationCandidateGitValidationFailed | IntegrationCandidateGitValidationReturned",
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    if (claimed.item._tag === "IntegrationCandidateGitValidationFailed") {
+      return yield* new AuthoredIntegrationCandidateGitValidationFailure({
+        detail: claimed.item.detail,
+        storyPosition: claimed.index
+      })
+    }
+    return claimed.item
+  })
+  const atTerminalAssertions = Ref.get(position).pipe(Effect.map((index) => story[index]?._tag === "ExpectedBehavior"))
   const consumeCapacityChange = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type =>
@@ -221,6 +286,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   return {
+    atTerminalAssertions,
+    awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
     consumeControlDirection,
@@ -229,6 +296,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeExecutorReport,
     consumeGitWorktreeObservationChange,
     consumeInitialPolicy,
+    consumeIntegrationCandidateAgentReport,
+    consumeIntegrationCandidateGitValidation,
     consumeRunCoordinator,
     consumeTaskClaimRead,
     consumeTaskWorkSpecification,

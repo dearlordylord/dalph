@@ -24,6 +24,7 @@ it.effect("serializes one exact target while allowing another target and release
     yield* controller.acquire(a)
     yield* controller.acquire(a)
     yield* controller.acquire(c)
+    expect((yield* Effect.exit(controller.withPermit(b, Effect.void)))._tag).toBe("Failure")
     expect(yield* Effect.flip(controller.acquire(b))).toEqual(
       new IntegrationTargetResourceUnavailable({
         heldBy: a.queuedAt,

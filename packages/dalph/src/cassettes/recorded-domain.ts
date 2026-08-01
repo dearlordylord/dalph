@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import {
   AcceptedResult,
   AttemptId,
+  GitCommitSha,
   IntegrationTarget,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
@@ -29,7 +30,17 @@ import {
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation,
-  TaskClaimReacquisitionRequestId
+  TaskClaimReacquisitionRequestId,
+  IntegrationCandidateAgentReport,
+  CandidateCorrectionLimit,
+  CandidateContinuationLimit,
+  IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateCorrelation,
+  IntegrationCandidateGitObservation,
+  IntegrationCandidateGitValidationAttemptOrdinal,
+  IntegrationCandidateId,
+  IntegrationCandidateResourceLocator,
+  IntegrationSessionId
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -66,6 +77,49 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...initiatedByCoordinator,
     integrationTarget: IntegrationTarget,
     plannedAttempt: PlannedTaskAttempt
+  },
+  IntegrationCandidateConstructionIntended: {
+    correlation: IntegrationCandidateCorrelation,
+    correctionLimit: CandidateCorrectionLimit,
+    continuationLimit: CandidateContinuationLimit,
+    ...initiatedByCoordinator,
+    plannedAttempt: PlannedTaskAttempt
+  },
+  IntegrationCandidateAgentReported: {
+    ...nonActionOccurrence,
+    expectedCorrelation: IntegrationCandidateCorrelation,
+    ordinal: IntegrationCandidateAgentReportOrdinal,
+    report: IntegrationCandidateAgentReport
+  },
+  IntegrationCandidateGitObserved: {
+    candidateCommit: GitCommitSha,
+    correlation: IntegrationCandidateCorrelation,
+    ...nonActionOccurrence,
+    observation: IntegrationCandidateGitObservation
+  },
+  IntegrationCandidateConstructed: {
+    candidateCommit: GitCommitSha,
+    correlation: IntegrationCandidateCorrelation,
+    ...nonActionOccurrence
+  },
+  IntegrationCandidateGitValidationFailed: {
+    attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal,
+    candidateCommit: GitCommitSha,
+    correlation: IntegrationCandidateCorrelation,
+    detail: Schema.String,
+    ...nonActionOccurrence
+  },
+  IntegrationCandidateCorrectionLimitReached: {
+    correctionCount: Schema.Int.check(Schema.isGreaterThan(0)),
+    correctionLimit: CandidateCorrectionLimit,
+    correlation: IntegrationCandidateCorrelation,
+    ...nonActionOccurrence
+  },
+  IntegrationCandidateContinuationLimitReached: {
+    continuationCount: Schema.Int.check(Schema.isGreaterThan(0)),
+    continuationLimit: CandidateContinuationLimit,
+    correlation: IntegrationCandidateCorrelation,
+    ...nonActionOccurrence
   },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
@@ -154,6 +208,15 @@ const consistentIdentityRenaming = Schema.makeFilter(
 /** One explicit, consistent alpha-renaming for generated cassette identities. */
 export const CassetteIdentityRenaming = Schema.Struct({
   attemptIds: Schema.Array(Schema.Struct({ from: AttemptId, to: AttemptId })).check(consistentIdentityRenaming),
+  integrationCandidateIds: Schema.Array(
+    Schema.Struct({ from: IntegrationCandidateId, to: IntegrationCandidateId })
+  ).check(consistentIdentityRenaming),
+  integrationCandidateResourceLocators: Schema.Array(
+    Schema.Struct({ from: IntegrationCandidateResourceLocator, to: IntegrationCandidateResourceLocator })
+  ).check(consistentIdentityRenaming),
+  integrationSessionIds: Schema.Array(Schema.Struct({ from: IntegrationSessionId, to: IntegrationSessionId })).check(
+    consistentIdentityRenaming
+  ),
   claimTokens: Schema.Array(Schema.Struct({ from: ClaimToken, to: ClaimToken })).check(consistentIdentityRenaming),
   operationIds: Schema.Array(Schema.Struct({ from: OperationId, to: OperationId })).check(consistentIdentityRenaming),
   runIds: Schema.Array(Schema.Struct({ from: RunId, to: RunId })).check(consistentIdentityRenaming),

@@ -13,6 +13,7 @@ import {
   ClaimOwner,
   ControlDirection,
   InitialControlPolicy,
+  IntegrationCandidateGitObservation,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,
@@ -94,6 +95,13 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
     attemptId: AttemptId,
     commit: GitCommitSha,
     integrationTarget: IntegrationTarget,
+    taskId: TaskId
+  },
+  IntegrationCandidateConstructed: {
+    acceptedResultCommit: GitCommitSha,
+    attemptId: AttemptId,
+    candidateCommit: GitCommitSha,
+    expectedTargetHead: GitCommitSha,
     taskId: TaskId
   },
   PlannedAttemptExecutorWorkReported: {
@@ -181,6 +189,17 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   GitWorktreeObservationChanged: {
     observation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   },
+  IntegrationCandidateAgentReported: {
+    report: Schema.TaggedUnion({
+      Conflict: {},
+      CorrelationContradiction: {},
+      ExitedWithoutCandidate: {},
+      Submitted: { candidateCommit: GitCommitSha },
+      Working: {}
+    })
+  },
+  IntegrationCandidateGitValidationFailed: { detail: Schema.String },
+  IntegrationCandidateGitValidationReturned: { observation: IntegrationCandidateGitObservation },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
@@ -227,6 +246,11 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteLifecycle: ["CoordinatorProcessDies"],
   DalphOperationTrace: ["DalphSelects"],
   Git: ["GitWorktreeObservationChanged"],
+  IntegrationCandidateConstruction: [
+    "IntegrationCandidateAgentReported",
+    "IntegrationCandidateGitValidationFailed",
+    "IntegrationCandidateGitValidationReturned"
+  ],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: [
     "TaskClaimReadFailed",

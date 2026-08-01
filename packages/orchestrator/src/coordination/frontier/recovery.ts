@@ -64,6 +64,7 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
     case "CommitFreshTaskClaimIntent":
     case "CommitTaskClaimReacquisitionIntent":
     case "AcquireStartedIntegrationTarget":
+    case "ContinueStartedIntegrationCandidate":
     case "ContinueFreshWorkflowOperation":
     case "ContinuePlannedAttemptExecutorWork":
     case "QueueAcceptedResultIntegrationResponsibility":

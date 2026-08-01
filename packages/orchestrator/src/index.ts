@@ -97,6 +97,8 @@ export {
   nodeGitTargetLineageLayer,
   TestGitTargetLineage
 } from "./authorities/git/target-lineage.js"
+export { nodeGitIntegrationCandidateLayer } from "./authorities/git/integration-candidate.js"
+export { runIntegrationCandidateConstruction } from "./coordination/run/integration-candidate-runtime.js"
 export {
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,
@@ -196,6 +198,8 @@ export {
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
+export * from "./workflow/protocols/integration-candidate-construction/events.js"
+export * from "./workflow/protocols/integration-candidate-construction/protocol.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export * from "./coordination/admission/controller.js"
@@ -292,6 +296,7 @@ export {
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
 export { runRecoveredWorkflow, runSyntheticWorkflow, runWorkflow } from "./coordination/run/run.js"
+export { IntegrationCandidateBoundaryUnavailable } from "./coordination/run/integration-transition-runtime.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,

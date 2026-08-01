@@ -3,6 +3,9 @@ import { Effect, Match, Schema, type Brand } from "effect"
 import {
   type AttemptId,
   type GitCommitSha,
+  type GitRepositoryLocator,
+  type IntegrationTarget,
+  type IntegrationTargetRef,
   type PlannedAttemptExecutorReport,
   type RunId,
   type TaskBranchRef,
@@ -29,6 +32,15 @@ import {
   type RunPolicyRevision,
   type TaskWorkCapacity,
   type TaskClaimReacquisitionRequestId,
+  type IntegrationCandidateAgentReport,
+  type IntegrationCandidateAgentReportOrdinal,
+  type IntegrationCandidateGitValidationAttemptOrdinal,
+  type CandidateCorrectionLimit,
+  type CandidateContinuationLimit,
+  type IntegrationCandidateCorrelation,
+  type IntegrationCandidateId,
+  type IntegrationCandidateResourceLocator,
+  type IntegrationSessionId,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -66,7 +78,16 @@ type IdentityRenamingMaps = RecordedOperationIdentityMaps & {
 }
 
 /** Identities allocated by Dalph and therefore eligible for cassette alpha-renaming. */
-type GeneratedCassetteIdentity = AttemptId | ClaimToken | OperationId | RunId | TaskBranchRef | WorktreeLocator
+type GeneratedCassetteIdentity =
+  | AttemptId
+  | ClaimToken
+  | IntegrationCandidateId
+  | IntegrationCandidateResourceLocator
+  | IntegrationSessionId
+  | OperationId
+  | RunId
+  | TaskBranchRef
+  | WorktreeLocator
 
 /**
  * Values the cassette records but Dalph must not alpha-rename: task-tracker
@@ -78,10 +99,16 @@ type PreservedCassetteBrand =
   | ControlDirectionApplicationOrdinal
   | FixtureTarget
   | GitCommitSha
+  | GitRepositoryLocator
   | GithubIssueNumber
   | GithubRepositoryName
   | GithubRepositoryOwner
   | PlannedAttemptExecutorReportOrdinal
+  | IntegrationTargetRef
+  | IntegrationCandidateAgentReportOrdinal
+  | IntegrationCandidateGitValidationAttemptOrdinal
+  | CandidateCorrectionLimit
+  | CandidateContinuationLimit
   | RunPolicyRevision
   | TaskWorkCapacity
   | TaskClaimReacquisitionRequestId
@@ -136,6 +163,45 @@ const renameExecutorReport = (
         correlation,
         result: preserveCassetteValue(report.result)
       })
+  }
+}
+
+const renameCandidateCorrelation = (
+  correlation: IntegrationCandidateCorrelation,
+  maps: IdentityRenamingMaps
+): IntegrationCandidateCorrelation =>
+  completeFields<IntegrationCandidateCorrelation>({
+    acceptedResultCommit: preserveCassetteValue(correlation.acceptedResultCommit),
+    attemptId: renamed(correlation.attemptId, maps.attemptIds),
+    candidateId: renamed(correlation.candidateId, maps.integrationCandidateIds),
+    candidateResource: renamed(correlation.candidateResource, maps.integrationCandidateResourceLocators),
+    expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
+    integrationSessionId: renamed(correlation.integrationSessionId, maps.integrationSessionIds),
+    integrationTarget: completeFields<IntegrationTarget>({
+      repository: preserveCassetteValue(correlation.integrationTarget.repository),
+      ref: preserveCassetteValue(correlation.integrationTarget.ref)
+    }),
+    runId: renamed(correlation.runId, maps.runIds)
+  })
+
+const renameCandidateAgentReport = (
+  report: IntegrationCandidateAgentReport,
+  maps: IdentityRenamingMaps
+): IntegrationCandidateAgentReport => {
+  const correlation = renameCandidateCorrelation(report.correlation, maps)
+  switch (report._tag) {
+    case "Conflict":
+      return completeFields<typeof report>({ _tag: "Conflict", correlation })
+    case "ExitedWithoutCandidate":
+      return completeFields<typeof report>({ _tag: "ExitedWithoutCandidate", correlation })
+    case "Submitted":
+      return completeFields<typeof report>({
+        _tag: "Submitted",
+        candidateCommit: preserveCassetteValue(report.candidateCommit),
+        correlation
+      })
+    case "Working":
+      return completeFields<typeof report>({ _tag: "Working", correlation })
   }
 }
 
@@ -337,6 +403,66 @@ const renameRecordedCassetteEntry = (
       renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
     ),
     Match.tags({
+      IntegrationCandidateConstructionIntended: (candidateEntry) => {
+        const correlation = renameCandidateCorrelation(candidateEntry.correlation, maps)
+        return completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateConstructionIntended",
+          correlation,
+          correctionLimit: preserveCassetteValue(candidateEntry.correctionLimit),
+          continuationLimit: preserveCassetteValue(candidateEntry.continuationLimit),
+          initiatedBy: preserveCassetteValue(candidateEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(candidateEntry.plannedAttempt, maps)
+        })
+      },
+      IntegrationCandidateAgentReported: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateAgentReported",
+          expectedCorrelation: renameCandidateCorrelation(candidateEntry.expectedCorrelation, maps),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
+          ordinal: preserveCassetteValue(candidateEntry.ordinal),
+          report: renameCandidateAgentReport(candidateEntry.report, maps)
+        }),
+      IntegrationCandidateGitObserved: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateGitObserved",
+          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
+          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
+          observation: preserveCassetteValue(candidateEntry.observation),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
+      IntegrationCandidateConstructed: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateConstructed",
+          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
+          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
+      IntegrationCandidateGitValidationFailed: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateGitValidationFailed",
+          attemptOrdinal: preserveCassetteValue(candidateEntry.attemptOrdinal),
+          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
+          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
+          detail: preserveCassetteValue(candidateEntry.detail),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
+      IntegrationCandidateCorrectionLimitReached: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateCorrectionLimitReached",
+          correctionCount: preserveCassetteValue(candidateEntry.correctionCount),
+          correctionLimit: preserveCassetteValue(candidateEntry.correctionLimit),
+          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
+      IntegrationCandidateContinuationLimitReached: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateContinuationLimitReached",
+          continuationCount: preserveCassetteValue(candidateEntry.continuationCount),
+          continuationLimit: preserveCassetteValue(candidateEntry.continuationLimit),
+          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({
           _tag: "ControlDirectionApplied",
@@ -462,6 +588,11 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   const maps = completeFields<IdentityRenamingMaps>({
     attemptIds: identityRenamingMap<AttemptId>(renaming.attemptIds),
     claimTokens: identityRenamingMap<ClaimToken>(renaming.claimTokens),
+    integrationCandidateIds: identityRenamingMap<IntegrationCandidateId>(renaming.integrationCandidateIds),
+    integrationCandidateResourceLocators: identityRenamingMap<IntegrationCandidateResourceLocator>(
+      renaming.integrationCandidateResourceLocators
+    ),
+    integrationSessionIds: identityRenamingMap<IntegrationSessionId>(renaming.integrationSessionIds),
     operationIds: identityRenamingMap<OperationId>(renaming.operationIds),
     runIds: identityRenamingMap<RunId>(renaming.runIds),
     taskBranchRefs: identityRenamingMap<TaskBranchRef>(renaming.taskBranchRefs),

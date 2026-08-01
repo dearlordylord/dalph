@@ -238,10 +238,12 @@ await run("Git reconciliation exhaustive model", [
 const acceptedResultIntegrationInvariants = [
   "cancellationExactlyQueued",
   "queuePositionsAreUnique",
-  "targetHeldExactlyStarted",
+  "targetHeldExactlyActiveIntegration",
   "atMostOneTargetHolder",
   "startedPrecedesRemainingQueue",
-  "dependencyWaitPreservesQueueOrder"
+  "dependencyWaitPreservesQueueOrder",
+  "candidateReadyHasExactOrderedParents",
+  "sessionIdentityFixedAfterStart"
 ]
 
 await run("accepted-result integration model typecheck", [
@@ -266,6 +268,10 @@ await run("accepted-result integration sampled model", [
   "dependencyWaitReached",
   "restartReached",
   "dependencyWaitReleasedTarget",
+  "candidateReadyReached",
+  "correctionRequiredReached",
+  "correctionLimitReached",
+  "continuationLimitReached",
   "--max-steps",
   "12",
   "--max-samples",

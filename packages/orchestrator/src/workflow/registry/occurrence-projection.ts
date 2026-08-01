@@ -379,6 +379,13 @@ type ProjectedJournalEvent = Extract<
 type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
 
 const nonProjectedJournalEventKinds = {
+  IntegrationCandidateAgentReported: true,
+  IntegrationCandidateConstructed: true,
+  IntegrationCandidateConstructionIntended: true,
+  IntegrationCandidateGitObserved: true,
+  IntegrationCandidateGitValidationFailed: true,
+  IntegrationCandidateCorrectionLimitReached: true,
+  IntegrationCandidateContinuationLimitReached: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,

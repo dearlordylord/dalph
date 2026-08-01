@@ -5,6 +5,14 @@ import {
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
+  IntegrationCandidateAgentReportedEvent,
+  IntegrationCandidateConstructedEvent,
+  IntegrationCandidateConstructionIntendedEvent,
+  IntegrationCandidateGitObservedEvent,
+  IntegrationCandidateGitValidationFailedEvent,
+  IntegrationCandidateCorrectionLimitReachedEvent,
+  IntegrationCandidateContinuationLimitReachedEvent,
+  integrationCandidateCorrelationEquals,
   JournalPosition,
   type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -123,6 +131,110 @@ const recordIntegrationEntry = (
   plannedAttempt: event.plannedAttempt
 })
 
+type CandidateConstructionEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegrationCandidateAgentReported"
+      | "IntegrationCandidateConstructed"
+      | "IntegrationCandidateConstructionIntended"
+      | "IntegrationCandidateGitObserved"
+      | "IntegrationCandidateGitValidationFailed"
+      | "IntegrationCandidateCorrectionLimitReached"
+      | "IntegrationCandidateContinuationLimitReached"
+  }
+>
+
+type RecordedCandidateConstructionEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: CandidateConstructionEvent["_tag"] }
+>
+
+const isCandidateConstructionEvent = (event: WorkflowJournalEvent): event is CandidateConstructionEvent =>
+  event._tag === "IntegrationCandidateAgentReported" ||
+  event._tag === "IntegrationCandidateConstructed" ||
+  event._tag === "IntegrationCandidateConstructionIntended" ||
+  event._tag === "IntegrationCandidateGitObserved" ||
+  event._tag === "IntegrationCandidateGitValidationFailed" ||
+  event._tag === "IntegrationCandidateCorrectionLimitReached" ||
+  event._tag === "IntegrationCandidateContinuationLimitReached"
+
+const isRecordedCandidateConstructionEntry = (
+  entry: RecordedCassetteEntry
+): entry is RecordedCandidateConstructionEntry =>
+  new Set([
+    "IntegrationCandidateAgentReported",
+    "IntegrationCandidateConstructed",
+    "IntegrationCandidateConstructionIntended",
+    "IntegrationCandidateGitObserved",
+    "IntegrationCandidateGitValidationFailed",
+    "IntegrationCandidateCorrectionLimitReached",
+    "IntegrationCandidateContinuationLimitReached"
+  ]).has(entry._tag)
+
+const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): RecordedCandidateConstructionEntry => {
+  switch (event._tag) {
+    case "IntegrationCandidateConstructionIntended":
+      return {
+        _tag: event._tag,
+        correlation: event.correlation,
+        correctionLimit: event.correctionLimit,
+        continuationLimit: event.continuationLimit,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt: event.plannedAttempt
+      }
+    case "IntegrationCandidateAgentReported":
+      return {
+        _tag: event._tag,
+        expectedCorrelation: event.expectedCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: event.ordinal,
+        report: event.report
+      }
+    case "IntegrationCandidateGitObserved":
+      return {
+        _tag: event._tag,
+        candidateCommit: event.candidateCommit,
+        correlation: event.correlation,
+        observation: event.observation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "IntegrationCandidateConstructed":
+      return {
+        _tag: event._tag,
+        candidateCommit: event.candidateCommit,
+        correlation: event.correlation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "IntegrationCandidateGitValidationFailed":
+      return {
+        _tag: event._tag,
+        attemptOrdinal: event.attemptOrdinal,
+        candidateCommit: event.candidateCommit,
+        correlation: event.correlation,
+        detail: event.detail,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "IntegrationCandidateCorrectionLimitReached":
+      return {
+        _tag: event._tag,
+        correctionCount: event.correctionCount,
+        correctionLimit: event.correctionLimit,
+        correlation: event.correlation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "IntegrationCandidateContinuationLimitReached":
+      return {
+        _tag: event._tag,
+        continuationCount: event.continuationCount,
+        continuationLimit: event.continuationLimit,
+        correlation: event.correlation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+  }
+}
+
 const recordTaskBoundaryEntry = (
   event: Exclude<
     WorkflowJournalEvent,
@@ -135,6 +247,13 @@ const recordTaskBoundaryEntry = (
         | "TargetLineageObserved"
         | "PlannedAttemptExecutorWorkReported"
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
+        | "IntegrationCandidateAgentReported"
+        | "IntegrationCandidateConstructed"
+        | "IntegrationCandidateConstructionIntended"
+        | "IntegrationCandidateGitObserved"
+        | "IntegrationCandidateGitValidationFailed"
+        | "IntegrationCandidateCorrectionLimitReached"
+        | "IntegrationCandidateContinuationLimitReached"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
         | "TaskWorkCapacityChanged"
@@ -195,6 +314,7 @@ const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): Recor
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
+  if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
     event._tag === "PlannedAttemptWorktreeObserved" ||
@@ -281,6 +401,8 @@ type RecordedExecutorEntry = Extract<
   RecordedCassetteEntry,
   { readonly _tag: "PlannedAttemptExecutorWorkReported" | "PlannedAttemptExecutorWorkResponsibilityBegan" }
 >
+const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is RecordedExecutorEntry =>
+  new Set(["PlannedAttemptExecutorWorkReported", "PlannedAttemptExecutorWorkResponsibilityBegan"]).has(entry._tag)
 
 const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEvent =>
   entry._tag === "PlannedAttemptExecutorWorkReported"
@@ -298,6 +420,8 @@ type RecordedTrackerEntry = Extract<
   RecordedCassetteEntry,
   { readonly _tag: "TaskTrackerFactsObserved" | "TaskTrackerReadInitiated" }
 >
+const isRecordedTrackerEntry = (entry: RecordedCassetteEntry): entry is RecordedTrackerEntry =>
+  new Set(["TaskTrackerFactsObserved", "TaskTrackerReadInitiated"]).has(entry._tag)
 
 const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent =>
   entry._tag === "TaskTrackerFactsObserved"
@@ -359,6 +483,129 @@ const eventForRecordedOperatorDirectionEntry = (
   })
 }
 
+const priorEntryPosition = (
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number,
+  matches: (entry: RecordedCassetteEntry) => boolean
+): JournalPosition => {
+  const priorIndex = entries.findLastIndex((entry, candidateIndex) => candidateIndex < index && matches(entry))
+  return JournalPosition.make((priorIndex < 0 ? index : priorIndex) + 1)
+}
+
+const eventForCandidateConstructionEntry = (
+  entry: RecordedCandidateConstructionEntry,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number
+): WorkflowJournalEvent => {
+  switch (entry._tag) {
+    case "IntegrationCandidateConstructionIntended":
+      return IntegrationCandidateConstructionIntendedEvent.make({
+        correlation: entry.correlation,
+        correctionLimit: entry.correctionLimit,
+        continuationLimit: entry.continuationLimit,
+        plannedAttempt: entry.plannedAttempt,
+        responsibilityBeganAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationResponsibilityBegan" &&
+            candidate.plannedAttempt.attemptId === entry.correlation.attemptId
+        ),
+        startedAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationStarted" &&
+            candidate.plannedAttempt.attemptId === entry.correlation.attemptId
+        ),
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateAgentReported":
+      return IntegrationCandidateAgentReportedEvent.make({
+        expectedCorrelation: entry.expectedCorrelation,
+        ordinal: entry.ordinal,
+        report: entry.report,
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateGitObserved":
+      return IntegrationCandidateGitObservedEvent.make({
+        candidateCommit: entry.candidateCommit,
+        correlation: entry.correlation,
+        observation: entry.observation,
+        submissionAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationCandidateAgentReported" &&
+            candidate.report._tag === "Submitted" &&
+            candidate.report.candidateCommit === entry.candidateCommit &&
+            candidate.report.correlation.candidateId === entry.correlation.candidateId
+        ),
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateConstructed":
+      return IntegrationCandidateConstructedEvent.make({
+        candidateCommit: entry.candidateCommit,
+        correlation: entry.correlation,
+        gitObservationAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationCandidateGitObserved" &&
+            candidate.candidateCommit === entry.candidateCommit &&
+            candidate.correlation.candidateId === entry.correlation.candidateId
+        ),
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateGitValidationFailed":
+      return IntegrationCandidateGitValidationFailedEvent.make({
+        attemptOrdinal: entry.attemptOrdinal,
+        candidateCommit: entry.candidateCommit,
+        correlation: entry.correlation,
+        detail: entry.detail,
+        submissionAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationCandidateAgentReported" &&
+            candidate.report._tag === "Submitted" &&
+            candidate.report.candidateCommit === entry.candidateCommit &&
+            candidate.report.correlation.candidateId === entry.correlation.candidateId
+        ),
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateCorrectionLimitReached":
+      return IntegrationCandidateCorrectionLimitReachedEvent.make({
+        correctionCount: entry.correctionCount,
+        correctionLimit: entry.correctionLimit,
+        correlation: entry.correlation,
+        invalidObservationAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationCandidateGitObserved" &&
+            candidate.correlation.candidateId === entry.correlation.candidateId
+        ),
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationCandidateContinuationLimitReached":
+      return IntegrationCandidateContinuationLimitReachedEvent.make({
+        continuationCount: entry.continuationCount,
+        continuationLimit: entry.continuationLimit,
+        correlation: entry.correlation,
+        lastReportAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationCandidateAgentReported" &&
+            candidate.report._tag !== "Submitted" &&
+            candidate.report.correlation.candidateId === entry.correlation.candidateId
+        ),
+        version: workflowJournalEventVersion
+      })
+  }
+}
+
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -367,16 +614,12 @@ const eventForRecordedEntry = (
 ): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
+  if (isRecordedCandidateConstructionEntry(entry)) {
+    return eventForCandidateConstructionEntry(entry, entries, index)
+  }
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
-  if (
-    entry._tag === "PlannedAttemptExecutorWorkReported" ||
-    entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-  ) {
-    return eventForExecutorEntry(entry)
-  }
-  if (entry._tag === "TaskTrackerFactsObserved" || entry._tag === "TaskTrackerReadInitiated") {
-    return eventForTrackerEntry(entry)
-  }
+  if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
+  if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
   return eventForTaskBoundaryEntry(entry, entries, index)
 }
 
@@ -471,6 +714,28 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     ? `Dalph observed ${entry.evidence._tag} through tracker read ${entry.originatingActionOperationId}.`
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
+// eslint-disable-next-line complexity -- Every closed candidate occurrence receives one concrete actor-first lyric.
+const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string => {
+  switch (entry._tag) {
+    case "IntegrationCandidateConstructionIntended":
+      return `Dalph coordinator began candidate ${entry.correlation.candidateId} in session ${entry.correlation.integrationSessionId}.`
+    case "IntegrationCandidateAgentReported":
+      return integrationCandidateCorrelationEquals(entry.expectedCorrelation, entry.report.correlation)
+        ? `The integration agent reported ${entry.report._tag} for session ${entry.report.correlation.integrationSessionId}.`
+        : `The integration agent returned an infrastructure correlation contradiction for expected session ${entry.expectedCorrelation.integrationSessionId}; Dalph preserved the involved candidate resources.`
+    case "IntegrationCandidateGitObserved":
+      return `Git reported ${entry.observation._tag} for submitted commit ${entry.candidateCommit}.`
+    case "IntegrationCandidateConstructed":
+      return `Git proved candidate ${entry.candidateCommit} has the exact ordered parents selected for the session.`
+    case "IntegrationCandidateGitValidationFailed":
+      return `Git could not validate submitted commit ${entry.candidateCommit}: ${entry.detail}`
+    case "IntegrationCandidateCorrectionLimitReached":
+      return `Candidate session ${entry.correlation.integrationSessionId} stopped after ${entry.correctionCount} correction attempts.`
+    case "IntegrationCandidateContinuationLimitReached":
+      return `Candidate session ${entry.correlation.integrationSessionId} stopped after ${entry.continuationCount} automatic agent continuations.`
+  }
+}
+
 type RecordedClaimAcquisitionEntry = Extract<
   RecordedCassetteEntry,
   { readonly _tag: "TaskClaimAcquired" | "TaskClaimAcquisitionIntended" | "TaskClaimAcquisitionRejected" }
@@ -495,6 +760,7 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
+    | RecordedCandidateConstructionEntry
     | RecordedExecutorEntry
     | RecordedGitObservationEntry
     | RecordedRunEntry
@@ -522,16 +788,10 @@ const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirection
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
+  if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
-  if (
-    entry._tag === "PlannedAttemptExecutorWorkReported" ||
-    entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-  ) {
-    return lyricForExecutorEntry(entry)
-  }
-  if (entry._tag === "TaskTrackerFactsObserved" || entry._tag === "TaskTrackerReadInitiated") {
-    return lyricForTrackerEntry(entry)
-  }
+  if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
+  if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
   if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
   return lyricForTaskBoundaryEntry(entry)
 }

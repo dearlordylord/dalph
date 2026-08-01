@@ -825,8 +825,8 @@ preserving the worktree. A verified candidate observed against its exact
 expected target head yields only an exact compare-and-set authorization. A
 stale head yields `ReconcileCandidateFromCurrentTarget`, and an ambiguous head
 yields `RereadTargetBeforePromotion`; neither can authorize overwrite.
-Issues #57, #59, and #60 retain candidate construction, candidate
-verification, and the concrete compare-and-set effect respectively.
+Issue #57 supplies candidate construction below. Issues #59 and #60 retain
+candidate verification and the concrete compare-and-set effect respectively.
 
 ## Planned-Attempt Executor Boundary
 
@@ -864,10 +864,33 @@ same-target order. Another target remains independently selectable. When a
 later complete tracker observation clears the prerequisites, the selector may
 reacquire the same target for the same started responsibility.
 
-Candidate construction, repository verification, promotion, resolution,
-tracker completion, and executor-internal review policy remain future work.
-Each requires accepted chronological operational scenarios before adding
-domain types or workflow events.
+After a compatible fresh target-lineage observation, Dalph records
+`IntegrationCandidateConstructionIntended` before asking the integration
+agent to start or continue one fixed session in a separately identified
+candidate resource. This resource is persisted with the intent and is never
+the planned task worktree. Only an explicit `Submitted` report authorizes the read-only Git
+candidate boundary. That boundary calls `git cat-file -t <M>` and, for a
+commit, `git cat-file -p <M>` against the configured repository; it never
+reads a worktree tip or mutates a ref.
+
+Git fixes the candidate only when the submitted commit's ordered direct
+parents are exactly `[H, C]`, where H is the target head fixed by the intent
+and C is the accepted result. Missing objects, non-commit objects, and wrong
+parents return concrete correction work to the same session. Unreadable Git
+records a typed validation failure and leaves the exact submission pending for
+a later reread without another agent call. A correlation contradiction stops
+before Git. The positive correction limit is supplied separately; exhaustion
+records non-convergence, preserves the accepted result and isolated work, and
+releases the process-local target resource. Conflict, working, and
+exited-without-candidate reports may automatically continue only up to a
+separately supplied positive continuation limit. Reaching it records the same
+work-preserving, target-releasing disposition. Neither numeric policy has a
+production default; candidate construction waits until both are configured.
+
+`IntegrationCandidateConstructed` is ready only for issue #59. Candidate
+verification, promotion, tracker completion, and executor-internal review
+policy remain future work. Each requires accepted chronological operational
+scenarios before adding domain types or workflow events.
 
 ## Formal Model and Executable Scenarios
 
@@ -877,8 +900,9 @@ ownership, retention of that position between a suspension request and its
 result, safe-suspension release, and terminal release. Detailed executor
 internals are not part of current Dalph. The `acceptedResultIntegration` model
 covers journal-position ordering, per-target serialization, the
-pre-integration cancellation cutoff, restart, and dependency-wait resource
-release while preserving same-target order.
+pre-integration cancellation cutoff, restart, dependency-wait resource
+release, explicit candidate submission, exact ordered parents, same-session
+correction, unreadable-Git retry, and work-preserving non-convergence.
 
 Executable TypeScript scenarios cover the same reports and recovery boundary,
 including generated traces replayed through the executor service. The Quint

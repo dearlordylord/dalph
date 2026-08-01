@@ -17,19 +17,33 @@ import {
 } from "./frontier.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
+import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import {
+  deriveIntegrationCandidateConstruction,
+  type CandidateCorrectionLimit,
+  type CandidateContinuationLimit
+} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 
 export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
+  readonly activeResponsibilityPositions?: ReadonlySet<JournalPosition>
   readonly currentTrackerTaskIds: ReadonlySet<TaskId>
   readonly heldResponsibilityPositions: ReadonlySet<JournalPosition>
   readonly integrationTarget: Option.Option<IntegrationTarget>
+  readonly candidateCorrectionLimit?: Option.Option<CandidateCorrectionLimit>
+  readonly candidateContinuationLimit?: Option.Option<CandidateContinuationLimit>
+  readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
 }
 
 const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   currentTrackerTaskIds: new Set(),
+  activeResponsibilityPositions: new Set(),
   heldResponsibilityPositions: new Set(),
   integrationTarget: Option.none(),
+  candidateCorrectionLimit: Option.none(),
+  candidateContinuationLimit: Option.none(),
+  targetLineageByAttemptId: new Map(),
   taskClaimAuthorityByAttemptId: new Map()
 }
 
@@ -77,15 +91,58 @@ export const deriveIntegrationFrontier = (
   const transitions = startable.map((responsibility) =>
     RunnableFrontierTransition.StartQueuedIntegration({ responsibility })
   )
+  // eslint-disable-next-line complexity -- One started responsibility has a closed precedence order for tracker, claim, blocker, target, and candidate facts.
   const responsibilityTransitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
     if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility)) return []
+    /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped candidate effect is active. */
+    if (runtimeFacts.activeResponsibilityPositions?.has(responsibility.queuedAt)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
-    return waiting && held
-      ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
-      : !waiting && !held
-        ? [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-        : []
+    if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+    if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+    if (waiting) return []
+    const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
+    const durableIntent = runState.workflowHistory.records.findLast(
+      ({ event }) =>
+        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
+    )?.event
+    if (
+      existing?._tag === "CandidateConstructed" ||
+      existing?._tag === "CandidateCorrelationContradiction" ||
+      existing?._tag === "CandidateCorrectionLimitReached" ||
+      existing?._tag === "CandidateContinuationLimitReached"
+    )
+      return []
+    return Option.all({
+      continuationLimit:
+        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
+          ? Option.some(durableIntent.continuationLimit)
+          : (runtimeFacts.candidateContinuationLimit ?? Option.none()),
+      correctionLimit:
+        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
+          ? Option.some(durableIntent.correctionLimit)
+          : (runtimeFacts.candidateCorrectionLimit ?? Option.none()),
+      lineage:
+        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
+          ? Option.some({
+              plannedBaseIsAncestorOfTargetHead: true as const,
+              plannedBaseSha: durableIntent.plannedAttempt.baseSha,
+              targetHeadSha: durableIntent.correlation.expectedTargetHead
+            })
+          : Option.fromUndefinedOr(runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId))
+    }).pipe(
+      Option.match({
+        onNone: () => [],
+        onSome: ({ continuationLimit, correctionLimit, lineage }) => [
+          RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+            correctionLimit,
+            continuationLimit,
+            lineage,
+            responsibility
+          })
+        ]
+      })
+    )
   })
   const reconciliationTransitions = Option.match(runtimeFacts.integrationTarget, {
     onNone: () => [],

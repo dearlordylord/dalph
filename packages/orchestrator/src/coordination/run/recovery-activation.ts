@@ -53,16 +53,29 @@ import {
   latestReconstructedTaskGraph,
   reconstructedTaskWorkSpecificationFor
 } from "../reconstruction/graph-knowledge.js"
-import { type AcceptedResultNotDurable } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  type AcceptedResultNotDurable,
+  deriveIntegrationAdmission
+} from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 import {
   type IntegrationTargetResourceController,
   type IntegrationTargetResourceUnavailable,
   makeIntegrationTargetResourceController
 } from "../admission/integration-target-resource.js"
-import { runIntegrationTransition } from "./integration-transition-runtime.js"
+import {
+  type IntegrationCandidateBoundaryUnavailable,
+  runIntegrationTransition
+} from "./integration-transition-runtime.js"
+import {
+  type CandidateContinuationLimit,
+  type CandidateCorrectionLimit,
+  type IntegrationCandidateAgentFailure,
+  type IntegrationCandidateTargetLineageRejected
+} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   latestTaskClaimReacquisitionDirection,
   taskClaimReacquisitionOperationId
@@ -101,6 +114,9 @@ export type RunRecoveryActivationError =
   | InvalidWorkflowJournalHistory
   | InterpreterError
   | IntegrationTargetResourceUnavailable
+  | IntegrationCandidateBoundaryUnavailable
+  | IntegrationCandidateAgentFailure
+  | IntegrationCandidateTargetLineageRejected
   | JournalAppendError
   | JournalStoreError
   | TaskClaimReacquisitionPlannerUnavailable
@@ -811,6 +827,7 @@ const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
 const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
   "AcquireStartedIntegrationTarget",
   "CommitTaskClaimReacquisitionIntent",
+  "ContinueStartedIntegrationCandidate",
   "ObservePlannedAttemptContinuationGraph",
   "ObservePlannedAttemptContinuationClaim",
   "ObservePlannedAttemptContinuationSpecification",
@@ -828,7 +845,9 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
   integrationTarget: Option.Option<IntegrationTarget>,
-  activationBaselinePosition: Option.Option<JournalPosition>
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
   const runState = yield* readRecoveredRunState(runId)
   const hasCurrentCompleteGraphObservation = runState.workflowHistory.records.some(
@@ -904,10 +923,43 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
           integrationTarget
         )
   )
+  const integrationResourceSnapshot = yield* integrationResources.snapshot
+  const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) =>
+    event._tag === "TargetLineageObserved" && positionIsAfter(position, activationBaselinePosition)
+      ? [[event.plannedAttempt.attemptId, event.observation] as const]
+      : []
+  )
+  const durableCandidateLineage = runState.workflowHistory.records.flatMap(({ event }) =>
+    event._tag === "IntegrationCandidateConstructionIntended"
+      ? [
+          [
+            event.plannedAttempt.attemptId,
+            TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: event.plannedAttempt.baseSha,
+              targetHeadSha: event.correlation.expectedTargetHead
+            })
+          ] as const
+        ]
+      : []
+  )
+  const targetLineageByAttemptId = new Map([...activationTargetLineage, ...durableCandidateLineage])
+  const latestClaimObservationPositionFor = (taskId: TaskId) =>
+    runState.workflowHistory.records.findLast(
+      ({ event, position }) =>
+        positionIsAfter(position, activationBaselinePosition) &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "FocusedTaskClaimFacts" ||
+          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+        event.observation.coverage.taskId === taskId
+    )?.position
   const integration = deriveIntegrationFrontier(runState, {
-    ...(yield* integrationResources.snapshot),
+    ...integrationResourceSnapshot,
+    candidateCorrectionLimit,
+    candidateContinuationLimit,
     currentTrackerTaskIds,
     integrationTarget,
+    targetLineageByAttemptId,
     taskClaimAuthorityByAttemptId: new Map(
       runState.workflowHistory.records.flatMap(({ event }) => {
         if (event._tag !== "TaskAttemptPlanned") return []
@@ -925,6 +977,42 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
         ]
       })
     )
+  })
+  const integrationLineageTransitions = Option.match(integrationTarget, {
+    onNone: () => [],
+    onSome: (target) =>
+      // eslint-disable-next-line complexity -- Candidate lineage starts only after the exact responsibility passes every current authority gate.
+      deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities.flatMap((responsibility) => {
+        if (responsibility._tag !== "StartedIntegrationResponsibility") return []
+        const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt.taskId)
+        const graphWasCheckedAfterClaim =
+          claimObservedAt !== undefined &&
+          currentGraphObservation !== undefined &&
+          currentGraphObservation.position > claimObservedAt
+        return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
+          graphWasCheckedAfterClaim &&
+          !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
+          !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) &&
+          !integration.transitions.some(
+            (transition) =>
+              transition._tag === "ReleaseStartedIntegrationTarget" &&
+              transition.responsibility.queuedAt === responsibility.queuedAt
+          )
+          ? [
+              RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+                operation: makeTargetLineageObservationOperation({
+                  integrationTarget: target,
+                  operationId: OperationId.make(
+                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(activationBaselinePosition, () => 0)}:target-lineage`
+                  ),
+                  plannedAttempt: responsibility.plannedAttempt,
+                  predecessorOperationIds: []
+                }),
+                plannedAttempt: responsibility.plannedAttempt
+              })
+            ]
+          : []
+      })
   })
   const unobservedClaimTaskIds = [...ordinary.explanations, ...integration.explanations].flatMap((explanation) =>
     (explanation._tag === "WorkflowOperationTaskClaimConstraint" ||
@@ -958,8 +1046,9 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
     transitions: [
       ...pendingGitReadTransitions,
       ...claimObservationTransitions,
-      ...integration.transitions,
-      ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition]))
+      ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition])),
+      ...integrationLineageTransitions,
+      ...integration.transitions
     ]
   }
 })
@@ -968,13 +1057,17 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
   integrationTarget: Option.Option<IntegrationTarget>,
-  activationBaselinePosition: Option.Option<JournalPosition>
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
   const frontier = yield* readRecoveredFrontier(
     runId,
     integrationResources,
     integrationTarget,
-    activationBaselinePosition
+    activationBaselinePosition,
+    candidateCorrectionLimit,
+    candidateContinuationLimit
   )
   return {
     explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
@@ -1067,7 +1160,12 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
  * reports while exposing no recovered transitions.
  */
 const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeJournaledFreshSource")(
-  function* (runId: RunId, integrationTarget: Option.Option<IntegrationTarget>) {
+  function* (
+    runId: RunId,
+    integrationTarget: Option.Option<IntegrationTarget>,
+    candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+    candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
+  ) {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* JournalStore
     const workflowInterpreter = Context.getOption(yield* Effect.context<never>(), WorkflowInterpreter)
@@ -1139,10 +1237,24 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       continueFreshPlannedAttemptExecutorWork: continueAttempt,
       continuePlannedAttemptExecutorWork: continueAttempt,
       readFinalityFrontier: provideJournal(
-        readRecoveredFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
+        readRecoveredFrontier(
+          runId,
+          integrationResources,
+          integrationTarget,
+          activationBaselinePosition,
+          candidateCorrectionLimit,
+          candidateContinuationLimit
+        )
       ),
       readFrontier: provideJournal(
-        readJournaledFreshFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
+        readJournaledFreshFrontier(
+          runId,
+          integrationResources,
+          integrationTarget,
+          activationBaselinePosition,
+          candidateCorrectionLimit,
+          candidateContinuationLimit
+        )
       ),
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
@@ -1186,17 +1298,38 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
 
 export const makeJournaledFreshRunRecoveryActivation = (
   runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget
-) => makeJournaledFreshRunRecoveryActivationEffect(runId, Option.fromUndefinedOr(configuredIntegrationTarget))
+  configuredIntegrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit
+) =>
+  makeJournaledFreshRunRecoveryActivationEffect(
+    runId,
+    Option.fromUndefinedOr(configuredIntegrationTarget),
+    Option.fromUndefinedOr(candidateCorrectionLimit),
+    Option.fromUndefinedOr(candidateContinuationLimit)
+  )
 
 export const journaledFreshRunRecoveryActivationLayer = (
   runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget
-) => Layer.effect(RunRecoveryActivation, makeJournaledFreshRunRecoveryActivation(runId, configuredIntegrationTarget))
+  configuredIntegrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit
+) =>
+  Layer.effect(
+    RunRecoveryActivation,
+    makeJournaledFreshRunRecoveryActivation(
+      runId,
+      configuredIntegrationTarget,
+      candidateCorrectionLimit,
+      candidateContinuationLimit
+    )
+  )
 
 const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
   runId: RunId,
-  integrationTarget: Option.Option<IntegrationTarget>
+  integrationTarget: Option.Option<IntegrationTarget>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
   const dependencies = yield* Effect.context<JournalStore | WorkflowInterpreter | WorkflowTrace>()
   const integrationResources = yield* makeIntegrationTargetResourceController()
@@ -1236,17 +1369,21 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     }
   )
   const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
-    return yield* readRecoveredFrontier(runId, integrationResources, integrationTarget, activationBaselinePosition)
+    return yield* readRecoveredFrontier(
+      runId,
+      integrationResources,
+      integrationTarget,
+      activationBaselinePosition,
+      candidateCorrectionLimit,
+      candidateContinuationLimit
+    )
   })
   const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
   // eslint-disable-next-line complexity -- Closed observation tags route to their matching journaled authority boundary.
   const runObservedOperation = Effect.fn("RunRecoveryActivation.runObservedOperation")(function* (
     transition: ObservedOperationTransition
   ) {
-    if (
-      transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
-      transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
-    ) {
+    if (transition._tag === "ObservePlannedAttemptContinuationWorktree") {
       const plannedAttempt = transition.operation.plannedAttempt
       const records = (yield* readRecoveredRunState(runId)).workflowHistory.records
       if (!attemptMayContinue(records, plannedAttempt)) return
@@ -1355,8 +1492,18 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   } satisfies AuthoritativeRunRecoveryActivation
 })
 
-export const makeRunRecoveryActivation = (runId: RunId, configuredIntegrationTarget?: IntegrationTarget) =>
-  makeRunRecoveryActivationEffect(runId, Option.fromUndefinedOr(configuredIntegrationTarget))
+export const makeRunRecoveryActivation = (
+  runId: RunId,
+  configuredIntegrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit
+) =>
+  makeRunRecoveryActivationEffect(
+    runId,
+    Option.fromUndefinedOr(configuredIntegrationTarget),
+    Option.fromUndefinedOr(candidateCorrectionLimit),
+    Option.fromUndefinedOr(candidateContinuationLimit)
+  )
 
 /**
  * Routes every already-intended recovered responsibility through the same
@@ -1365,9 +1512,19 @@ export const makeRunRecoveryActivation = (runId: RunId, configuredIntegrationTar
 export const activateRecoveredResponsibilities = Effect.fn("RunRecoveryActivation.activateRecoveredResponsibilities")(
   function* (
     runId: RunId,
-    input: { readonly capacity: TaskWorkCapacity; readonly integrationTarget: IntegrationTarget | undefined }
+    input: {
+      readonly candidateContinuationLimit?: CandidateContinuationLimit
+      readonly candidateCorrectionLimit?: CandidateCorrectionLimit
+      readonly capacity: TaskWorkCapacity
+      readonly integrationTarget: IntegrationTarget | undefined
+    }
   ) {
-    const recovery = yield* makeRunRecoveryActivation(runId, input.integrationTarget)
+    const recovery = yield* makeRunRecoveryActivation(
+      runId,
+      input.integrationTarget,
+      input.candidateCorrectionLimit,
+      input.candidateContinuationLimit
+    )
     const admissionController = yield* makeTaskAdmissionController({
       capacity: input.capacity,
       reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions

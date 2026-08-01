@@ -498,9 +498,127 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
   }
 )
 
+const candidateScenarioFrom = (
+  name: string,
+  candidateStory: ReadonlyArray<unknown>,
+  constructedCommit: string | undefined
+) => {
+  const baseStory = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
+  const finalBlockedGraphIndex = baseStory.findLastIndex(
+    (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision
+  )
+  return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
+    name,
+    story: baseStory.flatMap((item, index) => {
+      if (index === finalBlockedGraphIndex - 1 || index === finalBlockedGraphIndex) return []
+      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
+        return [{ ...item, graph: singletonGraph }]
+      }
+      if (item._tag !== "ExpectedBehavior") return [item]
+      const constructedEvidence =
+        constructedCommit === undefined
+          ? []
+          : [
+              {
+                _tag: "IntegrationCandidateConstructed",
+                acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                attemptId: "attempt:A:0",
+                candidateCommit: constructedCommit,
+                expectedTargetHead: "1111111111111111111111111111111111111111",
+                taskId: "A"
+              }
+            ]
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+        ...candidateStory,
+        {
+          ...item,
+          /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */
+          orchestration: item.orchestration === null ? null : [...item.orchestration, ...constructedEvidence]
+        }
+      ]
+    })
+  })
+}
+
+/** Conflict edits stay in one isolated candidate resource until an explicit exact submission. */
+export const candidateConflictRecoveryAuthoredCassette = candidateScenarioFrom(
+  "candidate conflict recovery stays in one isolated integration resource",
+  [
+    { _tag: "IntegrationCandidateAgentReported", report: { _tag: "Conflict" } },
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    {
+      _tag: "IntegrationCandidateGitValidationReturned",
+      observation: {
+        _tag: "Commit",
+        directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      }
+    }
+  ],
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+/** A definitive invalid submission is corrected, while unreadable Git causes a reread without another agent call. */
+export const candidateCorrectionAfterUnreadableGitAuthoredCassette = candidateScenarioFrom(
+  "candidate correction rereads unreadable Git without charging the agent",
+  [
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    { _tag: "IntegrationCandidateGitValidationReturned", observation: { _tag: "Missing" } },
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }
+    },
+    { _tag: "IntegrationCandidateGitValidationFailed", detail: "repository temporarily unreadable" },
+    {
+      _tag: "IntegrationCandidateGitValidationReturned",
+      observation: {
+        _tag: "Commit",
+        directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      }
+    }
+  ],
+  "cccccccccccccccccccccccccccccccccccccccc"
+)
+
+/** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
+export const candidateCorrectionExhaustionAuthoredCassette = candidateScenarioFrom(
+  "candidate correction exhaustion preserves non-convergent work",
+  [
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    { _tag: "IntegrationCandidateGitValidationReturned", observation: { _tag: "Missing" } },
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }
+    },
+    { _tag: "IntegrationCandidateGitValidationReturned", observation: { _tag: "Commit", directParents: [] } }
+  ],
+  undefined
+)
+
+/** A misrouted response is preserved as a correlation contradiction and never reaches Git. */
+export const candidateCorrelationContradictionAuthoredCassette = candidateScenarioFrom(
+  "candidate correlation contradiction fails closed before Git",
+  [{ _tag: "IntegrationCandidateAgentReported", report: { _tag: "CorrelationContradiction" } }],
+  undefined
+)
+
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
 export const maintainedAuthoredCassetteCatalog = {
   acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  candidateConflictRecovery: candidateConflictRecoveryAuthoredCassette,
+  candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+  candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
+  candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

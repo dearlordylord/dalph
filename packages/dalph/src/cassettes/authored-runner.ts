@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
@@ -11,8 +11,15 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  CandidateCorrectionLimit,
+  CandidateContinuationLimit,
   freshWorkflowRunId,
   GitTargetLineage,
+  IntegrationCandidateAgent,
+  IntegrationCandidateAgentReport,
+  IntegrationCandidateResourceLocator,
+  IntegrationCandidateGit,
+  IntegrationCandidateGitReadFailure,
   GitWorktree,
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
@@ -62,15 +69,41 @@ export interface AuthoredScenarioCassetteRun {
   readonly runId: RunId
 }
 
+const minimumCorrectionExhaustionValidationCount = 2
+const authoredCandidateContinuationLimit = 2
+const authoredSettlementYieldTurns = 10
+
 /** Decodes and drives one story through the production coordinator activation program. */
 export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(function* (input: unknown) {
   return yield* Effect.scoped(
+    // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
     Effect.gen(function* () {
       const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
       yield* Effect.forEach(cassette.story, (item) => assertExactlyOneAuthoredCassetteStoryItemOwner(item._tag), {
         discard: true
       })
       const cursor = yield* makeStoryCursor(cassette.story)
+      const candidateOutcomeRecorded = yield* Deferred.make<void>()
+      const candidateTerminalEventTag = cassette.story.some(
+        (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "CorrelationContradiction"
+      )
+        ? "IntegrationCandidateAgentReported"
+        : cassette.story.some(
+              (item) =>
+                item._tag === "ExpectedBehavior" &&
+                item.orchestration?.some((evidence) => evidence._tag === "IntegrationCandidateConstructed")
+            )
+          ? "IntegrationCandidateConstructed"
+          : cassette.story.filter((item) => item._tag === "IntegrationCandidateGitValidationReturned").length >=
+              minimumCorrectionExhaustionValidationCount
+            ? "IntegrationCandidateCorrectionLimitReached"
+            : cassette.story.filter(
+                  (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag !== "Submitted"
+                ).length >= authoredCandidateContinuationLimit
+              ? "IntegrationCandidateContinuationLimitReached"
+              : cassette.story.some((item) => item._tag === "IntegrationCandidateAgentReported")
+                ? "IntegrationCandidateAgentReported"
+                : undefined
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -91,7 +124,23 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           gitWorktreeTestLayer(cassette.startingFacts.worktreeObservation)
         )
       )
-      const journalLayer = Layer.succeed(JournalStore, Context.get(sharedContext, JournalStore))
+      const sharedJournal = Context.get(sharedContext, JournalStore)
+      const journalLayer = Layer.succeed(
+        JournalStore,
+        JournalStore.of({
+          ...sharedJournal,
+          append: (requestedRunId, key, event) =>
+            sharedJournal
+              .append(requestedRunId, key, event)
+              .pipe(
+                Effect.tap(() =>
+                  candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag
+                    ? Deferred.succeed(candidateOutcomeRecorded, undefined)
+                    : Effect.void
+                )
+              )
+        })
+      )
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
@@ -196,13 +245,89 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
             worktreeRoot: command.worktreeRoot
           })
         )
+      const candidateLayer = Layer.merge(
+        Layer.succeed(
+          IntegrationCandidateAgent,
+          IntegrationCandidateAgent.of({
+            startOrContinue: (request) =>
+              cursor.consumeIntegrationCandidateAgentReport.pipe(
+                Effect.flatMap((candidateReport) => {
+                  if (Option.isNone(candidateReport)) {
+                    return Context.get(sharedContext, JournalStore)
+                      .read(runId)
+                      .pipe(
+                        Effect.orDie,
+                        Effect.flatMap((candidateRecords) =>
+                          Effect.die(
+                            `candidate frontier invoked the agent without an authored report: ${candidateRecords
+                              .filter(({ event }) => event._tag.startsWith("IntegrationCandidate"))
+                              .map(({ event }) => event._tag)
+                              .join(",")}`
+                          )
+                        )
+                      )
+                  }
+                  const authored = candidateReport.value.report
+                  return Effect.succeed(
+                    authored._tag === "Submitted"
+                      ? IntegrationCandidateAgentReport.cases.Submitted.make({
+                          candidateCommit: authored.candidateCommit,
+                          correlation: request.correlation
+                        })
+                      : authored._tag === "Conflict"
+                        ? IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: request.correlation })
+                        : authored._tag === "CorrelationContradiction"
+                          ? IntegrationCandidateAgentReport.cases.Working.make({
+                              correlation: {
+                                ...request.correlation,
+                                candidateResource: IntegrationCandidateResourceLocator.make(
+                                  "/candidate-resources/authored-foreign"
+                                )
+                              }
+                            })
+                          : authored._tag === "ExitedWithoutCandidate"
+                            ? IntegrationCandidateAgentReport.cases.ExitedWithoutCandidate.make({
+                                correlation: request.correlation
+                              })
+                            : IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation })
+                  )
+                })
+              )
+          })
+        ),
+        Layer.succeed(
+          IntegrationCandidateGit,
+          IntegrationCandidateGit.of({
+            readSubmittedCommit: (repository, candidateCommit) =>
+              cursor.consumeIntegrationCandidateGitValidation.pipe(
+                Effect.map(({ observation }) => observation),
+                Effect.mapError(
+                  (failure) =>
+                    new IntegrationCandidateGitReadFailure({
+                      candidateCommit,
+                      detail: `${failure._tag}: ${
+                        /* v8 ignore next -- @preserve The generic interaction-mismatch rendering is exercised at the shared authored cursor boundary. */
+                        failure._tag === "AuthoredIntegrationCandidateGitValidationFailure"
+                          ? failure.detail
+                          : "interaction mismatch"
+                      } at story position ${failure.storyPosition}`,
+                      repository
+                    })
+                )
+              )
+          })
+        )
+      )
       const freshExecutorLayer = controlledExecutorLayer(cursor, runId)
       const freshWorkflowLayer = Layer.mergeAll(
+        candidateLayer,
         interpreterLayer,
-        journaledFreshRunRecoveryActivationLayer(runId, command.integrationTarget).pipe(
-          Layer.provide(freshExecutorLayer),
-          Layer.provide(interpreterLayer)
-        ),
+        journaledFreshRunRecoveryActivationLayer(
+          runId,
+          command.integrationTarget,
+          CandidateCorrectionLimit.make(1),
+          CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
+        ).pipe(Layer.provide(candidateLayer), Layer.provide(freshExecutorLayer), Layer.provide(interpreterLayer)),
         integrationTargetSelectionLayer(command.integrationTarget),
         planningLayer("fresh"),
         controlledControlPolicyLayer
@@ -214,7 +339,13 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       )
       const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId)
       const recoveryPlanningLayer = planningLayer("recovery")
-      const recoveryStartupLayer = startupRecoveryLayer(runId, command.integrationTarget).pipe(
+      const recoveryStartupLayer = startupRecoveryLayer(
+        runId,
+        command.integrationTarget,
+        CandidateCorrectionLimit.make(1),
+        CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
+      ).pipe(
+        Layer.provide(candidateLayer),
         Layer.provide(interpreterLayer),
         Layer.provide(controlledControlPolicyLayer),
         Layer.provide(recoveryExecutorLayer),
@@ -225,7 +356,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       )
       const recoveryWorkflowLayer = Layer.merge(recoveryStartupLayer, recoveryPlanningLayer)
 
-      const records = yield* Effect.scoped(
+      const execution = yield* Effect.scoped(
         Effect.gen(function* () {
           const freshRun = runWorkflow(command.target, initial.policy, runId).pipe(
             Effect.provideService(WorkflowTrace, trace),
@@ -240,15 +371,37 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               )
             )
             yield* Fiber.interrupt(coordinator)
-            yield* runRecoveredWorkflow(command.target).pipe(Effect.provide(recoveryWorkflowLayer))
-          } else {
-            yield* freshRun
+            const recoveryContext = yield* Layer.build(recoveryWorkflowLayer)
+            const recovered = yield* runRecoveredWorkflow(command.target).pipe(
+              Effect.provide(recoveryContext),
+              Effect.forkScoped({ startImmediately: true })
+            )
+            yield* Effect.raceFirst(
+              cursor.awaitTerminalAssertions,
+              Fiber.join(recovered).pipe(
+                Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
+              )
+            )
+            if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
+            for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
+            const recoveredCoordinatorExit = recovered.pollUnsafe()
+            yield* Fiber.interrupt(recovered)
+            return { records: yield* (yield* JournalStore).read(runId), recoveredCoordinatorExit }
           }
-          return yield* (yield* JournalStore).read(runId)
+          yield* freshRun
+          return { records: yield* (yield* JournalStore).read(runId), recoveredCoordinatorExit: undefined }
         }).pipe(Effect.provide(journalLayer))
       )
+      const { records, recoveredCoordinatorExit } = execution
       const assertions = yield* cursor.consumeTerminalAssertions
-      const observedBehavior = yield* assertAuthoredExpectedBehavior(records, assertions)
+      const behaviorExit = yield* Effect.exit(assertAuthoredExpectedBehavior(records, assertions))
+      if (Exit.isFailure(behaviorExit)) {
+        if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
+          return yield* Effect.failCause(recoveredCoordinatorExit.cause)
+        }
+        return yield* Effect.failCause(behaviorExit.cause)
+      }
+      const observedBehavior = behaviorExit.value
       return {
         cassette,
         coordinatorActivations: coordinatorDies ? ["Fresh", "Recovered"] : ["Fresh"],

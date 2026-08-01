@@ -24,6 +24,11 @@ import type {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import type {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit
+} from "../../workflow/protocols/integration-candidate-construction/events.js"
+import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.js"
@@ -70,6 +75,12 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   StartQueuedIntegration: { readonly responsibility: QueuedIntegrationResponsibility }
   AcquireStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
+  ContinueStartedIntegrationCandidate: {
+    readonly correctionLimit: CandidateCorrectionLimit
+    readonly continuationLimit: CandidateContinuationLimit
+    readonly lineage: TargetLineageObservation
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   ReleaseStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
 }>
 
