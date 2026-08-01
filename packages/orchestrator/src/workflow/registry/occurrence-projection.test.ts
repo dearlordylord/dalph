@@ -18,7 +18,6 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
-import { AuthenticatedOperatorIdentity, ControlCommandId } from "../../control/identity.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -26,7 +25,6 @@ import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
-import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import {
   GitReadIntentRecordedEvent,
@@ -44,7 +42,8 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   workflowRunBeganRecordKey,
-  workflowRunTerminatedRecordKey
+  workflowRunTerminatedRecordKey,
+  controlDirectionAppliedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -87,6 +86,10 @@ import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../protocols/integration-admission/events.js"
+import {
+  ControlDirectionAppliedEvent,
+  ControlDirectionApplicationOrdinal
+} from "../protocols/control-direction-application/events.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -663,6 +666,8 @@ it("classifies an applied operator direction as an initiated action", () => {
     direction: "Pause",
     initiatedBy: WorkflowActor.cases.Operator.make({}),
     occurrenceClassification: "InitiatedAction",
+    ordinal: ControlDirectionApplicationOrdinal.make(1),
+    recordedAt: JournalPosition.make(1),
     subject: { _tag: "Task", runId, taskId: TaskId.make("paused-task") }
   })
 
@@ -674,29 +679,48 @@ it("classifies an applied operator direction as an initiated action", () => {
   })
 })
 
-it.effect("rejects operator identity and command receipt as occurrence classification", () =>
+it.effect("projects only the applied direction and rejects unsupported operator identity", () =>
   Effect.gen(function* () {
     const appliedDirection = {
       _tag: "AppliedControlDirection",
       direction: "Pause",
       initiatedBy: { _tag: "Operator" },
       occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      recordedAt: JournalPosition.make(1),
       operatorId: "unsupported-operator-identity",
       subject: { _tag: "Run", runId }
     }
-    const commandReceipt = { _tag: "ControlCommandRecorded", occurrenceClassification: "InitiatedAction" }
-
     expect((yield* decodeWorkflowOccurrence(appliedDirection).pipe(Effect.flip))._tag).toBe("SchemaError")
-    expect((yield* decodeWorkflowOccurrence(commandReceipt).pipe(Effect.flip))._tag).toBe("SchemaError")
-    const receiptEvent = ControlCommandRecordedEvent.make({
-      command: ControlCommand.cases.RequestRunPause.make({
-        commandId: ControlCommandId.make("receipt-is-not-occurrence"),
-        operatorId: AuthenticatedOperatorIdentity.make("transitional-operator"),
-        runId
-      }),
+    const ordinal = ControlDirectionApplicationOrdinal.make(1)
+    const appliedEvent = ControlDirectionAppliedEvent.make({
+      direction: "Pause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal,
+      subject: { _tag: "Run", runId },
       version: workflowJournalEventVersion
     })
-    expect((yield* projectWorkflowOccurrences([record(1, receiptEvent)])).occurrences).toEqual([])
+    expect(
+      (yield* projectWorkflowOccurrences([
+        {
+          event: appliedEvent,
+          key: controlDirectionAppliedRecordKey(ordinal),
+          position: JournalPosition.make(1),
+          runId
+        }
+      ])).occurrences
+    ).toEqual([
+      {
+        _tag: "AppliedControlDirection",
+        direction: "Pause",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal,
+        recordedAt: JournalPosition.make(1),
+        subject: { _tag: "Run", runId }
+      }
+    ])
   })
 )
 
@@ -846,6 +870,8 @@ it.effect("generic occurrence consumer renders every runtime classification with
       direction: "Unpause",
       initiatedBy: WorkflowActor.cases.Operator.make({}),
       occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      recordedAt: JournalPosition.make(1),
       subject: { _tag: "Run", runId }
     })
 
@@ -948,6 +974,7 @@ it.effect("rejects an observation whose exact initiating action is absent, later
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
     AppliedControlDirection: true,
+    AppliedTaskClaimReacquisitionDirection: true,
     AppliedTaskWorkCapacity: true,
     IntegrationResponsibilityBegan: true,
     IntegrationStarted: true,
@@ -961,6 +988,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(11)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(12)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

@@ -81,10 +81,17 @@ const protocolEvidenceFor = (
     Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
   >
 ): ReadonlyArray<ProtocolEvidence> => {
-  if (event._tag === "ControlCommandRecorded" && event.command._tag === "RequestTaskClaimReacquisition") {
+  if (event._tag === "ControlDirectionApplied") {
     return [
-      { _tag: "TaskClaimReacquisitionRequested", commandId: event.command.commandId, taskId: event.command.taskId }
+      {
+        _tag: "ControlDirectionApplied",
+        direction: event.direction,
+        subject: event.subject._tag === "Run" ? { _tag: "Run" } : { _tag: "Task", taskId: event.subject.taskId }
+      }
     ]
+  }
+  if (event._tag === "TaskClaimReacquisitionDirected") {
+    return [{ _tag: "TaskClaimReacquisitionDirected", taskId: event.subject.taskId }]
   }
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimAcquired", taskId: event.claim.taskId }]
   if (event._tag === "TaskClaimReleased") return [{ _tag: "TaskClaimReleased", taskId: event.release.claim.taskId }]

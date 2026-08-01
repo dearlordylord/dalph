@@ -10,9 +10,8 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
-  AuthenticatedOperatorIdentity,
   ClaimOwner,
-  ControlCommandId,
+  ControlDirection,
   InitialControlPolicy,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
@@ -108,13 +107,17 @@ export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence
 export const AuthoredProtocolEvidence = Schema.TaggedUnion({
   AttemptWorktreeLost: { attemptId: AttemptId, taskId: TaskId },
   CompatibleTargetAdvance: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
+  ControlDirectionApplied: {
+    direction: ControlDirection,
+    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
+  },
   IncompatibleTargetRewrite: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
   TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
   TaskClaimAcquired: { taskId: TaskId },
   TaskClaimReleased: { taskId: TaskId },
   TaskClaimObserved: { claimState: Schema.Literals(["Exact", "Foreign", "Missing"]), taskId: TaskId },
   TaskClaimReadExhausted: { taskId: TaskId },
-  TaskClaimReacquisitionRequested: { commandId: ControlCommandId, taskId: TaskId },
+  TaskClaimReacquisitionDirected: { taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
@@ -182,11 +185,11 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     report: AuthoredPlannedAttemptExecutorReport,
     request: Schema.Literals(["StartOrContinue", "Suspend"])
   },
-  OperatorRequestsTaskClaimReacquisition: {
-    commandId: ControlCommandId,
-    operatorId: AuthenticatedOperatorIdentity,
-    taskId: TaskId
+  OperatorAppliesControlDirection: {
+    direction: ControlDirection,
+    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
+  OperatorDirectsTaskClaimReacquisition: { taskId: TaskId },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
@@ -215,7 +218,8 @@ const defineStoryItemOwners = <
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: [
     "InitialControlPolicy",
-    "OperatorRequestsTaskClaimReacquisition",
+    "OperatorAppliesControlDirection",
+    "OperatorDirectsTaskClaimReacquisition",
     "RunCoordinator",
     "SetTaskExecutionCapacity"
   ],

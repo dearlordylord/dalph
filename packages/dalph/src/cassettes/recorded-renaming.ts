@@ -17,8 +17,7 @@ import {
   ContradictoryWorktreeState,
   type ClaimOwner,
   type ClaimToken,
-  type ControlCommand,
-  type ControlCommandId,
+  type ControlDirectionApplicationOrdinal,
   type FixtureTarget,
   ForeignWorktreeRegistration,
   type GithubIssueNumber,
@@ -29,6 +28,7 @@ import {
   type PlannedAttemptExecutorReportOrdinal,
   type RunPolicyRevision,
   type TaskWorkCapacity,
+  type TaskClaimReacquisitionDirectionOrdinal,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -66,24 +66,16 @@ type IdentityRenamingMaps = RecordedOperationIdentityMaps & {
 }
 
 /** Identities allocated by Dalph and therefore eligible for cassette alpha-renaming. */
-type GeneratedCassetteIdentity =
-  | AttemptId
-  | ClaimToken
-  | ControlCommandId
-  | OperationId
-  | RunId
-  | TaskBranchRef
-  | WorktreeLocator
+type GeneratedCassetteIdentity = AttemptId | ClaimToken | OperationId | RunId | TaskBranchRef | WorktreeLocator
 
 /**
  * Values the cassette records but Dalph must not alpha-rename: task-tracker
  * identities, revisions, and claim owner; Git SHAs; configured executor and
- * tracker-target locators; the user identity already carried by a control
- * command; and executor-report ordinals.
+ * tracker-target locators and executor-report ordinals.
  */
 type PreservedCassetteBrand =
   | ClaimOwner
-  | ControlCommand["operatorId"]
+  | ControlDirectionApplicationOrdinal
   | FixtureTarget
   | GitCommitSha
   | GithubIssueNumber
@@ -92,6 +84,7 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorReportOrdinal
   | RunPolicyRevision
   | TaskWorkCapacity
+  | TaskClaimReacquisitionDirectionOrdinal
   | TaskExecutorLocator
   | TaskId
   | TaskRevision
@@ -123,49 +116,6 @@ const completeFields = <Value>(value: CompleteFields<Value>): Value => value
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
 const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>): Identity => map.get(value) ?? value
-
-const renameControlCommand = (command: ControlCommand, maps: IdentityRenamingMaps): ControlCommand => {
-  switch (command._tag) {
-    case "RequestRunPause":
-      return completeFields<typeof command>({
-        _tag: "RequestRunPause",
-        commandId: renamed(command.commandId, maps.controlCommandIds),
-        operatorId: preserveCassetteValue(command.operatorId),
-        runId: renamed(command.runId, maps.runIds)
-      })
-    case "RequestRunUnpause":
-      return completeFields<typeof command>({
-        _tag: "RequestRunUnpause",
-        commandId: renamed(command.commandId, maps.controlCommandIds),
-        operatorId: preserveCassetteValue(command.operatorId),
-        runId: renamed(command.runId, maps.runIds)
-      })
-    case "RequestTaskClaimReacquisition":
-      return completeFields<typeof command>({
-        _tag: "RequestTaskClaimReacquisition",
-        commandId: renamed(command.commandId, maps.controlCommandIds),
-        operatorId: preserveCassetteValue(command.operatorId),
-        runId: renamed(command.runId, maps.runIds),
-        taskId: preserveCassetteValue(command.taskId)
-      })
-    case "RequestTaskPause":
-      return completeFields<typeof command>({
-        _tag: "RequestTaskPause",
-        commandId: renamed(command.commandId, maps.controlCommandIds),
-        operatorId: preserveCassetteValue(command.operatorId),
-        runId: renamed(command.runId, maps.runIds),
-        taskId: preserveCassetteValue(command.taskId)
-      })
-    case "RequestTaskUnpause":
-      return completeFields<typeof command>({
-        _tag: "RequestTaskUnpause",
-        commandId: renamed(command.commandId, maps.controlCommandIds),
-        operatorId: preserveCassetteValue(command.operatorId),
-        runId: renamed(command.runId, maps.runIds),
-        taskId: preserveCassetteValue(command.taskId)
-      })
-  }
-}
 
 const renameExecutorReport = (
   report: PlannedAttemptExecutorReport,
@@ -387,10 +337,29 @@ const renameRecordedCassetteEntry = (
       renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
     ),
     Match.tags({
-      ControlCommandRecorded: (commandEntry) =>
-        completeFields<typeof commandEntry>({
-          _tag: "ControlCommandRecorded",
-          command: renameControlCommand(commandEntry.command, maps)
+      ControlDirectionApplied: (directionEntry) =>
+        completeFields<typeof directionEntry>({
+          _tag: "ControlDirectionApplied",
+          direction: preserveCassetteValue(directionEntry.direction),
+          initiatedBy: preserveCassetteValue(directionEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(directionEntry.occurrenceClassification),
+          ordinal: preserveCassetteValue(directionEntry.ordinal),
+          subject:
+            directionEntry.subject._tag === "Run"
+              ? { _tag: "Run", runId: renamed(directionEntry.subject.runId, maps.runIds) }
+              : {
+                  _tag: "Task",
+                  runId: renamed(directionEntry.subject.runId, maps.runIds),
+                  taskId: preserveCassetteValue(directionEntry.subject.taskId)
+                }
+        }),
+      TaskClaimReacquisitionDirected: (directionEntry) =>
+        completeFields<typeof directionEntry>({
+          _tag: "TaskClaimReacquisitionDirected",
+          initiatedBy: preserveCassetteValue(directionEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(directionEntry.occurrenceClassification),
+          ordinal: preserveCassetteValue(directionEntry.ordinal),
+          taskId: preserveCassetteValue(directionEntry.taskId)
         }),
       PlannedAttemptExecutorWorkReported: (reportEntry) =>
         completeFields<typeof reportEntry>({
@@ -493,7 +462,6 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   const maps = completeFields<IdentityRenamingMaps>({
     attemptIds: identityRenamingMap<AttemptId>(renaming.attemptIds),
     claimTokens: identityRenamingMap<ClaimToken>(renaming.claimTokens),
-    controlCommandIds: identityRenamingMap<ControlCommandId>(renaming.controlCommandIds),
     operationIds: identityRenamingMap<OperationId>(renaming.operationIds),
     runIds: identityRenamingMap<RunId>(renaming.runIds),
     taskBranchRefs: identityRenamingMap<TaskBranchRef>(renaming.taskBranchRefs),

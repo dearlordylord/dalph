@@ -2,7 +2,6 @@ import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option, Schema } from "effect"
 import { expect, it } from "vitest"
-import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -20,7 +19,6 @@ import {
   plannedAttemptExecutorCorrelationKey,
   PlannedAttemptExecutorReport
 } from "@dalph/contracts"
-import { AuthenticatedOperatorIdentity, ControlCommandId } from "../../control/identity.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -31,11 +29,12 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
-  controlCommandRecordKey,
+  controlDirectionAppliedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
@@ -78,9 +77,17 @@ import {
 } from "../../workflow/registry/operation.js"
 import { AttemptWorktreeLost } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
-  latestTaskClaimReacquisitionCommand,
+  latestTaskClaimReacquisitionDirection,
   taskClaimReacquisitionOperationId
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+import {
+  ControlDirectionAppliedEvent,
+  ControlDirectionApplicationOrdinal
+} from "../../workflow/protocols/control-direction-application/events.js"
+import {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionDirectionOrdinal
+} from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
@@ -299,7 +306,7 @@ it("rejects Git outcomes that do not match the exact read intent and planned att
       operationId: worktreeRead.operationId,
       version: workflowJournalEventVersion
     })
-  ]
+  ] as const
   const lineageOutcome = (operationId: OperationId, outcomeAttempt: PlannedTaskAttempt) =>
     TargetLineageObservedEvent.make({
       observation: {
@@ -427,36 +434,31 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
   }
 })
 
-it("reconstructs all pause commands and responsibility identities", () => {
-  const operatorId = AuthenticatedOperatorIdentity.make("operator")
-  const commands = [
-    ControlCommand.cases.RequestTaskPause.make({
-      commandId: ControlCommandId.make("pause-task"),
-      operatorId,
-      runId,
-      taskId
-    }),
-    ControlCommand.cases.RequestTaskUnpause.make({
-      commandId: ControlCommandId.make("unpause-task"),
-      operatorId,
-      runId,
-      taskId
-    }),
-    ControlCommand.cases.RequestRunPause.make({ commandId: ControlCommandId.make("pause-run"), operatorId, runId }),
-    ControlCommand.cases.RequestRunUnpause.make({ commandId: ControlCommandId.make("unpause-run"), operatorId, runId })
-  ]
-  const withCommands = recordsFrom([
+it("reconstructs all applied pause directions and responsibility identities", () => {
+  const directions = [
+    { direction: "Pause", subject: { _tag: "Task", runId, taskId } },
+    { direction: "Unpause", subject: { _tag: "Task", runId, taskId } },
+    { direction: "Pause", subject: { _tag: "Run", runId } },
+    { direction: "Unpause", subject: { _tag: "Run", runId } }
+  ] as const
+  const withDirections = recordsFrom([
     ...eventRows.slice(0, 10),
-    ...commands.map((command) => ({
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
+    ...directions.map((direction, index) => ({
+      event: ControlDirectionAppliedEvent.make({
+        ...direction,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: ControlDirectionApplicationOrdinal.make(index + 1),
+        version: workflowJournalEventVersion
+      }),
+      key: controlDirectionAppliedRecordKey(ControlDirectionApplicationOrdinal.make(index + 1))
     }))
   ])
-  for (let length = 11; length <= withCommands.length; length += 1) {
-    const reconstruction = reconstructRunState(runId, withCommands.slice(0, length))
+  for (let length = 11; length <= withDirections.length; length += 1) {
+    const reconstruction = reconstructRunState(runId, withDirections.slice(0, length))
     expect(reconstruction._tag).toBe("ValidReconstructedRun")
   }
-  const pausedTask = reconstructRunState(runId, withCommands.slice(0, 11))
+  const pausedTask = reconstructRunState(runId, withDirections.slice(0, 11))
   expect(pausedTask._tag).toBe("ValidReconstructedRun")
   if (pausedTask._tag !== "ValidReconstructedRun") return
   expect(reconstructedTaskIsPaused(pausedTask.state.pause, taskId)).toBe(true)
@@ -478,21 +480,23 @@ it("reconstructs all pause commands and responsibility identities", () => {
   expect(workflowResponsibilityOperationId(worktreeResponsibility)).toBe(worktree.operationId)
 })
 
-it("requires a prior matching authenticated command for a reacquisition intent", () => {
-  const command = ControlCommand.cases.RequestTaskClaimReacquisition.make({
-    commandId: ControlCommandId.make("history-reacquire"),
-    operatorId: AuthenticatedOperatorIdentity.make("operator"),
-    runId,
-    taskId
+it("requires a prior matching applied Operator direction for a reacquisition intent", () => {
+  const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
+  const direction = TaskClaimReacquisitionDirectedEvent.make({
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: directionOrdinal,
+    subject: { runId, taskId },
+    version: workflowJournalEventVersion
   })
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition: {
-      operationId: taskClaimReacquisitionOperationId(command.commandId),
+      operationId: taskClaimReacquisitionOperationId(directionOrdinal),
       owner: ClaimOwner.make("dalph"),
       taskId,
       token: ClaimToken.make("history-replacement-token")
     },
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal },
     predecessorOperationIds: []
   })
   const intent = {
@@ -516,10 +520,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
 
   const authorized = recordsFrom([
     ...lossRows,
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     intent
   ])
   const unauthorized = recordsFrom([...lossRows, intent])
@@ -529,15 +530,12 @@ it("requires a prior matching authenticated command for a reacquisition intent",
       operationId: claim.acquisition.operationId,
       token: claim.acquisition.token
     },
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal },
     predecessorOperationIds: []
   })
   const staleIdentity = recordsFrom([
     ...lossRows,
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     {
       event: TaskClaimAcquisitionIntendedEvent.make({
         operation: staleIdentityOperation,
@@ -552,15 +550,12 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   })
   const exactRead = makeTaskClaimObservationOperation(OperationId.make("history-exact-read"), target, taskId)
   const laterLossRead = makeTaskClaimObservationOperation(OperationId.make("history-later-loss-read"), target, taskId)
-  const staleCommandRows = (observation: JournalRecord["event"]) =>
+  const staleDirectionRows = (observation: JournalRecord["event"]) =>
     recordsFrom([
       ...eventRows.slice(0, 4),
       { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
       { event: observation, key: outcomeRecordKey(exactRead.operationId) },
-      {
-        event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-        key: controlCommandRecordKey(command.commandId)
-      },
+      { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
       { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
       {
         event: taskTrackerFactsObservedEvent(
@@ -573,10 +568,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
     ])
   const restoredThenLost = recordsFrom([
     ...lossRows,
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -620,10 +612,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
       }),
       key: outcomeRecordKey(restoredClaimOperation.acquisition.operationId)
     },
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -636,10 +625,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   ])
   const acquiredAfterCommand = recordsFrom([
     ...lossRows,
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     {
       event: TaskClaimAcquisitionIntendedEvent.make({
         operation: restoredClaimOperation,
@@ -678,10 +664,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
       ),
       key: outcomeRecordKey(foreignRead.operationId)
     },
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
     { event: taskTrackerReadIntent(foreignConfirmation), key: intentRecordKey(foreignConfirmation.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -698,7 +681,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
       expect.objectContaining({
-        detail: `task-claim reacquisition ${operation.acquisition.operationId} has no prior matching authenticated command`
+        detail: `task-claim reacquisition ${operation.acquisition.operationId} has no prior matching applied Operator direction`
       })
     ]
   })
@@ -706,7 +689,7 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   expect(
     reduceWorkflowJournalHistory(
       runId,
-      staleCommandRows(
+      staleDirectionRows(
         taskTrackerFactsObservedEvent(
           exactRead.operationId,
           makeFocusedTaskClaimFactsObserved(exactRead, ActiveTaskClaim.make(claim.acquisition))
@@ -716,23 +699,23 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
-      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching applied Operator direction") })
     ]
   })
   expect(reduceWorkflowJournalHistory(runId, restoredThenLost)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
-      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching applied Operator direction") })
     ]
   })
   expect(reduceWorkflowJournalHistory(runId, acquiredThenLost)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
-      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching applied Operator direction") })
     ]
   })
   expect(
-    latestTaskClaimReacquisitionCommand(
+    latestTaskClaimReacquisitionDirection(
       acquiredThenLost,
       runId,
       taskId,
@@ -764,12 +747,12 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   expect(reduceWorkflowJournalHistory(runId, acquiredAfterCommand)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
-      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching applied Operator direction") })
     ]
   })
   expect(reduceWorkflowJournalHistory(runId, confirmedForeignEpisode)._tag).toBe("ValidWorkflowJournalHistory")
   expect(
-    latestTaskClaimReacquisitionCommand(
+    latestTaskClaimReacquisitionDirection(
       acquiredAfterCommand,
       runId,
       taskId,
@@ -780,14 +763,14 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   expect(
     reduceWorkflowJournalHistory(
       runId,
-      staleCommandRows(
+      staleDirectionRows(
         taskTrackerFactsObservedEvent(exactRead.operationId, makeFocusedTaskClaimFactsUnreadable(exactRead))
       )
     )
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [
-      expect.objectContaining({ detail: expect.stringContaining("has no prior matching authenticated command") })
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching applied Operator direction") })
     ]
   })
   expect(
@@ -806,19 +789,18 @@ it("requires a prior matching authenticated command for a reacquisition intent",
   ).toBe("ValidWorkflowJournalHistory")
 })
 
-it("rejects commands and executor correlations bound to another run", () => {
+it("rejects applied directions and executor correlations bound to another run", () => {
   const otherRun = RunId.make("wrong-owner")
-  const command = ControlCommand.cases.RequestRunPause.make({
-    commandId: ControlCommandId.make("wrong-run-command"),
-    operatorId: AuthenticatedOperatorIdentity.make("operator"),
-    runId: otherRun
+  const ordinal = ControlDirectionApplicationOrdinal.make(1)
+  const direction = ControlDirectionAppliedEvent.make({
+    direction: "Pause",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal,
+    subject: { _tag: "Run", runId: otherRun },
+    version: workflowJournalEventVersion
   })
-  const commandRecord = recordsFrom([
-    {
-      event: ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion }),
-      key: controlCommandRecordKey(command.commandId)
-    }
-  ])
+  const directionRecord = recordsFrom([{ event: direction, key: controlDirectionAppliedRecordKey(ordinal) }])
   const wrongExecutorAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: otherRun })
   const executorRecord = recordsFrom([
     {
@@ -829,7 +811,7 @@ it("rejects commands and executor correlations bound to another run", () => {
       key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(wrongExecutorAttempt.attemptId)
     }
   ])
-  expect(reduceWorkflowJournalHistory(runId, commandRecord)._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, directionRecord)._tag).toBe("InvalidWorkflowJournalHistory")
   expect(reduceWorkflowJournalHistory(runId, executorRecord)._tag).toBe("InvalidWorkflowJournalHistory")
 })
 

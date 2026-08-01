@@ -27,7 +27,6 @@ flowchart LR
   end
 
   subgraph controls["Pause, drain, and dispositions"]
-    i166["#166 Apply Pause/Unpause"]
     i134["#134 Whole-run pause"]
     i135["#135 Task/group pause"]
     i156["#156 Reject stale pause"]
@@ -74,11 +73,8 @@ flowchart LR
   i138 --> i141
   i139 --> i141
 
-  i166 --> i134
   i134 --> i135
-  i166 --> i135
   i134 --> i156
-  i166 --> i156
   i134 --> i63
   i135 --> i63
   i56 --> i65
@@ -108,7 +104,6 @@ flowchart LR
   i139 --> i167
   i141 --> i167
   i156 --> i167
-  i166 --> i167
 
   i167 --> i127
   i127 --> i168

@@ -108,23 +108,10 @@ const reducePauseState = (records: ReadonlyArray<JournalRecord>): ReconstructedP
   let runPaused = false
   const pausedTaskIds = new Set<TaskId>()
   for (const { event } of records) {
-    if (event._tag !== "ControlCommandRecorded") continue
-    switch (event.command._tag) {
-      case "RequestRunPause":
-        runPaused = true
-        break
-      case "RequestRunUnpause":
-        runPaused = false
-        break
-      case "RequestTaskClaimReacquisition":
-        break
-      case "RequestTaskPause":
-        pausedTaskIds.add(event.command.taskId)
-        break
-      case "RequestTaskUnpause":
-        pausedTaskIds.delete(event.command.taskId)
-        break
-    }
+    if (event._tag !== "ControlDirectionApplied") continue
+    if (event.subject._tag === "Run") runPaused = event.direction === "Pause"
+    else if (event.direction === "Pause") pausedTaskIds.add(event.subject.taskId)
+    else pausedTaskIds.delete(event.subject.taskId)
   }
   const taskIds = [...pausedTaskIds].sort()
   return ReconstructedPauseState.make({

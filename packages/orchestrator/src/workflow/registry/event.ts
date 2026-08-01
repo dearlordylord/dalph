@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { PlannedTaskAttempt } from "@dalph/contracts"
-import { ControlCommandRecordedEvent } from "../../control/command.js"
+import { ControlDirectionAppliedEvent } from "../protocols/control-direction-application/events.js"
+import { TaskClaimReacquisitionDirectedEvent } from "../protocols/task-claim-reacquisition/events.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
@@ -149,7 +150,8 @@ export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent,
   TaskWorkCapacityChangedEvent,
-  ControlCommandRecordedEvent,
+  ControlDirectionAppliedEvent,
+  TaskClaimReacquisitionDirectedEvent,
   TaskTrackerReadIntentRecorded,
   TaskTrackerFactsObservedEvent,
   TaskClaimAcquisitionIntendedEvent,

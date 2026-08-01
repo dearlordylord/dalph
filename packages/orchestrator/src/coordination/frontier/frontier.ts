@@ -23,7 +23,7 @@ import type {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import type { ControlCommandId } from "../../control/identity.js"
+import type { TaskClaimReacquisitionDirectionOrdinal } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.js"
@@ -31,7 +31,10 @@ export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.j
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   CommitFreshTaskClaimIntent: { readonly taskId: TaskId; readonly taskRevision: TaskRevision }
-  CommitTaskClaimReacquisitionIntent: { readonly commandId: ControlCommandId; readonly taskId: TaskId }
+  CommitTaskClaimReacquisitionIntent: {
+    readonly directionOrdinal: TaskClaimReacquisitionDirectionOrdinal
+    readonly taskId: TaskId
+  }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
@@ -331,9 +334,9 @@ const executorDecisionFor = (
           wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
         })
       }),
-      TaskClaimReacquisitionRequested: ({ commandId }) => ({
+      TaskClaimReacquisitionRequested: ({ directionOrdinal }) => ({
         transition: RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
-          commandId,
+          directionOrdinal,
           taskId: facts.responsibility.plannedAttempt.taskId
         })
       }),

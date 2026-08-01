@@ -21,8 +21,10 @@ import {
 } from "../../../../test/controlled-planned-attempt-executor.js"
 import { Effect, Layer, Option, Schema } from "effect"
 import { expect } from "vitest"
-import { ControlService, controlServiceLayer } from "../../../control/service.js"
-import { AuthenticatedOperatorIdentity, ControlCommandId } from "../../../control/identity.js"
+import {
+  ControlDirectionApplication,
+  controlDirectionApplicationLayer
+} from "../control-direction-application/protocol.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -457,6 +459,11 @@ it.effect("frees the exact task-work position after a terminal report", () =>
 it.effect("releases capacity only after the planned attempt is safely suspended", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
+    yield* journal.beginRun(
+      plannedAttempt.runId,
+      recoveryTarget,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-before-suspension"),
       plannedAttempt,
@@ -477,11 +484,9 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
         ])
       )
     )
-    yield* (yield* ControlService).record(AuthenticatedOperatorIdentity.make("alice"), {
-      _tag: "RequestTaskPause",
-      commandId: ControlCommandId.make("pause-A"),
-      runId: plannedAttempt.runId,
-      taskId: plannedAttempt.taskId
+    yield* (yield* ControlDirectionApplication).apply({
+      direction: "Pause",
+      subject: { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     })
     const suspensionLayer = makeControlledFakePlannedAttemptExecutorLayer([
       ControlledFakeExecutorStep.cases.Suspend.make({
@@ -526,7 +531,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       (yield* afterController.admit({ explanations: [], transitions: [otherTask] }, plannedAttempt.runId)).transition
     ).toEqual(Option.some(otherTask))
   }).pipe(
-    Effect.provide(controlServiceLayer),
+    Effect.provide(controlDirectionApplicationLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -577,12 +582,10 @@ it.effect("resumes the same planned attempt after unpause", () =>
         ])
       )
     )
-    const control = yield* ControlService
-    yield* control.record(AuthenticatedOperatorIdentity.make("alice"), {
-      _tag: "RequestTaskPause",
-      commandId: ControlCommandId.make("pause-before-resume"),
-      runId: plannedAttempt.runId,
-      taskId: plannedAttempt.taskId
+    const control = yield* ControlDirectionApplication
+    yield* control.apply({
+      direction: "Pause",
+      subject: { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     })
     yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
       Effect.provide(
@@ -594,11 +597,9 @@ it.effect("resumes the same planned attempt after unpause", () =>
         ])
       )
     )
-    yield* control.record(AuthenticatedOperatorIdentity.make("alice"), {
-      _tag: "RequestTaskUnpause",
-      commandId: ControlCommandId.make("unpause-A"),
-      runId: plannedAttempt.runId,
-      taskId: plannedAttempt.taskId
+    yield* control.apply({
+      direction: "Unpause",
+      subject: { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     })
     yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
       capacity: TaskWorkCapacity.make(1),
@@ -627,7 +628,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
       )
     ).toEqual([correlation, correlation, correlation, correlation])
   }).pipe(
-    Effect.provide(controlServiceLayer),
+    Effect.provide(controlDirectionApplicationLayer),
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(memoryJournalStoreLayer)

@@ -37,6 +37,10 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
       return `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "CompatibleTargetAdvance":
       return `The story expects Git to prove target ${evidence.targetHeadSha} descends from Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
+    case "ControlDirectionApplied":
+      return `The story expects Operator to apply ${evidence.direction} to ${
+        evidence.subject._tag === "Run" ? "the Run" : `task ${evidence.subject.taskId}`
+      }.`
     case "IncompatibleTargetRewrite":
       return `The story expects Git to prove target ${evidence.targetHeadSha} is outside Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
     case "TaskClaimAcquired":
@@ -47,8 +51,8 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
       return `The story expects Dalph to record ${evidence.claimState.toLowerCase()} claim authority for task ${evidence.taskId}.`
     case "TaskClaimReadExhausted":
       return `The story expects Dalph to exhaust the bounded claim read for task ${evidence.taskId}.`
-    case "TaskClaimReacquisitionRequested":
-      return `The story expects the operator's command ${evidence.commandId} to request a replacement claim for task ${evidence.taskId}.`
+    case "TaskClaimReacquisitionDirected":
+      return `The story expects Operator to direct Dalph to reacquire the claim for task ${evidence.taskId}.`
     case "TaskAttemptPlanned":
       return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
     case "TaskWorktreeReady":
@@ -110,16 +114,30 @@ type RemainingCoordinatorStoryItem = Exclude<
 
 type OperatorStoryItem = Extract<
   RemainingCoordinatorStoryItem,
-  { readonly _tag: "OperatorRequestsTaskClaimReacquisition" | "SetTaskExecutionCapacity" }
+  {
+    readonly _tag:
+      | "OperatorAppliesControlDirection"
+      | "OperatorDirectsTaskClaimReacquisition"
+      | "SetTaskExecutionCapacity"
+  }
 >
 
 const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is OperatorStoryItem =>
-  item._tag === "OperatorRequestsTaskClaimReacquisition" || item._tag === "SetTaskExecutionCapacity"
-
-const operatorLyric = (item: OperatorStoryItem): string =>
+  item._tag === "OperatorAppliesControlDirection" ||
+  item._tag === "OperatorDirectsTaskClaimReacquisition" ||
   item._tag === "SetTaskExecutionCapacity"
-    ? `Operator applies task-execution capacity ${item.capacity} to the Run.`
-    : `Operator ${item.operatorId} requests a replacement claim for task ${item.taskId} with command ${item.commandId}.`
+
+const operatorLyric = (item: OperatorStoryItem): string => {
+  if (item._tag === "SetTaskExecutionCapacity") {
+    return `Operator applies task-execution capacity ${item.capacity} to the Run.`
+  }
+  if (item._tag === "OperatorAppliesControlDirection") {
+    return `Operator applies ${item.direction} to ${
+      item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+    }.`
+  }
+  return `Operator directs Dalph to reacquire the claim for task ${item.taskId}.`
+}
 
 // eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {

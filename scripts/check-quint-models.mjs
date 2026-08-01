@@ -68,6 +68,49 @@ await run("planned-attempt executor exhaustive model", [
   "1"
 ])
 
+const controlDirectionApplicationInvariants = [
+  "appliedDirectionIsOperatorInitiated",
+  "applicationClaimsNoLaterEffects",
+  "appliedCountIsNonNegative"
+]
+
+await run("control-direction application model typecheck", [
+  "typecheck",
+  "specs/controlDirectionApplication.qnt"
+])
+await run("control-direction application deterministic tests", [
+  "test",
+  "specs/controlDirectionApplication_test.qnt",
+  "--main",
+  "controlDirectionApplicationTest"
+])
+await run("control-direction application sampled model", [
+  "run",
+  "specs/controlDirectionApplication.qnt",
+  "--invariants",
+  ...controlDirectionApplicationInvariants,
+  "--witnesses",
+  "runPauseAppliedReached",
+  "taskPauseAppliedReached",
+  "taskUnpauseAppliedReached",
+  "--max-steps",
+  "8",
+  "--max-samples",
+  "5000",
+  "--verbosity",
+  "1"
+])
+await run("control-direction application exhaustive model", [
+  "verify",
+  "specs/controlDirectionApplication.qnt",
+  "--invariants",
+  ...controlDirectionApplicationInvariants,
+  "--max-steps",
+  "8",
+  "--verbosity",
+  "1"
+])
+
 const taskFactReconciliationInvariants = [
   "positionHeldUntilSafeSuspension",
   "changedFactsPreserveWip",
@@ -75,7 +118,7 @@ const taskFactReconciliationInvariants = [
   "externalSuccessPreventsDuplicateDelivery",
   "externalSuccessReleasesOnlyAfterSafeSuspension",
   "externalSuccessSettlesAfterExactClaimRelease",
-  "replacementClaimRequiresCommandAndIntent",
+  "replacementClaimRequiresDirectionAndIntent",
   "replacementClaimIdentityIsFresh",
   "foreignClaimIsNeverChanged",
   "unreadableClaimCannotAuthorizeReplacement",

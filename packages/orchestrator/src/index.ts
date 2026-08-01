@@ -3,8 +3,17 @@ export {
   type ActivationCoordinator,
   ActivationCoordinatorClosed
 } from "./coordination/activation/coordinator.js"
-export { ControlCommand, ControlCommandRecordedEvent, ControlCommandRequest } from "./control/command.js"
-export { ControlCommandIdentityContradiction, ControlService, controlServiceLayer } from "./control/service.js"
+export {
+  ControlDirection,
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent,
+  ControlDirectionSubject
+} from "./workflow/protocols/control-direction-application/events.js"
+export { ApplyControlDirectionRequest } from "./workflow/protocols/control-direction-application/request.js"
+export {
+  ControlDirectionApplication,
+  controlDirectionApplicationLayer
+} from "./workflow/protocols/control-direction-application/protocol.js"
 export {
   ControlledCoordinatorLock,
   controlledCoordinatorLockLayer,
@@ -23,7 +32,15 @@ export {
   TrackerSnapshot,
   TrackerTask
 } from "./authorities/task-tracker/task.js"
-export { AuthenticatedOperatorIdentity, ControlCommandId } from "./control/identity.js"
+export {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionDirectionOrdinal,
+  TaskClaimReacquisitionSubject
+} from "./workflow/protocols/task-claim-reacquisition/events.js"
+export {
+  TaskClaimReacquisitionControl,
+  taskClaimReacquisitionControlLayer
+} from "./workflow/protocols/task-claim-reacquisition/control.js"
 export {
   InitialControlPolicy,
   initialRunPolicyRevision,
@@ -281,8 +298,8 @@ export {
 } from "./coordination/run/startup-recovery.js"
 export {
   AppliedControlDirection,
+  AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
-  ControlDirectionSubject,
   decodeWorkflowOccurrence,
   ExecutorReportWithoutResponsibilityBegan,
   GitOutcomeWithoutReadIntent,

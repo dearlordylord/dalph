@@ -4,12 +4,14 @@ import {
   type PlannedTaskAttempt,
   type RunId
 } from "@dalph/contracts"
-import { type ControlCommandId } from "../../control/identity.js"
+import type { ControlDirectionApplicationOrdinal } from "../protocols/control-direction-application/events.js"
+import type { TaskClaimReacquisitionDirectionOrdinal } from "../protocols/task-claim-reacquisition/events.js"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { type OperationId } from "../identity.js"
 import {
   attemptPlanRecordKey,
-  controlCommandRecordKey,
+  controlDirectionAppliedRecordKey,
+  taskClaimReacquisitionDirectedRecordKey,
   intentRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
@@ -34,10 +36,17 @@ interface OperationEventDescriptor {
   readonly recordPredecessor: RecordPredecessorFact
 }
 
-interface ControlCommandEventDescriptor {
-  readonly _tag: "ControlCommandEventDescriptor"
-  readonly commandId: ControlCommandId
+interface ControlDirectionEventDescriptor {
+  readonly _tag: "ControlDirectionEventDescriptor"
   readonly expectedKey: JournalRecordKey
+  readonly ordinal: ControlDirectionApplicationOrdinal
+  readonly runId: RunId
+}
+
+interface TaskClaimReacquisitionDirectionEventDescriptor {
+  readonly _tag: "TaskClaimReacquisitionDirectionEventDescriptor"
+  readonly expectedKey: JournalRecordKey
+  readonly ordinal: TaskClaimReacquisitionDirectionOrdinal
   readonly runId: RunId
 }
 
@@ -68,11 +77,12 @@ interface IntegrationEventDescriptor {
 }
 
 type JournalEventDescriptor =
-  | ControlCommandEventDescriptor
+  | ControlDirectionEventDescriptor
   | IntegrationEventDescriptor
   | OperationEventDescriptor
   | PlannedAttemptExecutorEventDescriptor
   | RunPolicyEventDescriptor
+  | TaskClaimReacquisitionDirectionEventDescriptor
   | WorkflowRunLifecycleEventDescriptor
 
 type PlannedAttemptFact =
@@ -132,12 +142,19 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunTerminatedRecordKey }
     case "TaskWorkCapacityChanged":
       return { _tag: "RunPolicyEventDescriptor", expectedKey: taskWorkCapacityPolicyRecordKey(event.revision) }
-    case "ControlCommandRecorded":
+    case "ControlDirectionApplied":
       return {
-        _tag: "ControlCommandEventDescriptor",
-        commandId: event.command.commandId,
-        expectedKey: controlCommandRecordKey(event.command.commandId),
-        runId: event.command.runId
+        _tag: "ControlDirectionEventDescriptor",
+        expectedKey: controlDirectionAppliedRecordKey(event.ordinal),
+        ordinal: event.ordinal,
+        runId: event.subject.runId
+      }
+    case "TaskClaimReacquisitionDirected":
+      return {
+        _tag: "TaskClaimReacquisitionDirectionEventDescriptor",
+        expectedKey: taskClaimReacquisitionDirectedRecordKey(event.ordinal),
+        ordinal: event.ordinal,
+        runId: event.subject.runId
       }
     case "PlannedAttemptExecutorWorkResponsibilityBegan":
       return plannedAttemptExecutorEvent(

@@ -2,8 +2,10 @@ import { Context, Effect, Fiber, Layer, Option, Schema } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
-  ControlService,
-  controlServiceLayer,
+  ControlDirectionApplication,
+  controlDirectionApplicationLayer,
+  TaskClaimReacquisitionControl,
+  taskClaimReacquisitionControlLayer,
   CoordinatorOwnership,
   controlledTrackerMutationLayerFrom,
   deterministicOperationIdAllocatorLayer,
@@ -126,7 +128,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         TaskWorkCapacityControl,
         Effect.gen(function* () {
           const control = yield* TaskWorkCapacityControl
-          const controlService = yield* ControlService
+          const controlDirection = yield* ControlDirectionApplication
+          const claimReacquisitionControl = yield* TaskClaimReacquisitionControl
           return TaskWorkCapacityControl.of({
             ...control,
             read: (requestedRunId) =>
@@ -142,15 +145,22 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
                     })
                     .pipe(Effect.orDie)
                 }
-                const reacquisition = yield* cursor.consumeClaimReacquisitionRequest
-                if (Option.isSome(reacquisition)) {
-                  yield* controlService
-                    .record(reacquisition.value.operatorId, {
-                      _tag: "RequestTaskClaimReacquisition",
-                      commandId: reacquisition.value.commandId,
-                      runId: requestedRunId,
-                      taskId: reacquisition.value.taskId
+                const direction = yield* cursor.consumeControlDirection
+                if (Option.isSome(direction)) {
+                  yield* controlDirection
+                    .apply({
+                      direction: direction.value.direction,
+                      subject:
+                        direction.value.subject._tag === "Run"
+                          ? { _tag: "Run", runId: requestedRunId }
+                          : { _tag: "Task", runId: requestedRunId, taskId: direction.value.subject.taskId }
                     })
+                    .pipe(Effect.orDie)
+                }
+                const reacquisition = yield* cursor.consumeClaimReacquisitionDirection
+                if (Option.isSome(reacquisition)) {
+                  yield* claimReacquisitionControl
+                    .apply({ runId: requestedRunId, taskId: reacquisition.value.taskId })
                     .pipe(Effect.orDie)
                 }
                 yield* cursor.pauseAtCoordinatorProcessDeath
@@ -158,7 +168,12 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               })
           })
         })
-      ).pipe(Layer.provide(Layer.merge(baseControlPolicyLayer, controlServiceLayer)), Layer.provide(journalLayer))
+      ).pipe(
+        Layer.provide(
+          Layer.mergeAll(baseControlPolicyLayer, controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
+        ),
+        Layer.provide(journalLayer)
+      )
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer).pipe(
         Layer.provide(journalLayer)
       )

@@ -1,13 +1,14 @@
 import { type RunId, type TaskId } from "@dalph/contracts"
 import { type ActiveTaskClaim, isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import { type ControlCommandId } from "../../../control/identity.js"
+import type { TaskClaimReacquisitionDirectionOrdinal } from "./events.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 
-/** Stable acquisition operation identity derived from one authenticated reacquisition command. */
-export const taskClaimReacquisitionOperationId = (commandId: ControlCommandId): OperationId =>
-  OperationId.make(`task-claim-reacquisition:${commandId}`)
+/** Stable acquisition operation identity derived from one applied reacquisition direction. */
+export const taskClaimReacquisitionOperationId = (
+  directionOrdinal: TaskClaimReacquisitionDirectionOrdinal
+): OperationId => OperationId.make(`task-claim-reacquisition:${directionOrdinal}`)
 
 const isFocusedClaimObservation = (record: JournalRecord, taskId: TaskId): boolean =>
   record.event._tag === "TaskTrackerFactsObserved" &&
@@ -41,20 +42,20 @@ const observationRemainsInEpisode = (
   return isExactTaskClaim(observation, episode.claim)
 }
 
-const commandFollowsCurrentLossEpisode = (
+const directionFollowsCurrentLossEpisode = (
   records: ReadonlyArray<JournalRecord>,
   taskId: TaskId,
   expectedClaim: ActiveTaskClaim,
-  commandPosition: JournalPosition,
+  directionPosition: JournalPosition,
   throughPosition: JournalPosition
 ): boolean => {
   const expectedClaimPosition = records.findLast(
     ({ event, position }) =>
-      position < commandPosition && event._tag === "TaskClaimAcquired" && isExactTaskClaim(event.claim, expectedClaim)
+      position < directionPosition && event._tag === "TaskClaimAcquired" && isExactTaskClaim(event.claim, expectedClaim)
   )?.position
   const lossRecord = records.findLast(
     (record) =>
-      record.position < commandPosition &&
+      record.position < directionPosition &&
       (expectedClaimPosition === undefined || record.position > expectedClaimPosition) &&
       isFocusedClaimObservation(record, taskId)
   )
@@ -76,11 +77,11 @@ const commandFollowsCurrentLossEpisode = (
 }
 
 /**
- * Latest explicit reacquisition command made after the loss it authorizes.
+ * Latest applied reacquisition direction made after the loss it authorizes.
  * Confirming reads may preserve that same loss across restart, while exact,
  * unreadable, or different-loss evidence ends the command's authority.
  */
-export const latestTaskClaimReacquisitionCommand = (
+export const latestTaskClaimReacquisitionDirection = (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
   taskId: TaskId,
@@ -89,10 +90,9 @@ export const latestTaskClaimReacquisitionCommand = (
 ) =>
   records.findLast(
     ({ event, position }) =>
-      event._tag === "ControlCommandRecorded" &&
-      event.command._tag === "RequestTaskClaimReacquisition" &&
-      event.command.runId === runId &&
-      event.command.taskId === taskId &&
+      event._tag === "TaskClaimReacquisitionDirected" &&
+      event.subject.runId === runId &&
+      event.subject.taskId === taskId &&
       position <= throughPosition &&
-      commandFollowsCurrentLossEpisode(records, taskId, expectedClaim, position, throughPosition)
+      directionFollowsCurrentLossEpisode(records, taskId, expectedClaim, position, throughPosition)
   )?.event

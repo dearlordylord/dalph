@@ -7,7 +7,7 @@ import {
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import type { ControlCommandId } from "../../control/identity.js"
+import type { TaskClaimReacquisitionDirectionOrdinal } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
@@ -35,7 +35,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   TaskClaimMissingConstraint: Record<never, never>
   TaskClaimUnreadableWait: Record<never, never>
   TaskForeignClaimIsolation: Record<never, never>
-  TaskClaimReacquisitionRequested: { readonly commandId: ControlCommandId }
+  TaskClaimReacquisitionRequested: { readonly directionOrdinal: TaskClaimReacquisitionDirectionOrdinal }
   WorkflowOperationTaskClaimConstraint: { readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved" }
   WorkflowOperationGitConstraint: { readonly gitState: "WorktreeLost" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }

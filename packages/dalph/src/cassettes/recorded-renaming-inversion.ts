@@ -1,5 +1,5 @@
 import type { AttemptId, RunId, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
-import type { ClaimToken, ControlCommandId, OperationId } from "@dalph/orchestrator"
+import type { ClaimToken, OperationId } from "@dalph/orchestrator"
 import {
   CassetteIdentityRenaming,
   type CassetteIdentityRenaming as CassetteIdentityRenamingType
@@ -13,7 +13,6 @@ export const invertCassetteIdentityRenaming = (renaming: CassetteIdentityRenamin
   CassetteIdentityRenaming.make({
     attemptIds: invertIdentityRenamings<AttemptId>(renaming.attemptIds),
     claimTokens: invertIdentityRenamings<ClaimToken>(renaming.claimTokens),
-    controlCommandIds: invertIdentityRenamings<ControlCommandId>(renaming.controlCommandIds),
     operationIds: invertIdentityRenamings<OperationId>(renaming.operationIds),
     runIds: invertIdentityRenamings<RunId>(renaming.runIds),
     taskBranchRefs: invertIdentityRenamings<TaskBranchRef>(renaming.taskBranchRefs),

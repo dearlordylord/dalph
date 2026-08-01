@@ -49,8 +49,11 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
   >
-  readonly consumeClaimReacquisitionRequest: Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition.Type>
+  readonly consumeControlDirection: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
+  >
+  readonly consumeClaimReacquisitionDirection: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type>
   >
   readonly consumeRunCoordinator: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.RunCoordinator.Type,
@@ -132,14 +135,26 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   })
-  const consumeClaimReacquisitionRequest = Effect.gen(function* () {
+  const consumeControlDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
-      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition.Type =>
-        item?._tag === "OperatorRequestsTaskClaimReacquisition"
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type =>
+        item?._tag === "OperatorAppliesControlDirection"
     )
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
-      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorRequestsTaskClaimReacquisition)(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
+  const consumeClaimReacquisitionDirection = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type =>
+        item?._tag === "OperatorDirectsTaskClaimReacquisition"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition)(
         claimed.item
       ).pipe(Effect.orDie)
     )
@@ -208,7 +223,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   return {
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
-    consumeClaimReacquisitionRequest,
+    consumeControlDirection,
+    consumeClaimReacquisitionDirection,
     consumeDalphSelection,
     consumeExecutorReport,
     consumeGitWorktreeObservationChange,

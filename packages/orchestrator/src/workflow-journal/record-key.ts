@@ -1,16 +1,21 @@
 import { type AttemptId } from "@dalph/contracts"
-import { type ControlCommandId } from "../control/identity.js"
 import { type OperationId } from "../workflow/identity.js"
 import { JournalRecordKey } from "./identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import type { RunPolicyRevision } from "../control/policy.js"
+import type { ControlDirectionApplicationOrdinal } from "../workflow/protocols/control-direction-application/events.js"
+import type { TaskClaimReacquisitionDirectionOrdinal } from "../workflow/protocols/task-claim-reacquisition/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
 export const workflowRunTerminatedRecordKey = JournalRecordKey.make("run:terminated")
 
-export const controlCommandRecordKey = (commandId: ControlCommandId): JournalRecordKey =>
-  JournalRecordKey.make(`control-command:${commandId}`)
+export const controlDirectionAppliedRecordKey = (ordinal: ControlDirectionApplicationOrdinal): JournalRecordKey =>
+  JournalRecordKey.make(`control-direction:${ordinal}:applied`)
+
+export const taskClaimReacquisitionDirectedRecordKey = (
+  ordinal: TaskClaimReacquisitionDirectionOrdinal
+): JournalRecordKey => JournalRecordKey.make(`task-claim-reacquisition:${ordinal}:directed`)
 
 export const taskWorkCapacityPolicyRecordKey = (revision: RunPolicyRevision): JournalRecordKey =>
   JournalRecordKey.make(`run-policy:${revision}:task-work-capacity`)

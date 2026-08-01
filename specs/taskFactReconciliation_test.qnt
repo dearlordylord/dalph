@@ -45,7 +45,7 @@ module taskFactReconciliationTest {
     init
       .then(observeForeignClaim)
       .then(reportSafelySuspended)
-      .then(recordForeignClaimReacquisitionCommand)
+      .then(applyForeignClaimReacquisitionDirection)
       .then(rejectForeignClaimReacquisition)
       .then(selectIndependentTask)
       .expect(
@@ -56,7 +56,7 @@ module taskFactReconciliationTest {
       )
   }
 
-  run missingClaimRequiresCommand = {
+  run missingClaimRequiresAppliedDirection = {
     init
       .then(observeMissingClaim)
       .then(reportSafelySuspended)
@@ -67,12 +67,12 @@ module taskFactReconciliationTest {
           and claimConstraintPreservesIndependentEligibility
           and state.independentTaskSelected
       )
-      .then(recordMissingClaimReacquisitionCommand)
+      .then(applyMissingClaimReacquisitionDirection)
       .then(planReplacementClaim)
       .then(observeExactReplacementClaim)
       .expect(
         replacementClaimObserved
-          and replacementClaimRequiresCommandAndIntent
+          and replacementClaimRequiresDirectionAndIntent
           and replacementClaimIdentityIsFresh
       )
   }

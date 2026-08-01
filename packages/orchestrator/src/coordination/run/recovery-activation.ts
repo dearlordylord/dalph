@@ -64,7 +64,7 @@ import { runIntegrationTransition } from "./integration-transition-runtime.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import {
-  latestTaskClaimReacquisitionCommand,
+  latestTaskClaimReacquisitionDirection,
   taskClaimReacquisitionOperationId
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 
@@ -150,7 +150,7 @@ const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimR
         event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
       event.observation.coverage.taskId === input.transition.taskId
   )?.event
-  const operationId = taskClaimReacquisitionOperationId(input.transition.commandId)
+  const operationId = taskClaimReacquisitionOperationId(input.transition.directionOrdinal)
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition: yield* planner.plan(operationId, input.transition.taskId).pipe(
       Effect.mapError(
@@ -162,7 +162,7 @@ const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimR
           })
       )
     ),
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: input.transition.commandId },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal: input.transition.directionOrdinal },
     predecessorOperationIds: [
       /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
       ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
@@ -260,7 +260,7 @@ const deriveJournalResponsibilityFacts = (
       committedReacquisitionIntent?.event._tag === "TaskClaimAcquisitionIntended" &&
       committedReacquisitionIntent.event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority"
         ? {
-            commandId: committedReacquisitionIntent.event.operation.authority.commandId,
+            directionOrdinal: committedReacquisitionIntent.event.operation.authority.directionOrdinal,
             operation: committedReacquisitionIntent.event.operation
           }
         : undefined
@@ -274,24 +274,23 @@ const deriveJournalResponsibilityFacts = (
                 event.operationId === committedReacquisition.operation.acquisition.operationId)
           )
         : undefined
-    const committedReacquisitionCommand =
+    const committedReacquisitionDirection =
       committedReacquisition !== undefined &&
       (committedReacquisitionOutcome === undefined ||
         currentClaimRecord === undefined ||
         currentClaimRecord.position < committedReacquisitionOutcome.position)
         ? records.findLast(
             ({ event }) =>
-              event._tag === "ControlCommandRecorded" &&
-              event.command._tag === "RequestTaskClaimReacquisition" &&
-              event.command.commandId === committedReacquisition.commandId
+              event._tag === "TaskClaimReacquisitionDirected" &&
+              event.ordinal === committedReacquisition.directionOrdinal
           )?.event
         : undefined
-    const reacquisitionCommand =
-      committedReacquisitionCommand?._tag === "ControlCommandRecorded"
-        ? committedReacquisitionCommand
+    const reacquisitionDirection =
+      committedReacquisitionDirection?._tag === "TaskClaimReacquisitionDirected"
+        ? committedReacquisitionDirection
         : currentClaimRecord === undefined || acquiredClaim?._tag !== "TaskClaimAcquired"
           ? undefined
-          : latestTaskClaimReacquisitionCommand(
+          : latestTaskClaimReacquisitionDirection(
               records,
               responsibility.plannedAttempt.runId,
               responsibility.plannedAttempt.taskId,
@@ -299,17 +298,19 @@ const deriveJournalResponsibilityFacts = (
               /* v8 ignore next -- @preserve Recovery responsibility derivation always reads a non-empty run journal. */
               records.at(finalRecordOffset)?.position ?? currentClaimRecord.position
             )
-    const reacquisitionCommandId =
-      reacquisitionCommand?._tag === "ControlCommandRecorded" ? reacquisitionCommand.command.commandId : undefined
+    const reacquisitionDirectionOrdinal =
+      reacquisitionDirection?._tag === "TaskClaimReacquisitionDirected" ? reacquisitionDirection.ordinal : undefined
     const reacquisitionOperationId =
-      reacquisitionCommandId === undefined ? undefined : taskClaimReacquisitionOperationId(reacquisitionCommandId)
+      reacquisitionDirectionOrdinal === undefined
+        ? undefined
+        : taskClaimReacquisitionOperationId(reacquisitionDirectionOrdinal)
     const reacquisitionIntentExists =
       reacquisitionOperationId !== undefined &&
       records.some(
         ({ event }) =>
           event._tag === "TaskClaimAcquisitionIntended" &&
           event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority" &&
-          event.operation.authority.commandId === reacquisitionCommandId &&
+          event.operation.authority.directionOrdinal === reacquisitionDirectionOrdinal &&
           event.operation.acquisition.operationId === reacquisitionOperationId
       )
     const reacquisitionOutcomeRecord =
@@ -405,9 +406,11 @@ const deriveJournalResponsibilityFacts = (
       (currentClaimFacts.observation.observation._tag === "UnclaimedTask" ||
         !isExactTaskClaim(currentClaimFacts.observation.observation, acquiredClaim.claim))
     const requestedReacquisition =
-      claimCanBeReacquired && reacquisitionCommand?._tag === "ControlCommandRecorded" && !reacquisitionIntentExists
+      claimCanBeReacquired &&
+      reacquisitionDirection?._tag === "TaskClaimReacquisitionDirected" &&
+      !reacquisitionIntentExists
         ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
-            commandId: reacquisitionCommand.command.commandId
+            directionOrdinal: reacquisitionDirection.ordinal
           })
         : undefined
     const disposition =
@@ -748,9 +751,10 @@ const attemptMayContinue = (records: ReadonlyArray<JournalRecord>, plannedAttemp
       ((event._tag === "TaskClaimAcquisitionIntended" &&
         event.operation.acquisition.taskId === plannedAttempt.taskId &&
         event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority") ||
-        (event._tag === "ControlCommandRecorded" &&
-          event.command._tag === "RequestTaskUnpause" &&
-          event.command.taskId === plannedAttempt.taskId))
+        (event._tag === "ControlDirectionApplied" &&
+          event.direction === "Unpause" &&
+          event.subject._tag === "Task" &&
+          event.subject.taskId === plannedAttempt.taskId))
   )
 }
 

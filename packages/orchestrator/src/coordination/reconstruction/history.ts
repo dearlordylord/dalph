@@ -27,7 +27,7 @@ import { validateRunPolicyHistory } from "./run-policy-history.js"
 import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
 import {
-  latestTaskClaimReacquisitionCommand,
+  latestTaskClaimReacquisitionDirection,
   taskClaimReacquisitionOperationId
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -275,7 +275,7 @@ const validateClaimRejection = (
   }
 }
 
-const matchingReacquisitionCommand = (record: JournalRecord, runId: RunId, records: ReadonlyArray<JournalRecord>) => {
+const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, records: ReadonlyArray<JournalRecord>) => {
   /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
   const { acquisition } = record.event.operation
@@ -283,13 +283,13 @@ const matchingReacquisitionCommand = (record: JournalRecord, runId: RunId, recor
     ({ event, position }) =>
       position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
   )?.event
-  /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined command result. */
-  const command =
+  /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined direction result. */
+  const direction =
     expectedClaim?._tag === "TaskClaimAcquired"
-      ? latestTaskClaimReacquisitionCommand(records, runId, acquisition.taskId, expectedClaim.claim, record.position)
+      ? latestTaskClaimReacquisitionDirection(records, runId, acquisition.taskId, expectedClaim.claim, record.position)
       : undefined
   /* v8 ignore stop -- @preserve */
-  return command?._tag === "ControlCommandRecorded" ? command.command : undefined
+  return direction?._tag === "TaskClaimReacquisitionDirected" ? direction : undefined
 }
 
 const validateClaimReacquisitionIntent = (
@@ -301,16 +301,16 @@ const validateClaimReacquisitionIntent = (
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return
   const { acquisition, authority } = record.event.operation
   if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return
-  const command = matchingReacquisitionCommand(record, runId, records)
+  const direction = matchingReacquisitionDirection(record, runId, records)
   const matchesAuthority =
-    command?.commandId === authority.commandId &&
-    taskClaimReacquisitionOperationId(command.commandId) === acquisition.operationId
+    direction?.ordinal === authority.directionOrdinal &&
+    taskClaimReacquisitionOperationId(direction.ordinal) === acquisition.operationId
   if (!matchesAuthority) {
     semanticIssue(
       issues,
       runId,
       record.position,
-      `task-claim reacquisition ${acquisition.operationId} has no prior matching authenticated command`
+      `task-claim reacquisition ${acquisition.operationId} has no prior matching applied Operator direction`
     )
   }
 }
@@ -493,12 +493,16 @@ export const reduceWorkflowJournalHistory = (
   records.forEach((record, index) => {
     const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
     const descriptor = describeJournalEvent(record.event)
-    if (descriptor._tag === "ControlCommandEventDescriptor" && descriptor.runId !== runId) {
+    if (
+      (descriptor._tag === "ControlDirectionEventDescriptor" ||
+        descriptor._tag === "TaskClaimReacquisitionDirectionEventDescriptor") &&
+      descriptor.runId !== runId
+    ) {
       identityIssue(
         issues,
         runId,
         record.position,
-        `control command ${descriptor.commandId} binds run ${descriptor.runId}`
+        `operator direction ${descriptor.ordinal} binds run ${descriptor.runId}`
       )
     }
     if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {

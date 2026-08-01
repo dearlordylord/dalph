@@ -15,6 +15,11 @@ import { TargetLineageObservation } from "../../authorities/git/target-lineage.j
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { RunPolicyRevision } from "../../control/policy.js"
 import {
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionSubject
+} from "../protocols/control-direction-application/events.js"
+import { TaskClaimReacquisitionDirectionOrdinal } from "../protocols/task-claim-reacquisition/events.js"
+import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
   invalidIntegrationOccurrenceRelationship,
@@ -146,11 +151,7 @@ export const PlannedAttemptExecutorWorkReported = Schema.TaggedStruct("PlannedAt
 )
 export type PlannedAttemptExecutorWorkReported = typeof PlannedAttemptExecutorWorkReported.Type
 
-export const ControlDirectionSubject = Schema.TaggedUnion({
-  Run: { runId: RunId },
-  Task: { runId: RunId, taskId: TaskId }
-})
-export type ControlDirectionSubject = typeof ControlDirectionSubject.Type
+export { ControlDirectionSubject }
 
 /**
  * Operator applied one Pause or Unpause direction. Receiving the request is
@@ -160,9 +161,22 @@ export const AppliedControlDirection = Schema.TaggedStruct("AppliedControlDirect
   direction: Schema.Literals(["Pause", "Unpause"]),
   initiatedBy: WorkflowActor.cases.Operator,
   occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  ordinal: ControlDirectionApplicationOrdinal,
+  recordedAt: JournalPosition,
   subject: ControlDirectionSubject
 })
 export type AppliedControlDirection = typeof AppliedControlDirection.Type
+
+/** Operator applied one explicit direction to reacquire the exact task claim. */
+export const AppliedTaskClaimReacquisitionDirection = Schema.TaggedStruct("AppliedTaskClaimReacquisitionDirection", {
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  ordinal: TaskClaimReacquisitionDirectionOrdinal,
+  recordedAt: JournalPosition,
+  runId: RunId,
+  taskId: TaskId
+})
+export type AppliedTaskClaimReacquisitionDirection = typeof AppliedTaskClaimReacquisitionDirection.Type
 
 /** Operator durably changed the future task-admission ceiling for one Run. */
 export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapacity", {
@@ -177,6 +191,7 @@ export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 
 export const WorkflowOccurrence = Schema.Union([
   AppliedControlDirection,
+  AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
   IntegrationResponsibilityBegan,
   IntegrationStarted,
@@ -355,6 +370,8 @@ type ProjectedJournalEvent = Extract<
       | "PlannedAttemptWorktreeObserved"
       | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
+      | "ControlDirectionApplied"
+      | "TaskClaimReacquisitionDirected"
       | "TaskTrackerReadIntentRecorded"
       | "TaskTrackerFactsObserved"
   }
@@ -362,7 +379,6 @@ type ProjectedJournalEvent = Extract<
 type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
 
 const nonProjectedJournalEventKinds = {
-  ControlCommandRecorded: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
@@ -406,6 +422,8 @@ type DirectlyProjectedJournalEvent = Extract<
       | "IntegrationStarted"
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
       | "TaskWorkCapacityChanged"
+      | "ControlDirectionApplied"
+      | "TaskClaimReacquisitionDirected"
   }
 >
 
@@ -413,6 +431,8 @@ const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is 
   event._tag === "IntegrationResponsibilityBegan" ||
   event._tag === "IntegrationStarted" ||
   event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+  event._tag === "ControlDirectionApplied" ||
+  event._tag === "TaskClaimReacquisitionDirected" ||
   event._tag === "TaskWorkCapacityChanged"
 
 const projectDirectOccurrence = (
@@ -421,6 +441,32 @@ const projectDirectOccurrence = (
   executorResponsibilities: Set<string>,
   occurrences: Array<WorkflowOccurrence>
 ): void => {
+  if (event._tag === "ControlDirectionApplied") {
+    occurrences.push(
+      AppliedControlDirection.make({
+        direction: event.direction,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        ordinal: event.ordinal,
+        recordedAt: record.position,
+        subject: event.subject
+      })
+    )
+    return
+  }
+  if (event._tag === "TaskClaimReacquisitionDirected") {
+    occurrences.push(
+      AppliedTaskClaimReacquisitionDirection.make({
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        ordinal: event.ordinal,
+        recordedAt: record.position,
+        runId: event.subject.runId,
+        taskId: event.subject.taskId
+      })
+    )
+    return
+  }
   if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     executorResponsibilities.add(relationshipKey(record.runId, event.plannedAttempt.attemptId))
     occurrences.push(

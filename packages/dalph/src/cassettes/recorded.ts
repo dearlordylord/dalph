@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Schema } from "effect"
 import {
-  ControlCommandRecordedEvent,
+  ControlDirectionAppliedEvent,
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
@@ -18,7 +18,8 @@ import {
   type WorkflowJournalEvent,
   WorkflowActor,
   workflowJournalEventVersion,
-  reduceWorkflowJournalHistory
+  reduceWorkflowJournalHistory,
+  TaskClaimReacquisitionDirectedEvent
 } from "@dalph/orchestrator"
 import {
   type CassetteIdentityRenaming,
@@ -127,7 +128,8 @@ const recordTaskBoundaryEntry = (
     WorkflowJournalEvent,
     {
       readonly _tag:
-        | "ControlCommandRecorded"
+        | "ControlDirectionApplied"
+        | "TaskClaimReacquisitionDirected"
         | "GitReadIntentRecorded"
         | "PlannedAttemptWorktreeObserved"
         | "TargetLineageObserved"
@@ -164,8 +166,24 @@ const recordTaskBoundaryEntry = (
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
-  if (event._tag === "ControlCommandRecorded") {
-    return { _tag: "ControlCommandRecorded", command: event.command }
+  if (event._tag === "ControlDirectionApplied") {
+    return {
+      _tag: "ControlDirectionApplied",
+      direction: event.direction,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      ordinal: event.ordinal,
+      subject: event.subject
+    }
+  }
+  if (event._tag === "TaskClaimReacquisitionDirected") {
+    return {
+      _tag: "TaskClaimReacquisitionDirected",
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      ordinal: event.ordinal,
+      taskId: event.subject.taskId
+    }
   }
   if (
     event._tag === "GitReadIntentRecorded" ||
@@ -310,11 +328,21 @@ const eventForIntegrationEntry = (
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
-  index: number
+  index: number,
+  runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
-  if (entry._tag === "ControlCommandRecorded") {
-    return ControlCommandRecordedEvent.make({ command: entry.command, version: workflowJournalEventVersion })
+  if (entry._tag === "ControlDirectionApplied") {
+    return ControlDirectionAppliedEvent.make({ ...entry, version: workflowJournalEventVersion })
+  }
+  if (entry._tag === "TaskClaimReacquisitionDirected") {
+    return TaskClaimReacquisitionDirectedEvent.make({
+      initiatedBy: entry.initiatedBy,
+      occurrenceClassification: entry.occurrenceClassification,
+      ordinal: entry.ordinal,
+      subject: { runId, taskId: entry.taskId },
+      version: workflowJournalEventVersion
+    })
   }
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (
@@ -331,7 +359,7 @@ const eventForRecordedEntry = (
 
 const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord> =>
   cassette.entries.map((entry, index) => {
-    const event = eventForRecordedEntry(entry, cassette.entries, index)
+    const event = eventForRecordedEntry(entry, cassette.entries, index, cassette.runId)
     return {
       event,
       key: describeJournalEvent(event).expectedKey,
@@ -448,7 +476,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedGitObservationEntry
     | RecordedRunEntry
     | RecordedTrackerEntry
-    | { readonly _tag: "ControlCommandRecorded" }
+    | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
@@ -463,8 +491,11 @@ const lyricForTaskBoundaryEntry = (
 }
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
-  if (entry._tag === "ControlCommandRecorded") {
-    return `Dalph recorded the operator's ${entry.command._tag} command.`
+  if (entry._tag === "ControlDirectionApplied") {
+    return `Operator applied ${entry.direction} to ${entry.subject._tag === "Run" ? "the Run" : `task ${entry.subject.taskId}`}.`
+  }
+  if (entry._tag === "TaskClaimReacquisitionDirected") {
+    return `Operator directed Dalph to reacquire the claim for task ${entry.taskId}.`
   }
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (

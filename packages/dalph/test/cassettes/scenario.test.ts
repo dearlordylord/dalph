@@ -16,15 +16,13 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
-  AuthenticatedOperatorIdentity,
   AttemptWorktreeLost,
   ClaimOwner,
   ClaimToken,
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,
-  ControlCommand,
-  ControlCommandId,
-  ControlCommandRecordedEvent,
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent,
   ContradictoryWorktreeState,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
@@ -46,6 +44,7 @@ import {
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
+  TaskClaimReacquisitionDirectionOrdinal,
   UntrackedWorktreePath,
   UnclaimedTask,
   WorktreeBaseMismatch,
@@ -89,6 +88,66 @@ const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+
+it.effect("applies an authored operator direction through the production control boundary", () =>
+  Effect.gen(function* () {
+    const firstRunning = singleton.story.findIndex(
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+    )
+    const cassetteWith = (subject: { readonly _tag: "Run" } | { readonly _tag: "Task"; readonly taskId: TaskId }) => ({
+      ...singleton,
+      name: `the operator applies a ${subject._tag.toLowerCase()} unpause direction`,
+      story: singleton.story.flatMap((item, index) => {
+        const withExpectedProtocol =
+          item._tag === "ExpectedBehavior"
+            ? {
+                ...item,
+                protocol: [
+                  { _tag: "TaskClaimAcquired" as const, taskId: TaskId.make("A") },
+                  {
+                    _tag: "TaskAttemptPlanned" as const,
+                    attemptId: AttemptId.make("attempt:A:0"),
+                    taskId: TaskId.make("A")
+                  },
+                  {
+                    _tag: "TaskWorktreeReady" as const,
+                    attemptId: AttemptId.make("attempt:A:0"),
+                    taskId: TaskId.make("A")
+                  },
+                  { _tag: "ControlDirectionApplied" as const, direction: "Unpause" as const, subject }
+                ]
+              }
+            : item
+        return [
+          withExpectedProtocol,
+          ...(index === firstRunning
+            ? [{ _tag: "OperatorAppliesControlDirection" as const, direction: "Unpause" as const, subject }]
+            : [])
+        ]
+      })
+    })
+    const run = yield* runAuthoredScenarioCassette(cassetteWith({ _tag: "Run" }))
+    expect(run.records).toContainEqual(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          _tag: "ControlDirectionApplied",
+          direction: "Unpause",
+          initiatedBy: { _tag: "Operator" },
+          subject: { _tag: "Run", runId: run.runId }
+        })
+      })
+    )
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("Operator applies Unpause to the Run.")
+
+    const taskRun = yield* runAuthoredScenarioCassette(cassetteWith({ _tag: "Task", taskId: TaskId.make("A") }))
+    expect(taskRun.observedBehavior.protocolEvidence).toContainEqual({
+      _tag: "ControlDirectionApplied",
+      direction: "Unpause",
+      subject: { _tag: "Task", taskId: "A" }
+    })
+    expect(renderAuthoredCassetteLyrics(taskRun.cassette)).toContain("Operator applies Unpause to task A.")
+  })
+)
 
 it.effect("recovers an accepted result in journal order and crosses its integration cutoff once", () =>
   Effect.gen(function* () {
@@ -1405,7 +1464,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       "The task tracker cannot read the claim for task A."
     )
 
-    const commandId = ControlCommandId.make("cassette-reacquire-missing-A")
+    const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
     const missingClaimStory = {
       ...foreignClaimStory,
       name: "an operator replaces a missing claim with a fresh claim identity",
@@ -1425,12 +1484,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
           report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
           request: "Suspend"
         },
-        {
-          _tag: "OperatorRequestsTaskClaimReacquisition",
-          commandId,
-          operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-          taskId: "A"
-        },
+        { _tag: "OperatorDirectsTaskClaimReacquisition", taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
@@ -1454,15 +1508,14 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       event._tag === "TaskClaimAcquisitionIntended" ? [event.operation] : []
     )
     expect(claimIntents).toHaveLength(2)
-    expect(claimIntents[1]).toMatchObject({ authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId } })
+    expect(claimIntents[1]).toMatchObject({
+      authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal }
+    })
     expect(claimIntents[1]?.acquisition.operationId).not.toBe(claimIntents[0]?.acquisition.operationId)
     expect(claimIntents[1]?.acquisition.token).not.toBe(claimIntents[0]?.acquisition.token)
     expect(
       reacquiredRun.records.some(
-        ({ event }) =>
-          event._tag === "ControlCommandRecorded" &&
-          event.command._tag === "RequestTaskClaimReacquisition" &&
-          event.command.commandId === commandId
+        ({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.ordinal === directionOrdinal
       )
     ).toBe(true)
     expect(reacquiredRun.observedBehavior.taskWorkResults).toContainEqual({
@@ -1470,7 +1523,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       taskId: "A"
     })
     expect(renderAuthoredCassetteLyrics(decodedMissingClaimStory)).toContain(
-      `Operator cassette-operator requests a replacement claim for task A with command ${commandId}.`
+      "Operator directs Dalph to reacquire the claim for task A."
     )
 
     const foreignConflictStory = {
@@ -1478,12 +1531,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       name: "an operator request preserves a foreign claim conflict",
       story: [
         ...foreignClaimStory.story.slice(0, -3),
-        {
-          _tag: "OperatorRequestsTaskClaimReacquisition",
-          commandId: ControlCommandId.make("cassette-reacquire-foreign-A"),
-          operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-          taskId: "A"
-        },
+        { _tag: "OperatorDirectsTaskClaimReacquisition", taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         expected
       ]
@@ -1657,7 +1705,7 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
                 { _tag: "TaskClaimReleased", taskId: "A" },
                 { _tag: "TaskClaimObserved", claimState: "Missing", taskId: "A" },
                 { _tag: "TaskClaimReadExhausted", taskId: "A" },
-                { _tag: "TaskClaimReacquisitionRequested", commandId: "render-reacquisition", taskId: "A" },
+                { _tag: "TaskClaimReacquisitionDirected", taskId: "A" },
                 { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
                 { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
               ]
@@ -1669,7 +1717,7 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
     expect(allProtocolLyrics).toContain("release its exact claim")
     expect(allProtocolLyrics).toContain("record missing claim authority")
     expect(allProtocolLyrics).toContain("exhaust the bounded claim read")
-    expect(allProtocolLyrics).toContain("render-reacquisition")
+    expect(allProtocolLyrics).toContain("Operator to direct Dalph to reacquire the claim for task A")
   })
 )
 
@@ -1806,24 +1854,26 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(singleton)
-      const command = ControlCommand.cases.RequestRunPause.make({
-        commandId: ControlCommandId.make("rename-command"),
-        operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-        runId: run.runId
+      const directionEvent = ControlDirectionAppliedEvent.make({
+        direction: "Pause",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: ControlDirectionApplicationOrdinal.make(1),
+        subject: { _tag: "Run", runId: run.runId },
+        version: workflowJournalEventVersion
       })
-      const commandEvent = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-      const recordsWithCommand = insertBeforeRunTermination(run.records, commandEvent)
+      const recordsWithDirection = insertBeforeRunTermination(run.records, directionEvent)
       const terminationEvent = WorkflowRunTerminatedEvent.make({
         disposition: "Completed",
         occurrenceClassification: "NonActionOccurrence",
         version: workflowJournalEventVersion
       })
       const records = [
-        ...recordsWithCommand,
+        ...recordsWithDirection,
         {
           event: terminationEvent,
           key: describeJournalEvent(terminationEvent).expectedKey,
-          position: JournalPosition.make(recordsWithCommand.length + 1),
+          position: JournalPosition.make(recordsWithDirection.length + 1),
           runId: run.runId
         }
       ]
@@ -1853,41 +1903,37 @@ it.effect(
         repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
         ref: IntegrationTargetRef.make("refs/heads/master")
       })
-      const additionalCommands: ReadonlyArray<RecordedCassetteEntry> = [
+      const additionalDirections: ReadonlyArray<RecordedCassetteEntry> = [
         {
-          _tag: "ControlCommandRecorded",
-          command: ControlCommand.cases.RequestRunUnpause.make({
-            commandId: ControlCommandId.make("rename-run-unpause-command"),
-            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-            runId: run.runId
-          })
+          _tag: "ControlDirectionApplied",
+          direction: "Unpause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: ControlDirectionApplicationOrdinal.make(2),
+          subject: { _tag: "Run", runId: run.runId }
         },
         {
-          _tag: "ControlCommandRecorded",
-          command: ControlCommand.cases.RequestTaskPause.make({
-            commandId: ControlCommandId.make("rename-task-pause-command"),
-            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-            runId: run.runId,
-            taskId: TaskId.make("A")
-          })
+          _tag: "ControlDirectionApplied",
+          direction: "Pause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: ControlDirectionApplicationOrdinal.make(3),
+          subject: { _tag: "Task", runId: run.runId, taskId: TaskId.make("A") }
         },
         {
-          _tag: "ControlCommandRecorded",
-          command: ControlCommand.cases.RequestTaskUnpause.make({
-            commandId: ControlCommandId.make("rename-task-unpause-command"),
-            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-            runId: run.runId,
-            taskId: TaskId.make("A")
-          })
+          _tag: "ControlDirectionApplied",
+          direction: "Unpause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: ControlDirectionApplicationOrdinal.make(4),
+          subject: { _tag: "Task", runId: run.runId, taskId: TaskId.make("A") }
         },
         {
-          _tag: "ControlCommandRecorded",
-          command: ControlCommand.cases.RequestTaskClaimReacquisition.make({
-            commandId: ControlCommandId.make("rename-task-claim-reacquisition-command"),
-            operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-            runId: run.runId,
-            taskId: TaskId.make("A")
-          })
+          _tag: "TaskClaimReacquisitionDirected",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: TaskClaimReacquisitionDirectionOrdinal.make(1),
+          taskId: TaskId.make("A")
         }
       ]
       const entriesWithAcceptedResult = projected.entries.flatMap((entry) => {
@@ -2076,7 +2122,7 @@ it.effect(
         ...projected,
         entries: [
           ...entriesWithAcceptedResult.slice(0, insertionIndex),
-          ...additionalCommands,
+          ...additionalDirections,
           {
             _tag: "TaskWorkCapacityChanged",
             capacity: TaskWorkCapacity.make(2),
@@ -2098,13 +2144,6 @@ it.effect(
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
         claimTokens: [{ from: `cassette-claim:A:cassette:${run.runId}:operation:2`, to: "renamed-claim-token-A" }],
-        controlCommandIds: [
-          { from: "rename-command", to: "renamed-command" },
-          { from: "rename-run-unpause-command", to: "renamed-run-unpause-command" },
-          { from: "rename-task-pause-command", to: "renamed-task-pause-command" },
-          { from: "rename-task-unpause-command", to: "renamed-task-unpause-command" },
-          { from: "rename-task-claim-reacquisition-command", to: "renamed-task-claim-reacquisition-command" }
-        ],
         operationIds: [
           ...Array.from({ length: 7 }, (_unused, ordinal) => ({
             from: `cassette:${run.runId}:operation:${ordinal}`,
@@ -2137,14 +2176,13 @@ it.effect(
       const allRenamings = [
         ...renaming.attemptIds,
         ...renaming.claimTokens,
-        ...renaming.controlCommandIds,
         ...renaming.operationIds,
         ...renaming.runIds,
         ...renaming.taskBranchRefs,
         ...renaming.worktreeLocators
       ]
       const entryVariants = {
-        ControlCommandRecorded: true,
+        ControlDirectionApplied: true,
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
@@ -2158,6 +2196,7 @@ it.effect(
         TaskClaimAcquisitionRejected: true,
         TaskClaimReleaseIntended: true,
         TaskClaimReleased: true,
+        TaskClaimReacquisitionDirected: true,
         TaskTrackerFactsObserved: true,
         TaskTrackerReadInitiated: true,
         TaskWorktreeReady: true,
@@ -2243,14 +2282,13 @@ it.effect("renames and renders every contradictory planned-worktree observation 
         originatingActionOperationId: operationId
       })),
       runId: RunId.make("recorded-worktree-variant-run"),
-      schemaVersion: 4
+      schemaVersion: 5
     })
     const renamed = yield* renameRecordedCassette(
       cassette,
       yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [],
         claimTokens: [],
-        controlCommandIds: [],
         operationIds: [],
         runIds: [],
         taskBranchRefs: [
@@ -2278,7 +2316,6 @@ it.effect("rejects identity renaming that repeats a source or destination", () =
   Effect.gen(function* () {
     const otherwiseEmptyRenaming = {
       claimTokens: [],
-      controlCommandIds: [],
       operationIds: [],
       runIds: [],
       taskBranchRefs: [],
@@ -2362,20 +2399,20 @@ it.effect(
     })
 )
 
-it.effect("renders a recorded operator command from its structured occurrence", () =>
+it.effect("renders a recorded applied operator direction from its structured occurrence", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(singleton)
-    const command = ControlCommand.cases.RequestRunPause.make({
-      commandId: ControlCommandId.make("cassette-pause"),
-      operatorId: AuthenticatedOperatorIdentity.make("cassette-operator"),
-      runId: run.runId
+    const event = ControlDirectionAppliedEvent.make({
+      direction: "Pause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      subject: { _tag: "Run", runId: run.runId },
+      version: workflowJournalEventVersion
     })
-    const event = ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-    const withCommand = yield* projectRecordedCassette(insertBeforeRunTermination(run.records, event))
-    expect(renderRecordedCassetteLyrics(withCommand)).toContain(
-      "Dalph recorded the operator's RequestRunPause command."
-    )
-    expect(foldRecordedCassette(withCommand)._tag).toBe("ValidWorkflowJournalHistory")
+    const withDirection = yield* projectRecordedCassette(insertBeforeRunTermination(run.records, event))
+    expect(renderRecordedCassetteLyrics(withDirection)).toContain("Operator applied Pause to the Run.")
+    expect(foldRecordedCassette(withDirection)._tag).toBe("ValidWorkflowJournalHistory")
   })
 )
 

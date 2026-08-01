@@ -39,7 +39,7 @@ module taskFactReconciliation {
     dependantsReleasedByFreshGraph: bool,
     duplicateDeliveryPrevented: bool,
     claimState: ClaimState,
-    reacquisitionCommandRecorded: bool,
+    reacquisitionDirectionApplied: bool,
     replacementIntentRecorded: bool,
     lastClaimMutationTarget: ClaimMutationTarget,
     independentTaskEligible: bool,
@@ -81,10 +81,10 @@ module taskFactReconciliation {
         state.dependantsReleasedByFreshGraph,
       }
 
-  val replacementClaimRequiresCommandAndIntent: bool =
+  val replacementClaimRequiresDirectionAndIntent: bool =
     state.claimState != ReplacementClaim
       or and {
-        state.reacquisitionCommandRecorded,
+        state.reacquisitionDirectionApplied,
         state.replacementIntentRecorded,
       }
 
@@ -94,7 +94,7 @@ module taskFactReconciliation {
   val unreadableClaimCannotAuthorizeReplacement: bool =
     state.claimState != UnreadableClaim
       or and {
-        not(state.reacquisitionCommandRecorded),
+        not(state.reacquisitionDirectionApplied),
         not(state.replacementIntentRecorded),
       }
 
@@ -130,7 +130,7 @@ module taskFactReconciliation {
       dependantsReleasedByFreshGraph: false,
       duplicateDeliveryPrevented: false,
       claimState: ExactClaim,
-      reacquisitionCommandRecorded: false,
+      reacquisitionDirectionApplied: false,
       replacementIntentRecorded: false,
       lastClaimMutationTarget: NoClaimMutation,
       independentTaskEligible: true,
@@ -242,36 +242,36 @@ module taskFactReconciliation {
     },
   }
 
-  action recordMissingClaimReacquisitionCommand: bool = all {
+  action applyMissingClaimReacquisitionDirection: bool = all {
     state.status == SafelySuspended,
     state.decision == MissingClaimWait,
     state' = {
       ...state,
       decision: AllocateReplacementClaim,
-      reacquisitionCommandRecorded: true,
+      reacquisitionDirectionApplied: true,
     },
   }
 
-  action recordForeignClaimReacquisitionCommand: bool = all {
+  action applyForeignClaimReacquisitionDirection: bool = all {
     state.status == SafelySuspended,
     state.decision == ForeignClaimWait,
     state' = {
       ...state,
-      reacquisitionCommandRecorded: true,
+      reacquisitionDirectionApplied: true,
     },
   }
 
   action rejectForeignClaimReacquisition: bool = all {
     state.status == SafelySuspended,
     state.decision == ForeignClaimWait,
-    state.reacquisitionCommandRecorded,
+    state.reacquisitionDirectionApplied,
     state' = state,
   }
 
   action planReplacementClaim: bool = all {
     state.status == SafelySuspended,
     state.decision == AllocateReplacementClaim,
-    state.reacquisitionCommandRecorded,
+    state.reacquisitionDirectionApplied,
     state' = {
       ...state,
       decision: ObserveReplacementClaim,
@@ -337,8 +337,8 @@ module taskFactReconciliation {
     observeForeignClaim,
     observeUnreadableClaim,
     reportSafelySuspended,
-    recordMissingClaimReacquisitionCommand,
-    recordForeignClaimReacquisitionCommand,
+    applyMissingClaimReacquisitionDirection,
+    applyForeignClaimReacquisitionDirection,
     rejectForeignClaimReacquisition,
     planReplacementClaim,
     observeExactReplacementClaim,

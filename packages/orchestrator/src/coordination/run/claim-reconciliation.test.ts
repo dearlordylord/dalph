@@ -16,8 +16,6 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
-import { ControlCommand, ControlCommandRecordedEvent } from "../../control/command.js"
-import { AuthenticatedOperatorIdentity, ControlCommandId } from "../../control/identity.js"
 import { UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -29,11 +27,11 @@ import { makeOwnedTransitionExecutionFixture } from "../activation/coordinator.j
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
-  controlCommandRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -46,6 +44,10 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
+import {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionDirectionOrdinal
+} from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -559,23 +561,17 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       transitions: []
     })
 
-    const command = ControlCommand.cases.RequestTaskClaimReacquisition.make({
-      commandId: ControlCommandId.make("missing-claim-reacquire"),
-      operatorId: AuthenticatedOperatorIdentity.make("authenticated-operator"),
-      runId,
-      taskId
+    const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
+    const direction = TaskClaimReacquisitionDirectedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: directionOrdinal,
+      subject: { runId, taskId },
+      version: workflowJournalEventVersion
     })
-    yield* journal.append(
-      runId,
-      controlCommandRecordKey(command.commandId),
-      ControlCommandRecordedEvent.make({ command, version: workflowJournalEventVersion })
-    )
+    yield* journal.append(runId, taskClaimReacquisitionDirectedRecordKey(directionOrdinal), direction)
     const reacquisitionTransition = (yield* recovery.readFrontier).transitions[0]
-    expect(reacquisitionTransition).toEqual({
-      _tag: "CommitTaskClaimReacquisitionIntent",
-      commandId: command.commandId,
-      taskId
-    })
+    expect(reacquisitionTransition).toEqual({ _tag: "CommitTaskClaimReacquisitionIntent", directionOrdinal, taskId })
     if (reacquisitionTransition?._tag !== "CommitTaskClaimReacquisitionIntent") {
       return yield* Effect.die("expected explicit claim reacquisition")
     }
@@ -592,10 +588,10 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     expect(unavailablePlanner).toMatchObject({ _tag: "TaskClaimReacquisitionPlannerUnavailable", taskId })
 
     const replacement = {
-      operationId: taskClaimReacquisitionOperationId(command.commandId),
+      operationId: taskClaimReacquisitionOperationId(directionOrdinal),
       owner: ClaimOwner.make("dalph"),
       taskId,
-      token: ClaimToken.make(`replacement-claim:${taskId}:${taskClaimReacquisitionOperationId(command.commandId)}`)
+      token: ClaimToken.make(`replacement-claim:${taskId}:${taskClaimReacquisitionOperationId(directionOrdinal)}`)
     }
     const boundIntentIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const reacquisitionInterpreter = WorkflowInterpreter.of({
@@ -689,7 +685,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     const restartedReacquisition = (yield* reacquisitionRuntime.readFrontier).transitions[0]
     expect(restartedReacquisition).toEqual(reacquisitionTransition)
     if (restartedReacquisition?._tag !== "CommitTaskClaimReacquisitionIntent") {
-      return yield* Effect.die("the pre-crash command must survive restart")
+      return yield* Effect.die("the pre-crash applied direction must survive restart")
     }
     yield* reacquisitionRuntime.runTransition(
       restartedReacquisition,
@@ -702,8 +698,8 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     expect(yield* Ref.get(boundIntentIds)).toEqual([replacement.operationId])
     expect(replacement.operationId).not.toBe(acquisition.operationId)
     expect(replacement.token).not.toBe(acquisition.token)
-    expect(command).not.toHaveProperty("operationId")
-    expect(command).not.toHaveProperty("token")
+    expect(direction).not.toHaveProperty("operationId")
+    expect(direction).not.toHaveProperty("token")
     const replacementEvents = (yield* journal.read(runId)).filter(
       ({ event }) =>
         (event._tag === "TaskClaimAcquisitionIntended" &&
@@ -712,7 +708,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     )
     expect(replacementEvents).toHaveLength(2)
     expect(replacementEvents[0]?.event).toMatchObject({
-      operation: { authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", commandId: command.commandId } }
+      operation: { authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal } }
     })
 
     const replacementRead = (yield* recovery.readFrontier).transitions.find(

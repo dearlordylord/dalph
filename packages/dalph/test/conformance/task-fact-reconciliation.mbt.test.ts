@@ -17,11 +17,11 @@ import {
   ClaimOwner,
   ClaimToken,
   deriveRunnableFrontier,
-  ControlCommandId,
   JournalPosition,
   makeTaskClaimReleaseOperation,
   OperationId,
-  ResponsibilityDisposition
+  ResponsibilityDisposition,
+  TaskClaimReacquisitionDirectionOrdinal
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
 
@@ -81,7 +81,7 @@ const SpecProjection = Schema.Struct({
     originalClaimIdentity: Schema.Unknown,
     currentClaimIdentity: Schema.Unknown,
     positionHeld: Schema.Boolean,
-    reacquisitionCommandRecorded: Schema.Boolean,
+    reacquisitionDirectionApplied: Schema.Boolean,
     replacementIntentRecorded: Schema.Boolean,
     status: Schema.Unknown,
     wipPreserved: Schema.Boolean
@@ -98,16 +98,16 @@ const decisionFromProductionFrontier = (
   constraint: Constraint,
   status: Status,
   exactClaimHeld: boolean,
-  reacquisitionCommandRecorded: boolean,
+  reacquisitionDirectionApplied: boolean,
   replacementIntentRecorded: boolean
 ): string => {
   if (replacementIntentRecorded && constraint === "MissingClaimConstraint") return "ObserveReplacementClaim"
   const disposition =
     status === "Running" && constraint !== "NoConstraint"
       ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-      : constraint === "MissingClaimConstraint" && reacquisitionCommandRecorded
+      : constraint === "MissingClaimConstraint" && reacquisitionDirectionApplied
         ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
-            commandId: ControlCommandId.make("task-facts-reacquisition")
+            directionOrdinal: TaskClaimReacquisitionDirectionOrdinal.make(1)
           })
         : constraint === "NoConstraint"
           ? ResponsibilityDisposition.Ready()
@@ -174,8 +174,8 @@ const taskFactReconciliationDriver = defineDriver(
     observeSpecificationChange: {},
     observeExactReplacementClaim: {},
     planReplacementClaim: {},
-    recordForeignClaimReacquisitionCommand: {},
-    recordMissingClaimReacquisitionCommand: {},
+    applyForeignClaimReacquisitionDirection: {},
+    applyMissingClaimReacquisitionDirection: {},
     rejectForeignClaimReacquisition: {},
     requestOwnedClaimMutation: {},
     releaseExactClaim: {},
@@ -189,7 +189,7 @@ const taskFactReconciliationDriver = defineDriver(
     let dependantsReleasedByFreshGraph = false
     let duplicateDeliveryPrevented = false
     let claimState: ClaimState = "ExactClaim"
-    let reacquisitionCommandRecorded = false
+    let reacquisitionDirectionApplied = false
     let replacementIntentRecorded = false
     let lastClaimMutationTarget = "NoClaimMutation"
     let independentTaskSelected = false
@@ -211,7 +211,7 @@ const taskFactReconciliationDriver = defineDriver(
           dependantsReleasedByFreshGraph = false
           duplicateDeliveryPrevented = false
           claimState = "ExactClaim"
-          reacquisitionCommandRecorded = false
+          reacquisitionDirectionApplied = false
           replacementIntentRecorded = false
           lastClaimMutationTarget = "NoClaimMutation"
           independentTaskSelected = false
@@ -255,13 +255,13 @@ const taskFactReconciliationDriver = defineDriver(
           replacementIntentRecorded = true
           currentClaimIdentity = 2
         }),
-      recordForeignClaimReacquisitionCommand: () =>
+      applyForeignClaimReacquisitionDirection: () =>
         Effect.sync(() => {
-          reacquisitionCommandRecorded = true
+          reacquisitionDirectionApplied = true
         }),
-      recordMissingClaimReacquisitionCommand: () =>
+      applyMissingClaimReacquisitionDirection: () =>
         Effect.sync(() => {
-          reacquisitionCommandRecorded = true
+          reacquisitionDirectionApplied = true
         }),
       rejectForeignClaimReacquisition: () => Effect.void,
       requestOwnedClaimMutation: () =>
@@ -302,7 +302,7 @@ const taskFactReconciliationDriver = defineDriver(
             constraint,
             status,
             exactClaimHeld,
-            reacquisitionCommandRecorded,
+            reacquisitionDirectionApplied,
             replacementIntentRecorded
           ),
           dependantsReleasedByFreshGraph,
@@ -314,7 +314,7 @@ const taskFactReconciliationDriver = defineDriver(
           originalClaimIdentity: 1,
           currentClaimIdentity,
           positionHeld: status === "Running",
-          reacquisitionCommandRecorded,
+          reacquisitionDirectionApplied,
           replacementIntentRecorded,
           status,
           wipPreserved: true
@@ -361,7 +361,7 @@ quintIt(
         spec.originalClaimIdentity === implementation.originalClaimIdentity &&
         spec.currentClaimIdentity === implementation.currentClaimIdentity &&
         spec.positionHeld === implementation.positionHeld &&
-        spec.reacquisitionCommandRecorded === implementation.reacquisitionCommandRecorded &&
+        spec.reacquisitionDirectionApplied === implementation.reacquisitionDirectionApplied &&
         spec.replacementIntentRecorded === implementation.replacementIntentRecorded &&
         spec.status === implementation.status &&
         spec.wipPreserved === implementation.wipPreserved

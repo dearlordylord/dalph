@@ -6,14 +6,16 @@ import {
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
+  TaskId,
   TaskBranchRef,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
   ClaimToken,
-  ControlCommand,
-  ControlCommandId,
+  ControlDirection,
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionSubject,
   InitialControlPolicy,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
@@ -26,7 +28,8 @@ import {
   TargetLineageObservation,
   TaskTrackerFactsObservation,
   WorkflowActor,
-  WorkflowOperation
+  WorkflowOperation,
+  TaskClaimReacquisitionDirectionOrdinal
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -41,7 +44,13 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  * not belong to this boundary.
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
-  ControlCommandRecorded: { command: ControlCommand },
+  ControlDirectionApplied: {
+    direction: ControlDirection,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    ordinal: ControlDirectionApplicationOrdinal,
+    subject: ControlDirectionSubject
+  },
   GitReadInitiated: {
     ...initiatedByCoordinator,
     operation: Schema.Union([WorkflowOperation.cases.ReadTaskWorktree, WorkflowOperation.cases.ReadTargetLineage])
@@ -85,6 +94,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   TaskClaimReleaseIntended: { operation: WorkflowOperation.cases.ReleaseTaskClaim },
   TaskClaimReleased: { release: TaskClaimRelease },
+  TaskClaimReacquisitionDirected: {
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    ordinal: TaskClaimReacquisitionDirectionOrdinal,
+    taskId: TaskId
+  },
   TaskTrackerFactsObserved: {
     evidence: TaskTrackerFactsObservation,
     ...nonActionOccurrence,
@@ -116,7 +131,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 4
+const currentRecordedCassetteVersion = 5
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {
@@ -140,9 +155,6 @@ const consistentIdentityRenaming = Schema.makeFilter(
 export const CassetteIdentityRenaming = Schema.Struct({
   attemptIds: Schema.Array(Schema.Struct({ from: AttemptId, to: AttemptId })).check(consistentIdentityRenaming),
   claimTokens: Schema.Array(Schema.Struct({ from: ClaimToken, to: ClaimToken })).check(consistentIdentityRenaming),
-  controlCommandIds: Schema.Array(Schema.Struct({ from: ControlCommandId, to: ControlCommandId })).check(
-    consistentIdentityRenaming
-  ),
   operationIds: Schema.Array(Schema.Struct({ from: OperationId, to: OperationId })).check(consistentIdentityRenaming),
   runIds: Schema.Array(Schema.Struct({ from: RunId, to: RunId })).check(consistentIdentityRenaming),
   taskBranchRefs: Schema.Array(Schema.Struct({ from: TaskBranchRef, to: TaskBranchRef })).check(
