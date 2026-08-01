@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { Effect, FileSystem, Layer, Path } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref } from "effect"
 import { describe, expect } from "vitest"
 import { RunId, TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
@@ -21,6 +21,35 @@ const taskId = TaskId.make("task-2")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+
+const makeJournalReadBarrier = Effect.gen(function* () {
+  const armed = yield* Ref.make(false)
+  const activeReads = yield* Ref.make(0)
+  const peakReads = yield* Ref.make(0)
+  const firstReadEntered = yield* Deferred.make<void>()
+  const releaseReads = yield* Deferred.make<void>()
+  const layer = Layer.effect(
+    JournalStore,
+    Effect.gen(function* () {
+      const delegate = yield* JournalStore
+      return JournalStore.of({
+        ...delegate,
+        read: (readRunId) =>
+          Effect.gen(function* () {
+            if (!(yield* Ref.get(armed))) return yield* delegate.read(readRunId)
+            const active = yield* Ref.updateAndGet(activeReads, (count) => count + 1)
+            yield* Ref.update(peakReads, (peak) => Math.max(peak, active))
+            yield* Deferred.succeed(firstReadEntered, undefined)
+            yield* Deferred.await(releaseReads)
+            const records = yield* delegate.read(readRunId)
+            yield* Ref.update(activeReads, (count) => count - 1)
+            return records
+          })
+      })
+    })
+  ).pipe(Layer.provide(memoryJournalStoreLayer))
+  return { activeReads, armed, firstReadEntered, layer, peakReads, releaseReads }
+})
 
 const withTemporaryDatabase = <A, E, R>(use: (filename: JournalDatabaseLocator) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -104,24 +133,31 @@ describe("ControlDirectionApplication", () => {
     }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
   )
 
-  it.effect("serializes concurrent applications into distinct run-local ordinals", () =>
+  it.effect("serializes concurrent applications before either can allocate a run-local ordinal", () =>
     Effect.gen(function* () {
-      const journal = yield* JournalStore
-      yield* journal.beginRun(runId, FixtureTarget.make("control-direction-fixture"), initialPolicy)
-      const control = yield* ControlDirectionApplication
+      const barrier = yield* makeJournalReadBarrier
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(runId, FixtureTarget.make("control-direction-fixture"), initialPolicy)
+        const control = yield* ControlDirectionApplication
+        yield* Ref.set(barrier.armed, true)
 
-      const applied = yield* Effect.all(
-        [
-          control.apply({ direction: "Pause", subject: { _tag: "Run", runId } }),
-          control.apply({ direction: "Unpause", subject: { _tag: "Task", runId, taskId } })
-        ],
-        { concurrency: "unbounded" }
-      )
-      expect(applied.map(({ event }) => event._tag === "ControlDirectionApplied" && event.ordinal)).toEqual([1, 2])
-      expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(
-        2
-      )
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+        const first = yield* control
+          .apply({ direction: "Pause", subject: { _tag: "Run", runId } })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(barrier.firstReadEntered)
+        const second = yield* control
+          .apply({ direction: "Unpause", subject: { _tag: "Task", runId, taskId } })
+          .pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(barrier.activeReads)).toBe(1)
+        expect(yield* Ref.get(barrier.peakReads)).toBe(1)
+        yield* Deferred.succeed(barrier.releaseReads, undefined)
+
+        const applied = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+        expect(applied.map(({ event }) => event._tag === "ControlDirectionApplied" && event.ordinal)).toEqual([1, 2])
+      }).pipe(Effect.provide(controlDirectionApplicationLayer.pipe(Layer.provideMerge(barrier.layer))))
+    })
   )
 
   it.effect("rejects a decoded history whose first applied direction skips ordinal one", () =>

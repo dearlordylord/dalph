@@ -436,10 +436,11 @@ _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
 **Explicit task-claim reacquisition authority**:
 The durable authority linking one replacement task-claim acquisition intent to
-one earlier authenticated Operator command for that Run and task. A fresh
-tracker observation after a coordinator restart does not erase an unconsumed
-command. The authority is represented explicitly on the acquisition operation;
-an `OperationId` spelling or an earlier claim token cannot imply it.
+one earlier applied Operator direction for that Run and task. The direction's
+non-person `TaskClaimReacquisitionRequestId` coalesces exact transport
+redelivery and remains available after a coordinator restart. The authority is
+represented explicitly on the acquisition operation; an `OperationId`
+spelling or an earlier claim token cannot imply it.
 _Avoid_: Operation-ID prefix, stale claim token, automatic reacquisition
 
 **Completion claim**:

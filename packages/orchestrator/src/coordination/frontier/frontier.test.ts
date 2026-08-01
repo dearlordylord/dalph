@@ -484,7 +484,7 @@ it("explains missing, foreign, and unreadable claims without selecting task work
           claimState: "Missing",
           correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
           taskId: taskA,
-          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+          wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
         }
       ],
       transitions: [{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }]
@@ -496,7 +496,7 @@ it("explains missing, foreign, and unreadable claims without selecting task work
           claimState: "Foreign",
           correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
           taskId: taskA,
-          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+          wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
         }
       ],
       transitions: [{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }]

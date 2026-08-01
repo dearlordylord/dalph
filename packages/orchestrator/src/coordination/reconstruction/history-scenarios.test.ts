@@ -553,7 +553,10 @@ it("requires a prior matching applied Operator direction for a reacquisition int
     }
   ])
   const prefixCollision = makeTaskClaimAcquisitionOperation({
-    acquisition: { ...operation.acquisition, operationId: OperationId.make("task-claim-reacquisition:not-a-command") },
+    acquisition: {
+      ...operation.acquisition,
+      operationId: OperationId.make("task-claim-reacquisition:not-a-direction")
+    },
     predecessorOperationIds: []
   })
   const exactRead = makeTaskClaimObservationOperation(OperationId.make("history-exact-read"), target, taskId)

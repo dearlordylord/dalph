@@ -125,7 +125,7 @@ it("keeps A's worktree responsibility constrained while independent C remains se
     claimState: "Foreign",
     operationId: operation.operationId,
     taskId,
-    wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+    wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
   })
 })
 
@@ -555,7 +555,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
           claimState: "Missing",
           correlation: { attemptId: plannedAttempt.attemptId, runId },
           taskId,
-          wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+          wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
         }
       ],
       transitions: []

@@ -112,7 +112,7 @@ export const deriveIntegrationFrontier = (
                     taskId: accepted.plannedAttempt.taskId,
                     wakeCondition:
                       claimState === "Missing" || claimState === "Foreign"
-                        ? "ExplicitTaskClaimReacquisitionRequested"
+                        ? "ExplicitAppliedTaskClaimReacquisitionDirection"
                         : "TaskClaimFactsObserved"
                   })
                 })()
@@ -154,7 +154,7 @@ export const deriveIntegrationFrontier = (
         taskId: responsibility.plannedAttempt.taskId,
         wakeCondition:
           claimState === "Missing" || claimState === "Foreign"
-            ? "ExplicitTaskClaimReacquisitionRequested"
+            ? "ExplicitAppliedTaskClaimReacquisitionDirection"
             : "TaskClaimFactsObserved"
       })
     ]

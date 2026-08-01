@@ -1,11 +1,13 @@
+import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema } from "effect"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { taskClaimReacquisitionDirectedRecordKey } from "../../../workflow-journal/record-key.js"
 import {
-  type JournalAppendError,
   type JournalRecord,
   type JournalStoreError,
   JournalStore,
+  type WorkflowRunAlreadyTerminated,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
 import {
@@ -19,10 +21,23 @@ const ApplyTaskClaimReacquisitionRequest = Schema.Struct({
   subject: TaskClaimReacquisitionSubject
 })
 
+/** One transport request identity was already applied to different direction content. */
+export class TaskClaimReacquisitionRequestIdentityContradiction extends Schema.TaggedErrorClass<TaskClaimReacquisitionRequestIdentityContradiction>()(
+  "TaskClaimReacquisitionRequestIdentityContradiction",
+  { existingPosition: JournalPosition, requestId: TaskClaimReacquisitionRequestId, runId: RunId }
+) {}
+
 interface TaskClaimReacquisitionControlService {
   readonly apply: (
     input: unknown
-  ) => Effect.Effect<JournalRecord, JournalAppendError | JournalStoreError | Schema.SchemaError | WorkflowRunNotBegan>
+  ) => Effect.Effect<
+    JournalRecord,
+    | JournalStoreError
+    | Schema.SchemaError
+    | TaskClaimReacquisitionRequestIdentityContradiction
+    | WorkflowRunAlreadyTerminated
+    | WorkflowRunNotBegan
+  >
 }
 
 /** Decodes and durably applies one explicit Operator claim-reacquisition direction. */
@@ -43,17 +58,29 @@ export const taskClaimReacquisitionControlLayer = Layer.effect(
       if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
         return yield* new WorkflowRunNotBegan({ runId: request.subject.runId })
       }
-      return yield* journal.append(
-        request.subject.runId,
-        taskClaimReacquisitionDirectedRecordKey(request.requestId),
-        TaskClaimReacquisitionDirectedEvent.make({
-          initiatedBy: { _tag: "Operator" },
-          occurrenceClassification: "InitiatedAction",
-          requestId: request.requestId,
-          subject: request.subject,
-          version: workflowJournalEventVersion
-        })
-      )
+      return yield* journal
+        .append(
+          request.subject.runId,
+          taskClaimReacquisitionDirectedRecordKey(request.requestId),
+          TaskClaimReacquisitionDirectedEvent.make({
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: request.requestId,
+            subject: request.subject,
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(
+          Effect.catchTag(
+            "JournalStoreContradiction",
+            ({ existingPosition }) =>
+              new TaskClaimReacquisitionRequestIdentityContradiction({
+                existingPosition,
+                requestId: request.requestId,
+                runId: request.subject.runId
+              })
+          )
+        )
     })
     return TaskClaimReacquisitionControl.of({ apply })
   })

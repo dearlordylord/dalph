@@ -39,6 +39,7 @@ export {
 } from "./workflow/protocols/task-claim-reacquisition/events.js"
 export {
   TaskClaimReacquisitionControl,
+  TaskClaimReacquisitionRequestIdentityContradiction,
   taskClaimReacquisitionControlLayer
 } from "./workflow/protocols/task-claim-reacquisition/control.js"
 export {

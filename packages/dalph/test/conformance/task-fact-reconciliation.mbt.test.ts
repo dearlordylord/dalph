@@ -106,7 +106,7 @@ const decisionFromProductionFrontier = (
     status === "Running" && constraint !== "NoConstraint"
       ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
       : constraint === "MissingClaimConstraint" && reacquisitionDirectionApplied
-        ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
+        ? ResponsibilityDisposition.AppliedTaskClaimReacquisitionDirection({
             requestId: TaskClaimReacquisitionRequestId.make("task-facts-reacquisition")
           })
         : constraint === "NoConstraint"

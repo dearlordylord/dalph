@@ -35,7 +35,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   TaskClaimMissingConstraint: Record<never, never>
   TaskClaimUnreadableWait: Record<never, never>
   TaskForeignClaimIsolation: Record<never, never>
-  TaskClaimReacquisitionRequested: { readonly requestId: TaskClaimReacquisitionRequestId }
+  AppliedTaskClaimReacquisitionDirection: { readonly requestId: TaskClaimReacquisitionRequestId }
   WorkflowOperationTaskClaimConstraint: { readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved" }
   WorkflowOperationGitConstraint: { readonly gitState: "WorktreeLost" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
@@ -69,7 +69,7 @@ export type PlannedAttemptExecutorDisposition = Extract<
       | "TaskClaimMissingConstraint"
       | "TaskClaimUnreadableWait"
       | "TaskForeignClaimIsolation"
-      | "TaskClaimReacquisitionRequested"
+      | "AppliedTaskClaimReacquisitionDirection"
       | "TaskLifecycleConstraint"
       | "TaskMembershipConstraint"
       | "TaskSpecificationChangeConstraint"
@@ -91,7 +91,7 @@ type WorkflowOperationDisposition = Exclude<
       | "TaskClaimMissingConstraint"
       | "TaskClaimUnreadableWait"
       | "TaskForeignClaimIsolation"
-      | "TaskClaimReacquisitionRequested"
+      | "AppliedTaskClaimReacquisitionDirection"
       | "TaskLifecycleConstraint"
       | "TaskSpecificationChangeConstraint"
   }

@@ -78,7 +78,7 @@ const directionFollowsCurrentLossEpisode = (
 /**
  * Latest applied reacquisition direction made after the loss it authorizes.
  * Confirming reads may preserve that same loss across restart, while exact,
- * unreadable, or different-loss evidence ends the command's authority.
+ * unreadable, or different-loss evidence ends the direction's authority.
  */
 export const latestTaskClaimReacquisitionDirection = (
   records: ReadonlyArray<JournalRecord>,

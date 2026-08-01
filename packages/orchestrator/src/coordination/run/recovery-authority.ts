@@ -50,7 +50,7 @@ export const causalClaimForAttempt = (
 
 /**
  * Finds the original planned claim or the latest replacement authorized by an
- * authenticated reacquisition command and its exact durable intent.
+ * applied reacquisition direction and its exact durable intent.
  */
 export const authorizedClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,

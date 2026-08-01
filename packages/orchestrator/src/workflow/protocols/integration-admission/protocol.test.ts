@@ -665,7 +665,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
       _tag: "IntegrationTaskClaimConstraint",
       claimState: "Foreign",
       taskId: a.taskId,
-      wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+      wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
     })
     expect(
       deriveIntegrationFrontier(queuedRun.state, {

@@ -732,7 +732,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
             claimState: "Foreign",
             correlation: { attemptId: plannedAttempt.attemptId, runId },
             taskId,
-            wakeCondition: "ExplicitTaskClaimReacquisitionRequested"
+            wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
           }
         ],
         transitions: []

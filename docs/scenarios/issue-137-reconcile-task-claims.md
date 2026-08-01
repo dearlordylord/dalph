@@ -12,7 +12,7 @@ later qualifies the same behavior against GitHub.
 ## Owning model and executable adapter
 
 `specs/taskFactReconciliation.qnt` owns the affected-attempt claim constraints,
-safe-suspension decision, command-gated replacement identity, foreign-claim
+safe-suspension decision, direction-gated replacement identity, foreign-claim
 preservation, and independent-task progress. Its deterministic scenarios live
 in `specs/taskFactReconciliation_test.qnt`; the production frontier projection
 is exercised by
@@ -172,7 +172,7 @@ reacquisition direction naming A and that request identity; V1 records no
 person identity. Dalph accepts that direction for this replacement only when
 it follows the
 durable missing observation for the still-current loss episode. An exact or
-unreadable observation before the command cannot authorize a later loss; an
+unreadable observation before the direction cannot authorize a later loss; an
 exact restoration, a different foreign claim, or unreadability after the
 direction ends its authority. A recorded exact claim acquisition also ends any
 older loss episode before another focused read occurs. Dalph records the
@@ -202,22 +202,25 @@ outcome.
 
 Alice sees either exact K3 acquired, a visible foreign-claim conflict, or a
 bounded unreadable result. Dalph must not reuse K1, overwrite K2, create two
-claims, treat the command as capacity admission, or resume P1 merely because
-K3 was acquired.
+claims, treat the applied direction as capacity admission, or resume P1 merely
+because K3 was acquired.
 
 ### Acceptance-test mapping
 
-- `records explicit pause, unpause, and claim-reacquisition commands without
-  applying workflow effects` proves the authenticated command is durable but
-  does not itself admit or resume work.
+- `coalesces exact request redelivery and rejects identity reuse for another
+  task` proves one non-person request identity coalesces exact redelivery and
+  contradicts reuse for a different task.
+- `requires a prior matching applied Operator direction for a reacquisition
+  intent` proves the durable applied direction authorizes only its exact
+  replacement acquisition and does not itself admit or resume work.
 - `reads current claim facts, safely suspends A, and then exposes its
-  missing-claim constraint` proves a command recorded before a real recovery
+  missing-claim constraint` proves a direction applied before a real recovery
   activation survives that restart, allocates one stable fresh K3, binds
   intent once, rereads exact K3, and only then exposes ordinary continuation
   to admission.
 - The missing-claim and foreign-conflict variants inside `records a foreign
   claim from an authored recovery story and safely suspends only its attempt`
-  compose the authenticated operator request with the controlled tracker:
+  compose the applied Operator direction with the controlled tracker:
   missing K1 produces fresh K3 and a foreign K2 remains untouched as a typed
   acquisition conflict.
 - `rereads tracker authority after an ambiguously applied acquisition` proves
@@ -227,9 +230,9 @@ K3 was acquired.
 - `records a foreign acquisition rejection as terminal and never reconstructs
   a retry` proves the definite conflict is journaled as the intent's terminal
   outcome and remains non-runnable across restart even if K2 later disappears.
-- `requires a prior matching authenticated command for a reacquisition intent`
-  proves malformed history cannot manufacture replacement authority, commands
-  recorded after exact or unreadable evidence cannot authorize a later loss,
-  restoration ends an earlier loss command, a stale K1 identity is rejected,
+- `requires a prior matching applied Operator direction for a reacquisition
+  intent` proves malformed history cannot manufacture replacement authority,
+  directions applied after exact or unreadable evidence cannot authorize a
+  later loss, restoration ends an earlier direction, a stale K1 identity is rejected,
   and an ordinary acquisition is never classified by parsing its opaque
   operation-ID spelling.

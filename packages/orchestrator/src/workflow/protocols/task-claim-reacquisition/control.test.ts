@@ -7,7 +7,11 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
-import { TaskClaimReacquisitionControl, taskClaimReacquisitionControlLayer } from "./control.js"
+import {
+  TaskClaimReacquisitionControl,
+  TaskClaimReacquisitionRequestIdentityContradiction,
+  taskClaimReacquisitionControlLayer
+} from "./control.js"
 import { TaskClaimReacquisitionRequestId } from "./events.js"
 
 it.effect("rejects an operator claim-reacquisition direction before the Run begins", () =>
@@ -45,6 +49,8 @@ it.effect("coalesces exact request redelivery and rejects identity reuse for ano
     const contradiction = yield* Effect.flip(
       control.apply({ requestId, subject: { runId, taskId: TaskId.make("task-B") } })
     )
-    expect(contradiction._tag).toBe("JournalStoreContradiction")
+    expect(contradiction).toEqual(
+      new TaskClaimReacquisitionRequestIdentityContradiction({ existingPosition: first.position, requestId, runId })
+    )
   }).pipe(Effect.provide(taskClaimReacquisitionControlLayer), Effect.provide(memoryJournalStoreLayer))
 )

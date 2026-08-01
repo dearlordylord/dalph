@@ -402,11 +402,13 @@ const deriveJournalResponsibilityFacts = (
       acquiredClaim?._tag === "TaskClaimAcquired" &&
       (currentClaimFacts.observation.observation._tag === "UnclaimedTask" ||
         !isExactTaskClaim(currentClaimFacts.observation.observation, acquiredClaim.claim))
-    const requestedReacquisition =
+    const appliedReacquisitionDirection =
       claimCanBeReacquired &&
       reacquisitionDirection?._tag === "TaskClaimReacquisitionDirected" &&
       !reacquisitionIntentExists
-        ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({ requestId: reacquisitionDirection.requestId })
+        ? ResponsibilityDisposition.AppliedTaskClaimReacquisitionDirection({
+            requestId: reacquisitionDirection.requestId
+          })
         : undefined
     const disposition =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Terminal"
@@ -429,7 +431,7 @@ const deriveJournalResponsibilityFacts = (
                 : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
               : claimConstraint !== undefined
                 ? safelySuspended
-                  ? (requestedReacquisition ?? claimConstraint)
+                  ? (appliedReacquisitionDirection ?? claimConstraint)
                   : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
                 : gitConstraint !== undefined
                   ? safelySuspended
