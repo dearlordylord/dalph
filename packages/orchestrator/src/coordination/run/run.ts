@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The production Run keeps pause gating inside the one shared fresh/recovered activation loop. */
 import { Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "../activation/coordinator.js"
 import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
@@ -63,6 +64,73 @@ export const discardRecoveredFrontierOwnedByFreshStages = (
 
 type RunControlPolicyReadError = Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
 
+type JournaledRunRecoveryActivation = Extract<
+  RunRecoveryActivation["Service"],
+  { readonly _tag: "AuthoritativeRunRecoveryActivation" | "JournaledFreshRunActivation" }
+>
+
+const drainPausedRunTransitions = Effect.fn("Workflow.drainPausedRunTransitions")(function* (
+  recovery: JournaledRunRecoveryActivation,
+  capacity: RunControlPolicy["taskExecutionCapacity"],
+  runId: RunId,
+  mayRun: (transition: RunnableFrontierTransition) => boolean = () => true
+) {
+  const readBoundaryFrontier = recovery.readFrontier.pipe(
+    Effect.map((frontier) => ({ ...frontier, transitions: frontier.transitions.filter(mayRun) }))
+  )
+  const admissionController = yield* makeTaskAdmissionController({
+    capacity,
+    reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
+  })
+  interface PausedRunCompletion {
+    readonly acknowledged: Deferred.Deferred<void>
+    readonly exit: Exit.Exit<void, RunRecoveryActivationError>
+  }
+  const completions = yield* Queue.unbounded<PausedRunCompletion>()
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController,
+        readFrontier: readBoundaryFrontier,
+        runId,
+        runTransition: (transition, execution): Effect.Effect<void, RunRecoveryActivationError> =>
+          Effect.gen(function* () {
+            const exit = yield* recovery.runTransition(transition, execution).pipe(Effect.exit)
+            const acknowledged = yield* Deferred.make<void>()
+            yield* Queue.offer(completions, { acknowledged, exit })
+            yield* Deferred.await(acknowledged)
+            return yield* Exit.match(exit, { onFailure: Effect.failCause, onSuccess: () => Effect.void })
+          })
+      })
+      const applyCompletion = Effect.fn("Workflow.applyPausedRunCompletion")(function* (
+        completion: PausedRunCompletion
+      ) {
+        yield* Deferred.succeed(completion.acknowledged, undefined)
+        return yield* Exit.match(completion.exit, { onFailure: Effect.failCause, onSuccess: () => Effect.void })
+      })
+      for (;;) {
+        yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
+        const pendingCompletion = yield* Queue.poll(completions)
+        if (Option.isSome(pendingCompletion)) {
+          yield* applyCompletion(pendingCompletion.value)
+          continue
+        }
+        /* v8 ignore start -- This protects either handoff instant while a paused-run runner consumes the last derived transition. */
+        if ((yield* readBoundaryFrontier).transitions.length > 0) {
+          yield* applyCompletion(yield* Queue.take(completions))
+          continue
+        }
+        if (!(yield* coordinator.isIdle)) {
+          yield* applyCompletion(yield* Queue.take(completions))
+          continue
+        }
+        /* v8 ignore stop */
+        return
+      }
+    })
+  )
+})
+
 const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   target: TrackerTarget,
   startup:
@@ -89,6 +157,32 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
         startup._tag === "Recovered"
         ? yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         : startup.runId
+  const initialControlPolicy = yield* readCurrentControlPolicy
+  if ((yield* recovery.readRunPauseState)._tag === "RunPaused") {
+    /* v8 ignore start -- Synthetic activation has no journal and therefore cannot reconstruct Run Pause. */
+    if (recovery._tag === "SyntheticFreshOnlyActivation") {
+      return yield* Effect.die("synthetic activation cannot reconstruct a Run Pause")
+    }
+    /* v8 ignore stop */
+    yield* drainPausedRunTransitions(recovery, initialControlPolicy.taskExecutionCapacity, runId)
+    return deriveRunFinalityDecision(yield* recovery.readFinalityFrontier, yield* recovery.readResponsibility, false)
+  }
+  if (recovery._tag !== "SyntheticFreshOnlyActivation" && (yield* recovery.readRunContinuationRequiresFreshFacts)) {
+    yield* drainPausedRunTransitions(
+      recovery,
+      initialControlPolicy.taskExecutionCapacity,
+      runId,
+      (transition) =>
+        transition._tag === "SuspendPlannedAttemptExecutorWork" ||
+        transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
+        transition._tag === "ObservePlannedAttemptContinuationTargetLineage" ||
+        transition._tag === "CheckTaskClaim" ||
+        transition._tag === "ReconcileTaskClaim" ||
+        transition._tag === "ReconcileTaskClaimRelease" ||
+        transition._tag === "ReconcileTaskWorktree" ||
+        transition._tag === "ReleaseStartedIntegrationTarget"
+    )
+  }
   const graphOperation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
   yield* trace.emit(OperationSelected.make({ operation: graphOperation }))
   const snapshot = yield* interpreter.readTrackerGraph(graphOperation)
@@ -102,7 +196,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
   const traceEmission = yield* Semaphore.make(1)
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
-    capacity: (yield* readCurrentControlPolicy).taskExecutionCapacity,
+    capacity: initialControlPolicy.taskExecutionCapacity,
     reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
   })
   type Task = ReturnType<typeof snapshot.eligibleTasks>[number]
@@ -259,6 +353,8 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
       const scheduledFreshTaskIds = yield* Ref.make<ReadonlySet<Task["id"]>>(new Set(initialTasks.map(({ id }) => id)))
       const readFrontier = Effect.fn("Workflow.readActivationFrontier")(function* () {
         const completeRecovered = yield* recovery.readFrontier
+        const currentRunPause = yield* recovery.readRunPauseState
+        if (currentRunPause._tag === "RunPaused") return completeRecovered
         const recoveredTaskIds = new Set([
           ...completeRecovered.explanations.flatMap(explanationTaskIds),
           ...completeRecovered.transitions.map(runnableTransitionTaskId)
@@ -276,8 +372,11 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
             (current) => new Set([...current, ...newlyFresh.map(({ id }) => id)])
           )
         }
-        if (initialRecoveredTaskIds.size > 0) {
-          yield* Ref.update(stages, (current) => discardFreshStagesOwnedByRecovery(current, initialRecoveredTaskIds))
+        const recoveryOwnedTaskIds = (yield* recovery.readRunContinuationRequiresFreshFacts)
+          ? recoveredTaskIds
+          : initialRecoveredTaskIds
+        if (recoveryOwnedTaskIds.size > 0) {
+          yield* Ref.update(stages, (current) => discardFreshStagesOwnedByRecovery(current, recoveryOwnedTaskIds))
         }
         const current = yield* Ref.get(stages)
         const freshTaskIds = new Set(current.map(({ transition }) => runnableTransitionTaskId(transition)))
@@ -358,6 +457,19 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
         }
         const currentFrontier = yield* readFrontier()
         if (currentFrontier.transitions.length === 0) {
+          /* v8 ignore start -- This protects the handoff instant after a runner consumes the last currently derived transition. */
+          if (!(yield* coordinator.isIdle)) {
+            yield* applyCompletion(yield* Queue.take(completions))
+            continue
+          }
+          /* v8 ignore stop */
+          if ((yield* recovery.readRunPauseState)._tag === "RunPaused") {
+            return deriveRunFinalityDecision(
+              yield* recovery.readFinalityFrontier,
+              yield* recovery.readResponsibility,
+              false
+            )
+          }
           const refreshed = yield* refreshCurrentGraph()
           const refreshedFrontier = yield* readFrontier()
           if (refreshedFrontier.transitions.length === 0) {

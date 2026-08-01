@@ -137,6 +137,8 @@ effectIt.effect("starts a production Run by recording its identity before readin
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" } as const),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       }),
@@ -201,6 +203,8 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" } as const),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       }),
@@ -259,6 +263,8 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" } as const),
         reconstructedPlannedAttemptPositions: [],
         runId,
         runTransition: () => Effect.die("unused"),
@@ -318,6 +324,8 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" } as const),
         reconstructedPlannedAttemptPositions: [],
         runId,
         runTransition: () => Effect.die("unused"),
@@ -413,6 +421,8 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
         transitions: []
       }),
       readResponsibility: Effect.succeed(responsibility),
+      readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+      readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" }),
       reconstructedPlannedAttemptPositions: [],
       runId,
       runTransition: () => Effect.die("unused"),
@@ -482,6 +492,8 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
         Effect.map((isActive) => ({ explanations: [], transitions: isActive ? [transition] : [] }))
       ),
       readResponsibility: Effect.succeed({ entries: [] }),
+      readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+      readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" }),
       reconstructedPlannedAttemptPositions: [
         { attemptId: plannedAttempt.attemptId, runId, taskId: plannedAttempt.taskId }
       ],
@@ -625,6 +637,8 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
         )
       ),
       readResponsibility: Effect.succeed({ entries: [] }),
+      readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+      readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" }),
       reconstructedPlannedAttemptPositions: [],
       waitForNextExecutorWake: Effect.void
     })

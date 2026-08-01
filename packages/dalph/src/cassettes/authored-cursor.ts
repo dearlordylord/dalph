@@ -66,6 +66,11 @@ export interface StoryCursor {
   readonly consumeControlDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
   >
+  readonly consumeInFlightExecutorControlDirection: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+    >
+  >
   readonly consumeClaimReacquisitionDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type>
   >
@@ -212,6 +217,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
+  const consumeInFlightExecutorControlDirection = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type =>
+        item?._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(
+        AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight
+      )(claimed.item).pipe(Effect.orDie)
+    )
+  })
   const consumeClaimReacquisitionDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type =>
@@ -291,6 +310,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
     consumeControlDirection,
+    consumeInFlightExecutorControlDirection,
     consumeClaimReacquisitionDirection,
     consumeDalphSelection,
     consumeExecutorReport,

@@ -296,7 +296,11 @@ const executorReport = (
   }
 }
 
-export const controlledExecutorLayer = (cursor: StoryCursor, runId: RunId) =>
+export const controlledExecutorLayer = (
+  cursor: StoryCursor,
+  runId: RunId,
+  beforeExecutorReport: Effect.Effect<void> = Effect.void
+) =>
   Layer.effect(
     PlannedAttemptExecutor,
     Effect.gen(function* () {
@@ -305,6 +309,7 @@ export const controlledExecutorLayer = (cursor: StoryCursor, runId: RunId) =>
         request: "StartOrContinue" | "Suspend",
         plannedAttempt: PlannedTaskAttempt
       ) {
+        yield* beforeExecutorReport
         yield* cursor.pauseAtCoordinatorProcessDeath
         const item = yield* cursor.consumeExecutorReport.pipe(
           Effect.mapError(

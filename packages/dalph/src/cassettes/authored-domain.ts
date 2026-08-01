@@ -209,6 +209,11 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     direction: ControlDirection,
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
+  /** Harness timing: the Operator applies this direction after the executor request crossed its boundary. */
+  OperatorAppliesControlDirectionWhileExecutorRequestInFlight: {
+    direction: ControlDirection,
+    subject: Schema.TaggedUnion({ Run: {} })
+  },
   OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
@@ -239,6 +244,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: [
     "InitialControlPolicy",
     "OperatorAppliesControlDirection",
+    "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
     "OperatorDirectsTaskClaimReacquisition",
     "RunCoordinator",
     "SetTaskExecutionCapacity"

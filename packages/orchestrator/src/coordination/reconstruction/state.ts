@@ -77,6 +77,7 @@ export type WorkflowResponsibilityState = typeof WorkflowResponsibilityState.Typ
 
 /** The latest applied operator direction for the whole run. */
 export const ReconstructedRunPauseState = Schema.TaggedUnion({ RunPaused: {}, RunUnpaused: {} })
+export type ReconstructedRunPauseState = typeof ReconstructedRunPauseState.Type
 
 /** The exact tasks whose latest applied operator direction is Pause. */
 export const ReconstructedTaskPauseState = Schema.TaggedUnion({

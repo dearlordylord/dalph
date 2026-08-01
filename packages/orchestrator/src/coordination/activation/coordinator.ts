@@ -49,6 +49,8 @@ class DuplicateActivationOwnershipDefect extends Schema.TaggedErrorClass<Duplica
 ) {}
 
 export interface ActivationCoordinator {
+  /** True only after every already-selected runner has returned and released its exact ownership. */
+  readonly isIdle: Effect.Effect<boolean>
   readonly signal: (cause: ActivationCause) => Effect.Effect<void, ActivationCoordinatorClosed>
 }
 
@@ -184,6 +186,17 @@ const projectActivationOwnership = (
       ownership.get(ownedTransitionKey(runId, transition)) ??
       [...ownership.values()].find(
         (candidate) => operationId !== undefined && Option.getOrUndefined(candidate.operationId) === operationId
+      ) ??
+      [...ownership.values()].find(
+        (candidate) =>
+          candidate.transition._tag === "SuspendPlannedAttemptExecutorWork" &&
+          runnableTransitionTaskId(candidate.transition) === runnableTransitionTaskId(transition) &&
+          (transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+            transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+            transition._tag === "ObservePlannedAttemptContinuationClaim" ||
+            transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
+            transition._tag === "ObservePlannedAttemptContinuationTargetLineage" ||
+            transition._tag === "ObservePlannedAttemptContinuationWorktree")
       )
     return entry === undefined
       ? { explanation: null, transition }
@@ -550,5 +563,8 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
     })
   )
 
-  return { signal } satisfies ActivationCoordinator
+  return {
+    isIdle: ownership.snapshot().pipe(Effect.map(({ owners }) => owners.size === 0)),
+    signal
+  } satisfies ActivationCoordinator
 })

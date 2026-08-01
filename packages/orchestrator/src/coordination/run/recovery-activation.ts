@@ -28,13 +28,14 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import {
+  type ReconstructedRunPauseState,
   type ReconstructedRunState,
   reconstructedTaskIsPaused,
   type WorkflowResponsibilityState,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   deriveRunnableFrontier,
   FrontierExplanation,
@@ -98,6 +99,19 @@ import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 const finalRecordOffset = -1
+
+const isRunPauseEvent = (event: JournalRecord["event"]): boolean =>
+  event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+
+const isExecutorReportFor = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean =>
+  event._tag === "PlannedAttemptExecutorWorkReported" &&
+  event.report.correlation.runId === plannedAttempt.runId &&
+  event.report.correlation.attemptId === plannedAttempt.attemptId
+
+const isSuspensionSettlementFor = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean =>
+  isExecutorReportFor(event, plannedAttempt) &&
+  event._tag === "PlannedAttemptExecutorWorkReported" &&
+  (event.report._tag === "SafelySuspended" || event.report._tag === "Terminal")
 
 type InterpreterError = {
   [Key in keyof WorkflowInterpreterService]-?: Effect.Error<ReturnType<NonNullable<WorkflowInterpreterService[Key]>>>
@@ -255,6 +269,32 @@ const deriveJournalResponsibilityFacts = (
     const paused = reconstructedTaskIsPaused(runState.pause, responsibility.plannedAttempt.taskId)
     const safelySuspended =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended"
+    /**
+     * A completed Run Pause application durably requests suspension of every
+     * exact attempt that was still running when that direction was recorded.
+     * A later Unpause cannot erase an executor request that may already have
+     * crossed its boundary; only a correlated executor report settles it.
+     */
+    /* v8 ignore start -- @preserve Maintained crash cassettes cover owed and settled suspension; these chronological guards exclude historical Pause cycles and already-safe attempts. */
+    const runPauseSuspensionOwed = records.some(({ event, position: pausePosition }) => {
+      if (!isRunPauseEvent(event) || pausePosition <= responsibility.beganAt) {
+        return false
+      }
+      const latestReportBeforePause = records.findLast(
+        ({ event: candidate, position }) =>
+          position < pausePosition && isExecutorReportFor(candidate, responsibility.plannedAttempt)
+      )?.event
+      const wasRunningOrCrossingStartBoundary =
+        latestReportBeforePause === undefined ||
+        (latestReportBeforePause._tag === "PlannedAttemptExecutorWorkReported" &&
+          latestReportBeforePause.report._tag === "Running")
+      const settledAfterPause = records.some(
+        ({ event: candidate, position }) =>
+          position > pausePosition && isSuspensionSettlementFor(candidate, responsibility.plannedAttempt)
+      )
+      return wasRunningOrCrossingStartBoundary && !settledAfterPause
+    })
+    /* v8 ignore stop -- @preserve */
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
     const currentClaimRecord = records.findLast(
@@ -464,7 +504,7 @@ const deriveJournalResponsibilityFacts = (
                       ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
                           correlation: report.report.correlation
                         })
-                      : paused
+                      : paused || runPauseSuspensionOwed
                         ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
                         : ResponsibilityDisposition.Ready()
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
@@ -493,6 +533,79 @@ const latestJournalPosition = (
 
 const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
   Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
+
+const latestCompletedRunPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined => {
+  if (runState.pause.run._tag === "RunPaused") return undefined
+  const wasPaused = runState.workflowHistory.records.some(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+  )
+  if (!wasPaused) return undefined
+  /* v8 ignore next -- A valid unpaused history that previously applied Run Pause necessarily contains a later Run Unpause. */
+  return runState.workflowHistory.records.findLast(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" && event.direction === "Unpause" && event.subject._tag === "Run"
+  )?.position
+}
+
+const continuationFreshnessBaseline = (
+  runState: ReconstructedRunState,
+  activationBaselinePosition: Option.Option<JournalPosition>
+): Option.Option<JournalPosition> => {
+  const latestRunUnpause = latestCompletedRunPauseCyclePosition(runState)
+  if (latestRunUnpause === undefined) return activationBaselinePosition
+  return Option.some(
+    JournalPosition.make(
+      Option.match(activationBaselinePosition, {
+        onNone: () => latestRunUnpause,
+        onSome: (activationBaseline) => Math.max(activationBaseline, latestRunUnpause)
+      })
+    )
+  )
+}
+
+const runContinuationRequiresFreshFacts = (runState: ReconstructedRunState): boolean => {
+  return latestCompletedRunPauseCyclePosition(runState) !== undefined
+}
+
+const transitionTagsAllowedWhileRunPaused = new Set<RunnableFrontierTransition["_tag"]>([
+  "CheckTaskClaim",
+  "ReconcileTaskClaim",
+  "ReconcileTaskClaimRelease",
+  "ReconcileTaskWorktree",
+  "SuspendPlannedAttemptExecutorWork",
+  "ReleaseStartedIntegrationTarget"
+])
+const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
+  transitionTagsAllowedWhileRunPaused.has(transition._tag)
+
+/** A crashed candidate request may finish only when its exact intent predates the active Run Pause. */
+/* v8 ignore start -- @preserve Candidate protocol tests cover durable intent correlation; the authored cursor cannot yet crash inside this boundary. */
+const startedIntegrationIntentMayReconcileWhileRunPaused = (
+  transition: RunnableFrontierTransition,
+  records: ReadonlyArray<JournalRecord>
+): boolean => {
+  if (
+    transition._tag !== "AcquireStartedIntegrationTarget" &&
+    transition._tag !== "ContinueStartedIntegrationCandidate"
+  ) {
+    return false
+  }
+  const pausePosition = records.findLast(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+  )?.position
+  return (
+    pausePosition !== undefined &&
+    records.some(
+      ({ event, position }) =>
+        position < pausePosition &&
+        event._tag === "IntegrationCandidateConstructionIntended" &&
+        event.startedAt === transition.responsibility.startedAt
+    )
+  )
+}
+/* v8 ignore stop -- @preserve */
 
 type CurrentGraphObservation = {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
@@ -744,6 +857,7 @@ const decisionWithoutCurrentSpecification = (
   })
 })
 
+// eslint-disable-next-line complexity -- Resume authority distinguishes running, terminal, task-specific, and whole-Run directions chronologically.
 const attemptMayContinue = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt): boolean => {
   const latestReportRecord = records.findLast(
     ({ event }) =>
@@ -758,6 +872,16 @@ const attemptMayContinue = (records: ReadonlyArray<JournalRecord>, plannedAttemp
     return true
   }
   if (latestReportRecord.event.report._tag === "Terminal") return false
+  const latestRunDirection = records.findLast(
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<JournalRecord["event"], { readonly _tag: "ControlDirectionApplied" }>
+    } => record.event._tag === "ControlDirectionApplied" && record.event.subject._tag === "Run"
+  )?.event
+  if (latestRunDirection?.direction === "Unpause") {
+    return true
+  }
   return records.some(
     ({ event, position }) =>
       position > latestReportRecord.position &&
@@ -850,12 +974,13 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
   const runState = yield* readRecoveredRunState(runId)
+  const requiredFreshnessBaseline = continuationFreshnessBaseline(runState, activationBaselinePosition)
   const hasCurrentCompleteGraphObservation = runState.workflowHistory.records.some(
     ({ event, position }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      positionIsAfter(position, activationBaselinePosition)
+      positionIsAfter(position, requiredFreshnessBaseline)
   )
   const currentTrackerTaskIds = Option.match(latestReconstructedTaskGraph(runState.graphKnowledge), {
     onNone: () => new Set<TaskId>(),
@@ -864,14 +989,14 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(runState, activationBaselinePosition)
+    responsibilityFacts: deriveJournalResponsibilityFacts(runState, requiredFreshnessBaseline)
   })
   const currentGraphRecord = runState.workflowHistory.records.findLast(
     ({ event, position }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      positionIsAfter(position, activationBaselinePosition)
+      positionIsAfter(position, requiredFreshnessBaseline)
   )
   const currentGraphObservation =
     currentGraphRecord?.event._tag === "TaskTrackerFactsObserved"
@@ -919,13 +1044,13 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
           transition,
           runState.workflowHistory.records,
           currentGraphObservation,
-          activationBaselinePosition,
+          requiredFreshnessBaseline,
           integrationTarget
         )
   )
   const integrationResourceSnapshot = yield* integrationResources.snapshot
   const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) =>
-    event._tag === "TargetLineageObserved" && positionIsAfter(position, activationBaselinePosition)
+    event._tag === "TargetLineageObserved" && positionIsAfter(position, requiredFreshnessBaseline)
       ? [[event.plannedAttempt.attemptId, event.observation] as const]
       : []
   )
@@ -947,7 +1072,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const latestClaimObservationPositionFor = (taskId: TaskId) =>
     runState.workflowHistory.records.findLast(
       ({ event, position }) =>
-        positionIsAfter(position, activationBaselinePosition) &&
+        positionIsAfter(position, requiredFreshnessBaseline) &&
         event._tag === "TaskTrackerFactsObserved" &&
         (event.observation._tag === "FocusedTaskClaimFacts" ||
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
@@ -971,7 +1096,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
               runState.workflowHistory.records,
               plannedAttempt.taskId,
               authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
-              activationBaselinePosition
+              requiredFreshnessBaseline
             )
           ] as const
         ]
@@ -1003,7 +1128,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
                 operation: makeTargetLineageObservationOperation({
                   integrationTarget: target,
                   operationId: OperationId.make(
-                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(activationBaselinePosition, () => 0)}:target-lineage`
+                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
                   ),
                   plannedAttempt: responsibility.plannedAttempt,
                   predecessorOperationIds: []
@@ -1037,7 +1162,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
               taskId
             })
           )
-  return {
+  const frontier = {
     explanations: [
       ...ordinary.explanations,
       ...continuationDecisions.flatMap(({ explanation }) => (explanation === undefined ? [] : [explanation])),
@@ -1051,6 +1176,18 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
       ...integration.transitions
     ]
   }
+  const pendingGitReadReconciliations = new Set<RunnableFrontierTransition>(pendingGitReadTransitions)
+  return runState.pause.run._tag === "RunPaused"
+    ? {
+        ...frontier,
+        transitions: frontier.transitions.filter(
+          (transition) =>
+            transitionMayRunWhileRunPaused(transition) ||
+            pendingGitReadReconciliations.has(transition) ||
+            startedIntegrationIntentMayReconcileWhileRunPaused(transition, runState.workflowHistory.records)
+        )
+      }
+    : frontier
 })
 
 const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
@@ -1069,9 +1206,14 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
     candidateCorrectionLimit,
     candidateContinuationLimit
   )
+  const allowRecoveredContinuation = runContinuationRequiresFreshFacts(yield* readRecoveredRunState(runId))
   return {
     explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
-    transitions: frontier.transitions.filter(({ _tag }) => journaledFreshTransitionTags.has(_tag))
+    transitions: frontier.transitions.filter(
+      ({ _tag }) =>
+        journaledFreshTransitionTags.has(_tag) ||
+        (allowRecoveredContinuation && _tag === "ContinuePlannedAttemptExecutorWork")
+    )
   }
 })
 
@@ -1088,6 +1230,9 @@ interface RunRecoveryActivationSource {
   readonly readFinalityFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
+  /** True after a Run Unpause requires preserved work to discard pre-Unpause process-local stages. */
+  readonly readRunContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
+  readonly readRunPauseState: Effect.Effect<ReconstructedRunPauseState, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
     readonly attemptId: AttemptId
     readonly runId: RunId
@@ -1148,6 +1293,8 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
+        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" }),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       })
@@ -1259,6 +1406,10 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
       ),
+      readRunContinuationRequiresFreshFacts: provideJournal(
+        readRecoveredRunState(runId).pipe(Effect.map(runContinuationRequiresFreshFacts))
+      ),
+      readRunPauseState: provideJournal(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause.run))),
       reconstructedPlannedAttemptPositions: [],
       runId,
       // eslint-disable-next-line complexity -- Fresh activation exhaustively routes its closed transition vocabulary.
@@ -1274,18 +1425,23 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
               transition._tag === "ObserveResponsibleTaskClaim" ||
               transition._tag === "ReleaseExternallyCompletedTaskClaim"
             ? runObservedOperation(transition)
-            : transition._tag === "SuspendPlannedAttemptExecutorWork"
-              ? requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
-                  Effect.provideService(PlannedAttemptExecutor, executor),
-                  Effect.provideService(JournalStore, journal),
-                  Effect.flatMap((report) =>
-                    report._tag === "SafelySuspended" || report._tag === "Terminal"
-                      ? execution.releasePlannedAttemptExecutorWorkPosition(
-                          plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-                        )
-                      : Effect.void
-                  )
-                )
+            : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                transition._tag === "SuspendPlannedAttemptExecutorWork"
+              ? Effect.gen(function* () {
+                  const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+                  if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
+                    yield* execution.bindPlannedAttemptExecutorPosition(correlation)
+                  }
+                  const report = yield* transition._tag === "ContinuePlannedAttemptExecutorWork"
+                    ? continueAttempt(transition.plannedAttempt)
+                    : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
+                        Effect.provideService(PlannedAttemptExecutor, executor),
+                        Effect.provideService(JournalStore, journal)
+                      )
+                  if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
+                    yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
+                  }
+                })
               : provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
                   Effect.flatMap((handled) =>
                     handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
@@ -1485,6 +1641,10 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     readResponsibility: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
     ),
+    readRunContinuationRequiresFreshFacts: provideDependencies(
+      readRecoveredRunState(runId).pipe(Effect.map(runContinuationRequiresFreshFacts))
+    ),
+    readRunPauseState: provideDependencies(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause.run))),
     reconstructedPlannedAttemptPositions,
     runId,
     runTransition: (transition, execution) => provideDependencies(runTransition(transition, execution)),
@@ -1550,7 +1710,7 @@ export const activateRecoveredResponsibilities = Effect.fn("RunRecoveryActivatio
           return Effect.gen(function* () {
             yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
             const next = (yield* recovery.readFrontier).transitions[0]
-            if (next === undefined) {
+            if (next === undefined && (yield* coordinator.isIdle)) {
               yield* recovery.waitForNextExecutorWake
               return
             }

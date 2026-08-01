@@ -1,10 +1,18 @@
 /* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette } from "./authored.js"
 
 const singletonGraph = {
   revision: "singleton-revision",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+}
+
+const twoEligibleTasksGraph = {
+  revision: "two-eligible-tasks-revision",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
 }
 
 const independentRecoveryGraph = {
@@ -119,6 +127,145 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
   ]
 })
 
+const singletonRunningExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+)
+const singletonStoryBeforeRunningExecutorReport = singletonTaskCompletesAuthoredCassette.story.slice(
+  0,
+  singletonRunningExecutorReportAt
+)
+type SingletonStoryItem = (typeof singletonTaskCompletesAuthoredCassette.story)[number]
+const isExecutorReport = (
+  item: SingletonStoryItem | undefined
+): item is Extract<SingletonStoryItem, { readonly _tag: "PlannedAttemptExecutorWorkReported" }> =>
+  item?._tag === "PlannedAttemptExecutorWorkReported"
+const singletonRunningExecutorReport = Option.getOrThrow(
+  Option.fromUndefinedOr(singletonTaskCompletesAuthoredCassette.story[singletonRunningExecutorReportAt]).pipe(
+    Option.filter(isExecutorReport)
+  )
+)
+const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningExecutorReport
+  .flatMap((item) => [
+    ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
+      ? [
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+          },
+          { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
+        ]
+      : []),
+    item._tag === "TrackerGraphReadReturned" ? { ...item, graph: twoEligibleTasksGraph } : item
+  ])
+  .flatMap((item) => [
+    ...(item._tag === "DalphSelects" && item.operation._tag === "ReadTaskWorkSpecification"
+      ? [{ _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } }]
+      : []),
+    item
+  ])
+  .flatMap((item) => [
+    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
+      ? [
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+          },
+          { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
+        ]
+      : []),
+    item
+  ])
+  .flatMap((item) => [
+    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+      ? [
+          { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
+          {
+            _tag: "TaskWorkSpecificationReadReturned" as const,
+            body: "Implement the second eligible behavior.",
+            taskId: "B",
+            title: "Implement second task"
+          }
+        ]
+      : []),
+    item
+  ])
+const twoEligiblePlannedStoryBeforeRunningExecutorReport = [
+  ...twoEligibleStoryBeforeRunningExecutorReport,
+  {
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
+  }
+]
+
+const runPauseExpectedBehavior = {
+  _tag: "ExpectedBehavior",
+  orchestration: [
+    { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+  ],
+  protocol: [
+    { _tag: "TaskClaimAcquired", taskId: "A" },
+    { _tag: "TaskClaimAcquired", taskId: "B" },
+    { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
+    { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } }
+  ],
+  taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }], results: [] }
+} as const
+
+/** A live Run finishes the exact executor suspension selected after Alice applies Pause. */
+export const runPauseSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice pauses the Run while its exact executor work is running",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...singletonTaskCompletesAuthoredCassette.startingFacts.taskWorkSpecifications,
+      { body: "Implement the second eligible behavior.", taskId: "B", title: "Implement second task" }
+    ],
+    trackerGraph: twoEligibleTasksGraph
+  },
+  story: [
+    ...twoEligiblePlannedStoryBeforeRunningExecutorReport,
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      subject: { _tag: "Run" }
+    },
+    singletonRunningExecutorReport,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    runPauseExpectedBehavior
+  ]
+})
+
+/** Restart reconstructs Run Pause, safely suspends prior work, and performs no tracker read. */
+export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...runPauseSafelySuspendsAuthoredCassette,
+  name: "a confirmed paused Run restarts without run-specific polling",
+  story: [
+    ...twoEligiblePlannedStoryBeforeRunningExecutorReport,
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      subject: { _tag: "Run" }
+    },
+    singletonRunningExecutorReport,
+    { _tag: "CoordinatorProcessDies" },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    runPauseExpectedBehavior
+  ]
+})
+
 const lostWorktreeStoryBeforeAssertions = singletonTaskCompletesAuthoredCassette.story.flatMap((item) => {
   if (item._tag === "ExpectedBehavior") return []
   return item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
@@ -189,6 +336,84 @@ const targetLineageProtocolPrefix = [
   { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
   { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
 ] as const
+
+/** Unpause during suspension finishes that request, then freshly rereads every continuation authority. */
+export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice unpauses the Run while exact executor suspension is in flight",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "2222222222222222222222222222222222222222"
+    }
+  },
+  story: [
+    ...singletonStoryBeforeRunningExecutorReport,
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      subject: { _tag: "Run" }
+    },
+    singletonRunningExecutorReport,
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Unpause",
+      subject: { _tag: "Run" }
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...targetLineageRecoveryReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...singletonExpectedBehavior,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+      ],
+      protocol: [
+        { _tag: "TaskClaimAcquired", taskId: "A" },
+        { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } },
+        { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Run" } },
+        { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" },
+        {
+          _tag: "CompatibleTargetAdvance",
+          plannedBaseSha: "1111111111111111111111111111111111111111",
+          targetHeadSha: "2222222222222222222222222222222222222222",
+          taskId: "A"
+        }
+      ]
+    }
+  ]
+})
+
+/** Recovery preserves an in-flight suspension across an Unpause and process death. */
+export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+  name: "Alice unpauses during exact suspension before the coordinator restarts",
+  story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap((item) => [
+    item,
+    ...(item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
+      ? [{ _tag: "CoordinatorProcessDies" as const }]
+      : [])
+  ])
+})
 
 /** A recovered attempt continues when Git proves the target advanced from its immutable Base. */
 export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -623,5 +848,9 @@ export const maintainedAuthoredCassetteCatalog = {
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
   lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,
+  runPauseRestartsPassively: runPauseRestartsPassivelyAuthoredCassette,
+  runPauseSafelySuspends: runPauseSafelySuspendsAuthoredCassette,
+  runUnpauseAfterSafeSuspension: runUnpauseAfterSafeSuspensionAuthoredCassette,
+  runUnpauseDuringSuspensionRestarts: runUnpauseDuringSuspensionRestartsAuthoredCassette,
   singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
 } as const

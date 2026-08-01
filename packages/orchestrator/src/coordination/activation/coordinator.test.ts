@@ -1,8 +1,18 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Queue, Ref, Scope } from "effect"
+import { Deferred, Effect, Exit, Option, Queue, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./coordinator.js"
-import { RunId, TaskId, TaskRevision } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunnableFrontierTransition, runnableTransitionTaskId } from "../frontier/frontier.js"
@@ -49,6 +59,59 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
       expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
 
       yield* Deferred.succeed(releaseRunner, undefined)
+    })
+  )
+)
+
+it.effect("finishes an in-flight suspension before continuing the same attempt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runId = RunId.make("suspension-order-run")
+      const taskId = TaskId.make("suspension-order-task")
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("suspension-order-attempt"),
+        baseSha: GitCommitSha.make("4".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/suspension-order-attempt"),
+        executor: TaskExecutorLocator.make("executor:fake"),
+        runId,
+        taskId,
+        taskRevision: TaskRevision.make("suspension-order-revision"),
+        worktree: WorktreeLocator.make("/worktrees/suspension-order-attempt")
+      })
+      const suspension = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+      const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+      const releaseSuspension = yield* Deferred.make<void>()
+      const releaseContinuation = yield* Deferred.make<void>()
+      const suspensionFinished = yield* Ref.make(false)
+      const started = yield* Queue.unbounded<RunnableFrontierTransition["_tag"]>()
+      const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(2) })
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController: controller,
+        readFrontier: Ref.get(suspensionFinished).pipe(
+          Effect.map((finished) => ({
+            explanations: [],
+            transitions: finished ? [continuation] : [suspension, continuation]
+          }))
+        ),
+        runId,
+        runTransition: (transition) =>
+          Queue.offer(started, transition._tag).pipe(
+            Effect.andThen(
+              transition._tag === "SuspendPlannedAttemptExecutorWork"
+                ? Deferred.await(releaseSuspension).pipe(Effect.andThen(Ref.set(suspensionFinished, true)))
+                : Deferred.await(releaseContinuation)
+            )
+          )
+      })
+
+      yield* coordinator.signal(ActivationCause.Startup())
+      expect(yield* Queue.take(started)).toBe("SuspendPlannedAttemptExecutorWork")
+      expect(yield* coordinator.isIdle).toBe(false)
+      expect(Option.isNone(yield* Queue.poll(started))).toBe(true)
+
+      yield* Deferred.succeed(releaseSuspension, undefined)
+      expect(yield* Queue.take(started)).toBe("ContinuePlannedAttemptExecutorWork")
+      yield* Deferred.succeed(releaseContinuation, undefined)
     })
   )
 )

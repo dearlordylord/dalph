@@ -83,6 +83,10 @@ import {
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
+  runPauseRestartsPassivelyAuthoredCassette,
+  runPauseSafelySuspendsAuthoredCassette,
+  runUnpauseAfterSafeSuspensionAuthoredCassette,
+  runUnpauseDuringSuspensionRestartsAuthoredCassette,
   runAuthoredScenarioCassette as runAuthoredScenarioCassetteWithCrypto,
   singletonTaskCompletesAuthoredCassette,
   verifyRecordedCassetteRoundTrip,
@@ -95,6 +99,143 @@ const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+
+it.effect("stops before the next forward operation after Alice pauses the Run", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseSafelySuspendsAuthoredCassette)
+    const pauseAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+    )
+    const afterPause = run.records.slice(pauseAt + 1)
+
+    expect(pauseAt).toBeGreaterThan(0)
+    expect(
+      run.records.some(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
+      )
+    ).toEqual(["Running", "SafelySuspended"])
+    expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
+    expect(afterPause.some(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toBe(false)
+    expect(run.history).toMatchObject({
+      _tag: "ValidWorkflowJournalHistory",
+      runState: { pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "NoTaskPauses" } } }
+    })
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("restarts a confirmed paused Run without selecting new forward progress", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseRestartsPassivelyAuthoredCassette)
+    const pauseAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+    )
+    const afterPause = run.records.slice(pauseAt + 1)
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(pauseAt).toBeGreaterThan(0)
+    expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
+    expect(
+      afterPause.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
+      )
+    ).toEqual(["Running", "SafelySuspended"])
+    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("finishes the exact safe suspension before fresh reads after Unpause", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runUnpauseAfterSafeSuspensionAuthoredCassette)
+    const unpauseAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "ControlDirectionApplied" && event.direction === "Unpause" && event.subject._tag === "Run"
+    )
+    const afterUnpause = run.records.slice(unpauseAt + 1)
+    const tags = afterUnpause.map(({ event }) => event._tag)
+    const safelySuspendedAt = afterUnpause.findIndex(
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+    )
+    const graphAt = tags.indexOf("TaskTrackerFactsObserved")
+    const specificationAt = afterUnpause.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+    )
+    const claimAt = afterUnpause.findIndex(
+      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFacts"
+    )
+    const worktreeAt = tags.indexOf("PlannedAttemptWorktreeObserved")
+    const targetLineageAt = tags.indexOf("TargetLineageObserved")
+    const terminalAt = afterUnpause.findIndex(
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+    )
+
+    expect(unpauseAt).toBeGreaterThan(0)
+    expect(safelySuspendedAt).toBe(0)
+    expect(graphAt).toBeGreaterThan(safelySuspendedAt)
+    expect(specificationAt).toBeGreaterThan(graphAt)
+    expect(claimAt).toBeGreaterThan(specificationAt)
+    expect(worktreeAt).toBeGreaterThan(claimAt)
+    expect(targetLineageAt).toBeGreaterThan(worktreeAt)
+    expect(terminalAt).toBeGreaterThan(targetLineageAt)
+    expect(run.history).toMatchObject({
+      _tag: "ValidWorkflowJournalHistory",
+      runState: { pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } }
+    })
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) =>
+          checkpoint.workflowHistoryEquivalent &&
+          checkpoint.operationalStateEquivalent &&
+          checkpoint.pureSelectionEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("recovers Unpause during safe suspension without competing executor work", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
+    const reports = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
+    )
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(reports).toEqual(["Running", "SafelySuspended", "Terminal"])
+  })
+)
 
 it.effect("applies an authored operator direction through the production control boundary", () =>
   Effect.gen(function* () {

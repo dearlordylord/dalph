@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
@@ -109,6 +110,12 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorDies = cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
       const trace = controlledTrace(cursor)
+      const journaledFreshTraceLayer = cassette.story.some(
+        (item) =>
+          item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
+      )
+        ? Layer.succeed(WorkflowTrace, trace)
+        : Layer.empty
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
@@ -141,6 +148,17 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               )
         })
       )
+      const executorControlDirection = Context.get(
+        yield* Layer.build(controlDirectionApplicationLayer.pipe(Layer.provide(journalLayer))),
+        ControlDirectionApplication
+      )
+      const applyNextControlDirection = Effect.gen(function* () {
+        const direction = yield* cursor.consumeInFlightExecutorControlDirection
+        if (Option.isNone(direction)) return
+        yield* executorControlDirection
+          .apply({ direction: direction.value.direction, subject: { _tag: "Run", runId } })
+          .pipe(Effect.orDie)
+      })
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
@@ -318,7 +336,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           })
         )
       )
-      const freshExecutorLayer = controlledExecutorLayer(cursor, runId)
+      const freshExecutorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection)
       const freshWorkflowLayer = Layer.mergeAll(
         candidateLayer,
         interpreterLayer,
@@ -327,7 +345,12 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           command.integrationTarget,
           CandidateCorrectionLimit.make(1),
           CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
-        ).pipe(Layer.provide(candidateLayer), Layer.provide(freshExecutorLayer), Layer.provide(interpreterLayer)),
+        ).pipe(
+          Layer.provide(candidateLayer),
+          Layer.provide(freshExecutorLayer),
+          Layer.provide(interpreterLayer),
+          Layer.provide(journaledFreshTraceLayer)
+        ),
         integrationTargetSelectionLayer(command.integrationTarget),
         planningLayer("fresh"),
         controlledControlPolicyLayer
@@ -337,7 +360,7 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         /* v8 ignore next -- startup only requires capability presence; cassette mutations use controlled authorities. */
         CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
       )
-      const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId)
+      const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection)
       const recoveryPlanningLayer = planningLayer("recovery")
       const recoveryStartupLayer = startupRecoveryLayer(
         runId,
