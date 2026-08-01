@@ -459,6 +459,12 @@ execution resource. Planning it does not prove that an external resource
 exists or that executor work started.
 _Avoid_: Plan, attempt plan, task, task work, retry counter
 
+**Attempt-choice request identity**:
+The non-person identity of one Operator request to continue or stop one exact
+pre-integration planned task attempt. It coalesces exact request redelivery and
+cannot identify another attempt or a different choice.
+_Avoid_: Operator identity, attempt identity, operation identity, idempotency key
+
 **Accepted result**:
 The immutable Git commit returned by the executor after its whole bounded
 workflow accepts one planned attempt. It does not select repository policy,
