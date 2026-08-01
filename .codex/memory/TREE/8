@@ -1,0 +1,1 @@
+OptMem: master publishes; shared roots lock, worktrees propose. M1 keys executor work by RunId/AttemptId, holds capacity until terminal/suspended; reports are non-actions; internals later. Cassettes own typed outcomes. Rivals: Gas Town mechanism, Symphony scheduler, HerdOS loop.        
