@@ -156,7 +156,13 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         const direction = yield* cursor.consumeInFlightExecutorControlDirection
         if (Option.isNone(direction)) return
         yield* executorControlDirection
-          .apply({ direction: direction.value.direction, subject: { _tag: "Run", runId } })
+          .apply({
+            direction: direction.value.direction,
+            subject:
+              direction.value.subject._tag === "Run"
+                ? { _tag: "Run", runId }
+                : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
+          })
           .pipe(Effect.orDie)
       })
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))

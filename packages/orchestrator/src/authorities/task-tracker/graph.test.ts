@@ -107,3 +107,22 @@ it("keeps grouping independent while traversing and deriving diamond eligibility
   expect(graph.childrenOf(missing)).toEqual([])
   expect(graph.prerequisitesOf(missing)).toEqual([])
 })
+
+it("derives only the selected task and its transitive grouping descendants", () => {
+  const graph = validSnapshot({
+    revision: "grouping-pause-coverage-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: null, prerequisiteIds: ["P"] },
+      { id: "D", lifecycle: open, parentTaskId: "A", prerequisiteIds: [] },
+      { id: "E", lifecycle: open, parentTaskId: "D", prerequisiteIds: [] },
+      { id: "P", lifecycle: open, parentTaskId: null, prerequisiteIds: [] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A"] },
+      { id: "S", lifecycle: open, parentTaskId: null, prerequisiteIds: [] },
+      { id: "C", lifecycle: open, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+
+  expect(graph.groupingSubtreeOf(TaskId.make("A"))).toEqual(["A", "D", "E"])
+  expect(graph.groupingSubtreeOf(TaskId.make("D"))).toEqual(["D", "E"])
+  expect(graph.groupingSubtreeOf(TaskId.make("missing"))).toEqual([])
+})

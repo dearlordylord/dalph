@@ -98,21 +98,21 @@ export const deriveIntegrationFrontier = (
     if (runtimeFacts.activeResponsibilityPositions?.has(responsibility.queuedAt)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
-    if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
-    if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-    if (waiting) return []
     const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
-    const durableIntent = runState.workflowHistory.records.findLast(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-    )?.event
     if (
       existing?._tag === "CandidateConstructed" ||
       existing?._tag === "CandidateCorrelationContradiction" ||
       existing?._tag === "CandidateCorrectionLimitReached" ||
       existing?._tag === "CandidateContinuationLimitReached"
     )
-      return []
+      return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+    if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+    if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+    if (waiting) return []
+    const durableIntent = runState.workflowHistory.records.findLast(
+      ({ event }) =>
+        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
+    )?.event
     return Option.all({
       continuationLimit:
         durableIntent?._tag === "IntegrationCandidateConstructionIntended"

@@ -28,7 +28,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import {
-  type ReconstructedRunPauseState,
+  type ReconstructedPauseState,
   type ReconstructedRunState,
   reconstructedTaskIsPaused,
   type WorkflowResponsibilityState,
@@ -41,6 +41,7 @@ import {
   FrontierExplanation,
   ResponsibilityDisposition,
   RunnableFrontierTransition,
+  runnableTransitionTaskId,
   type RunnableFrontier
 } from "../frontier/frontier.js"
 import { recoverRunnableTransition } from "../frontier/recovery.js"
@@ -52,6 +53,7 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import {
   latestReconstructedTaskGraph,
+  reconstructedTaskGraphFromEvents,
   reconstructedTaskWorkSpecificationFor
 } from "../reconstruction/graph-knowledge.js"
 import {
@@ -96,6 +98,7 @@ import type { TraceOutputError } from "../../presentation/trace-output.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 const finalRecordOffset = -1
@@ -103,10 +106,149 @@ const finalRecordOffset = -1
 const isRunPauseEvent = (event: JournalRecord["event"]): boolean =>
   event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
 
+type TaskPauseEvent = Extract<JournalRecord["event"], { readonly _tag: "ControlDirectionApplied" }> & {
+  readonly direction: "Pause"
+  readonly subject: Extract<
+    Extract<JournalRecord["event"], { readonly _tag: "ControlDirectionApplied" }>["subject"],
+    { readonly _tag: "Task" }
+  >
+}
+
+const isTaskPauseEvent = (event: JournalRecord["event"]): event is TaskPauseEvent =>
+  event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Task"
+
 const isExecutorReportFor = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean =>
   event._tag === "PlannedAttemptExecutorWorkReported" &&
   event.report.correlation.runId === plannedAttempt.runId &&
   event.report.correlation.attemptId === plannedAttempt.attemptId
+
+const suspensionIsOwedAfterBoundary = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  beganAt: JournalPosition,
+  boundaryPosition: JournalPosition
+): boolean => {
+  if (boundaryPosition <= beganAt) return false
+  const latestReportBeforeBoundary = records.findLast(
+    ({ event, position }) => position < boundaryPosition && isExecutorReportFor(event, plannedAttempt)
+  )?.event
+  const wasRunningOrCrossingStartBoundary =
+    latestReportBeforeBoundary === undefined ||
+    (latestReportBeforeBoundary._tag === "PlannedAttemptExecutorWorkReported" &&
+      latestReportBeforeBoundary.report._tag === "Running")
+  const settledAfterBoundary = records.some(
+    ({ event, position }) => position > boundaryPosition && isSuspensionSettlementFor(event, plannedAttempt)
+  )
+  return wasRunningOrCrossingStartBoundary && !settledAfterBoundary
+}
+
+const suspensionWasOwedAfterPause = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  beganAt: JournalPosition,
+  isApplicablePause: (event: JournalRecord["event"]) => boolean
+): boolean =>
+  records.some(
+    ({ event, position }) =>
+      isApplicablePause(event) && suspensionIsOwedAfterBoundary(records, plannedAttempt, beganAt, position)
+  )
+
+const taskPauseCoversAttempt = (
+  event: JournalRecord["event"],
+  plannedAttempt: PlannedTaskAttempt,
+  currentGraph: TaskDagSnapshot | undefined
+): boolean =>
+  isTaskPauseEvent(event) &&
+  reconstructedTaskIsPaused(
+    { run: { _tag: "RunUnpaused" }, tasks: { _tag: "TaskPauses", taskIds: [event.subject.taskId] } },
+    plannedAttempt.taskId,
+    currentGraph
+  )
+
+const isMatchingTaskUnpause = (event: JournalRecord["event"], pause: TaskPauseEvent): boolean =>
+  event._tag === "ControlDirectionApplied" &&
+  event.direction === "Unpause" &&
+  event.subject._tag === "Task" &&
+  event.subject.runId === pause.subject.runId &&
+  event.subject.taskId === pause.subject.taskId
+
+type GraphObservationRecord = Pick<JournalRecord, "position"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
+}
+
+const isGraphObservationRecord = (
+  record: Pick<JournalRecord, "event" | "position">
+): record is GraphObservationRecord =>
+  record.event._tag === "TaskTrackerFactsObserved" &&
+  (record.event.observation._tag === "CompleteTaskTrackerFacts" ||
+    record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+
+const graphReconstructedAt = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  graphObservation: GraphObservationRecord
+): TaskDagSnapshot | undefined =>
+  Option.getOrUndefined(
+    reconstructedTaskGraphFromEvents(
+      records.filter(({ position }) => position <= graphObservation.position).map(({ event }) => event),
+      graphObservation.event.observation.target
+    )
+  )
+
+const taskPauseCoverageBoundaries = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  pause: TaskPauseEvent,
+  pausePosition: JournalPosition,
+  plannedAttempt: PlannedTaskAttempt,
+  currentGraph: TaskDagSnapshot | undefined
+): ReadonlyArray<JournalPosition> => {
+  if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
+  const unpausePosition = records.find(
+    ({ event, position }) => position > pausePosition && isMatchingTaskUnpause(event, pause)
+  )?.position
+  const graphObservations = records
+    .filter(isGraphObservationRecord)
+    .filter(
+      ({ position }) =>
+        position < pausePosition ||
+        (position > pausePosition && (unpausePosition === undefined || position < unpausePosition))
+    )
+  const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
+  const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
+  const observedGraphs = [
+    ...(graphBeforePause === undefined ? [] : [{ boundary: pausePosition, observation: graphBeforePause }]),
+    ...graphsWhilePaused.map((observation) => ({ boundary: observation.position, observation }))
+  ].flatMap(({ boundary, observation }) => {
+    const graph = graphReconstructedAt(records, observation)
+    return graph === undefined ? [] : [{ boundary, graph }]
+  })
+  if (observedGraphs.length === 0) {
+    return unpausePosition === undefined && taskPauseCoversAttempt(pause, plannedAttempt, currentGraph)
+      ? [pausePosition]
+      : []
+  }
+  let covered = false
+  return observedGraphs.flatMap(({ boundary, graph }) => {
+    const nowCovered = taskPauseCoversAttempt(pause, plannedAttempt, graph)
+    const newlyCovered = nowCovered && !covered
+    covered = nowCovered
+    return newlyCovered ? [boundary] : []
+  })
+}
+
+/** A covered running attempt still owes the exact suspension requested by an applied task Pause. */
+export const taskPauseSuspensionIsOwed = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  beganAt: JournalPosition,
+  currentGraph: TaskDagSnapshot | undefined
+): boolean =>
+  records.some(
+    ({ event, position }) =>
+      isTaskPauseEvent(event) &&
+      taskPauseCoverageBoundaries(records, event, position, plannedAttempt, currentGraph).some((boundary) =>
+        suspensionIsOwedAfterBoundary(records, plannedAttempt, beganAt, boundary)
+      )
+  )
 
 const isSuspensionSettlementFor = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean =>
   isExecutorReportFor(event, plannedAttempt) &&
@@ -213,6 +355,9 @@ const deriveJournalResponsibilityFacts = (
 ): ReadonlyArray<ResponsibilityFreshFacts> => {
   const records = runState.workflowHistory.records
   const latestTaskGraph = latestReconstructedTaskGraph(runState.graphKnowledge)
+  const currentTaskGraph = Option.getOrUndefined(latestTaskGraph)
+  const freshnessBaselineForTask = (taskId: TaskId) =>
+    continuationFreshnessBaselineForTask(runState, activationBaselinePosition, taskId, currentTaskGraph)
   const taskLeftMembership = (taskId: TaskId): boolean =>
     Option.isSome(latestTaskGraph) && !latestTaskGraph.value.taskIds().includes(taskId)
   const taskTerminalWithoutSuccess = (taskId: TaskId): boolean =>
@@ -247,7 +392,12 @@ const deriveJournalResponsibilityFacts = (
       const claimAuthority =
         responsibility._tag === "TaskClaimResponsibility"
           ? undefined
-          : currentTaskClaimAuthority(records, responsibility.taskId, expectedClaim, activationBaselinePosition)
+          : currentTaskClaimAuthority(
+              records,
+              responsibility.taskId,
+              expectedClaim,
+              freshnessBaselineForTask(responsibility.taskId)
+            )
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
         disposition: !settled
@@ -266,7 +416,11 @@ const deriveJournalResponsibilityFacts = (
         event.report.correlation.runId === responsibility.plannedAttempt.runId &&
         event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
     )?.event
-    const paused = reconstructedTaskIsPaused(runState.pause, responsibility.plannedAttempt.taskId)
+    const paused = reconstructedTaskIsPaused(
+      runState.pause,
+      responsibility.plannedAttempt.taskId,
+      Option.getOrUndefined(latestTaskGraph)
+    )
     const safelySuspended =
       report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "SafelySuspended"
     /**
@@ -276,24 +430,18 @@ const deriveJournalResponsibilityFacts = (
      * crossed its boundary; only a correlated executor report settles it.
      */
     /* v8 ignore start -- @preserve Maintained crash cassettes cover owed and settled suspension; these chronological guards exclude historical Pause cycles and already-safe attempts. */
-    const runPauseSuspensionOwed = records.some(({ event, position: pausePosition }) => {
-      if (!isRunPauseEvent(event) || pausePosition <= responsibility.beganAt) {
-        return false
-      }
-      const latestReportBeforePause = records.findLast(
-        ({ event: candidate, position }) =>
-          position < pausePosition && isExecutorReportFor(candidate, responsibility.plannedAttempt)
-      )?.event
-      const wasRunningOrCrossingStartBoundary =
-        latestReportBeforePause === undefined ||
-        (latestReportBeforePause._tag === "PlannedAttemptExecutorWorkReported" &&
-          latestReportBeforePause.report._tag === "Running")
-      const settledAfterPause = records.some(
-        ({ event: candidate, position }) =>
-          position > pausePosition && isSuspensionSettlementFor(candidate, responsibility.plannedAttempt)
-      )
-      return wasRunningOrCrossingStartBoundary && !settledAfterPause
-    })
+    const runPauseSuspensionOwed = suspensionWasOwedAfterPause(
+      records,
+      responsibility.plannedAttempt,
+      responsibility.beganAt,
+      isRunPauseEvent
+    )
+    const taskPauseSuspensionOwed = taskPauseSuspensionIsOwed(
+      records,
+      responsibility.plannedAttempt,
+      responsibility.beganAt,
+      Option.getOrUndefined(latestTaskGraph)
+    )
     /* v8 ignore stop -- @preserve */
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
@@ -303,7 +451,7 @@ const deriveJournalResponsibilityFacts = (
         (event.observation._tag === "FocusedTaskClaimFacts" ||
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
         event.observation.coverage.taskId === responsibility.plannedAttempt.taskId &&
-        positionIsAfter(position, activationBaselinePosition)
+        positionIsAfter(position, freshnessBaselineForTask(responsibility.plannedAttempt.taskId))
     )
     const currentClaimFacts = currentClaimRecord?.event
     const committedReacquisitionIntent = records.findLast(
@@ -504,7 +652,7 @@ const deriveJournalResponsibilityFacts = (
                       ? ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
                           correlation: report.report.correlation
                         })
-                      : paused || runPauseSuspensionOwed
+                      : paused || runPauseSuspensionOwed || taskPauseSuspensionOwed
                         ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
                         : ResponsibilityDisposition.Ready()
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
@@ -548,27 +696,99 @@ const latestCompletedRunPauseCyclePosition = (runState: ReconstructedRunState): 
   )?.position
 }
 
+const completedTaskPauseCycles = (
+  runState: ReconstructedRunState
+): ReadonlyArray<{ readonly position: JournalPosition; readonly taskId: TaskId }> =>
+  runState.workflowHistory.records.flatMap(({ event, position }) => {
+    if (event._tag !== "ControlDirectionApplied" || event.direction !== "Unpause" || event.subject._tag !== "Task") {
+      return []
+    }
+    const taskId = event.subject.taskId
+    const completesPause = runState.workflowHistory.records.some(
+      ({ event: candidate, position: candidatePosition }) =>
+        candidatePosition < position &&
+        candidate._tag === "ControlDirectionApplied" &&
+        candidate.direction === "Pause" &&
+        candidate.subject._tag === "Task" &&
+        candidate.subject.taskId === taskId
+    )
+    return completesPause ? [{ position, taskId }] : []
+  })
+
+const latestCompletedTaskPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined =>
+  completedTaskPauseCycles(runState).at(finalRecordOffset)?.position
+
+const latestCompletedTaskPauseCyclePositionFor = (
+  runState: ReconstructedRunState,
+  taskId: TaskId,
+  currentGraph: TaskDagSnapshot | undefined
+): JournalPosition | undefined =>
+  completedTaskPauseCycles(runState).findLast(
+    ({ taskId: pausedTaskId }) =>
+      pausedTaskId === taskId || currentGraph?.groupingSubtreeOf(pausedTaskId).includes(taskId) === true
+  )?.position
+
+const latestCompletedPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined => {
+  const positions = [
+    latestCompletedRunPauseCyclePosition(runState),
+    latestCompletedTaskPauseCyclePosition(runState)
+  ].filter((position): position is JournalPosition => position !== undefined)
+  return positions.length === 0 ? undefined : JournalPosition.make(Math.max(...positions))
+}
+
 const continuationFreshnessBaseline = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition>
 ): Option.Option<JournalPosition> => {
-  const latestRunUnpause = latestCompletedRunPauseCyclePosition(runState)
-  if (latestRunUnpause === undefined) return activationBaselinePosition
+  const latestUnpause = latestCompletedPauseCyclePosition(runState)
+  if (latestUnpause === undefined) return activationBaselinePosition
   return Option.some(
     JournalPosition.make(
       Option.match(activationBaselinePosition, {
-        onNone: () => latestRunUnpause,
-        onSome: (activationBaseline) => Math.max(activationBaseline, latestRunUnpause)
+        onNone: () => latestUnpause,
+        onSome: (activationBaseline) => Math.max(activationBaseline, latestUnpause)
       })
     )
   )
 }
 
-const runContinuationRequiresFreshFacts = (runState: ReconstructedRunState): boolean => {
-  return latestCompletedRunPauseCyclePosition(runState) !== undefined
+const continuationFreshnessBaselineForTask = (
+  runState: ReconstructedRunState,
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  taskId: TaskId,
+  currentGraph: TaskDagSnapshot | undefined
+): Option.Option<JournalPosition> => {
+  const positions = [
+    Option.getOrUndefined(activationBaselinePosition),
+    latestCompletedRunPauseCyclePosition(runState),
+    latestCompletedTaskPauseCyclePositionFor(runState, taskId, currentGraph)
+  ].filter((position): position is JournalPosition => position !== undefined)
+  return positions.length === 0 ? Option.none() : Option.some(JournalPosition.make(Math.max(...positions)))
 }
 
-const transitionTagsAllowedWhileRunPaused = new Set<RunnableFrontierTransition["_tag"]>([
+export type ContinuationFreshnessScope =
+  | { readonly _tag: "AllRecoveredTasks" }
+  | { readonly _tag: "SpecificTasks"; readonly taskIds: ReadonlySet<TaskId> }
+
+const continuationFreshnessScope = (runState: ReconstructedRunState): ContinuationFreshnessScope => {
+  if (latestCompletedRunPauseCyclePosition(runState) !== undefined) return { _tag: "AllRecoveredTasks" }
+  const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
+  return {
+    _tag: "SpecificTasks",
+    taskIds: new Set(
+      completedTaskPauseCycles(runState).flatMap(({ taskId }) => [
+        taskId,
+        ...(currentGraph?.groupingSubtreeOf(taskId) ?? [])
+      ])
+    )
+  }
+}
+
+const continuationRequiresFreshFacts = (runState: ReconstructedRunState): boolean => {
+  return latestCompletedPauseCyclePosition(runState) !== undefined
+}
+
+const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_tag"]>([
   "CheckTaskClaim",
   "ReconcileTaskClaim",
   "ReconcileTaskClaimRelease",
@@ -576,14 +796,21 @@ const transitionTagsAllowedWhileRunPaused = new Set<RunnableFrontierTransition["
   "SuspendPlannedAttemptExecutorWork",
   "ReleaseStartedIntegrationTarget"
 ])
+const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTransition["_tag"]>([
+  "ContinueStartedIntegrationCandidate",
+  "ObservePlannedAttemptContinuationTargetLineage",
+  "ObserveResponsibleTaskClaim",
+  "ReleaseStartedIntegrationTarget"
+])
 const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
-  transitionTagsAllowedWhileRunPaused.has(transition._tag)
+  transitionTagsAllowedWhilePaused.has(transition._tag)
 
 /** A crashed candidate request may finish only when its exact intent predates the active Run Pause. */
 /* v8 ignore start -- @preserve Candidate protocol tests cover durable intent correlation; the authored cursor cannot yet crash inside this boundary. */
-const startedIntegrationIntentMayReconcileWhileRunPaused = (
+const startedIntegrationIntentMayReconcileBeforePause = (
   transition: RunnableFrontierTransition,
-  records: ReadonlyArray<JournalRecord>
+  records: ReadonlyArray<JournalRecord>,
+  pausePosition: JournalPosition | undefined
 ): boolean => {
   if (
     transition._tag !== "AcquireStartedIntegrationTarget" &&
@@ -591,10 +818,6 @@ const startedIntegrationIntentMayReconcileWhileRunPaused = (
   ) {
     return false
   }
-  const pausePosition = records.findLast(
-    ({ event }) =>
-      event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
-  )?.position
   return (
     pausePosition !== undefined &&
     records.some(
@@ -605,11 +828,85 @@ const startedIntegrationIntentMayReconcileWhileRunPaused = (
     )
   )
 }
+
+const activeTaskPausePosition = (
+  runState: ReconstructedRunState,
+  taskId: TaskId,
+  currentGraph: TaskDagSnapshot | undefined
+): JournalPosition | undefined => {
+  if (runState.pause.tasks._tag === "NoTaskPauses") return undefined
+  return runState.workflowHistory.records.findLast(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" &&
+      event.direction === "Pause" &&
+      event.subject._tag === "Task" &&
+      runState.pause.tasks._tag === "TaskPauses" &&
+      runState.pause.tasks.taskIds.includes(event.subject.taskId) &&
+      (event.subject.taskId === taskId ||
+        currentGraph?.groupingSubtreeOf(event.subject.taskId).includes(taskId) === true)
+  )?.position
+}
+
+const filterFrontierForActivePauses = (
+  frontier: RunnableFrontier,
+  runState: ReconstructedRunState,
+  currentTaskGraph: TaskDagSnapshot | undefined,
+  pendingGitReadReconciliations: ReadonlySet<RunnableFrontierTransition>,
+  heldIntegrationTaskIds: ReadonlySet<TaskId>
+): RunnableFrontier => {
+  const runPausePosition = runState.workflowHistory.records.findLast(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+  )?.position
+  const transitionMayRunWhileTaskPaused = (transition: RunnableFrontierTransition): boolean => {
+    const pausePosition = activeTaskPausePosition(runState, runnableTransitionTaskId(transition), currentTaskGraph)
+    return (
+      pausePosition === undefined ||
+      transitionTagsAllowedWhilePaused.has(transition._tag) ||
+      (heldIntegrationTaskIds.has(runnableTransitionTaskId(transition)) &&
+        transitionTagsAllowedToFinishHeldIntegration.has(transition._tag)) ||
+      pendingGitReadReconciliations.has(transition) ||
+      startedIntegrationIntentMayReconcileBeforePause(transition, runState.workflowHistory.records, pausePosition)
+    )
+  }
+  const transitions =
+    runState.pause.run._tag === "RunPaused"
+      ? frontier.transitions.filter(
+          (transition) =>
+            transitionMayRunWhileRunPaused(transition) ||
+            (heldIntegrationTaskIds.has(runnableTransitionTaskId(transition)) &&
+              transitionTagsAllowedToFinishHeldIntegration.has(transition._tag)) ||
+            pendingGitReadReconciliations.has(transition) ||
+            startedIntegrationIntentMayReconcileBeforePause(
+              transition,
+              runState.workflowHistory.records,
+              runPausePosition
+            )
+        )
+      : frontier.transitions.filter(transitionMayRunWhileTaskPaused)
+  return { ...frontier, transitions }
+}
 /* v8 ignore stop -- @preserve */
 
 type CurrentGraphObservation = {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
   readonly position: JournalPosition
+}
+
+const currentCompleteGraphObservationAfter = (
+  records: ReadonlyArray<JournalRecord>,
+  baseline: Option.Option<JournalPosition>
+): CurrentGraphObservation | undefined => {
+  const record = records.findLast(
+    ({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+      positionIsAfter(position, baseline)
+  )
+  return record?.event._tag === "TaskTrackerFactsObserved"
+    ? { event: record.event, position: record.position }
+    : undefined
 }
 
 type ContinuationDecision = {
@@ -857,8 +1154,19 @@ const decisionWithoutCurrentSpecification = (
   })
 })
 
-// eslint-disable-next-line complexity -- Resume authority distinguishes running, terminal, task-specific, and whole-Run directions chronologically.
-const attemptMayContinue = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt): boolean => {
+/** A safely suspended attempt may reopen as soon as current grouping facts no longer cover its task. */
+export const safelySuspendedAttemptMayContinue = (
+  pause: ReconstructedPauseState,
+  plannedAttempt: PlannedTaskAttempt,
+  currentGraph: TaskDagSnapshot | undefined
+): boolean => !reconstructedTaskIsPaused(pause, plannedAttempt.taskId, currentGraph)
+
+const attemptMayContinue = (
+  runState: ReconstructedRunState,
+  plannedAttempt: PlannedTaskAttempt,
+  currentGraph?: TaskDagSnapshot
+): boolean => {
+  const records = runState.workflowHistory.records
   const latestReportRecord = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkReported" &&
@@ -872,27 +1180,7 @@ const attemptMayContinue = (records: ReadonlyArray<JournalRecord>, plannedAttemp
     return true
   }
   if (latestReportRecord.event.report._tag === "Terminal") return false
-  const latestRunDirection = records.findLast(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "ControlDirectionApplied" }>
-    } => record.event._tag === "ControlDirectionApplied" && record.event.subject._tag === "Run"
-  )?.event
-  if (latestRunDirection?.direction === "Unpause") {
-    return true
-  }
-  return records.some(
-    ({ event, position }) =>
-      position > latestReportRecord.position &&
-      ((event._tag === "TaskClaimAcquisitionIntended" &&
-        event.operation.acquisition.taskId === plannedAttempt.taskId &&
-        event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority") ||
-        (event._tag === "ControlDirectionApplied" &&
-          event.direction === "Unpause" &&
-          event.subject._tag === "Task" &&
-          event.subject.taskId === plannedAttempt.taskId))
-  )
+  return safelySuspendedAttemptMayContinue(runState.pause, plannedAttempt, currentGraph)
 }
 
 const continuationDecisionFor = (
@@ -974,34 +1262,20 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
   const runState = yield* readRecoveredRunState(runId)
+  const currentTaskGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
   const requiredFreshnessBaseline = continuationFreshnessBaseline(runState, activationBaselinePosition)
-  const hasCurrentCompleteGraphObservation = runState.workflowHistory.records.some(
-    ({ event, position }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      positionIsAfter(position, requiredFreshnessBaseline)
+  const freshnessBaselineForTask = (taskId: TaskId) =>
+    continuationFreshnessBaselineForTask(runState, activationBaselinePosition, taskId, currentTaskGraph)
+  const currentGraphObservationForTask = (taskId: TaskId) =>
+    currentCompleteGraphObservationAfter(runState.workflowHistory.records, freshnessBaselineForTask(taskId))
+  const currentTrackerTaskIds = new Set(
+    currentTaskGraph?.taskIds().filter((taskId) => currentGraphObservationForTask(taskId) !== undefined) ?? []
   )
-  const currentTrackerTaskIds = Option.match(latestReconstructedTaskGraph(runState.graphKnowledge), {
-    onNone: () => new Set<TaskId>(),
-    onSome: (graph) => new Set(hasCurrentCompleteGraphObservation ? graph.taskIds() : [])
-  })
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(runState, requiredFreshnessBaseline)
+    responsibilityFacts: deriveJournalResponsibilityFacts(runState, activationBaselinePosition)
   })
-  const currentGraphRecord = runState.workflowHistory.records.findLast(
-    ({ event, position }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      positionIsAfter(position, requiredFreshnessBaseline)
-  )
-  const currentGraphObservation =
-    currentGraphRecord?.event._tag === "TaskTrackerFactsObserved"
-      ? { event: currentGraphRecord.event, position: currentGraphRecord.position }
-      : undefined
   const pendingGitReadIntents = runState.workflowHistory.records
     .filter(
       (
@@ -1036,24 +1310,32 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
           plannedAttempt: event.operation.plannedAttempt
         })
   )
-  const continuationDecisions = ordinary.transitions.map((transition) =>
-    transition._tag === "ContinuePlannedAttemptExecutorWork" &&
-    pendingAttemptIds.has(transition.plannedAttempt.attemptId)
+  const continuationDecisions = ordinary.transitions.map((transition) => {
+    if (transition._tag !== "ContinuePlannedAttemptExecutorWork") {
+      return continuationDecisionFor(
+        transition,
+        runState.workflowHistory.records,
+        undefined,
+        activationBaselinePosition,
+        integrationTarget
+      )
+    }
+    return pendingAttemptIds.has(transition.plannedAttempt.attemptId)
       ? {}
       : continuationDecisionFor(
           transition,
           runState.workflowHistory.records,
-          currentGraphObservation,
-          requiredFreshnessBaseline,
+          currentGraphObservationForTask(transition.plannedAttempt.taskId),
+          freshnessBaselineForTask(transition.plannedAttempt.taskId),
           integrationTarget
         )
-  )
+  })
   const integrationResourceSnapshot = yield* integrationResources.snapshot
-  const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) =>
-    event._tag === "TargetLineageObserved" && positionIsAfter(position, requiredFreshnessBaseline)
-      ? [[event.plannedAttempt.attemptId, event.observation] as const]
-      : []
-  )
+  const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
+    if (event._tag !== "TargetLineageObserved") return []
+    const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
+    return positionIsAfter(position, taskBaseline) ? [[event.plannedAttempt.attemptId, event.observation] as const] : []
+  })
   const durableCandidateLineage = runState.workflowHistory.records.flatMap(({ event }) =>
     event._tag === "IntegrationCandidateConstructionIntended"
       ? [
@@ -1072,7 +1354,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const latestClaimObservationPositionFor = (taskId: TaskId) =>
     runState.workflowHistory.records.findLast(
       ({ event, position }) =>
-        positionIsAfter(position, requiredFreshnessBaseline) &&
+        positionIsAfter(position, freshnessBaselineForTask(taskId)) &&
         event._tag === "TaskTrackerFactsObserved" &&
         (event.observation._tag === "FocusedTaskClaimFacts" ||
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
@@ -1096,7 +1378,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
               runState.workflowHistory.records,
               plannedAttempt.taskId,
               authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
-              requiredFreshnessBaseline
+              freshnessBaselineForTask(plannedAttempt.taskId)
             )
           ] as const
         ]
@@ -1110,10 +1392,11 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
       deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities.flatMap((responsibility) => {
         if (responsibility._tag !== "StartedIntegrationResponsibility") return []
         const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt.taskId)
+        const taskGraphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
         const graphWasCheckedAfterClaim =
           claimObservedAt !== undefined &&
-          currentGraphObservation !== undefined &&
-          currentGraphObservation.position > claimObservedAt
+          taskGraphObservation !== undefined &&
+          taskGraphObservation.position > claimObservedAt
         return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
           graphWasCheckedAfterClaim &&
           !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
@@ -1146,22 +1429,22 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
       ? [explanation.taskId]
       : []
   )
-  const claimObservationTransitions =
-    currentGraphObservation === undefined
+  const claimObservationTransitions = [...new Set(unobservedClaimTaskIds)].sort().flatMap((taskId) => {
+    const taskGraphObservation = currentGraphObservationForTask(taskId)
+    return taskGraphObservation === undefined
       ? []
-      : [...new Set(unobservedClaimTaskIds)]
-          .sort()
-          .map((taskId) =>
-            RunnableFrontierTransition.ObserveResponsibleTaskClaim({
-              operation: makeTaskClaimObservationOperation(
-                OperationId.make(`responsibility:${taskId}:after:${currentGraphObservation.position}:claim`),
-                currentGraphObservation.event.observation.target,
-                taskId,
-                [currentGraphObservation.event.operationId]
-              ),
-              taskId
-            })
-          )
+      : [
+          RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+            operation: makeTaskClaimObservationOperation(
+              OperationId.make(`responsibility:${taskId}:after:${taskGraphObservation.position}:claim`),
+              taskGraphObservation.event.observation.target,
+              taskId,
+              [taskGraphObservation.event.operationId]
+            ),
+            taskId
+          })
+        ]
+  })
   const frontier = {
     explanations: [
       ...ordinary.explanations,
@@ -1177,17 +1460,21 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
     ]
   }
   const pendingGitReadReconciliations = new Set<RunnableFrontierTransition>(pendingGitReadTransitions)
-  return runState.pause.run._tag === "RunPaused"
-    ? {
-        ...frontier,
-        transitions: frontier.transitions.filter(
-          (transition) =>
-            transitionMayRunWhileRunPaused(transition) ||
-            pendingGitReadReconciliations.has(transition) ||
-            startedIntegrationIntentMayReconcileWhileRunPaused(transition, runState.workflowHistory.records)
-        )
-      }
-    : frontier
+  const heldIntegrationTaskIds = new Set(
+    deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities.flatMap((responsibility) =>
+      responsibility._tag === "StartedIntegrationResponsibility" &&
+      integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
+        ? [responsibility.plannedAttempt.taskId]
+        : []
+    )
+  )
+  return filterFrontierForActivePauses(
+    frontier,
+    runState,
+    currentTaskGraph,
+    pendingGitReadReconciliations,
+    heldIntegrationTaskIds
+  )
 })
 
 const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
@@ -1206,7 +1493,7 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
     candidateCorrectionLimit,
     candidateContinuationLimit
   )
-  const allowRecoveredContinuation = runContinuationRequiresFreshFacts(yield* readRecoveredRunState(runId))
+  const allowRecoveredContinuation = continuationRequiresFreshFacts(yield* readRecoveredRunState(runId))
   return {
     explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
     transitions: frontier.transitions.filter(
@@ -1230,9 +1517,11 @@ interface RunRecoveryActivationSource {
   readonly readFinalityFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
-  /** True after a Run Unpause requires preserved work to discard pre-Unpause process-local stages. */
-  readonly readRunContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
-  readonly readRunPauseState: Effect.Effect<ReconstructedRunPauseState, RunRecoveryActivationError, never>
+  /** True after a Run or task Unpause requires preserved work to discard pre-Unpause process-local stages. */
+  readonly readContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
+  /** Recovered tasks whose process-local stages must be discarded after the applicable Unpause. */
+  readonly readContinuationFreshnessScope: Effect.Effect<ContinuationFreshnessScope, RunRecoveryActivationError, never>
+  readonly readPauseState: Effect.Effect<ReconstructedPauseState, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
     readonly attemptId: AttemptId
     readonly runId: RunId
@@ -1293,8 +1582,9 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
-        readRunContinuationRequiresFreshFacts: Effect.succeed(false),
-        readRunPauseState: Effect.succeed({ _tag: "RunUnpaused" }),
+        readContinuationRequiresFreshFacts: Effect.succeed(false),
+        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set() }),
+        readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
       })
@@ -1406,10 +1696,13 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
       ),
-      readRunContinuationRequiresFreshFacts: provideJournal(
-        readRecoveredRunState(runId).pipe(Effect.map(runContinuationRequiresFreshFacts))
+      readContinuationRequiresFreshFacts: provideJournal(
+        readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
       ),
-      readRunPauseState: provideJournal(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause.run))),
+      readContinuationFreshnessScope: provideJournal(
+        readRecoveredRunState(runId).pipe(Effect.map(continuationFreshnessScope))
+      ),
+      readPauseState: provideJournal(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
       reconstructedPlannedAttemptPositions: [],
       runId,
       // eslint-disable-next-line complexity -- Fresh activation exhaustively routes its closed transition vocabulary.
@@ -1541,8 +1834,15 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   ) {
     if (transition._tag === "ObservePlannedAttemptContinuationWorktree") {
       const plannedAttempt = transition.operation.plannedAttempt
-      const records = (yield* readRecoveredRunState(runId)).workflowHistory.records
-      if (!attemptMayContinue(records, plannedAttempt)) return
+      const runState = yield* readRecoveredRunState(runId)
+      if (
+        !attemptMayContinue(
+          runState,
+          plannedAttempt,
+          Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
+        )
+      )
+        return
     }
     yield* workflowTrace.emit(OperationSelected.make({ operation: transition.operation }))
     switch (transition._tag) {
@@ -1641,10 +1941,13 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     readResponsibility: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
     ),
-    readRunContinuationRequiresFreshFacts: provideDependencies(
-      readRecoveredRunState(runId).pipe(Effect.map(runContinuationRequiresFreshFacts))
+    readContinuationRequiresFreshFacts: provideDependencies(
+      readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
     ),
-    readRunPauseState: provideDependencies(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause.run))),
+    readContinuationFreshnessScope: provideDependencies(
+      readRecoveredRunState(runId).pipe(Effect.map(continuationFreshnessScope))
+    ),
+    readPauseState: provideDependencies(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
     reconstructedPlannedAttemptPositions,
     runId,
     runTransition: (transition, execution) => provideDependencies(runTransition(transition, execution)),

@@ -14,6 +14,7 @@ import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutat
 import { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { TaskTrackerFactsObservation } from "../../workflow/task-tracker-facts/observation.js"
 import type { RunControlPolicy } from "../../control/policy.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 
 /** Best available journaled graph knowledge, never current tracker authority. */
 export const BestAvailableDurableGraphKnowledge = Schema.Struct({
@@ -90,8 +91,17 @@ export const ReconstructedPauseState = Schema.Struct({
 })
 export type ReconstructedPauseState = typeof ReconstructedPauseState.Type
 
-export const reconstructedTaskIsPaused = (pause: ReconstructedPauseState, taskId: TaskId): boolean =>
-  pause.run._tag === "RunPaused" || (pause.tasks._tag === "TaskPauses" && pause.tasks.taskIds.includes(taskId))
+export const reconstructedTaskIsPaused = (
+  pause: ReconstructedPauseState,
+  taskId: TaskId,
+  currentGraph?: TaskDagSnapshot
+): boolean =>
+  pause.run._tag === "RunPaused" ||
+  (pause.tasks._tag === "TaskPauses" &&
+    pause.tasks.taskIds.some(
+      (pausedTaskId) =>
+        pausedTaskId === taskId || (currentGraph?.groupingSubtreeOf(pausedTaskId).includes(taskId) ?? false)
+    ))
 
 export interface ReconstructedWorkflowHistory {
   readonly records: ReadonlyArray<JournalRecord>

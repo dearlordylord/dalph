@@ -254,6 +254,14 @@ export class TaskDagSnapshot {
     return this.taskIds().filter((taskId) => HashMap.getUnsafe(this.tasks, taskId).parentTaskId === parentTaskId)
   }
 
+  /** The selected task and every current descendant reached only through tracker grouping edges. */
+  groupingSubtreeOf(taskId: TaskId): ReadonlyArray<TaskId> {
+    if (!HashMap.has(this.tasks, taskId)) return []
+    const taskIds = [taskId]
+    for (const member of taskIds) taskIds.push(...this.childrenOf(member))
+    return taskIds
+  }
+
   prerequisitesOf(taskId: TaskId): ReadonlyArray<TaskId> {
     const projection = taskProjection(this.tasks, taskId)
     return Option.isSome(projection) ? sorted(projection.value.prerequisiteIds) : []

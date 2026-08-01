@@ -133,6 +133,28 @@ describe("ControlDirectionApplication", () => {
     }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
   )
 
+  it.effect("unpauses A without clearing an independent Pause on C", () =>
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(runId, FixtureTarget.make("independent-task-pause-fixture"), initialPolicy)
+      const control = yield* ControlDirectionApplication
+      const independentTaskId = TaskId.make("C")
+
+      yield* control.apply({ direction: "Pause", subject: { _tag: "Task", runId, taskId } })
+      yield* control.apply({ direction: "Pause", subject: { _tag: "Task", runId, taskId: independentTaskId } })
+      yield* control.apply({ direction: "Unpause", subject: { _tag: "Task", runId, taskId } })
+
+      const reopened = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+      expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
+      if (reopened._tag === "ValidWorkflowJournalHistory") {
+        expect(reopened.runState.pause).toEqual({
+          run: { _tag: "RunUnpaused" },
+          tasks: { _tag: "TaskPauses", taskIds: [independentTaskId] }
+        })
+      }
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+  )
+
   it.effect("serializes concurrent applications before either can allocate a run-local ordinal", () =>
     Effect.gen(function* () {
       const barrier = yield* makeJournalReadBarrier

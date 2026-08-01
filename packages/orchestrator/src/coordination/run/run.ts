@@ -158,7 +158,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
         ? yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         : startup.runId
   const initialControlPolicy = yield* readCurrentControlPolicy
-  if ((yield* recovery.readRunPauseState)._tag === "RunPaused") {
+  if ((yield* recovery.readPauseState).run._tag === "RunPaused") {
     /* v8 ignore start -- Synthetic activation has no journal and therefore cannot reconstruct Run Pause. */
     if (recovery._tag === "SyntheticFreshOnlyActivation") {
       return yield* Effect.die("synthetic activation cannot reconstruct a Run Pause")
@@ -167,7 +167,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
     yield* drainPausedRunTransitions(recovery, initialControlPolicy.taskExecutionCapacity, runId)
     return deriveRunFinalityDecision(yield* recovery.readFinalityFrontier, yield* recovery.readResponsibility, false)
   }
-  if (recovery._tag !== "SyntheticFreshOnlyActivation" && (yield* recovery.readRunContinuationRequiresFreshFacts)) {
+  if (recovery._tag !== "SyntheticFreshOnlyActivation" && (yield* recovery.readContinuationRequiresFreshFacts)) {
     yield* drainPausedRunTransitions(
       recovery,
       initialControlPolicy.taskExecutionCapacity,
@@ -353,8 +353,8 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
       const scheduledFreshTaskIds = yield* Ref.make<ReadonlySet<Task["id"]>>(new Set(initialTasks.map(({ id }) => id)))
       const readFrontier = Effect.fn("Workflow.readActivationFrontier")(function* () {
         const completeRecovered = yield* recovery.readFrontier
-        const currentRunPause = yield* recovery.readRunPauseState
-        if (currentRunPause._tag === "RunPaused") return completeRecovered
+        const currentPause = yield* recovery.readPauseState
+        if (currentPause.run._tag === "RunPaused") return completeRecovered
         const recoveredTaskIds = new Set([
           ...completeRecovered.explanations.flatMap(explanationTaskIds),
           ...completeRecovered.transitions.map(runnableTransitionTaskId)
@@ -372,9 +372,20 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
             (current) => new Set([...current, ...newlyFresh.map(({ id }) => id)])
           )
         }
-        const recoveryOwnedTaskIds = (yield* recovery.readRunContinuationRequiresFreshFacts)
-          ? recoveredTaskIds
-          : initialRecoveredTaskIds
+        const taskPauseCoveredIds =
+          currentPause.tasks._tag === "NoTaskPauses"
+            ? new Set<TaskId>()
+            : new Set(currentPause.tasks.taskIds.flatMap((taskId) => latestSnapshot.groupingSubtreeOf(taskId)))
+        const continuationFreshnessScope = yield* recovery.readContinuationFreshnessScope
+        const continuationFreshTaskIds =
+          continuationFreshnessScope._tag === "AllRecoveredTasks"
+            ? recoveredTaskIds
+            : continuationFreshnessScope.taskIds
+        const recoveryOwnedTaskIds = new Set([
+          ...initialRecoveredTaskIds,
+          ...continuationFreshTaskIds,
+          ...taskPauseCoveredIds
+        ])
         if (recoveryOwnedTaskIds.size > 0) {
           yield* Ref.update(stages, (current) => discardFreshStagesOwnedByRecovery(current, recoveryOwnedTaskIds))
         }
@@ -463,7 +474,7 @@ const runWorkflowWithStartup = Effect.fn("Workflow.runWithStartup")(function* (
             continue
           }
           /* v8 ignore stop */
-          if ((yield* recovery.readRunPauseState)._tag === "RunPaused") {
+          if ((yield* recovery.readPauseState).run._tag === "RunPaused") {
             return deriveRunFinalityDecision(
               yield* recovery.readFinalityFrontier,
               yield* recovery.readResponsibility,

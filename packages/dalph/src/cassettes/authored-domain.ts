@@ -212,7 +212,7 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   /** Harness timing: the Operator applies this direction after the executor request crossed its boundary. */
   OperatorAppliesControlDirectionWhileExecutorRequestInFlight: {
     direction: ControlDirection,
-    subject: Schema.TaggedUnion({ Run: {} })
+    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
   OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
   RunCoordinator: RunCoordinatorFields,
