@@ -35,11 +35,13 @@ inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
 
 **Operator**:
-The authenticated human actor that intentionally applies a Pause, Unpause, or
-task-claim reacquisition direction through Dalph. The control boundary records
-the exact operator identity supplied by its authentication substrate; that
-identity is neither a task-claim owner nor a provider user.
-_Avoid_: Claim owner, provider user
+The one logical V1 human actor that intentionally applies a Pause, Unpause, or
+task-claim reacquisition direction through Dalph. V1 records the actor class
+`Operator`, not an authenticated person identity; a separately accepted
+transport request identity may identify a redeliverable request without
+identifying the person. Authentication and multiple operator identities
+require a separately accepted boundary design.
+_Avoid_: Authenticated operator identity, claim owner, provider user
 
 **Workflow occurrence**:
 One concrete happening relevant to a Dalph run. Constructing a command,

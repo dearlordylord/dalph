@@ -54,6 +54,7 @@ const semanticIssue = (
 }
 
 interface FoldIndexes extends IntegrationHistoryIndexes {
+  latestControlDirectionOrdinal: number
   readonly executorReportOrdinals: Map<AttemptId, number>
   readonly executorResponsibilitiesBegan: Map<
     AttemptId,
@@ -77,6 +78,7 @@ const emptyIndexes = (): FoldIndexes => ({
   executorReportOrdinals: new Map(),
   executorResponsibilitiesBegan: new Map(),
   integrationResponsibilitiesBegan: new Map(),
+  latestControlDirectionOrdinal: 0,
   plans: new Map(),
   gitReadIntents: new Map(),
   latestRunPolicyRevision: undefined,
@@ -121,6 +123,50 @@ const validateRecordEnvelope = (
   }
   indexes.seenKeys.add(record.key)
   return true
+}
+
+const validateControlDirection = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const descriptor = describeJournalEvent(record.event)
+  if (descriptor._tag !== "ControlDirectionEventDescriptor") return
+  if (descriptor.runId !== runId) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `control direction ${descriptor.ordinal} binds run ${descriptor.runId}`
+    )
+  }
+  const expectedOrdinal = indexes.latestControlDirectionOrdinal + 1
+  if (descriptor.ordinal !== expectedOrdinal) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `control direction expected ordinal ${expectedOrdinal}, found ${descriptor.ordinal}`
+    )
+  }
+  indexes.latestControlDirectionOrdinal = descriptor.ordinal
+}
+
+const validateTaskClaimReacquisitionDirection = (
+  record: JournalRecord,
+  runId: RunId,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const descriptor = describeJournalEvent(record.event)
+  if (descriptor._tag === "TaskClaimReacquisitionDirectionEventDescriptor" && descriptor.runId !== runId) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `task-claim reacquisition request ${descriptor.requestId} binds run ${descriptor.runId}`
+    )
+  }
 }
 
 const validateOperationEvent = (
@@ -303,8 +349,8 @@ const validateClaimReacquisitionIntent = (
   if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return
   const direction = matchingReacquisitionDirection(record, runId, records)
   const matchesAuthority =
-    direction?.ordinal === authority.directionOrdinal &&
-    taskClaimReacquisitionOperationId(direction.ordinal) === acquisition.operationId
+    direction?.requestId === authority.requestId &&
+    taskClaimReacquisitionOperationId(direction.requestId) === acquisition.operationId
   if (!matchesAuthority) {
     semanticIssue(
       issues,
@@ -493,18 +539,8 @@ export const reduceWorkflowJournalHistory = (
   records.forEach((record, index) => {
     const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
     const descriptor = describeJournalEvent(record.event)
-    if (
-      (descriptor._tag === "ControlDirectionEventDescriptor" ||
-        descriptor._tag === "TaskClaimReacquisitionDirectionEventDescriptor") &&
-      descriptor.runId !== runId
-    ) {
-      identityIssue(
-        issues,
-        runId,
-        record.position,
-        `operator direction ${descriptor.ordinal} binds run ${descriptor.runId}`
-      )
-    }
+    validateControlDirection(record, runId, indexes, issues)
+    validateTaskClaimReacquisitionDirection(record, runId, issues)
     if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
       identityIssue(
         issues,

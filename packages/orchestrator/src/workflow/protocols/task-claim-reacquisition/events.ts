@@ -3,11 +3,11 @@ import { RunId, TaskId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
 
-/** Monotonic position among one Run's explicit task-claim reacquisition directions. */
-export const TaskClaimReacquisitionDirectionOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
-  Schema.brand("TaskClaimReacquisitionDirectionOrdinal")
+/** Transport identity that makes one explicit reacquisition direction exactly redeliverable. */
+export const TaskClaimReacquisitionRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("TaskClaimReacquisitionRequestId")
 )
-export type TaskClaimReacquisitionDirectionOrdinal = typeof TaskClaimReacquisitionDirectionOrdinal.Type
+export type TaskClaimReacquisitionRequestId = typeof TaskClaimReacquisitionRequestId.Type
 
 export const TaskClaimReacquisitionSubject = Schema.Struct({ runId: RunId, taskId: TaskId })
 export type TaskClaimReacquisitionSubject = typeof TaskClaimReacquisitionSubject.Type
@@ -16,7 +16,7 @@ export type TaskClaimReacquisitionSubject = typeof TaskClaimReacquisitionSubject
 export const TaskClaimReacquisitionDirectedEvent = Schema.TaggedStruct("TaskClaimReacquisitionDirected", {
   initiatedBy: WorkflowActor.cases.Operator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
-  ordinal: TaskClaimReacquisitionDirectionOrdinal,
+  requestId: TaskClaimReacquisitionRequestId,
   subject: TaskClaimReacquisitionSubject,
   version: Schema.Literal(workflowJournalEventVersion)
 })

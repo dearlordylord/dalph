@@ -19,6 +19,7 @@ import {
   TaskLifecycle,
   TaskWorkCapacity,
   TaskClaimObservation,
+  TaskClaimReacquisitionRequestId,
   TargetLineageObservation,
   TrackerRevision,
   TrackerTarget
@@ -117,7 +118,7 @@ export const AuthoredProtocolEvidence = Schema.TaggedUnion({
   TaskClaimReleased: { taskId: TaskId },
   TaskClaimObserved: { claimState: Schema.Literals(["Exact", "Foreign", "Missing"]), taskId: TaskId },
   TaskClaimReadExhausted: { taskId: TaskId },
-  TaskClaimReacquisitionDirected: { taskId: TaskId },
+  TaskClaimReacquisitionDirected: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
   TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
@@ -189,7 +190,7 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     direction: ControlDirection,
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
-  OperatorDirectsTaskClaimReacquisition: { taskId: TaskId },
+  OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,

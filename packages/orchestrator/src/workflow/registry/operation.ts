@@ -9,7 +9,7 @@ import {
 import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
-import { TaskClaimReacquisitionDirectionOrdinal } from "../protocols/task-claim-reacquisition/events.js"
+import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -55,7 +55,7 @@ const ReadTaskClaimOperation = Schema.TaggedStruct("ReadTaskClaim", {
  * an explicit applied Operator direction are distinct domain phenomena.
  */
 export const TaskClaimAcquisitionAuthority = Schema.TaggedUnion({
-  ExplicitTaskClaimReacquisitionAuthority: { directionOrdinal: TaskClaimReacquisitionDirectionOrdinal },
+  ExplicitTaskClaimReacquisitionAuthority: { requestId: TaskClaimReacquisitionRequestId },
   TaskSelectionAuthority: {}
 })
 export type TaskClaimAcquisitionAuthority = typeof TaskClaimAcquisitionAuthority.Type

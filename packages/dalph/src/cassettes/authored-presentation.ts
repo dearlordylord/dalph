@@ -52,7 +52,7 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
     case "TaskClaimReadExhausted":
       return `The story expects Dalph to exhaust the bounded claim read for task ${evidence.taskId}.`
     case "TaskClaimReacquisitionDirected":
-      return `The story expects Operator to direct Dalph to reacquire the claim for task ${evidence.taskId}.`
+      return `The story expects Operator request ${evidence.requestId} to direct Dalph to reacquire the claim for task ${evidence.taskId}.`
     case "TaskAttemptPlanned":
       return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
     case "TaskWorktreeReady":
@@ -136,7 +136,7 @@ const operatorLyric = (item: OperatorStoryItem): string => {
       item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
     }.`
   }
-  return `Operator directs Dalph to reacquire the claim for task ${item.taskId}.`
+  return `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
 }
 
 // eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.

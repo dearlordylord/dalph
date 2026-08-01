@@ -34,7 +34,7 @@ export {
 } from "./authorities/task-tracker/task.js"
 export {
   TaskClaimReacquisitionDirectedEvent,
-  TaskClaimReacquisitionDirectionOrdinal,
+  TaskClaimReacquisitionRequestId,
   TaskClaimReacquisitionSubject
 } from "./workflow/protocols/task-claim-reacquisition/events.js"
 export {

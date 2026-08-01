@@ -21,7 +21,7 @@ import {
   makeTaskClaimReleaseOperation,
   OperationId,
   ResponsibilityDisposition,
-  TaskClaimReacquisitionDirectionOrdinal
+  TaskClaimReacquisitionRequestId
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
 
@@ -107,7 +107,7 @@ const decisionFromProductionFrontier = (
       ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
       : constraint === "MissingClaimConstraint" && reacquisitionDirectionApplied
         ? ResponsibilityDisposition.TaskClaimReacquisitionRequested({
-            directionOrdinal: TaskClaimReacquisitionDirectionOrdinal.make(1)
+            requestId: TaskClaimReacquisitionRequestId.make("task-facts-reacquisition")
           })
         : constraint === "NoConstraint"
           ? ResponsibilityDisposition.Ready()

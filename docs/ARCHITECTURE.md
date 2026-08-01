@@ -253,23 +253,22 @@ operations across the run while each already-started task action reaches the
 same boundary it would use for a task pause. Unpausing the run removes only the
 run-level state; any independently requested task pause remains in force.
 
-The control surface records four distinct durable commands in the run's
-workflow journal before selecting any resulting boundary action: request run
-pause, request run unpause, request task pause, and request task unpause. They
-set the requested direction for one exact pause subject; they are not reference
-counts. Repeating Pause does not stack another pause or require another
-Unpause.
-Each carries a branded `ControlCommandId`; an exact identity-and-payload
-delivery retry is idempotent, while reusing the identity for a different command
-is a typed contradiction. A later command with a new identity may change the
-requested direction without cancelling an already-started safety action.
+The control surface receives run/task Pause and Unpause requests as ephemeral
+input. Receiving, decoding, or queueing one is not a workflow occurrence; a
+process crash before application may lose it without changing reconstructed
+direction. When Dalph applies the direction, it records one past-tense
+`ControlDirectionApplied` initiated action for the exact run or task. The event
+records `initiatedBy: Operator`, the direction, its run-local application
+ordinal, and its subject, but no authenticated operator or transport-command
+identity. A later applied direction may replace the direction for that exact
+subject. Transport delivery and idempotency policy require a separately
+accepted design.
 
-Issue #155 reconsiders the preceding receipt-durability protocol. A control
-request that disappears before Dalph applies its direction may be lost. The
-replacement design must retain enough durable evidence to reconstruct an
-applied Pause or Unpause direction without treating receipt alone as applied;
-command-id allocation remains undecided. Issues #134 and #135 do not consume
-the provisional receipt protocol until that decision closes.
+The applied direction does not claim that executor work was interrupted,
+authorities were reread, execution resumed, or a final pause phase completed.
+Issues #134 and #135 own those later run/task progression rules and must relate
+their own actions or observations to the exact applied direction without
+copying a person identity.
 
 The pause reducer maintains run pause and per-task pause phases independently
 from tracker lifecycle, task claims, workflow stages, and resource
@@ -278,9 +277,10 @@ their Cartesian product as one task-status enum. A pause request therefore does
 not acquire a missing claim, release an existing claim, or replace either claim
 fact; an unclaimed task can remain paused.
 
-The current journal records user Pause and Unpause commands, not `Pausing` or `Paused`
-status updates. The pure pause reducer derives each phase and its tagged
-progress reason from those commands, ordinary workflow outcomes, current
+The current journal records applied Pause and Unpause directions, not `Pausing`
+or `Paused` status updates. The pure pause reducer reconstructs the latest
+direction for each exact subject. The #134/#135 design derives later phases and
+their tagged progress reasons from those directions, ordinary workflow outcomes, current
 grouping coverage, and outstanding responsibilities. A task pause remains
 pausing while any covered grouping descendant is still reaching a safe
 boundary; the derived parent reason identifies each preventing descendant.
@@ -294,7 +294,7 @@ tracker facts; neither restores a saved task graph.
 
 A task pause covers the selected task and every task reached by following
 tracker-owned grouping edges from parent to transitive descendant. Only the
-selected task receives an explicit user pause command. Operation selection
+selected task receives an explicit applied pause direction. Operation selection
 derives descendant coverage from current graph knowledge; it does not write
 pause state to each child or persist the resolved closure. A newly grouped
 descendant becomes covered, and a task moved outside that grouping closure

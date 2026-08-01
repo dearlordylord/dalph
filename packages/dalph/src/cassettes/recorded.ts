@@ -163,9 +163,15 @@ const recordTaskBoundaryEntry = (
   }
 }
 
-// eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
-const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
-  if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
+type OperatorDirectionEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+>
+
+const isOperatorDirectionEvent = (event: WorkflowJournalEvent): event is OperatorDirectionEvent =>
+  event._tag === "ControlDirectionApplied" || event._tag === "TaskClaimReacquisitionDirected"
+
+const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): RecordedCassetteEntry => {
   if (event._tag === "ControlDirectionApplied") {
     return {
       _tag: "ControlDirectionApplied",
@@ -176,15 +182,19 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
       subject: event.subject
     }
   }
-  if (event._tag === "TaskClaimReacquisitionDirected") {
-    return {
-      _tag: "TaskClaimReacquisitionDirected",
-      initiatedBy: event.initiatedBy,
-      occurrenceClassification: event.occurrenceClassification,
-      ordinal: event.ordinal,
-      taskId: event.subject.taskId
-    }
+  return {
+    _tag: "TaskClaimReacquisitionDirected",
+    initiatedBy: event.initiatedBy,
+    occurrenceClassification: event.occurrenceClassification,
+    requestId: event.requestId,
+    taskId: event.subject.taskId
   }
+}
+
+// eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
+const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
+  if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
+  if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
     event._tag === "PlannedAttemptWorktreeObserved" ||
@@ -325,6 +335,30 @@ const eventForIntegrationEntry = (
   })
 }
 
+type RecordedOperatorDirectionEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+>
+
+const isRecordedOperatorDirectionEntry = (entry: RecordedCassetteEntry): entry is RecordedOperatorDirectionEntry =>
+  entry._tag === "ControlDirectionApplied" || entry._tag === "TaskClaimReacquisitionDirected"
+
+const eventForRecordedOperatorDirectionEntry = (
+  entry: RecordedOperatorDirectionEntry,
+  runId: RecordedCassetteType["runId"]
+): WorkflowJournalEvent => {
+  if (entry._tag === "ControlDirectionApplied") {
+    return ControlDirectionAppliedEvent.make({ ...entry, version: workflowJournalEventVersion })
+  }
+  return TaskClaimReacquisitionDirectedEvent.make({
+    initiatedBy: entry.initiatedBy,
+    occurrenceClassification: entry.occurrenceClassification,
+    requestId: entry.requestId,
+    subject: { runId, taskId: entry.taskId },
+    version: workflowJournalEventVersion
+  })
+}
+
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -332,18 +366,7 @@ const eventForRecordedEntry = (
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
-  if (entry._tag === "ControlDirectionApplied") {
-    return ControlDirectionAppliedEvent.make({ ...entry, version: workflowJournalEventVersion })
-  }
-  if (entry._tag === "TaskClaimReacquisitionDirected") {
-    return TaskClaimReacquisitionDirectedEvent.make({
-      initiatedBy: entry.initiatedBy,
-      occurrenceClassification: entry.occurrenceClassification,
-      ordinal: entry.ordinal,
-      subject: { runId, taskId: entry.taskId },
-      version: workflowJournalEventVersion
-    })
-  }
+  if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (
     entry._tag === "PlannedAttemptExecutorWorkReported" ||
@@ -490,13 +513,15 @@ const lyricForTaskBoundaryEntry = (
   return `Dalph planned attempt ${entry.operation.plannedAttempt.attemptId} for task ${entry.operation.plannedAttempt.taskId}.`
 }
 
-const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
+const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirectionEntry): string => {
   if (entry._tag === "ControlDirectionApplied") {
     return `Operator applied ${entry.direction} to ${entry.subject._tag === "Run" ? "the Run" : `task ${entry.subject.taskId}`}.`
   }
-  if (entry._tag === "TaskClaimReacquisitionDirected") {
-    return `Operator directed Dalph to reacquire the claim for task ${entry.taskId}.`
-  }
+  return `Operator directed Dalph to reacquire the claim for task ${entry.taskId}.`
+}
+
+const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
+  if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (
     entry._tag === "PlannedAttemptExecutorWorkReported" ||

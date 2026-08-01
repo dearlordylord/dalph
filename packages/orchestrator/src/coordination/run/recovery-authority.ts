@@ -72,15 +72,15 @@ export const authorizedClaimForAttempt = (
     const intentEvent = intent.event
     /* v8 ignore next -- @preserve The selecting predicate above already narrows this exact authority variant. */
     if (intentEvent.operation.authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return false
-    const directionOrdinal = intentEvent.operation.authority.directionOrdinal
+    const requestId = intentEvent.operation.authority.requestId
     const direction = records.findLast(
       ({ event: candidate, position: directionPosition }) =>
         directionPosition < intent.position &&
         candidate._tag === "TaskClaimReacquisitionDirected" &&
         candidate.subject.runId === plannedAttempt.runId &&
         candidate.subject.taskId === plannedAttempt.taskId &&
-        candidate.ordinal === directionOrdinal &&
-        taskClaimReacquisitionOperationId(candidate.ordinal) === event.claim.operationId
+        candidate.requestId === requestId &&
+        taskClaimReacquisitionOperationId(candidate.requestId) === event.claim.operationId
     )
     return direction?.event._tag === "TaskClaimReacquisitionDirected"
   })?.event

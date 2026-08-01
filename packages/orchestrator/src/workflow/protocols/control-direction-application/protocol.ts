@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { ControlDirectionApplicationOrdinal, ControlDirectionAppliedEvent, controlDirectionRunId } from "./events.js"
 import { ApplyControlDirectionRequest } from "./request.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -27,8 +27,11 @@ export const controlDirectionApplicationLayer = Layer.effect(
   ControlDirectionApplication,
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    const apply = Effect.fn("ControlDirectionApplication.apply")(function* (input: unknown) {
-      const request = yield* Schema.decodeUnknownEffect(ApplyControlDirectionRequest)(input)
+    const applications = yield* Semaphore.make(1)
+    const applyUnserialized = Effect.fn("ControlDirectionApplication.apply")(function* (input: unknown) {
+      const request = yield* Schema.decodeUnknownEffect(ApplyControlDirectionRequest, { onExcessProperty: "error" })(
+        input
+      )
       const runId = controlDirectionRunId(request.subject)
       const records = yield* journal.read(runId)
       if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
@@ -50,6 +53,7 @@ export const controlDirectionApplicationLayer = Layer.effect(
         })
       )
     })
+    const apply = (input: unknown) => applications.withPermit(applyUnserialized(input))
     return ControlDirectionApplication.of({ apply })
   })
 )

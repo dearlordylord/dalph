@@ -160,7 +160,10 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
                 const reacquisition = yield* cursor.consumeClaimReacquisitionDirection
                 if (Option.isSome(reacquisition)) {
                   yield* claimReacquisitionControl
-                    .apply({ runId: requestedRunId, taskId: reacquisition.value.taskId })
+                    .apply({
+                      requestId: reacquisition.value.requestId,
+                      subject: { runId: requestedRunId, taskId: reacquisition.value.taskId }
+                    })
                     .pipe(Effect.orDie)
                 }
                 yield* cursor.pauseAtCoordinatorProcessDeath

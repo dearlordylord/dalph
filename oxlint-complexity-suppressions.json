@@ -4,11 +4,6 @@
       "count": 1
     }
   },
-  "packages/dalph/src/cassettes/recorded.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/authorities/git/node-worktree.ts": {
     "complexity": {
       "count": 1
@@ -36,7 +31,7 @@
   },
   "packages/orchestrator/src/coordination/reconstruction/history.ts": {
     "complexity": {
-      "count": 4
+      "count": 3
     }
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {

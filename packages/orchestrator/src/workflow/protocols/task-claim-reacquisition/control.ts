@@ -10,9 +10,14 @@ import {
 } from "../../../workflow-journal/store.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
-  TaskClaimReacquisitionDirectionOrdinal,
+  TaskClaimReacquisitionRequestId,
   TaskClaimReacquisitionSubject
 } from "./events.js"
+
+const ApplyTaskClaimReacquisitionRequest = Schema.Struct({
+  requestId: TaskClaimReacquisitionRequestId,
+  subject: TaskClaimReacquisitionSubject
+})
 
 interface TaskClaimReacquisitionControlService {
   readonly apply: (
@@ -31,22 +36,21 @@ export const taskClaimReacquisitionControlLayer = Layer.effect(
   Effect.gen(function* () {
     const journal = yield* JournalStore
     const apply = Effect.fn("TaskClaimReacquisitionControl.apply")(function* (input: unknown) {
-      const subject = yield* Schema.decodeUnknownEffect(TaskClaimReacquisitionSubject)(input)
-      const records = yield* journal.read(subject.runId)
+      const request = yield* Schema.decodeUnknownEffect(ApplyTaskClaimReacquisitionRequest, {
+        onExcessProperty: "error"
+      })(input)
+      const records = yield* journal.read(request.subject.runId)
       if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
-        return yield* new WorkflowRunNotBegan({ runId: subject.runId })
+        return yield* new WorkflowRunNotBegan({ runId: request.subject.runId })
       }
-      const ordinal = TaskClaimReacquisitionDirectionOrdinal.make(
-        records.filter(({ event }) => event._tag === "TaskClaimReacquisitionDirected").length + 1
-      )
       return yield* journal.append(
-        subject.runId,
-        taskClaimReacquisitionDirectedRecordKey(ordinal),
+        request.subject.runId,
+        taskClaimReacquisitionDirectedRecordKey(request.requestId),
         TaskClaimReacquisitionDirectedEvent.make({
           initiatedBy: { _tag: "Operator" },
           occurrenceClassification: "InitiatedAction",
-          ordinal,
-          subject,
+          requestId: request.requestId,
+          subject: request.subject,
           version: workflowJournalEventVersion
         })
       )

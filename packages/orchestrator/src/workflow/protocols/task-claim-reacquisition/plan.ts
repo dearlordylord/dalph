@@ -1,14 +1,13 @@
 import { type RunId, type TaskId } from "@dalph/contracts"
 import { type ActiveTaskClaim, isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import type { TaskClaimReacquisitionDirectionOrdinal } from "./events.js"
+import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 
 /** Stable acquisition operation identity derived from one applied reacquisition direction. */
-export const taskClaimReacquisitionOperationId = (
-  directionOrdinal: TaskClaimReacquisitionDirectionOrdinal
-): OperationId => OperationId.make(`task-claim-reacquisition:${directionOrdinal}`)
+export const taskClaimReacquisitionOperationId = (requestId: TaskClaimReacquisitionRequestId): OperationId =>
+  OperationId.make(`task-claim-reacquisition:${requestId}`)
 
 const isFocusedClaimObservation = (record: JournalRecord, taskId: TaskId): boolean =>
   record.event._tag === "TaskTrackerFactsObserved" &&

@@ -28,7 +28,7 @@ import {
   type PlannedAttemptExecutorReportOrdinal,
   type RunPolicyRevision,
   type TaskWorkCapacity,
-  type TaskClaimReacquisitionDirectionOrdinal,
+  type TaskClaimReacquisitionRequestId,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -84,7 +84,7 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorReportOrdinal
   | RunPolicyRevision
   | TaskWorkCapacity
-  | TaskClaimReacquisitionDirectionOrdinal
+  | TaskClaimReacquisitionRequestId
   | TaskExecutorLocator
   | TaskId
   | TaskRevision
@@ -358,7 +358,7 @@ const renameRecordedCassetteEntry = (
           _tag: "TaskClaimReacquisitionDirected",
           initiatedBy: preserveCassetteValue(directionEntry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(directionEntry.occurrenceClassification),
-          ordinal: preserveCassetteValue(directionEntry.ordinal),
+          requestId: preserveCassetteValue(directionEntry.requestId),
           taskId: preserveCassetteValue(directionEntry.taskId)
         }),
       PlannedAttemptExecutorWorkReported: (reportEntry) =>

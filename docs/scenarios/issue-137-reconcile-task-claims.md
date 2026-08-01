@@ -166,33 +166,36 @@ new request.
 
 ### Trigger and ordered boundary calls
 
-Alice sends the accepted explicit reacquisition command for A. The
-authenticated command names A and has its own immutable command identity.
-Dalph accepts that command for this replacement only when it follows the
+Alice directs Dalph to reacquire the claim for A with one immutable
+`TaskClaimReacquisitionRequestId`. Dalph applies a durable Operator-initiated
+reacquisition direction naming A and that request identity; V1 records no
+person identity. Dalph accepts that direction for this replacement only when
+it follows the
 durable missing observation for the still-current loss episode. An exact or
 unreadable observation before the command cannot authorize a later loss; an
 exact restoration, a different foreign claim, or unreadability after the
-command ends its authority. A recorded exact claim acquisition also ends any
+direction ends its authority. A recorded exact claim acquisition also ends any
 older loss episode before another focused read occurs. Dalph records the
-command, then its claim planner allocates a new acquisition operation and
+direction, then its claim planner allocates a new acquisition operation and
 token K3; neither claim identity equals K1. Dalph records K3's intent before
 asking the tracker to acquire it. It reads the current claim before the
 request and again after an ambiguous result, using the existing bounded
 acquisition protocol.
 
-Redelivery of the same command reuses its recorded result and cannot allocate
-another K3. A different command cannot reuse K1 because only the claim planner
+Redelivery of the same request identity and payload reuses its recorded result
+and cannot allocate another K3. Reusing the identity for another task is a
+typed contradiction. A different request cannot reuse K1 because only the claim planner
 allocates claim identities. If the tracker reports a foreign K2, Dalph
 preserves K2 and records a terminal foreign-claim rejection for that exact
 acquisition intent. Restart reconstructs the rejection and never retries that
-command, even if K2 later disappears; a later loss requires a new command.
+request, even if K2 later disappears; a later loss requires a new request.
 Only a fresh unclaimed observation may authorize creation of K3. Reacquiring
 capacity and deciding whether preserved P1 may continue remain independent
 later decisions.
 
 ### Crash, retry, visible result, and forbidden result
 
-If Dalph dies after recording the command or acquisition intent, restart reuses
+If Dalph dies after recording the direction or acquisition intent, restart reuses
 K3 and checks the tracker before another request. If the tracker created K3 but
 the response was lost, the reread accepts that exact K3 and records one
 outcome.

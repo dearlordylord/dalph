@@ -11,6 +11,9 @@ import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memo
 import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
+import { controlDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { ControlDirectionApplicationOrdinal, ControlDirectionAppliedEvent } from "./events.js"
 import { ControlDirectionApplication, controlDirectionApplicationLayer } from "./protocol.js"
 
 const runId = RunId.make("control-direction-run")
@@ -101,6 +104,53 @@ describe("ControlDirectionApplication", () => {
     }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
   )
 
+  it.effect("serializes concurrent applications into distinct run-local ordinals", () =>
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(runId, FixtureTarget.make("control-direction-fixture"), initialPolicy)
+      const control = yield* ControlDirectionApplication
+
+      const applied = yield* Effect.all(
+        [
+          control.apply({ direction: "Pause", subject: { _tag: "Run", runId } }),
+          control.apply({ direction: "Unpause", subject: { _tag: "Task", runId, taskId } })
+        ],
+        { concurrency: "unbounded" }
+      )
+      expect(applied.map(({ event }) => event._tag === "ControlDirectionApplied" && event.ordinal)).toEqual([1, 2])
+      expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(
+        2
+      )
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+  )
+
+  it.effect("rejects a decoded history whose first applied direction skips ordinal one", () =>
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(runId, FixtureTarget.make("control-direction-fixture"), initialPolicy)
+      const ordinal = ControlDirectionApplicationOrdinal.make(2)
+      yield* journal.append(
+        runId,
+        controlDirectionAppliedRecordKey(ordinal),
+        ControlDirectionAppliedEvent.make({
+          direction: "Pause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal,
+          subject: { _tag: "Run", runId },
+          version: workflowJournalEventVersion
+        })
+      )
+      const history = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+      expect(history._tag).toBe("InvalidWorkflowJournalHistory")
+      if (history._tag === "InvalidWorkflowJournalHistory") {
+        expect(history.issues).toContainEqual(
+          expect.objectContaining({ detail: "control direction expected ordinal 1, found 2" })
+        )
+      }
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+
   it.effect("rejects malformed input and a Run that has not begun without appending", () =>
     Effect.gen(function* () {
       const journal = yield* JournalStore
@@ -109,6 +159,10 @@ describe("ControlDirectionApplication", () => {
         control.apply({ direction: "Stop", subject: { _tag: "Task", runId, taskId } })
       )
       expect(malformed._tag).toBe("SchemaError")
+      const unsupportedIdentity = yield* Effect.flip(
+        control.apply({ direction: "Pause", operatorId: "legacy-operator", subject: { _tag: "Run", runId } })
+      )
+      expect(unsupportedIdentity._tag).toBe("SchemaError")
       const missingRun = yield* Effect.flip(control.apply({ direction: "Pause", subject: { _tag: "Run", runId } }))
       expect(missingRun).toMatchObject({ _tag: "WorkflowRunNotBegan", runId })
       expect(yield* journal.read(runId)).toEqual([])

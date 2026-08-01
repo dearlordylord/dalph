@@ -46,7 +46,7 @@ import {
 } from "../../workflow/registry/event.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
-  TaskClaimReacquisitionDirectionOrdinal
+  TaskClaimReacquisitionRequestId
 } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import {
   makeTaskAttemptPlanOperation,
@@ -561,17 +561,17 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       transitions: []
     })
 
-    const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
+    const requestId = TaskClaimReacquisitionRequestId.make("claim-reacquisition-request")
     const direction = TaskClaimReacquisitionDirectedEvent.make({
       initiatedBy: { _tag: "Operator" },
       occurrenceClassification: "InitiatedAction",
-      ordinal: directionOrdinal,
+      requestId,
       subject: { runId, taskId },
       version: workflowJournalEventVersion
     })
-    yield* journal.append(runId, taskClaimReacquisitionDirectedRecordKey(directionOrdinal), direction)
+    yield* journal.append(runId, taskClaimReacquisitionDirectedRecordKey(requestId), direction)
     const reacquisitionTransition = (yield* recovery.readFrontier).transitions[0]
-    expect(reacquisitionTransition).toEqual({ _tag: "CommitTaskClaimReacquisitionIntent", directionOrdinal, taskId })
+    expect(reacquisitionTransition).toEqual({ _tag: "CommitTaskClaimReacquisitionIntent", requestId, taskId })
     if (reacquisitionTransition?._tag !== "CommitTaskClaimReacquisitionIntent") {
       return yield* Effect.die("expected explicit claim reacquisition")
     }
@@ -588,10 +588,10 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     expect(unavailablePlanner).toMatchObject({ _tag: "TaskClaimReacquisitionPlannerUnavailable", taskId })
 
     const replacement = {
-      operationId: taskClaimReacquisitionOperationId(directionOrdinal),
+      operationId: taskClaimReacquisitionOperationId(requestId),
       owner: ClaimOwner.make("dalph"),
       taskId,
-      token: ClaimToken.make(`replacement-claim:${taskId}:${taskClaimReacquisitionOperationId(directionOrdinal)}`)
+      token: ClaimToken.make(`replacement-claim:${taskId}:${taskClaimReacquisitionOperationId(requestId)}`)
     }
     const boundIntentIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const reacquisitionInterpreter = WorkflowInterpreter.of({
@@ -708,7 +708,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     )
     expect(replacementEvents).toHaveLength(2)
     expect(replacementEvents[0]?.event).toMatchObject({
-      operation: { authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal } }
+      operation: { authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId } }
     })
 
     const replacementRead = (yield* recovery.readFrontier).transitions.find(

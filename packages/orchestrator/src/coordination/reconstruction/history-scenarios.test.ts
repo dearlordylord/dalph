@@ -86,7 +86,7 @@ import {
 } from "../../workflow/protocols/control-direction-application/events.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
-  TaskClaimReacquisitionDirectionOrdinal
+  TaskClaimReacquisitionRequestId
 } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import {
   makeFocusedTaskClaimFactsObserved,
@@ -481,22 +481,22 @@ it("reconstructs all applied pause directions and responsibility identities", ()
 })
 
 it("requires a prior matching applied Operator direction for a reacquisition intent", () => {
-  const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
+  const requestId = TaskClaimReacquisitionRequestId.make("history-reacquisition-request")
   const direction = TaskClaimReacquisitionDirectedEvent.make({
     initiatedBy: { _tag: "Operator" },
     occurrenceClassification: "InitiatedAction",
-    ordinal: directionOrdinal,
+    requestId,
     subject: { runId, taskId },
     version: workflowJournalEventVersion
   })
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition: {
-      operationId: taskClaimReacquisitionOperationId(directionOrdinal),
+      operationId: taskClaimReacquisitionOperationId(requestId),
       owner: ClaimOwner.make("dalph"),
       taskId,
       token: ClaimToken.make("history-replacement-token")
     },
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId },
     predecessorOperationIds: []
   })
   const intent = {
@@ -520,8 +520,16 @@ it("requires a prior matching applied Operator direction for a reacquisition int
 
   const authorized = recordsFrom([
     ...lossRows,
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     intent
+  ])
+  const foreignRunDirection = TaskClaimReacquisitionDirectedEvent.make({
+    ...direction,
+    subject: { runId: RunId.make("another-run"), taskId }
+  })
+  const crossRunDirection = recordsFrom([
+    ...lossRows,
+    { event: foreignRunDirection, key: taskClaimReacquisitionDirectedRecordKey(requestId) }
   ])
   const unauthorized = recordsFrom([...lossRows, intent])
   const staleIdentityOperation = makeTaskClaimAcquisitionOperation({
@@ -530,12 +538,12 @@ it("requires a prior matching applied Operator direction for a reacquisition int
       operationId: claim.acquisition.operationId,
       token: claim.acquisition.token
     },
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal },
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId },
     predecessorOperationIds: []
   })
   const staleIdentity = recordsFrom([
     ...lossRows,
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     {
       event: TaskClaimAcquisitionIntendedEvent.make({
         operation: staleIdentityOperation,
@@ -555,7 +563,7 @@ it("requires a prior matching applied Operator direction for a reacquisition int
       ...eventRows.slice(0, 4),
       { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
       { event: observation, key: outcomeRecordKey(exactRead.operationId) },
-      { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+      { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
       { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
       {
         event: taskTrackerFactsObservedEvent(
@@ -568,7 +576,7 @@ it("requires a prior matching applied Operator direction for a reacquisition int
     ])
   const restoredThenLost = recordsFrom([
     ...lossRows,
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     { event: taskTrackerReadIntent(exactRead), key: intentRecordKey(exactRead.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -612,7 +620,7 @@ it("requires a prior matching applied Operator direction for a reacquisition int
       }),
       key: outcomeRecordKey(restoredClaimOperation.acquisition.operationId)
     },
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     { event: taskTrackerReadIntent(laterLossRead), key: intentRecordKey(laterLossRead.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -625,7 +633,7 @@ it("requires a prior matching applied Operator direction for a reacquisition int
   ])
   const acquiredAfterCommand = recordsFrom([
     ...lossRows,
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     {
       event: TaskClaimAcquisitionIntendedEvent.make({
         operation: restoredClaimOperation,
@@ -664,7 +672,7 @@ it("requires a prior matching applied Operator direction for a reacquisition int
       ),
       key: outcomeRecordKey(foreignRead.operationId)
     },
-    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(directionOrdinal) },
+    { event: direction, key: taskClaimReacquisitionDirectedRecordKey(requestId) },
     { event: taskTrackerReadIntent(foreignConfirmation), key: intentRecordKey(foreignConfirmation.operationId) },
     {
       event: taskTrackerFactsObservedEvent(
@@ -677,6 +685,10 @@ it("requires a prior matching applied Operator direction for a reacquisition int
   ])
 
   expect(reduceWorkflowJournalHistory(runId, authorized)._tag).toBe("ValidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, crossRunDirection)).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [expect.objectContaining({ detail: expect.stringContaining("binds run another-run") })]
+  })
   expect(reduceWorkflowJournalHistory(runId, unauthorized)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: [

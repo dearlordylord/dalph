@@ -91,7 +91,7 @@ const protocolEvidenceFor = (
     ]
   }
   if (event._tag === "TaskClaimReacquisitionDirected") {
-    return [{ _tag: "TaskClaimReacquisitionDirected", taskId: event.subject.taskId }]
+    return [{ _tag: "TaskClaimReacquisitionDirected", requestId: event.requestId, taskId: event.subject.taskId }]
   }
   if (event._tag === "TaskClaimAcquired") return [{ _tag: "TaskClaimAcquired", taskId: event.claim.taskId }]
   if (event._tag === "TaskClaimReleased") return [{ _tag: "TaskClaimReleased", taskId: event.release.claim.taskId }]

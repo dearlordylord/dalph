@@ -29,7 +29,7 @@ import {
   TaskTrackerFactsObservation,
   WorkflowActor,
   WorkflowOperation,
-  TaskClaimReacquisitionDirectionOrdinal
+  TaskClaimReacquisitionRequestId
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -97,7 +97,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   TaskClaimReacquisitionDirected: {
     initiatedBy: WorkflowActor.cases.Operator,
     occurrenceClassification: Schema.Literal("InitiatedAction"),
-    ordinal: TaskClaimReacquisitionDirectionOrdinal,
+    requestId: TaskClaimReacquisitionRequestId,
     taskId: TaskId
   },
   TaskTrackerFactsObserved: {

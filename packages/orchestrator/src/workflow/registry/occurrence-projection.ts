@@ -18,7 +18,7 @@ import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionSubject
 } from "../protocols/control-direction-application/events.js"
-import { TaskClaimReacquisitionDirectionOrdinal } from "../protocols/task-claim-reacquisition/events.js"
+import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
 import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
@@ -171,7 +171,7 @@ export type AppliedControlDirection = typeof AppliedControlDirection.Type
 export const AppliedTaskClaimReacquisitionDirection = Schema.TaggedStruct("AppliedTaskClaimReacquisitionDirection", {
   initiatedBy: WorkflowActor.cases.Operator,
   occurrenceClassification: initiatedActionFields.occurrenceClassification,
-  ordinal: TaskClaimReacquisitionDirectionOrdinal,
+  requestId: TaskClaimReacquisitionRequestId,
   recordedAt: JournalPosition,
   runId: RunId,
   taskId: TaskId
@@ -459,7 +459,7 @@ const projectDirectOccurrence = (
       AppliedTaskClaimReacquisitionDirection.make({
         initiatedBy: event.initiatedBy,
         occurrenceClassification: event.occurrenceClassification,
-        ordinal: event.ordinal,
+        requestId: event.requestId,
         recordedAt: record.position,
         runId: event.subject.runId,
         taskId: event.subject.taskId

@@ -5,7 +5,7 @@ import {
   type RunId
 } from "@dalph/contracts"
 import type { ControlDirectionApplicationOrdinal } from "../protocols/control-direction-application/events.js"
-import type { TaskClaimReacquisitionDirectionOrdinal } from "../protocols/task-claim-reacquisition/events.js"
+import type { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { type OperationId } from "../identity.js"
 import {
@@ -46,7 +46,7 @@ interface ControlDirectionEventDescriptor {
 interface TaskClaimReacquisitionDirectionEventDescriptor {
   readonly _tag: "TaskClaimReacquisitionDirectionEventDescriptor"
   readonly expectedKey: JournalRecordKey
-  readonly ordinal: TaskClaimReacquisitionDirectionOrdinal
+  readonly requestId: TaskClaimReacquisitionRequestId
   readonly runId: RunId
 }
 
@@ -152,8 +152,8 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
     case "TaskClaimReacquisitionDirected":
       return {
         _tag: "TaskClaimReacquisitionDirectionEventDescriptor",
-        expectedKey: taskClaimReacquisitionDirectedRecordKey(event.ordinal),
-        ordinal: event.ordinal,
+        expectedKey: taskClaimReacquisitionDirectedRecordKey(event.requestId),
+        requestId: event.requestId,
         runId: event.subject.runId
       }
     case "PlannedAttemptExecutorWorkResponsibilityBegan":

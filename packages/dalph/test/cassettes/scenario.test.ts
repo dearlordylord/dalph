@@ -44,7 +44,7 @@ import {
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
-  TaskClaimReacquisitionDirectionOrdinal,
+  TaskClaimReacquisitionRequestId,
   UntrackedWorktreePath,
   UnclaimedTask,
   WorktreeBaseMismatch,
@@ -719,6 +719,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
           ...(index === firstRunning
             ? [
                 { _tag: "SetTaskExecutionCapacity", capacity: TaskWorkCapacity.make(1) } as const,
+                { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Run" } } as const,
                 { _tag: "CoordinatorProcessDies" } as const,
                 { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
                 { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const,
@@ -757,6 +758,8 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
     }
 
     const run = yield* runAuthoredScenarioCassette(withCoordinatorDeath)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const reopened = foldRecordedCassette(recorded)
     const eventTags = run.records.map(({ event }) => event._tag)
     const changedAt = eventTags.indexOf("TaskWorkCapacityChanged")
     const aTerminalAt = run.records.findIndex(
@@ -787,6 +790,12 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
       "The coordinator process and its same-process fake executor die"
     )
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("Operator applies Unpause to the Run.")
+    expect(recorded.entries.some(({ _tag }) => _tag === "ControlDirectionApplied")).toBe(true)
+    expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
+    if (reopened._tag === "ValidWorkflowJournalHistory") {
+      expect(reopened.runState.pause.run).toEqual({ _tag: "RunUnpaused" })
+    }
     expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
     expect(
       run.records.filter(
@@ -1464,7 +1473,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       "The task tracker cannot read the claim for task A."
     )
 
-    const directionOrdinal = TaskClaimReacquisitionDirectionOrdinal.make(1)
+    const requestId = TaskClaimReacquisitionRequestId.make("cassette-reacquire-missing-A")
     const missingClaimStory = {
       ...foreignClaimStory,
       name: "an operator replaces a missing claim with a fresh claim identity",
@@ -1484,7 +1493,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
           report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
           request: "Suspend"
         },
-        { _tag: "OperatorDirectsTaskClaimReacquisition", taskId: "A" },
+        { _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
@@ -1508,14 +1517,12 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       event._tag === "TaskClaimAcquisitionIntended" ? [event.operation] : []
     )
     expect(claimIntents).toHaveLength(2)
-    expect(claimIntents[1]).toMatchObject({
-      authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", directionOrdinal }
-    })
+    expect(claimIntents[1]).toMatchObject({ authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId } })
     expect(claimIntents[1]?.acquisition.operationId).not.toBe(claimIntents[0]?.acquisition.operationId)
     expect(claimIntents[1]?.acquisition.token).not.toBe(claimIntents[0]?.acquisition.token)
     expect(
       reacquiredRun.records.some(
-        ({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.ordinal === directionOrdinal
+        ({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.requestId === requestId
       )
     ).toBe(true)
     expect(reacquiredRun.observedBehavior.taskWorkResults).toContainEqual({
@@ -1523,7 +1530,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       taskId: "A"
     })
     expect(renderAuthoredCassetteLyrics(decodedMissingClaimStory)).toContain(
-      "Operator directs Dalph to reacquire the claim for task A."
+      `Operator request ${requestId} directs Dalph to reacquire the claim for task A.`
     )
 
     const foreignConflictStory = {
@@ -1531,7 +1538,11 @@ it.effect("records a foreign claim from an authored recovery story and safely su
       name: "an operator request preserves a foreign claim conflict",
       story: [
         ...foreignClaimStory.story.slice(0, -3),
-        { _tag: "OperatorDirectsTaskClaimReacquisition", taskId: "A" },
+        {
+          _tag: "OperatorDirectsTaskClaimReacquisition",
+          requestId: TaskClaimReacquisitionRequestId.make("cassette-reacquire-foreign-A"),
+          taskId: "A"
+        },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         expected
       ]
@@ -1705,7 +1716,7 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
                 { _tag: "TaskClaimReleased", taskId: "A" },
                 { _tag: "TaskClaimObserved", claimState: "Missing", taskId: "A" },
                 { _tag: "TaskClaimReadExhausted", taskId: "A" },
-                { _tag: "TaskClaimReacquisitionDirected", taskId: "A" },
+                { _tag: "TaskClaimReacquisitionDirected", requestId: "render-reacquisition", taskId: "A" },
                 { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
                 { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
               ]
@@ -1717,7 +1728,9 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
     expect(allProtocolLyrics).toContain("release its exact claim")
     expect(allProtocolLyrics).toContain("record missing claim authority")
     expect(allProtocolLyrics).toContain("exhaust the bounded claim read")
-    expect(allProtocolLyrics).toContain("Operator to direct Dalph to reacquire the claim for task A")
+    expect(allProtocolLyrics).toContain(
+      "Operator request render-reacquisition to direct Dalph to reacquire the claim for task A"
+    )
   })
 )
 
@@ -1932,7 +1945,7 @@ it.effect(
           _tag: "TaskClaimReacquisitionDirected",
           initiatedBy: { _tag: "Operator" },
           occurrenceClassification: "InitiatedAction",
-          ordinal: TaskClaimReacquisitionDirectionOrdinal.make(1),
+          requestId: TaskClaimReacquisitionRequestId.make("rename-task-claim-reacquisition-request"),
           taskId: TaskId.make("A")
         }
       ]
