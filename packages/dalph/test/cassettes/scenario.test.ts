@@ -1212,6 +1212,37 @@ it.effect("runs the maintained singleton through production activation and descr
     expect(expected?._tag === "ExpectedBehavior" ? expected.orchestration : undefined).toBeNull()
     expect(expected?._tag === "ExpectedBehavior" ? expected.protocol : undefined).toBeNull()
     expect(JSON.stringify(expected)).not.toContain("attempt:A:0")
+    expect(run.records.map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorWorkReported",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved"
+    ])
+    expect(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported"
+          ? [{ attemptId: event.report.correlation.attemptId, report: event.report._tag }]
+          : []
+      )
+    ).toEqual([
+      { attemptId: "attempt:A:0", report: "Running" },
+      { attemptId: "attempt:A:0", report: "Terminal" }
+    ])
   })
 )
 

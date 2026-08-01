@@ -26,6 +26,7 @@ import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
+import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
@@ -787,10 +788,22 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         recordTaskAttemptPlan: () => Effect.die("startup authority reread must not reach attempt planning"),
         releaseTaskClaim: () => Effect.die("startup authority reread must not release a tracker claim")
       })
+      const records = yield* Ref.make(prefix)
       const journal = JournalStore.of({
-        append: () => Effect.die("startup authority reread must not append"),
+        append: (recordRunId, key, event) =>
+          Ref.modify(records, (current) => {
+            const existing = current.find((record) => record.key === key)
+            if (existing !== undefined) return [existing, current] as const
+            const record = {
+              event,
+              key,
+              position: JournalPosition.make(current.length + 1),
+              runId: recordRunId
+            } satisfies JournalRecord
+            return [record, [...current, record]] as const
+          }),
         beginRun: () => Effect.die("recovery must not begin the Run again"),
-        read: () => Effect.succeed(prefix),
+        read: () => Ref.get(records),
         readRunForRecovery: () => Effect.succeed(began),
         scan: () => Effect.die("startup authority reread must not scan"),
         terminateRun: () => Effect.succeed(terminated)
@@ -802,10 +815,13 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         controlledFakePlannedAttemptExecutorLayer
       )
       const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
+      const journalLayer = Layer.succeed(JournalStore, journal)
       const workflowLayer = Layer.mergeAll(
-        Layer.succeed(JournalStore, journal),
+        journalLayer,
         Layer.succeed(RunRecoveryActivation, recovery),
-        Layer.succeed(WorkflowInterpreter, interpreter),
+        journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter)).pipe(
+          Layer.provide(journalLayer)
+        ),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Layer.succeed(
           TaskWorkCapacityControl,
@@ -834,7 +850,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         )
       )
       yield* runRecoveredWorkflow(target).pipe(Effect.provide(workflowLayer))
-      expect(yield* Ref.get(trackerReads)).toBe(2)
+      expect(yield* Ref.get(trackerReads)).toBe(1)
     }
 
     const projection = yield* projectWorkflowOccurrences([retainedIntent])

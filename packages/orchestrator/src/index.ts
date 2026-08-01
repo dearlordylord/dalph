@@ -188,6 +188,7 @@ export * from "./coordination/reconstruction/history.js"
 export * from "./coordination/reconstruction/history-result.js"
 export * from "./coordination/frontier/recovery-frontier.js"
 export * from "./coordination/run/recovery-activation.js"
+export { CurrentDeliveryGraphUnavailable } from "./coordination/run/current-delivery-relation.js"
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
