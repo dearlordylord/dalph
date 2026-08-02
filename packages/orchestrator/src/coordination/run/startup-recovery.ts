@@ -8,9 +8,9 @@ import { ControlDirectionApplication } from "../../workflow/protocols/control-di
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import {
   hasUnfinishedRunResponsibility,
-  makeJournaledFreshRunRecoveryActivation,
-  makeRunRecoveryActivation,
-  RunRecoveryActivation
+  makeJournaledFreshRunRecoveryProjection,
+  makeRunRecoveryProjection,
+  RunRecoveryProjection
 } from "./recovery-activation.js"
 import {
   type CandidateContinuationLimit,
@@ -81,8 +81,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   integrationTarget: IntegrationTarget | undefined,
   candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
-  startup: "Fresh" | "Recovered",
-  freshRecoveryTrace: "Emit" | "Suppress"
+  startup: "Fresh" | "Recovered"
 ) {
   yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
@@ -102,14 +101,14 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const integrationResources = runtimeResources.integrationTargets
   const recovery =
     startup === "Fresh"
-      ? yield* makeJournaledFreshRunRecoveryActivation(
+      ? yield* makeJournaledFreshRunRecoveryProjection(
           runId,
           integrationTarget,
           candidateCorrectionLimit,
           candidateContinuationLimit,
-          { integrationResources, workflowTrace: freshRecoveryTrace === "Emit" ? Option.some(trace) : Option.none() }
+          integrationResources
         )
-      : yield* makeRunRecoveryActivation(
+      : yield* makeRunRecoveryProjection(
           runId,
           integrationTarget,
           candidateCorrectionLimit,
@@ -118,7 +117,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
         )
   let context = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
-    Context.add(RunRecoveryActivation, recovery),
+    Context.add(RunRecoveryProjection, recovery),
     Context.add(PlannedAttemptExecutor, executor),
     Context.add(InRunJournal, inRunJournal),
     Context.add(ControlDirectionApplication, controlDirectionApplication),
@@ -139,16 +138,8 @@ export const validatedStartupRecoveryLayer = (
   integrationTarget: IntegrationTarget | undefined,
   startup: "Fresh" | "Recovered",
   candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit,
-  options?: { readonly freshRecoveryTrace?: "Emit" | "Suppress" }
+  candidateContinuationLimit?: CandidateContinuationLimit
 ) =>
   Layer.effectContext(
-    makeStartupRecoveryContext(
-      runId,
-      integrationTarget,
-      candidateCorrectionLimit,
-      candidateContinuationLimit,
-      startup,
-      options?.freshRecoveryTrace ?? "Emit"
-    )
+    makeStartupRecoveryContext(runId, integrationTarget, candidateCorrectionLimit, candidateContinuationLimit, startup)
   )

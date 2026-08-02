@@ -1,10 +1,5 @@
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
 export {
-  ActivationCause,
-  type ActivationCoordinator,
-  ActivationCoordinatorClosed
-} from "./coordination/activation/coordinator.js"
-export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
@@ -197,11 +192,21 @@ export {
 export * from "./coordination/reconstruction/history.js"
 export * from "./coordination/reconstruction/history-result.js"
 export * from "./coordination/frontier/recovery-frontier.js"
-export * from "./coordination/run/recovery-activation.js"
+export { deriveIntegrationFrontier } from "./coordination/frontier/integration-frontier.js"
+export {
+  emptyRunRecoveryProjectionLayer,
+  RunRecoveryProjection,
+  type RunRecoveryProjectionError,
+  type RunRecoveryProjectionSource
+} from "./coordination/run/recovery-activation.js"
+export {
+  TaskClaimReacquisitionPlannerUnavailable,
+  TaskClaimReacquisitionPlanningFailed
+} from "./workflow/protocols/task-claim-reacquisition/execute.js"
 export {
   CurrentDeliveryControlPolicyUnavailable,
   CurrentDeliveryGraphUnavailable
-} from "./coordination/run/current-delivery-relation.js"
+} from "./coordination/run/current-delivery-frame.js"
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
@@ -216,7 +221,6 @@ export * from "./workflow/protocols/integration-candidate-construction/events.js
 export * from "./workflow/protocols/integration-candidate-construction/protocol.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
-export * from "./coordination/admission/controller.js"
 export {
   journalDatabaseLocatorConfig,
   legacySqliteJournalStoreLayer,
@@ -316,20 +320,19 @@ export {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   runRecoveredWorkflow,
-  runSyntheticWorkflow,
   runWorkflow
 } from "./coordination/run/run.js"
+export { runSyntheticWorkflow } from "./coordination/run/synthetic-workflow.js"
 export {
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput
 } from "./coordination/run/journaled-run-bootstrap.js"
-export { IntegrationCandidateBoundaryUnavailable } from "./coordination/run/integration-transition-runtime.js"
+export { IntegrationCandidateBoundaryUnavailable } from "./coordination/delivery/integration-candidate-boundary.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,
   validatedStartupRecoveryLayer
 } from "./coordination/run/startup-recovery.js"
-export { RunRecoveryActivation } from "./coordination/run/recovery-activation.js"
 export {
   AcceptedFactGatewayInitialHistoryInvalid,
   AcceptedFactPublicationGateway

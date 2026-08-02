@@ -171,7 +171,8 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
             ]
           }
         },
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "QuiescencePassive", reason: "ProbeNotRequired" }
       )
 
     expect(finalityFor(PlannedAttemptExecutorResult.cases.Completed.make({}))).toEqual({
@@ -183,6 +184,28 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
         PlannedAttemptExecutorResult.cases.Accepted.make({
           acceptedResult: { commit: GitCommitSha.make("3".repeat(40)) }
         })
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  })
+)
+
+it.effect("keeps a settled accepted graph active while the Run is paused", () =>
+  Effect.gen(function* () {
+    const layer = makeDeliveryRelationsLayer({
+      exactEvidence: currentSignalOf([]),
+      graph: currentSignalOf(
+        TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("paused-settled") })
+      ),
+      policy: currentSignalOf(policy)
+    })
+    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const current = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
+
+    expect(
+      deliveryFinalityOf(
+        current,
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "QuiescencePassive", reason: "RunPaused" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
@@ -273,9 +296,8 @@ it.effect("fails closed when two lower relations claim one exact proposal identi
       graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
       policy: currentSignalOf(policy),
       proposalContributions: currentSignalOf({
-        deliverySettlement: [],
+        deliverySettlement: [{ ...proposal, owner: "DeliverySettlement" }],
         issues: [],
-        selectedTransitionKeys: [],
         ticketDelivery: [{ ...proposal, owner: "TicketDelivery" }]
       }),
       trackerGraphProposals: currentSignalOf([proposal])
@@ -287,7 +309,7 @@ it.effect("fails closed when two lower relations claim one exact proposal identi
 
     expect(frontier).toEqual({
       _tag: "DeliveryProposalOwnershipConflict",
-      conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery"] }]
+      conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery", "DeliverySettlement"] }]
     })
     expect(evaluation.finality).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
@@ -304,7 +326,7 @@ it.effect("carries every lower owner's pure proposal through the literal deliver
         acceptedAt: JournalPosition.make(position),
         purpose: position === 1 ? "EstablishCurrentGraph" : "QuiescenceProbe",
         runId: RunId.make("proposal-composition"),
-        target
+        target: FixtureTarget.make(`proposal-composition-target-${position}`)
       }),
       owner
     })
@@ -326,7 +348,6 @@ it.effect("carries every lower owner's pure proposal through the literal deliver
           proposalContributions: currentSignalOf({
             deliverySettlement: [settlement],
             issues: [],
-            selectedTransitionKeys: [],
             ticketDelivery: [ticket]
           }),
           reflectionProposals: currentSignalOf([reflection]),
@@ -458,7 +479,6 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
     fileURLToPath(new URL("./delivery-proposal-route.ts", import.meta.url)),
     "utf8"
   )
-  const shadowSource = readFileSync(fileURLToPath(new URL("./delivery-shadow.ts", import.meta.url)), "utf8")
   const runSource = readFileSync(fileURLToPath(new URL("../run/run.ts", import.meta.url)), "utf8")
 
   const outerEffect = deliverySource.slice(deliverySource.indexOf("export const delivery"))
@@ -488,15 +508,8 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   expect(`${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`).not.toMatch(
     /(?:\.\.\/admission\/controller|\.\.\/run\/|\b(?:Effect|Queue|Ref|Semaphore|WorkflowInterpreter)\b)/
   )
-  expect(shadowSource).toContain('import { delivery } from "./delivery.js"')
-  expect(shadowSource).toContain("const relation = yield* delivery.pipe(")
-  expect(runSource).toContain("observeBoundaryDeliveryShadow({")
-  expect(runSource).toContain("yield* observeDeliveryShadow({")
-  expect(runSource).toContain("observeQuiescenceDeliveryShadow({")
-  expect(runSource).toMatch(
-    /const frontier = \{ \.\.\.recovered, transitions: recovered\.transitions\.filter\(currentPhase\.mayRun\) \}[\s\S]*?observeBoundaryDeliveryShadow\(/
-  )
-  expect(runSource.match(/yield\* observeDeliveryShadowWithinTurn\(/g)).toHaveLength(2)
+  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
 })
 
 it("keeps the live action dispatcher free of workflow protocol implementations", () => {

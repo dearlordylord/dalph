@@ -24,11 +24,6 @@
       "count": 2
     }
   },
-  "packages/orchestrator/src/coordination/frontier/recovery.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/coordination/reconstruction/history.ts": {
     "complexity": {
       "count": 3

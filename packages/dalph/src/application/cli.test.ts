@@ -20,7 +20,7 @@ const fixture = (name: "empty" | "singleton") =>
 const plannerLayer = deterministicPlannedTaskAttemptLayer({
   baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
   executor: TaskExecutorLocator.make("executor:cli-test"),
-  runId: RunId.make("cli-test"),
+  runId: RunId.make("dry-run"),
   worktreeRoot: WorktreeLocator.make("/tmp/dalph-cli-test")
 })
 const claimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Effect, Option, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -22,8 +22,8 @@ import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { makeRunRecoveryActivation } from "./recovery-activation.js"
-import { makeOwnedTransitionExecutionFixture } from "../activation/coordinator.js"
+import { makeRunRecoveryProjection } from "./recovery-activation.js"
+import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
@@ -70,7 +70,7 @@ import {
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
-import { deterministicTaskClaimAcquisitionPlannerLayer } from "../../workflow/protocols/task-claim-acquisition/plan.js"
+import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { deriveRunnableFrontier, ResponsibilityDisposition } from "../frontier/frontier.js"
 import { AttemptWorktreeLost } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
@@ -251,8 +251,8 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       })
     )
 
-    const recovery = yield* makeRunRecoveryActivation(runId)
-    const graphRead = (yield* recovery.readFrontier).transitions[0]
+    const recovery = yield* makeRunRecoveryProjection(runId)
+    const graphRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected current graph read")
     }
@@ -275,7 +275,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       )
     )
 
-    const specificationRead = (yield* recovery.readFrontier).transitions[0]
+    const specificationRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
       return yield* Effect.die("expected current specification read")
     }
@@ -293,7 +293,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       )
     )
 
-    const claimRead = (yield* recovery.readFrontier).transitions[0]
+    const claimRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
       return yield* Effect.die("expected current claim read")
     }
@@ -311,7 +311,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       )
     )
 
-    const worktreeRead = (yield* recovery.readFrontier).transitions[0]
+    const worktreeRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (worktreeRead?._tag !== "ObservePlannedAttemptContinuationWorktree") {
       return yield* Effect.die("expected current worktree read")
     }
@@ -336,7 +336,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       })
     )
 
-    expect((yield* recovery.readFrontier).transitions).toEqual([
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([
       { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
     ])
     const suspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
@@ -351,7 +351,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
         version: workflowJournalEventVersion
       })
     )
-    expect(yield* recovery.readFrontier).toEqual({
+    expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
       explanations: [
         { _tag: "Settlement", operationId: acquisition.operationId, outcome: "ResponsibilityCompleted", taskId },
         {
@@ -364,8 +364,8 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       ],
       transitions: []
     })
-    const secondRestart = yield* makeRunRecoveryActivation(runId)
-    expect((yield* secondRestart.readFrontier).explanations).toContainEqual({
+    const secondRestart = yield* makeRunRecoveryProjection(runId)
+    expect((yield* secondRestart.readDeliveryProjection).frontier.explanations).toContainEqual({
       _tag: "PlannedAttemptGitConstraint",
       correlation: { attemptId: plannedAttempt.attemptId, runId },
       gitState: "WorktreeLost",
@@ -472,8 +472,8 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       })
     )
 
-    const recovery = yield* makeRunRecoveryActivation(runId)
-    const graphTransition = (yield* recovery.readFrontier).transitions[0]
+    const recovery = yield* makeRunRecoveryProjection(runId)
+    const graphTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected current graph read")
     }
@@ -496,7 +496,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       )
     )
 
-    const specificationTransition = (yield* recovery.readFrontier).transitions[0]
+    const specificationTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (specificationTransition?._tag !== "ObservePlannedAttemptContinuationSpecification") {
       return yield* Effect.die("expected current specification read")
     }
@@ -514,7 +514,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       )
     )
 
-    const claimTransition = (yield* recovery.readFrontier).transitions[0]
+    const claimTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (claimTransition?._tag !== "ObservePlannedAttemptContinuationClaim") {
       return yield* Effect.die("expected current claim read")
     }
@@ -531,7 +531,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         makeFocusedTaskClaimFactsObserved(claimTransition.operation, UnclaimedTask.make({ taskId }))
       )
     )
-    expect((yield* recovery.readFrontier).transitions).toEqual([
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([
       { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
     ])
 
@@ -547,7 +547,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         version: workflowJournalEventVersion
       })
     )
-    expect(yield* recovery.readFrontier).toEqual({
+    expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
       explanations: [
         { _tag: "Settlement", operationId: acquisition.operationId, outcome: "ResponsibilityCompleted", taskId },
         {
@@ -570,7 +570,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       version: workflowJournalEventVersion
     })
     yield* journal.append(runId, taskClaimReacquisitionDirectedRecordKey(requestId), direction)
-    const reacquisitionTransition = (yield* recovery.readFrontier).transitions[0]
+    const reacquisitionTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     expect(reacquisitionTransition).toEqual({
       _tag: "CommitTaskClaimReacquisitionIntent",
       plannedAttempt,
@@ -580,16 +580,26 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     if (reacquisitionTransition?._tag !== "CommitTaskClaimReacquisitionIntent") {
       return yield* Effect.die("expected explicit claim reacquisition")
     }
-    const unavailablePlanner = yield* recovery
-      .runTransition(
-        reacquisitionTransition,
-        makeOwnedTransitionExecutionFixture({
-          bindPlannedAttemptExecutorPosition: () => Effect.void,
-          recordIntent: () => Effect.die("an unavailable planner must not bind intent"),
-          releasePlannedAttemptExecutorWorkPosition: () => Effect.void
-        })
-      )
-      .pipe(Effect.flip)
+    const unavailablePlanner = yield* runTaskClaimReacquisition({
+      execution: { recordIntent: () => Effect.die("an unavailable planner must not bind intent") },
+      interpreter: WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTaskClaim: unused,
+        readTaskWorktree: unused,
+        readTargetLineage: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      }),
+      journal,
+      planner: Option.none(),
+      requestId: reacquisitionTransition.requestId,
+      runId,
+      taskId: reacquisitionTransition.taskId,
+      trace: Option.none()
+    }).pipe(Effect.flip)
     expect(unavailablePlanner).toMatchObject({ _tag: "TaskClaimReacquisitionPlannerUnavailable", taskId })
 
     const replacement = {
@@ -627,16 +637,8 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       recordTaskAttemptPlan: unused,
       releaseTaskClaim: unused
     })
-    const reacquisitionRuntime = yield* makeRunRecoveryActivation(runId).pipe(
-      Effect.provideService(WorkflowInterpreter, reacquisitionInterpreter),
-      Effect.provide(
-        deterministicTaskClaimAcquisitionPlannerLayer({
-          owner: ClaimOwner.make("dalph"),
-          tokenPrefix: "replacement-claim"
-        })
-      )
-    )
-    const restartedGraphRead = (yield* reacquisitionRuntime.readFrontier).transitions[0]
+    const reacquisitionRuntime = yield* makeRunRecoveryProjection(runId)
+    const restartedGraphRead = (yield* reacquisitionRuntime.readDeliveryProjection).frontier.transitions[0]
     if (restartedGraphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("restart must first reread the graph")
     }
@@ -653,7 +655,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         makeCompleteTaskTrackerFactsObserved(restartedGraphRead.operation, graph.snapshot)
       )
     )
-    const restartedSpecificationRead = (yield* reacquisitionRuntime.readFrontier).transitions[0]
+    const restartedSpecificationRead = (yield* reacquisitionRuntime.readDeliveryProjection).frontier.transitions[0]
     if (restartedSpecificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
       return yield* Effect.die("restart must reread the task specification")
     }
@@ -670,7 +672,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         makeFocusedTaskWorkSpecificationFactsObserved(restartedSpecificationRead.operation, specification)
       )
     )
-    const restartedClaimRead = (yield* reacquisitionRuntime.readFrontier).transitions[0]
+    const restartedClaimRead = (yield* reacquisitionRuntime.readDeliveryProjection).frontier.transitions[0]
     if (restartedClaimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
       return yield* Effect.die("restart must reread the missing claim")
     }
@@ -687,19 +689,31 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         makeFocusedTaskClaimFactsObserved(restartedClaimRead.operation, UnclaimedTask.make({ taskId }))
       )
     )
-    const restartedReacquisition = (yield* reacquisitionRuntime.readFrontier).transitions[0]
+    const restartedReacquisition = (yield* reacquisitionRuntime.readDeliveryProjection).frontier.transitions[0]
     expect(restartedReacquisition).toEqual(reacquisitionTransition)
     if (restartedReacquisition?._tag !== "CommitTaskClaimReacquisitionIntent") {
       return yield* Effect.die("the pre-crash applied direction must survive restart")
     }
-    yield* reacquisitionRuntime.runTransition(
-      restartedReacquisition,
-      makeOwnedTransitionExecutionFixture({
-        bindPlannedAttemptExecutorPosition: () => Effect.void,
-        recordIntent: (operationId) => Ref.update(boundIntentIds, (ids) => [...ids, operationId]),
-        releasePlannedAttemptExecutorWorkPosition: () => Effect.void
-      })
-    )
+    yield* runTaskClaimReacquisition({
+      execution: { recordIntent: (operationId) => Ref.update(boundIntentIds, (ids) => [...ids, operationId]) },
+      interpreter: reacquisitionInterpreter,
+      journal,
+      planner: Option.some(
+        TaskClaimAcquisitionPlanner.of({
+          plan: (operationId, plannedTaskId) =>
+            Effect.succeed({
+              operationId,
+              owner: ClaimOwner.make("dalph"),
+              taskId: plannedTaskId,
+              token: ClaimToken.make(`replacement-claim:${plannedTaskId}:${operationId}`)
+            })
+        })
+      ),
+      requestId: restartedReacquisition.requestId,
+      runId,
+      taskId: restartedReacquisition.taskId,
+      trace: Option.none()
+    })
     expect(yield* Ref.get(boundIntentIds)).toEqual([replacement.operationId])
     expect(replacement.operationId).not.toBe(acquisition.operationId)
     expect(replacement.token).not.toBe(acquisition.token)
@@ -716,7 +730,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       operation: { authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId } }
     })
 
-    const replacementRead = (yield* recovery.readFrontier).transitions.find(
+    const replacementRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationClaim"
     )
     if (replacementRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
@@ -735,7 +749,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         makeFocusedTaskClaimFactsObserved(replacementRead.operation, { _tag: "ActiveTaskClaim", ...replacement })
       )
     )
-    const worktreeRead = (yield* recovery.readFrontier).transitions.find(
+    const worktreeRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationWorktree"
     )
     if (worktreeRead?._tag !== "ObservePlannedAttemptContinuationWorktree") {
@@ -766,7 +780,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         version: workflowJournalEventVersion
       })
     )
-    expect((yield* recovery.readFrontier).transitions).toContainEqual({
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
       _tag: "ContinuePlannedAttemptExecutorWork",
       plannedAttempt
     })

@@ -8,7 +8,7 @@ import {
   IntegrationCandidateGit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
-import { IntegrationCandidateBoundaryUnavailable } from "../run/integration-transition-runtime.js"
+import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import { deliveryActionCompleted } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"

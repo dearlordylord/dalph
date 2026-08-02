@@ -10,7 +10,7 @@ import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { deriveRunRecoveryFrontier } from "../coordination/frontier/recovery-frontier.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
-import { makeRunRecoveryActivation } from "../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
@@ -64,12 +64,12 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
     })
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     expect(deriveRunRecoveryFrontier(records).entries).toEqual([])
-    const recovery = yield* makeRunRecoveryActivation(runId)
-    expect((yield* recovery.readFrontier).transitions).not.toContainEqual(
+    const recovery = yield* makeRunRecoveryProjection(runId)
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).not.toContainEqual(
       expect.objectContaining({ _tag: "ReconcileTaskClaim", operationId: operation.acquisition.operationId })
     )
     // Removing the foreign tracker claim changes no durable rejection fact and cannot revive this command.
-    expect((yield* recovery.readFrontier).transitions).not.toContainEqual(
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).not.toContainEqual(
       expect.objectContaining({ _tag: "ReconcileTaskClaim", operationId: operation.acquisition.operationId })
     )
   }).pipe(

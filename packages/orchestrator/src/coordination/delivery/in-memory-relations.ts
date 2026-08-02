@@ -53,7 +53,7 @@ export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) =>
   invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
   runtimeFacts: currentSignalOf<DeliveryRuntimeFacts>({
     acceptedAt: null,
-    quiescence: { _tag: "QuiescencePassive" },
+    quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
     revision: DeliveryRelationRevision.make(0),
     taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
   })
@@ -66,7 +66,6 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   const noProposalContributions = currentSignalOf<DeliveryProposalContributions>({
     deliverySettlement: [],
     issues: [],
-    selectedTransitionKeys: [],
     ticketDelivery: []
   })
   const trackerGraphService = TrackerGraphRelation.of({
@@ -149,7 +148,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
                 current,
-                finality: deliveryFinalityOf(current, proposedActions),
+                finality: deliveryFinalityOf(current, proposedActions, facts.quiescence),
                 proposedActions,
                 quiescence: facts.quiescence,
                 revision: facts.revision,

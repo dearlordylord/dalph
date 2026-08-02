@@ -1,23 +1,48 @@
 import { it } from "@effect/vitest"
-import { RunId, TaskId } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import { Cause, Deferred, Effect, Fiber, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskClaimReleaseOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  controlDirectionAppliedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
+} from "../../workflow-journal/record-key.js"
 import { AcceptedJournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
+import {
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent
+} from "../../workflow/protocols/control-direction-application/events.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
-import { TaskClaimReacquisitionPlannerUnavailable } from "../run/recovery-activation.js"
+import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { type AcceptedFactPublicationState, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
 import { delivery } from "./delivery.js"
 import { DeliveryControlPolicyMissing, makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
@@ -26,6 +51,16 @@ import { DeliveryRelationReconciliationError } from "./relations.js"
 const runId = RunId.make("reactive-delivery-coherent-reconstruction")
 const target = FixtureTarget.make("reactive-delivery-coherent-reconstruction-target")
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const recoveredAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("reactive-delivery-recovered-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/reactive-delivery-recovered"),
+  executor: TaskExecutorLocator.make("executor:reactive-delivery-test"),
+  runId,
+  taskId: TaskId.make("recovered-task"),
+  taskRevision: TaskRevision.make("reactive-delivery-recovered-revision"),
+  worktree: WorktreeLocator.make("/worktrees/reactive-delivery-recovered")
+})
 
 const makeGateway = Effect.gen(function* () {
   const storage = yield* JournalStore
@@ -57,6 +92,43 @@ const unavailableProjection = {
   }),
   reconstructedPlannedAttemptPositions: []
 }
+
+it.effect("keeps a recovered paused Run passive before its first current graph", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gateway = yield* makeGateway
+      const ordinal = ControlDirectionApplicationOrdinal.make(1)
+      yield* gateway.journal.append(
+        runId,
+        controlDirectionAppliedRecordKey(ordinal),
+        ControlDirectionAppliedEvent.make({
+          direction: "Pause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal,
+          subject: { _tag: "Run", runId },
+          version: workflowJournalEventVersion
+        })
+      )
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        gateway,
+        currentProjection(gateway.readCurrent.pipe(Effect.orDie))
+      )
+      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+
+      expect(evaluation.current.trackerGraph._tag).toBe("GraphNotEstablished")
+      expect(evaluation.proposedActions).toEqual({
+        _tag: "DeliveryProposalsAvailable",
+        isolatedIssues: [],
+        proposals: []
+      })
+      expect(evaluation.quiescence).toEqual({ _tag: "QuiescencePassive", reason: "RunPaused" })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
 
 it.effect("retries reconstruction when an accepted append lands during recovery projection", () =>
   Effect.scoped(
@@ -123,6 +195,108 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
   )
 )
 
+it.effect("does not propose the initial graph read until recovered boundary work disappears", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gateway = yield* makeGateway
+      const recoveredTransitions = yield* Ref.make<ReadonlyArray<RunnableFrontierTransition>>([
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: recoveredAttempt })
+      ])
+      const recovery = {
+        readDeliveryProjection: Effect.all({
+          accepted: gateway.readCurrent,
+          transitions: Ref.get(recoveredTransitions)
+        }).pipe(
+          Effect.map(({ accepted, transitions }) => ({
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt: accepted.appliedPosition,
+              facts: [],
+              integrationWaits: []
+            },
+            frontier: { explanations: [], transitions }
+          }))
+        ),
+        reconstructedPlannedAttemptPositions: [
+          { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
+        ]
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      expect(initial.proposedActions).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [
+          { route: { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "SuspendPlannedAttemptExecutorWork" } } }
+        ]
+      })
+      const initialProposal =
+        initial.proposedActions._tag === "DeliveryProposalsAvailable" ? initial.proposedActions.proposals[0] : undefined
+      if (initialProposal === undefined) return yield* Effect.die("expected one recovered proposal")
+
+      yield* Ref.set(recoveredTransitions, [])
+      yield* relation.invalidate({ _tag: "ProposalCompleted", proposalId: initialProposal.id, result: null })
+      const afterRecovery = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      expect(afterRecovery.proposedActions).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph" } }]
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("establishes the current graph before proposing an external-success claim release", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gateway = yield* makeGateway
+      const claimOperationId = OperationId.make("stale-external-success-claim")
+      const claim = ActiveTaskClaim.make({
+        operationId: claimOperationId,
+        owner: ClaimOwner.make("dalph"),
+        taskId: recoveredAttempt.taskId,
+        token: ClaimToken.make("stale-external-success-token")
+      })
+      const release = makeTaskClaimReleaseOperation({
+        predecessorOperationIds: [claimOperationId],
+        release: { claim, operationId: OperationId.make("stale-external-success-release-placeholder") }
+      })
+      const recovery = {
+        readDeliveryProjection: gateway.readCurrent.pipe(
+          Effect.map((accepted) => ({
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt: accepted.appliedPosition,
+              facts: [],
+              integrationWaits: []
+            },
+            frontier: {
+              explanations: [],
+              transitions: [
+                RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({
+                  operation: release,
+                  plannedAttempt: recoveredAttempt
+                })
+              ]
+            }
+          }))
+        ),
+        reconstructedPlannedAttemptPositions: [
+          { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
+        ]
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+
+      expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
+      expect(initial.proposedActions).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph" } }]
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
 it.effect("fails initial reconciliation with the exact missing-policy error", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -148,7 +322,12 @@ it.effect("publishes a typed relation failure when a later recovery projection f
     Effect.gen(function* () {
       const gateway = yield* makeGateway
       const failProjection = yield* Ref.make(false)
-      const recoveryFailure = new TaskClaimReacquisitionPlannerUnavailable({ taskId: TaskId.make("failed-region") })
+      const recoveryFailure: InvalidWorkflowJournalHistory = {
+        _tag: "InvalidWorkflowJournalHistory",
+        issues: [],
+        records: [],
+        runId
+      }
       const recovery = {
         ...currentProjection(gateway.readCurrent.pipe(Effect.orDie)),
         readDeliveryProjection: Ref.get(failProjection).pipe(

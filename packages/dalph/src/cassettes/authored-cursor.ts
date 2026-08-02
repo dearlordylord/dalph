@@ -1,4 +1,4 @@
-import { Deferred, Effect, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Option, Schema, Stream, SubscriptionRef } from "effect"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -95,26 +95,28 @@ export interface StoryCursor {
   >
   readonly consumeTrackerGraph: Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
+  /** Test-driver view of the next authored boundary; observing it never advances the story. */
+  readonly storyItems: Stream.Stream<StoryItem | undefined>
 }
 
 export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
   story: ReadonlyArray<StoryItem>
 ): Effect.fn.Return<StoryCursor> {
-  const position = yield* Ref.make(0)
+  const position = yield* SubscriptionRef.make(0)
   const coordinatorProcessDeath =
     yield* Deferred.make<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
   const terminalAssertionsReached = yield* Deferred.make<void>()
   const claimNext = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A
   ): Effect.Effect<ClaimedStoryItem<A>> =>
-    Ref.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
+    SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
       const item = story[index]
       return predicate(item)
         ? [{ _tag: "Claimed" as const, index, item }, index + 1]
         : [{ _tag: "Mismatch" as const, index, item }, index]
     }).pipe(
       Effect.tap(() =>
-        Ref.get(position).pipe(
+        SubscriptionRef.get(position).pipe(
           Effect.flatMap((index) =>
             story[index]?._tag === "ExpectedBehavior"
               ? Deferred.succeed(terminalAssertionsReached, undefined)
@@ -192,7 +194,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     return claimed.item
   })
-  const atTerminalAssertions = Ref.get(position).pipe(Effect.map((index) => story[index]?._tag === "ExpectedBehavior"))
+  const atTerminalAssertions = SubscriptionRef.get(position).pipe(
+    Effect.map((index) => story[index]?._tag === "ExpectedBehavior")
+  )
   const consumeCapacityChange = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type =>
@@ -323,6 +327,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTaskWorkSpecification,
     consumeTerminalAssertions,
     consumeTrackerGraph,
-    pauseAtCoordinatorProcessDeath
+    pauseAtCoordinatorProcessDeath,
+    storyItems: SubscriptionRef.changes(position).pipe(Stream.map((index) => story[index]))
   }
 })

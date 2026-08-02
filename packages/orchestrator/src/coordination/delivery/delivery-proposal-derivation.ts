@@ -51,9 +51,11 @@ const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPo
   if (mode === null) return { _tag: "NoTaskWorkPosition" }
   const taskId = runnableTransitionTaskId(transition)
   if (mode === "Existing") {
+    /* v8 ignore start -- transitionTaskWorkPosition returns Existing only for executor suspension. */
     if (transition._tag !== "SuspendPlannedAttemptExecutorWork") {
       return { _tag: "NoTaskWorkPosition" }
     }
+    /* v8 ignore stop */
     return {
       _tag: "TaskWorkPositionRequired",
       correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt),
@@ -333,18 +335,22 @@ const recoveredRouteProposalOf = (
     }
   }
   if (operationId !== undefined) {
+    /* v8 ignore start -- operation identity is derived only for accepted-route transition tags. */
     if (!isAcceptedRouteTransition(transition)) {
       return routePolicyContradiction(transition)
     }
+    /* v8 ignore stop */
     const route: AcceptedWorkflowRoute = { _tag: "AcceptedWorkflowRoute", transition }
     return {
       _tag: "ProposalDerived",
       proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "ExistingOperationId", operationId }, route }
     }
   }
+  /* v8 ignore start -- identity-free selection is derived only for identity-free transition tags. */
   if (!isIdentityFreeTransition(transition)) {
     return routePolicyContradiction(transition)
   }
+  /* v8 ignore stop */
   const route: IdentityFreeWorkflowRoute = { _tag: "IdentityFreeWorkflowRoute", transition }
   return {
     _tag: "ProposalDerived",
@@ -373,17 +379,14 @@ const appendDerived = (
   contributions: {
     readonly deliverySettlement: Array<DeliveryActionProposal>
     readonly issues: Array<DeliveryProposalContributions["issues"][number]>
-    readonly selectedTransitionKeys: Array<string>
     readonly ticketDelivery: Array<DeliveryActionProposal>
   },
-  derived: DerivedProposal,
-  selectedKey: string
+  derived: DerivedProposal
 ): void => {
   if (derived._tag === "ProposalIssue") {
     contributions.issues.push(derived.issue)
     return
   }
-  contributions.selectedTransitionKeys.push(selectedKey)
   if (derived.proposal.owner === "DeliverySettlement") contributions.deliverySettlement.push(derived.proposal)
   else contributions.ticketDelivery.push(derived.proposal)
 }
@@ -396,9 +399,8 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
   const contributions: {
     deliverySettlement: Array<DeliveryActionProposal>
     issues: Array<DeliveryProposalContributions["issues"][number]>
-    selectedTransitionKeys: Array<string>
     ticketDelivery: Array<DeliveryActionProposal>
-  } = { deliverySettlement: [], issues: [], selectedTransitionKeys: [], ticketDelivery: [] }
+  } = { deliverySettlement: [], issues: [], ticketDelivery: [] }
 
   for (const [index, transition] of input.transitions.entries()) {
     const fresh = freshByTransition.get(transitionKey(input.runId, transition))
@@ -428,7 +430,7 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
       fresh === undefined
         ? recoveredProposalOf(input.acceptedOperationIds, context, transition)
         : freshProposalOf(context, fresh)
-    appendDerived(contributions, derived, transitionKey(input.runId, transition))
+    appendDerived(contributions, derived)
   }
   return contributions
 }

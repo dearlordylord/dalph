@@ -31,7 +31,7 @@ import type {
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
-export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.js"
+export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
@@ -106,6 +106,41 @@ export const runnableTransitionTaskId = (transition: RunnableFrontierTransition)
 
 export const runnableTransitionOperationId = (transition: RunnableFrontierTransition): OperationId | undefined =>
   "operationId" in transition ? transition.operationId : undefined
+
+export type TransitionTrackerGraphRequirement = "AcceptedHistorySufficient" | "CurrentTrackerGraphRequired"
+
+/**
+ * Declares whether accepted pre-crash evidence is sufficient to run this
+ * transition before the current tracker graph has been established.
+ */
+const transitionTrackerGraphRequirements = {
+  AcquireStartedIntegrationTarget: "CurrentTrackerGraphRequired",
+  CheckTaskClaim: "AcceptedHistorySufficient",
+  CommitFreshTaskClaimIntent: "CurrentTrackerGraphRequired",
+  CommitTaskClaimReacquisitionIntent: "AcceptedHistorySufficient",
+  ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
+  ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
+  ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
+  ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
+  ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
+  ObservePlannedAttemptContinuationTargetLineage: "AcceptedHistorySufficient",
+  ObservePlannedAttemptContinuationWorktree: "AcceptedHistorySufficient",
+  ObserveResponsibleTaskClaim: "CurrentTrackerGraphRequired",
+  QueueAcceptedResultIntegrationResponsibility: "CurrentTrackerGraphRequired",
+  ReconcileTaskClaim: "AcceptedHistorySufficient",
+  ReconcileTaskClaimRelease: "AcceptedHistorySufficient",
+  ReconcileTaskWorktree: "AcceptedHistorySufficient",
+  ReleaseExternallyCompletedTaskClaim: "CurrentTrackerGraphRequired",
+  ReleaseStartedIntegrationTarget: "AcceptedHistorySufficient",
+  StartPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  StartQueuedIntegration: "CurrentTrackerGraphRequired",
+  SuspendPlannedAttemptExecutorWork: "AcceptedHistorySufficient"
+} as const satisfies Record<RunnableFrontierTransition["_tag"], TransitionTrackerGraphRequirement>
+
+export const transitionTrackerGraphRequirement = (
+  transition: RunnableFrontierTransition
+): TransitionTrackerGraphRequirement => transitionTrackerGraphRequirements[transition._tag]
 
 export type FrontierExplanation = Data.TaggedEnum<{
   CapacityWait: { readonly taskId: TaskId; readonly wakeCondition: "CapacityReleasedOrReconstructedStateChanged" }

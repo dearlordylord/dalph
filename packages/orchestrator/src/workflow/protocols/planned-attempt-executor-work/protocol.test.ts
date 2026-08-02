@@ -11,7 +11,6 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -42,10 +41,7 @@ import {
   TaskClaimAcquisitionIntendedEvent
 } from "../../registry/event.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import {
-  activateRecoveredResponsibilities,
-  makeRunRecoveryActivation
-} from "../../../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./events.js"
 import { continuePlannedAttemptExecutorWork, requestPlannedAttemptExecutorSuspension } from "./protocol.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
@@ -55,7 +51,6 @@ import {
   RunnableFrontierTransition
 } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
-import { makeTaskAdmissionController } from "../../../coordination/admission/controller.js"
 import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
@@ -89,6 +84,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+
 const taskClaim = ActiveTaskClaim.make({
   operationId: OperationId.make("planned-attempt-executor-claim"),
   owner: ClaimOwner.make("planned-attempt-executor-owner"),
@@ -262,7 +258,7 @@ it.effect("rejects an executor report correlated to another attempt", () =>
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
-it.effect("continues an exact planned attempt through the recovered source capability", () =>
+it.effect("continues an exact planned attempt through the executor protocol", () =>
   Effect.gen(function* () {
     yield* (yield* JournalStore).append(
       plannedAttempt.runId,
@@ -276,8 +272,7 @@ it.effect("continues an exact planned attempt through the recovered source capab
         version: workflowJournalEventVersion
       })
     )
-    const recovery = yield* makeRunRecoveryActivation(plannedAttempt.runId)
-    expect(yield* recovery.continuePlannedAttemptExecutorWork(plannedAttempt)).toEqual(
+    expect(yield* continuePlannedAttemptExecutorWork(plannedAttempt)).toEqual(
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
   }).pipe(
@@ -422,10 +417,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
         ])
       )
     )
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
-      capacity: TaskWorkCapacity.make(1),
-      integrationTarget: undefined
-    }).pipe(
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
           ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -435,20 +427,10 @@ it.effect("frees the exact task-work position after a terminal report", () =>
         ])
       )
     )
-    const recovery = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(
+    const recovery = yield* makeRunRecoveryProjection(plannedAttempt.runId).pipe(
       Effect.provide(makeControlledFakePlannedAttemptExecutorLayer([]))
     )
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
-    })
-    const otherTask = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: TaskId.make("B"),
-      taskRevision: TaskRevision.make("task-B-revision")
-    })
-    expect(
-      (yield* controller.admit({ explanations: [], transitions: [otherTask] }, plannedAttempt.runId)).transition
-    ).toEqual(Option.some(otherTask))
+    expect(recovery.reconstructedPlannedAttemptPositions).toEqual([])
   }).pipe(
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
@@ -498,38 +480,17 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
         report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
       })
     ])
-    const before = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
+    const before = yield* makeRunRecoveryProjection(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
     expect(before.reconstructedPlannedAttemptPositions).toEqual([
       { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     ])
 
-    const beforeController = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      reconstructedPlannedAttemptPositions: before.reconstructedPlannedAttemptPositions
-    })
-    const otherTask = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: TaskId.make("B"),
-      taskRevision: TaskRevision.make("task-B-revision")
-    })
-    expect(
-      Option.isNone(
-        (yield* beforeController.admit({ explanations: [], transitions: [otherTask] }, plannedAttempt.runId)).transition
-      )
-    ).toBe(true)
-
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
-      capacity: TaskWorkCapacity.make(1),
-      integrationTarget: undefined
+    yield* Effect.gen(function* () {
+      yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
+      yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
     }).pipe(Effect.provide(suspensionLayer))
-    const after = yield* makeRunRecoveryActivation(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
+    const after = yield* makeRunRecoveryProjection(plannedAttempt.runId).pipe(Effect.provide(suspensionLayer))
     expect(after.reconstructedPlannedAttemptPositions).toEqual([])
-    const afterController = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(1),
-      reconstructedPlannedAttemptPositions: after.reconstructedPlannedAttemptPositions
-    })
-    expect(
-      (yield* afterController.admit({ explanations: [], transitions: [otherTask] }, plannedAttempt.runId)).transition
-    ).toEqual(Option.some(otherTask))
   }).pipe(
     Effect.provide(controlDirectionApplicationLayer),
     Effect.provideService(
@@ -601,9 +562,9 @@ it.effect("resumes the same planned attempt after unpause", () =>
       direction: "Unpause",
       subject: { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
     })
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
-      capacity: TaskWorkCapacity.make(1),
-      integrationTarget: undefined
+    yield* Effect.gen(function* () {
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt)
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt)
     }).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
@@ -667,7 +628,7 @@ it("reconstructs the same planned attempt after Dalph and the fake executor cras
   ).toEqual([RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })])
 })
 
-it.effect("generic activation continues reconstructed work through the controlled fake", () =>
+it.effect("one recovered transition continues reconstructed work through the controlled fake", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.beginRun(
@@ -692,10 +653,7 @@ it.effect("generic activation continues reconstructed work through the controlle
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
 
-    yield* activateRecoveredResponsibilities(plannedAttempt.runId, {
-      capacity: TaskWorkCapacity.make(1),
-      integrationTarget: undefined
-    })
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt)
 
     expect((yield* journal.read(plannedAttempt.runId)).at(-1)?.event).toMatchObject({
       _tag: "PlannedAttemptExecutorWorkReported",

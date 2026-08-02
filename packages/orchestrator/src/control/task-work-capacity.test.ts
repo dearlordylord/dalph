@@ -15,9 +15,9 @@ import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
-import { makeTaskAdmissionController } from "../coordination/admission/controller.js"
-import { RunnableFrontierTransition } from "../coordination/frontier/frontier.js"
-import { makeRunRecoveryActivation } from "../coordination/run/recovery-activation.js"
+import { makeIntegrationTargetResourceController } from "../coordination/admission/integration-target-resource.js"
+import { makeDeliveryRuntimeAdmissionController } from "../coordination/delivery/delivery-runtime-admission.js"
+import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { legacyMemoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
 import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
@@ -233,7 +233,7 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       },
       { discard: true }
     )
-    const recovery = yield* makeRunRecoveryActivation(runId).pipe(
+    const recovery = yield* makeRunRecoveryProjection(runId).pipe(
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
@@ -259,17 +259,18 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
     const current = yield* control.read(runId)
-    const controller = yield* makeTaskAdmissionController({
-      capacity: current.taskExecutionCapacity,
-      reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
-    })
-    const freshC = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: TaskId.make("C"),
-      taskRevision: TaskRevision.make("revision-C")
-    })
+    const controller = yield* makeDeliveryRuntimeAdmissionController(
+      {
+        capacity: current.taskExecutionCapacity,
+        held: recovery.reconstructedPlannedAttemptPositions.map(({ attemptId, runId, taskId }) => ({
+          correlation: { attemptId, runId },
+          taskId
+        }))
+      },
+      yield* makeIntegrationTargetResourceController()
+    )
 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })
-    expect((yield* controller.snapshot()).reservedTaskIds).toEqual([TaskId.make("A"), TaskId.make("B")])
-    expect((yield* controller.admit({ explanations: [], transitions: [freshC] }, runId)).transition._tag).toBe("None")
+    expect([...(yield* controller.snapshot).positions.keys()]).toEqual([TaskId.make("A"), TaskId.make("B")])
   }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

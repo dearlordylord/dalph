@@ -31,10 +31,11 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>
 ) {
   const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
-  yield* executeTrackerGraphRead(operation)
+  const snapshot = yield* executeTrackerGraphRead(operation)
   return {
     _tag: "TrackerGraphObservationPublished" as const,
     operationId: action.operationId,
-    proposalId: action.proposal.id
+    proposalId: action.proposal.id,
+    snapshot
   }
 })

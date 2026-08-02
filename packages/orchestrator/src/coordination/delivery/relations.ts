@@ -23,6 +23,7 @@ import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.j
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { DeliveryActionResult } from "./delivery-action-executor.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -358,7 +359,7 @@ export interface DeliveryTaskWorkAdmissionBasis {
 /** Whether an empty relation may ask for one final graph read or must remain passive. */
 export type DeliveryQuiescenceDisposition =
   | { readonly _tag: "QuiescenceProbeAllowed" }
-  | { readonly _tag: "QuiescencePassive" }
+  | { readonly _tag: "QuiescencePassive"; readonly reason: "ProbeNotRequired" | "RunPaused" }
 
 /** Monotonic process-local version of one fully reconciled delivery relation value. */
 export const DeliveryRelationRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
@@ -389,7 +390,11 @@ export interface DeliveryRuntimeEvaluation {
 /** Process-local reason for the runtime to request a fresh evaluation of descriptive relations. */
 export type DeliveryInvalidation =
   | { readonly _tag: "AcceptedFactsChanged" }
-  | { readonly _tag: "ProposalCompleted"; readonly proposalId: DeliveryProposalId }
+  | {
+      readonly _tag: "ProposalCompleted"
+      readonly proposalId: DeliveryProposalId
+      readonly result: DeliveryActionResult | null
+    }
   | { readonly _tag: "QuiescenceProbeRequested" }
 
 export interface DeliveryRuntimeRelation<E = DeliveryReflectionError> {
@@ -423,8 +428,12 @@ const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
 /** Derives finality from the relation's own lifecycle facts, never from the legacy runnable frontier. */
 export const deliveryFinalityOf = (
   current: DeliveryRuntimeSnapshot,
-  proposedActions: DeliveryProposalFrontier
+  proposedActions: DeliveryProposalFrontier,
+  quiescence: DeliveryQuiescenceDisposition
 ): RunFinalityDecisionType => {
+  if (quiescence._tag === "QuiescencePassive" && quiescence.reason === "RunPaused") {
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+  }
   if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
     return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
@@ -527,7 +536,7 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
       _tag: "DeliveryRuntimeEvaluation",
       acceptedAt: facts.acceptedAt,
       current,
-      finality: deliveryFinalityOf(current, frontier),
+      finality: deliveryFinalityOf(current, frontier, facts.quiescence),
       proposedActions: frontier,
       quiescence: facts.quiescence,
       revision: facts.revision,

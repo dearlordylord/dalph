@@ -56,7 +56,13 @@ export const currentTaskClaimAuthority = (
     (observation.observation._tag !== "FocusedTaskClaimFacts" &&
       observation.observation._tag !== "FocusedTaskClaimFactsUnreadable")
   ) {
-    return { _tag: "Unobserved" }
+    return Option.match(activationBaselinePosition, {
+      onNone: () => ({ _tag: "Unobserved" as const }),
+      onSome: (activationBaseline) =>
+        expectedAt !== undefined && expectedAt > activationBaseline
+          ? { _tag: "Exact" as const }
+          : { _tag: "Unobserved" as const }
+    })
   }
   return classifyObservation(observation.observation, expectedClaim)
 }

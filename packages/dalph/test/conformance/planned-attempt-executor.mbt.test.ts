@@ -22,13 +22,20 @@ import {
   journalStoreCapabilities,
   legacyUnpublishedInRunJournalLayer,
   JournalPosition,
-  makeTaskAdmissionController,
   requestPlannedAttemptExecutorSuspension,
-  RunnableFrontierTransition,
-  type TaskAdmissionController,
   TaskWorkCapacity
 } from "@dalph/orchestrator"
 import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import {
+  makeDeliveryRuntimeAdmissionController,
+  type DeliveryRuntimeAdmissionController
+} from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
+import {
+  DeliveryProposalId,
+  trackerGraphReadProposalOf
+} from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
+import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("1"),
@@ -41,7 +48,24 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+const continuationProposal = {
+  ...trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId: plannedAttempt.runId,
+    target: FixtureTarget.make("planned-attempt-executor-model")
+  }),
+  admission: {
+    integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+    taskWorkPosition: {
+      _tag: "TaskWorkPositionRequired" as const,
+      mode: "ReserveOrReuse" as const,
+      retainAs: correlation,
+      taskId: plannedAttempt.taskId
+    }
+  },
+  id: DeliveryProposalId.make("planned-attempt-executor-model-continuation")
+}
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
@@ -69,7 +93,7 @@ const executorConformanceDriver = defineDriver(
     let nextStartReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     let pendingSuspension: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
     let pendingStart: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
-    let controller: TaskAdmissionController | undefined
+    let controller: DeliveryRuntimeAdmissionController | undefined
     let records: ReadonlyArray<JournalRecord> = []
     let status = "NoReport"
     let responsibilityRecorded = Deferred.makeUnsafe<void>()
@@ -130,27 +154,20 @@ const executorConformanceDriver = defineDriver(
       continuePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
     const suspendExecutorWorkflow = () =>
       requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
-    const requireController = (): Effect.Effect<TaskAdmissionController> =>
+    const requireController = (): Effect.Effect<DeliveryRuntimeAdmissionController> =>
       controller === undefined ? Effect.die("admission controller must be initialized") : Effect.succeed(controller)
     const releasePositionIfHeld = Effect.fn("PlannedAttemptExecutorConformance.releasePositionIfHeld")(function* () {
       const admission = yield* requireController()
-      const snapshot = yield* admission.snapshot()
-      if (
-        snapshot.reservedPositions.some(
-          ({ correlation: reserved }) =>
-            reserved._tag === "PlannedAttemptReservation" &&
-            reserved.attemptId === correlation.attemptId &&
-            reserved.runId === correlation.runId
-        )
-      ) {
+      const snapshot = yield* admission.snapshot
+      if (snapshot.positions.has(plannedAttempt.taskId)) {
         yield* admission.releasePlannedAttemptPosition(correlation)
       }
     })
     const reservePositionIfAvailable = Effect.fn("PlannedAttemptExecutorConformance.reservePositionIfAvailable")(
       function* () {
         const admission = yield* requireController()
-        const decision = yield* admission.admit({ explanations: [], transitions: [continuation] }, plannedAttempt.runId)
-        if (Option.isNone(decision.transition)) {
+        const decision = yield* admission.tryReserve(continuationProposal)
+        if (decision._tag === "Deferred") {
           return yield* Effect.die("planned attempt must be admitted")
         }
       }
@@ -184,15 +201,8 @@ const executorConformanceDriver = defineDriver(
     const invokeStart = (report: PlannedAttemptExecutorReport) =>
       Effect.gen(function* () {
         const admission = yield* requireController()
-        const snapshot = yield* admission.snapshot()
-        if (
-          !snapshot.reservedPositions.some(
-            ({ correlation: reserved }) =>
-              reserved._tag === "PlannedAttemptReservation" &&
-              reserved.attemptId === correlation.attemptId &&
-              reserved.runId === correlation.runId
-          )
-        ) {
+        const snapshot = yield* admission.snapshot
+        if (!snapshot.positions.has(plannedAttempt.taskId)) {
           yield* reservePositionIfAvailable()
         }
         const observed =
@@ -227,16 +237,11 @@ const executorConformanceDriver = defineDriver(
             ),
       getState: () =>
         Effect.gen(function* () {
-          const snapshot = yield* (yield* requireController()).snapshot()
+          const snapshot = yield* (yield* requireController()).snapshot
           return {
             correlationAttemptId: 1n,
             correlationRunId: 158n,
-            positionHeld: snapshot.reservedPositions.some(
-              ({ correlation: reserved }) =>
-                reserved._tag === "PlannedAttemptReservation" &&
-                reserved.attemptId === correlation.attemptId &&
-                reserved.runId === correlation.runId
-            ),
+            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
             status
           }
         }),
@@ -248,7 +253,10 @@ const executorConformanceDriver = defineDriver(
           if (pendingStart !== undefined) {
             yield* Fiber.interrupt(pendingStart)
           }
-          controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+          controller = yield* makeDeliveryRuntimeAdmissionController(
+            { capacity: TaskWorkCapacity.make(1), held: [] },
+            yield* makeIntegrationTargetResourceController()
+          )
           latestReport = undefined
           pendingSuspension = undefined
           pendingStart = undefined

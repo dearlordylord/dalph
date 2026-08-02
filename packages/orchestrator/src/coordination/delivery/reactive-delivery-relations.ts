@@ -1,16 +1,19 @@
-import { plannedAttemptExecutorCorrelation, type AttemptId, type RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type AttemptId, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import { runnableTransitionTaskId, type RunnableFrontierTransition } from "../frontier/frontier.js"
-import type { RunRecoveryActivationError, RunRecoveryProjectionSnapshot } from "../run/recovery-activation.js"
-import { journaledCurrentDeliveryFrameOf } from "../run/current-delivery-relation.js"
+import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
+import type { RunRecoveryProjectionSource } from "../run/recovery-activation.js"
+import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
-import { acceptedOperationIdsOf } from "./delivery-shadow.js"
-import { ticketDeliveryEvidenceOf, journaledIntegrationEvidenceOf } from "./delivery-shadow-evidence.js"
+import {
+  acceptedOperationIdsOf,
+  ticketDeliveryEvidenceOf,
+  journaledIntegrationEvidenceOf
+} from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
@@ -42,20 +45,61 @@ interface ReactiveDeliveryBundle {
   readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
 }
 
-export interface DeliveryRecoveryRelationSource {
-  readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryActivationError>
-  readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{ readonly attemptId: AttemptId }>
+type AcceptedDeliveryProjection = Effect.Success<AcceptedFactPublicationGatewayService["readCurrent"]>
+type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
+
+const eligibleRecoveredTransitions = (
+  accepted: AcceptedDeliveryProjection,
+  projection: RecoveredDeliveryProjection,
+  freshTaskIds: ReadonlySet<TaskId>
+) =>
+  projection.frontier.transitions.filter(
+    (transition) =>
+      !freshTaskIds.has(runnableTransitionTaskId(transition)) &&
+      (accepted.graph._tag === "GraphEstablished" ||
+        transitionTrackerGraphRequirement(transition) === "AcceptedHistorySufficient")
+  )
+
+const exactDeliveryEvidenceOf = (
+  frame: CurrentDeliveryFrame | undefined,
+  projection: RecoveredDeliveryProjection,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<TicketDeliveryEvidence> => {
+  if (frame === undefined) {
+    const responsibilityEvidence =
+      projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
+        ? projection.evidence.facts.map((facts): TicketDeliveryEvidence => ({ _tag: "ResponsibilityFacts", facts }))
+        : []
+    return [...responsibilityEvidence, ...journaledIntegrationEvidenceOf(records)]
+  }
+  if (projection.evidence._tag !== "AvailableDeliveryProjectionEvidence") return []
+  return [
+    ...ticketDeliveryEvidenceOf(frame, projection.evidence.facts),
+    ...projection.evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
+  ]
 }
 
-const boundaryTransitionAllowed = (transition: RunnableFrontierTransition): boolean =>
-  transition._tag === "SuspendPlannedAttemptExecutorWork" ||
-  transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
-  transition._tag === "ObservePlannedAttemptContinuationTargetLineage" ||
-  transition._tag === "CheckTaskClaim" ||
-  transition._tag === "ReconcileTaskClaim" ||
-  transition._tag === "ReconcileTaskClaimRelease" ||
-  transition._tag === "ReconcileTaskWorktree" ||
-  transition._tag === "ReleaseStartedIntegrationTarget"
+const trackerGraphProposalsOf = (
+  accepted: AcceptedDeliveryProjection,
+  recoveredTransitionCount: number,
+  activeProbe: ReadonlyArray<TrackerGraphActionProposal>,
+  runIsPaused: boolean,
+  runId: RunId,
+  target: TrackerTarget
+): ReadonlyArray<TrackerGraphActionProposal> => {
+  if (runIsPaused) return []
+  if (accepted.graph._tag === "GraphNotEstablished" && recoveredTransitionCount === 0) {
+    return [
+      trackerGraphReadProposalOf({
+        acceptedAt: accepted.appliedPosition,
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+    ]
+  }
+  return accepted.graph._tag === "GraphEstablished" ? activeProbe : []
+}
 
 const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: AttemptId) =>
   records.findLast(
@@ -88,7 +132,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   runId: RunId,
   target: TrackerTarget,
   gateway: AcceptedFactPublicationGatewayService,
-  recovery: DeliveryRecoveryRelationSource
+  recovery: RunRecoveryProjectionSource
 ) {
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
   const probe = yield* Ref.make<Option.Option<TrackerGraphActionProposal>>(Option.none())
@@ -124,11 +168,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       accepted.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(accepted) : undefined
     const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
-    const recovered = projection.frontier.transitions.filter(
-      (transition) =>
-        !freshTaskIds.has(runnableTransitionTaskId(transition)) &&
-        (accepted.graph._tag === "GraphEstablished" || boundaryTransitionAllowed(transition))
-    )
+    const recovered = eligibleRecoveredTransitions(accepted, projection, freshTaskIds)
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
     const records = accepted.records
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
@@ -141,36 +181,18 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       runId,
       transitions
     })
-    const exactEvidence: ReadonlyArray<TicketDeliveryEvidence> =
-      frame === undefined
-        ? [
-            ...(projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
-              ? projection.evidence.facts.map(
-                  (facts): TicketDeliveryEvidence => ({ _tag: "ResponsibilityFacts", facts })
-                )
-              : []),
-            ...journaledIntegrationEvidenceOf(records)
-          ]
-        : projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
-          ? [
-              ...ticketDeliveryEvidenceOf(frame, projection.evidence.facts),
-              ...projection.evidence.integrationWaits.map(
-                (wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait })
-              )
-            ]
-          : []
-    const activeProbe = Option.toArray(yield* Ref.get(probe))
-    const trackerGraphProposals =
-      accepted.graph._tag === "GraphNotEstablished"
-        ? [
-            trackerGraphReadProposalOf({
-              acceptedAt: accepted.appliedPosition,
-              purpose: "EstablishCurrentGraph",
-              runId,
-              target
-            })
-          ]
-        : activeProbe
+    const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
+    const runIsPaused = accepted.reconstructed.pause.run._tag === "RunPaused"
+    if (runIsPaused) yield* Ref.set(probe, Option.none())
+    const activeProbe = runIsPaused ? [] : Option.toArray(yield* Ref.get(probe))
+    const trackerGraphProposals = trackerGraphProposalsOf(
+      accepted,
+      recovered.length,
+      activeProbe,
+      runIsPaused,
+      runId,
+      target
+    )
     return {
       exactEvidence,
       graph: accepted.graph,
@@ -178,10 +200,9 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       proposalContributions,
       runtimeFacts: {
         acceptedAt: accepted.appliedPosition,
-        quiescence:
-          accepted.reconstructed.pause.run._tag === "RunPaused"
-            ? { _tag: "QuiescencePassive" }
-            : { _tag: "QuiescenceProbeAllowed" },
+        quiescence: runIsPaused
+          ? { _tag: "QuiescencePassive", reason: "RunPaused" }
+          : { _tag: "QuiescenceProbeAllowed" },
         revision: currentRevision,
         taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(accepted) }
       },
@@ -277,10 +298,10 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   })
 })
 
-/** Scoped Layer form used by the package-private candidate application seam. */
+/** Scoped Layer form for application compositions that already own the gateway. */
 export const reactiveDeliveryRelationsLayer = (
   runId: RunId,
   target: TrackerTarget,
   gateway: AcceptedFactPublicationGatewayService,
-  recovery: DeliveryRecoveryRelationSource
+  recovery: RunRecoveryProjectionSource
 ) => Layer.unwrap(makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery))

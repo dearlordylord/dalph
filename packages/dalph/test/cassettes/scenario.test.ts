@@ -456,6 +456,14 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
       "IntegrationStarted"
     ])
     expect(integrationRecords[0]?.position).toBeLessThan(integrationRecords[1]?.position ?? 0)
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report._tag === "Terminal" &&
+          event.report.result._tag === "Accepted"
+      )
+    ).toHaveLength(1)
     expect(JSON.stringify(run.records)).not.toContain("queueOrdinal")
     if (run.history._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("accepted-result cassette must retain valid journal history")
@@ -1026,6 +1034,35 @@ it.effect("returns control after one unchanged refresh without terminating the u
   })
 )
 
+it.effect("restart before first intent recomputes delivery without recovering a proposal", () =>
+  Effect.gen(function* () {
+    const firstGraphResult = singleton.story.findIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const cassette = {
+      ...singleton,
+      name: "restart before the first claim intent recomputes current delivery",
+      story: singleton.story.flatMap((item, index) =>
+        index === firstGraphResult
+          ? [
+              item,
+              { _tag: "CoordinatorProcessDies" as const },
+              {
+                _tag: "DalphSelects" as const,
+                operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+              },
+              { _tag: "TrackerGraphReadReturned" as const, graph: singleton.startingFacts.trackerGraph }
+            ]
+          : [item]
+      )
+    }
+    const run = yield* runAuthoredScenarioCassette(cassette)
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquired")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+  })
+)
+
 it.effect("an invalid quiescent refresh authorizes no new work", () =>
   Effect.gen(function* () {
     const lastGraphReturn = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
@@ -1476,6 +1513,14 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
       story: dependentTasksCompleteInOneRunAuthoredCassette.story
         .filter((_item, index) => index <= aTerminal + 2 || index >= acquireB)
         .flatMap((item, index) => [
+          ...(item._tag === "DalphSelects" &&
+          item.operation._tag === "AcquireTaskClaim" &&
+          item.operation.taskId === TaskId.make("B")
+            ? [
+                { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
+                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const
+              ]
+            : []),
           ...(index === 0 && item._tag === "InitialControlPolicy"
             ? [{ ...item, policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } }]
             : [item]),
@@ -1671,6 +1716,8 @@ it.effect(
             report: { _tag: "SafelySuspended", attemptId: aAttemptId },
             request: "Suspend"
           },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
           { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
@@ -2063,34 +2110,7 @@ it.effect("derives failed task-work results and safely suspended orchestration e
       "The story expects the planned work for task A to fail."
     )
 
-    const suspendedGraph = { revision: TrackerRevision.make("singleton-A-left-target-after-suspension"), tasks: [] }
-    const safelySuspended = {
-      ...singleton,
-      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item, index, source) => {
-        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
-          return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
-        }
-        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
-        if (item._tag === "TrackerGraphReadReturned" && source[index + 1]?._tag === "ExpectedBehavior") {
-          return [...story, { ...item, graph: suspendedGraph }]
-        }
-        if (item._tag === "ExpectedBehavior") {
-          return [
-            ...story,
-            {
-              ...item,
-              orchestration: [
-                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
-              ],
-              taskWork: { ...item.taskWork, results: [] }
-            }
-          ]
-        }
-        return [...story, item]
-      }, [])
-    }
-    const suspendedRun = yield* runAuthoredScenarioCassette(safelySuspended)
+    const suspendedRun = yield* runAuthoredScenarioCassette(runPauseSafelySuspendsAuthoredCassette)
     expect(suspendedRun.observedBehavior.orchestrationEvidence).toContainEqual({
       _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
@@ -2559,25 +2579,22 @@ it.effect("rejects missing, reordered, or additional evidence within either pres
 
 it.effect("rejects no-work-undertaken when Dalph assumed executor-work responsibility for that task", () =>
   Effect.gen(function* () {
-    const suspendedGraph = { revision: TrackerRevision.make("singleton-A-left-target-before-absence-check"), tasks: [] }
     const contradictedAbsence = {
-      ...singleton,
-      story: singleton.story.reduce<ReadonlyArray<unknown>>((story, item, index, source) => {
-        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running") {
-          return [...story, { ...item, report: { _tag: "SafelySuspended", attemptId: item.report.attemptId } }]
-        }
-        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") return story
-        if (item._tag === "TrackerGraphReadReturned" && source[index + 1]?._tag === "ExpectedBehavior") {
-          return [...story, { ...item, graph: suspendedGraph }]
-        }
-        if (item._tag === "ExpectedBehavior") {
-          return [
-            ...story,
-            { ...item, taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "A" }], results: [] } }
-          ]
-        }
-        return [...story, item]
-      }, [])
+      ...runPauseSafelySuspendsAuthoredCassette,
+      story: runPauseSafelySuspendsAuthoredCassette.story.map((item) =>
+        item._tag === "ExpectedBehavior"
+          ? {
+              ...item,
+              taskWork: {
+                ...item.taskWork,
+                absences: [
+                  ...item.taskWork.absences,
+                  { _tag: "NoPlannedWorkUndertakenForTask" as const, taskId: TaskId.make("A") }
+                ]
+              }
+            }
+          : item
+      )
     }
 
     expect((yield* runAuthoredScenarioCassette(contradictedAbsence).pipe(Effect.flip))._tag).toBe(

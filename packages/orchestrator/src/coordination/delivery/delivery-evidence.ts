@@ -1,13 +1,20 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "@dalph/contracts"
+import { Option } from "effect"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { OperationId } from "../../workflow/identity.js"
+import { acceptedOperationIdOf } from "../../workflow/registry/event-descriptor.js"
 import {
   deriveIntegrationAdmission,
   deriveUnqueuedAcceptedResults
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationCandidateConstruction } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
-import type { CurrentDeliveryFrame } from "../run/current-delivery-relation.js"
+import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
+
+/** Every operation identity whose accepted journal fact is available to delivery proposal derivation. */
+export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
+  new Set(records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))))
 
 const syntheticExecutorEvidenceOf = (
   frame: Extract<CurrentDeliveryFrame, { readonly _tag: "SyntheticCurrentDeliveryFrame" }>

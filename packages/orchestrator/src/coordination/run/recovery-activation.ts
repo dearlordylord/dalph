@@ -1,37 +1,23 @@
 /* eslint-disable max-lines -- Fresh and authoritative activation must share one recovery authority boundary. */
-import { Context, Effect, Exit, Layer, Option, Queue, Schema } from "effect"
-import { ActivationCause, makeActivationCoordinator, type OwnedTransitionExecution } from "../activation/coordinator.js"
+import { Context, Effect, Layer, Option } from "effect"
 import {
   type AttemptId,
   type IntegrationTarget,
   type PlannedTaskAttempt,
   plannedTaskAttemptEquivalence,
   type RunId,
-  TaskId,
-  PlannedAttemptExecutor,
-  plannedAttemptExecutorCorrelation,
-  type PlannedAttemptExecutorReport
+  type TaskId,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { type TaskWorkCapacity } from "../admission/capacity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
-import {
-  InRunJournal,
-  type JournalAppendError,
-  type JournalRecord,
-  type JournalStoreError
-} from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalTransitionRuleFor } from "../reconstruction/history-transition.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
-import {
-  continuePlannedAttemptExecutorWork,
-  requestPlannedAttemptExecutorSuspension
-} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import {
   type ReconstructedPauseState,
   type ReconstructedRunState,
   reconstructedTaskIsPaused,
-  type WorkflowResponsibilityState,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
@@ -45,37 +31,20 @@ import {
   runnableTransitionTaskId,
   type RunnableFrontier
 } from "../frontier/frontier.js"
-import { recoverRunnableTransition } from "../frontier/recovery.js"
-import { makeTaskAdmissionController } from "../admission/controller.js"
-import {
-  WorkflowInterpreter,
-  type WorkflowInterpreterService,
-  WorkflowTrace
-} from "../../workflow/interpretation/interpreter.js"
 import {
   latestReconstructedTaskGraph,
   reconstructedTaskGraphFromEvents,
   reconstructedTaskWorkSpecificationFor
 } from "../reconstruction/graph-knowledge.js"
-import {
-  type AcceptedResultNotDurable,
-  deriveIntegrationAdmission
-} from "../../workflow/protocols/integration-admission/protocol.js"
+import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier, integrationDeliveryWaitsOf } from "../frontier/integration-frontier.js"
 import {
   type IntegrationTargetResourceController,
-  type IntegrationTargetResourceUnavailable,
   makeIntegrationTargetResourceController
 } from "../admission/integration-target-resource.js"
 import {
-  type IntegrationCandidateBoundaryUnavailable,
-  runIntegrationTransition
-} from "./integration-transition-runtime.js"
-import {
   type CandidateContinuationLimit,
-  type CandidateCorrectionLimit,
-  type IntegrationCandidateAgentFailure,
-  type IntegrationCandidateTargetLineageRejected
+  type CandidateCorrectionLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -88,15 +57,11 @@ import {
 import {
   makeTaskClaimReleaseOperation,
   makeTaskClaimObservationOperation,
-  makeTaskClaimAcquisitionOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
-import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
-import type { TraceOutputError } from "../../presentation/trace-output.js"
-import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -255,101 +220,6 @@ const isSuspensionSettlementFor = (event: JournalRecord["event"], plannedAttempt
   isExecutorReportFor(event, plannedAttempt) &&
   event._tag === "PlannedAttemptExecutorWorkReported" &&
   (event.report._tag === "SafelySuspended" || event.report._tag === "Terminal")
-
-type InterpreterError = {
-  [Key in keyof WorkflowInterpreterService]-?: Effect.Error<ReturnType<NonNullable<WorkflowInterpreterService[Key]>>>
-}[keyof WorkflowInterpreterService]
-
-type InvalidWorkflowJournalHistory = Extract<
-  ReturnType<typeof reduceWorkflowJournalHistory>,
-  { readonly _tag: "InvalidWorkflowJournalHistory" }
->
-
-export type RunRecoveryActivationError =
-  | Effect.Error<ReturnType<typeof continuePlannedAttemptExecutorWork>>
-  | AcceptedResultNotDurable
-  | InvalidWorkflowJournalHistory
-  | InterpreterError
-  | IntegrationTargetResourceUnavailable
-  | IntegrationCandidateBoundaryUnavailable
-  | IntegrationCandidateAgentFailure
-  | IntegrationCandidateTargetLineageRejected
-  | JournalAppendError
-  | JournalStoreError
-  | TaskClaimReacquisitionPlannerUnavailable
-  | TaskClaimReacquisitionPlanningFailed
-  | TraceOutputError
-
-/** A selected explicit reacquisition has no configured identity planner. */
-export class TaskClaimReacquisitionPlannerUnavailable extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlannerUnavailable>()(
-  "TaskClaimReacquisitionPlannerUnavailable",
-  { taskId: TaskId }
-) {}
-
-/** The configured planner could not allocate the replacement claim identity. */
-export class TaskClaimReacquisitionPlanningFailed extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlanningFailed>()(
-  "TaskClaimReacquisitionPlanningFailed",
-  { detail: Schema.String, taskId: TaskId }
-) {}
-
-/* v8 ignore start -- @preserve Planner failure rendering is a defensive fallback around a typed Effect boundary. */
-const planningFailureDetail = (failure: unknown): string =>
-  typeof failure === "object" && failure !== null && "_tag" in failure
-    ? String(failure._tag)
-    : "TaskClaimAcquisitionPlanner.plan failed"
-/* v8 ignore stop -- @preserve */
-
-export const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimReacquisition")(
-  function* (input: {
-    readonly execution: Pick<OwnedTransitionExecution, "recordIntent">
-    readonly interpreter: WorkflowInterpreterService
-    readonly journal: InRunJournal["Service"]
-    readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
-    readonly runId: RunId
-    readonly trace: Option.Option<WorkflowTrace["Service"]>
-    readonly transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>
-  }) {
-    const planner = yield* Option.match(input.planner, {
-      onNone: () => Effect.fail(new TaskClaimReacquisitionPlannerUnavailable({ taskId: input.transition.taskId })),
-      onSome: Effect.succeed
-    })
-    const records = yield* input.journal.read(input.runId)
-    const priorClaim = records.findLast(
-      ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === input.transition.taskId
-    )?.event
-    const observation = records.findLast(
-      ({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" &&
-        (event.observation._tag === "FocusedTaskClaimFacts" ||
-          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-        event.observation.coverage.taskId === input.transition.taskId
-    )?.event
-    const operationId = taskClaimReacquisitionOperationId(input.transition.requestId)
-    const operation = makeTaskClaimAcquisitionOperation({
-      acquisition: yield* planner.plan(operationId, input.transition.taskId).pipe(
-        Effect.mapError(
-          /* v8 ignore next -- @preserve The unavailable-planner path is tested; provider-specific planner failures are wrapped here. */
-          (failure) =>
-            new TaskClaimReacquisitionPlanningFailed({
-              detail: planningFailureDetail(failure),
-              taskId: input.transition.taskId
-            })
-        )
-      ),
-      authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: input.transition.requestId },
-      predecessorOperationIds: [
-        /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
-        ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
-        /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
-        ...(observation?._tag === "TaskTrackerFactsObserved" ? [observation.operationId] : [])
-      ]
-    })
-    if (Option.isSome(input.trace)) {
-      yield* input.trace.value.emit(OperationSelected.make({ operation }))
-    }
-    yield* input.interpreter.acquireTaskClaim(operation, input.execution.recordIntent(operationId))
-  }
-)
 
 /** Derives which journaled responsibilities are still unfinished. */
 const deriveJournalResponsibilityFacts = (
@@ -899,31 +769,6 @@ type ContinuationDecision = {
   readonly transition?: RunnableFrontierTransition
 }
 
-type ObservedOperationTransition = Extract<
-  RunnableFrontierTransition,
-  {
-    readonly _tag:
-      | "ObservePlannedAttemptContinuationGraph"
-      | "ObservePlannedAttemptContinuationClaim"
-      | "ObservePlannedAttemptContinuationSpecification"
-      | "ObservePlannedAttemptContinuationTargetLineage"
-      | "ObservePlannedAttemptContinuationWorktree"
-      | "ObserveResponsibleTaskClaim"
-      | "ReleaseExternallyCompletedTaskClaim"
-  }
->
-
-const isObservedOperationTransition = (
-  transition: RunnableFrontierTransition
-): transition is ObservedOperationTransition =>
-  transition._tag === "ObservePlannedAttemptContinuationGraph" ||
-  transition._tag === "ObservePlannedAttemptContinuationClaim" ||
-  transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
-  transition._tag === "ObservePlannedAttemptContinuationTargetLineage" ||
-  transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
-  transition._tag === "ObserveResponsibleTaskClaim" ||
-  transition._tag === "ReleaseExternallyCompletedTaskClaim"
-
 const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
   if (began?.event._tag === "WorkflowRunBegan") return began.event.target
@@ -1145,28 +990,6 @@ export const safelySuspendedAttemptMayContinue = (
   plannedAttempt: PlannedTaskAttempt,
   currentGraph: TaskDagSnapshot | undefined
 ): boolean => !reconstructedTaskIsPaused(pause, plannedAttempt.taskId, currentGraph)
-
-const attemptMayContinue = (
-  runState: ReconstructedRunState,
-  plannedAttempt: PlannedTaskAttempt,
-  currentGraph?: TaskDagSnapshot
-): boolean => {
-  const records = runState.workflowHistory.records
-  const latestReportRecord = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.attemptId === plannedAttempt.attemptId &&
-      event.report.correlation.runId === plannedAttempt.runId
-  )
-  if (
-    latestReportRecord?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
-    latestReportRecord.event.report._tag === "Running"
-  ) {
-    return true
-  }
-  if (latestReportRecord.event.report._tag === "Terminal") return false
-  return safelySuspendedAttemptMayContinue(runState.pause, plannedAttempt, currentGraph)
-}
 
 const continuationDecisionFor = (
   transition: RunnableFrontierTransition,
@@ -1481,370 +1304,125 @@ const journaledFreshFrontierOf = (
   )
 })
 
-const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
-  runId: RunId,
-  integrationResources: IntegrationTargetResourceController,
-  integrationTarget: Option.Option<IntegrationTarget>,
-  activationBaselinePosition: Option.Option<JournalPosition>,
-  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
-) {
-  return (yield* readRecoveredProjection(
-    runId,
-    integrationResources,
-    integrationTarget,
-    activationBaselinePosition,
-    candidateCorrectionLimit,
-    candidateContinuationLimit
-  )).frontier
-})
-
-const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
-  runId: RunId,
-  integrationResources: IntegrationTargetResourceController,
-  integrationTarget: Option.Option<IntegrationTarget>,
-  activationBaselinePosition: Option.Option<JournalPosition>,
-  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
-) {
-  const projection = yield* readRecoveredProjection(
-    runId,
-    integrationResources,
-    integrationTarget,
-    activationBaselinePosition,
-    candidateCorrectionLimit,
-    candidateContinuationLimit
-  )
-  return journaledFreshFrontierOf(projection.frontier, projection.allowRecoveredContinuation)
-})
-
-// eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction with its executor capability.
-interface RunRecoveryActivationSource {
-  /** Continues an attempt first planned by this activation, without applying startup-recovery authority checks. */
-  readonly continueFreshPlannedAttemptExecutorWork: (
-    plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
-  /** Continues an attempt reconstructed at startup after rereading its tracker claim and Git worktree. */
-  readonly continuePlannedAttemptExecutorWork: (
-    plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, RunRecoveryActivationError>
-  readonly readFinalityFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
-  readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
-  readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
-  /** One coherent frontier plus its exact lower evidence for observational delivery comparison. */
-  readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryActivationError, never>
-  /** True after a Run or task Unpause requires preserved work to discard pre-Unpause process-local stages. */
-  readonly readContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
-  readonly readPauseState: Effect.Effect<ReconstructedPauseState, RunRecoveryActivationError, never>
-  readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
-    readonly attemptId: AttemptId
-    readonly runId: RunId
-    readonly taskId: TaskId
-  }>
-  readonly waitForNextExecutorWake: Effect.Effect<void, RunRecoveryActivationError, never>
-}
-
 /** One reconstruction turn; process-local integration state is sampled exactly once. */
 export interface RunRecoveryProjectionSnapshot {
   readonly evidence: DeliveryProjectionEvidence
   readonly frontier: RunnableFrontier
 }
 
-/** A journal-backed source can execute recovered transitions for its exact run. */
-// eslint-disable-next-line functional/no-mixed-types -- The discriminated source carries the exact run and its sole recovered-transition capability.
-interface AuthoritativeRunRecoveryActivation extends RunRecoveryActivationSource {
-  readonly _tag: "AuthoritativeRunRecoveryActivation"
-  readonly runId: RunId
-  readonly runTransition: (
-    transition: RunnableFrontierTransition,
-    execution: OwnedTransitionExecution
-  ) => Effect.Effect<void, RunRecoveryActivationError, never>
-}
+/** Exact shared failures that can prevent reconstruction of descriptive recovery evidence. */
+export type RunRecoveryProjectionError = Effect.Error<ReturnType<typeof readRecoveredProjection>>
 
-/** A live fresh Run may execute only integration work reconstructed from its own journal. */
-interface JournaledFreshRunActivation extends RunRecoveryActivationSource {
-  readonly _tag: "JournaledFreshRunActivation"
-  readonly runId: RunId
-  readonly runTransition: (
-    transition: RunnableFrontierTransition,
-    execution: OwnedTransitionExecution
-  ) => Effect.Effect<void, RunRecoveryActivationError, never>
+/** Read-only reconstructed evidence consumed by the flat delivery relation. */
+export interface RunRecoveryProjectionSource {
+  readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryProjectionError, never>
+  readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
+    readonly attemptId: AttemptId
+    readonly runId: RunId
+    readonly taskId: TaskId
+  }>
 }
 
 /** A non-journaled composition has no recovered-transition capability. */
-interface SyntheticFreshOnlyActivation extends RunRecoveryActivationSource {
-  readonly _tag: "SyntheticFreshOnlyActivation"
-}
-
-type RunRecoveryActivationService =
-  | AuthoritativeRunRecoveryActivation
-  | JournaledFreshRunActivation
-  | SyntheticFreshOnlyActivation
+type RunRecoveryProjectionService =
+  | (RunRecoveryProjectionSource & { readonly _tag: "AuthoritativeRunRecoveryProjection"; readonly runId: RunId })
+  | (RunRecoveryProjectionSource & { readonly _tag: "JournaledFreshRunProjection"; readonly runId: RunId })
+  | (RunRecoveryProjectionSource & { readonly _tag: "SyntheticFreshOnlyProjection" })
 
 /**
- * Current-run recovered work source. It owns no selector, admission controller,
- * or runner; a caller composes these transitions into its one activation loop.
+ * Read-only current-run recovery evidence for the descriptive delivery relation.
  */
-export class RunRecoveryActivation extends Context.Service<RunRecoveryActivation, RunRecoveryActivationService>()(
-  "@dalph/RunRecoveryActivation"
+export class RunRecoveryProjection extends Context.Service<RunRecoveryProjection, RunRecoveryProjectionService>()(
+  "@dalph/RunRecoveryProjection"
 ) {}
 
 /** Explicit fresh-only composition for dry-run and deterministic tests. */
-export const emptyRunRecoveryActivationLayer = Layer.effect(
-  RunRecoveryActivation,
-  PlannedAttemptExecutor.pipe(
-    Effect.map((executor) => {
-      const continueAttempt = (plannedAttempt: PlannedTaskAttempt) => executor.startOrContinue(plannedAttempt)
-      return RunRecoveryActivation.of({
-        _tag: "SyntheticFreshOnlyActivation",
-        continueFreshPlannedAttemptExecutorWork: continueAttempt,
-        continuePlannedAttemptExecutorWork: continueAttempt,
-        readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-        readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-        readResponsibility: Effect.succeed({ entries: [] }),
-        readDeliveryProjection: Effect.succeed({
-          evidence: { _tag: "AvailableDeliveryProjectionEvidence", acceptedAt: null, facts: [], integrationWaits: [] },
-          frontier: { explanations: [], transitions: [] }
-        }),
-        readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
-        reconstructedPlannedAttemptPositions: [],
-        waitForNextExecutorWake: Effect.void
-      })
-    })
-  )
+export const emptyRunRecoveryProjectionLayer = Layer.succeed(
+  RunRecoveryProjection,
+  RunRecoveryProjection.of({
+    _tag: "SyntheticFreshOnlyProjection",
+    readDeliveryProjection: Effect.succeed({
+      evidence: { _tag: "AvailableDeliveryProjectionEvidence", acceptedAt: null, facts: [], integrationWaits: [] },
+      frontier: { explanations: [], transitions: [] }
+    }),
+    reconstructedPlannedAttemptPositions: []
+  })
 )
 
-/**
- * Fresh-run composition that records coarse executor responsibility and
- * reports while exposing no recovered transitions.
- */
-const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeJournaledFreshSource")(
-  function* (
-    runId: RunId,
-    integrationTarget: Option.Option<IntegrationTarget>,
-    candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-    candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
-    workflowTraceOverride: Option.Option<WorkflowTrace["Service"]> | undefined,
-    integrationResourcesOverride: IntegrationTargetResourceController | undefined
-  ) {
-    const executor = yield* PlannedAttemptExecutor
-    const journal = yield* InRunJournal
-    const workflowInterpreter = Context.getOption(yield* Effect.context<never>(), WorkflowInterpreter)
-    const workflowTrace = workflowTraceOverride ?? Context.getOption(yield* Effect.context<never>(), WorkflowTrace)
-    const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
-    // Fresh work has no recovered-history freshness boundary. This must remain
-    // explicit now that runtime construction correctly follows WorkflowRunBegan.
-    const activationBaselinePosition = Option.none<JournalPosition>()
-    const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
-    const provideJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal>): Effect.Effect<A, E> =>
-      Effect.provideService(effect, InRunJournal, journal)
-    const continueAttempt = (plannedAttempt: PlannedTaskAttempt) =>
-      continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, executor),
-        Effect.provideService(InRunJournal, journal)
-      )
-    const runObservedOperation = (
-      transition: ObservedOperationTransition
-    ): Effect.Effect<void, RunRecoveryActivationError> =>
-      // eslint-disable-next-line complexity -- Closed observation tags route to their matching interpreter boundary.
-      Effect.gen(function* () {
-        const interpreter = Option.getOrUndefined(workflowInterpreter)
-        if (interpreter === undefined) {
-          return yield* Effect.die(`fresh journal activation cannot interpret ${transition._tag}`)
-        }
-        if (Option.isSome(workflowTrace)) {
-          yield* workflowTrace.value.emit(OperationSelected.make({ operation: transition.operation }))
-        }
-        switch (transition._tag) {
-          case "ObservePlannedAttemptContinuationClaim":
-          case "ObserveResponsibleTaskClaim":
-            yield* interpreter.readTaskClaim(transition.operation)
-            return
-          case "ObservePlannedAttemptContinuationGraph":
-            yield* interpreter.readTrackerGraph(transition.operation)
-            return
-          case "ObservePlannedAttemptContinuationSpecification":
-            yield* interpreter.readTaskWorkSpecification(transition.operation)
-            return
-          case "ObservePlannedAttemptContinuationTargetLineage":
-            yield* interpreter.readTargetLineage(transition.operation)
-            return
-          case "ObservePlannedAttemptContinuationWorktree":
-            yield* interpreter.readTaskWorktree(transition.operation)
-            return
-          case "ReleaseExternallyCompletedTaskClaim":
-            yield* interpreter.releaseTaskClaim(transition.operation)
-            return
-        }
-      })
-    /* v8 ignore start -- @preserve The shared reacquisition runtime is exercised through recovered activation. */
-    const runClaimReacquisition = (
-      transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>,
-      execution: OwnedTransitionExecution
-    ) =>
-      runTaskClaimReacquisition({
-        execution,
-        interpreter: Option.getOrThrowWith(
-          workflowInterpreter,
-          () => new Error("fresh journal activation has no workflow interpreter")
-        ),
-        journal,
-        planner: claimPlanner,
-        runId,
-        trace: workflowTrace,
-        transition
-      })
-    /* v8 ignore stop -- @preserve */
-    return RunRecoveryActivation.of({
-      _tag: "JournaledFreshRunActivation",
-      continueFreshPlannedAttemptExecutorWork: continueAttempt,
-      continuePlannedAttemptExecutorWork: continueAttempt,
-      readFinalityFrontier: provideJournal(
-        readRecoveredFrontier(
-          runId,
-          integrationResources,
-          integrationTarget,
-          activationBaselinePosition,
-          candidateCorrectionLimit,
-          candidateContinuationLimit
-        )
-      ),
-      readFrontier: provideJournal(
-        readJournaledFreshFrontier(
-          runId,
-          integrationResources,
-          integrationTarget,
-          activationBaselinePosition,
-          candidateCorrectionLimit,
-          candidateContinuationLimit
-        )
-      ),
-      readResponsibility: provideJournal(
-        readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
-      ),
-      readDeliveryProjection: provideJournal(
-        readRecoveredProjection(
-          runId,
-          integrationResources,
-          integrationTarget,
-          activationBaselinePosition,
-          candidateCorrectionLimit,
-          candidateContinuationLimit
-        ).pipe(
-          Effect.map(({ acceptedAt, allowRecoveredContinuation, frontier, integrationWaits, responsibilityFacts }) => ({
-            evidence: {
-              _tag: "AvailableDeliveryProjectionEvidence" as const,
-              acceptedAt,
-              facts: responsibilityFacts,
-              integrationWaits
-            },
-            frontier: journaledFreshFrontierOf(frontier, allowRecoveredContinuation)
-          }))
-        )
-      ),
-      readContinuationRequiresFreshFacts: provideJournal(
-        readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
-      ),
-      readPauseState: provideJournal(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
-      reconstructedPlannedAttemptPositions: [],
-      runId,
-      // eslint-disable-next-line complexity -- Fresh activation exhaustively routes its closed transition vocabulary.
-      runTransition: (transition, execution) =>
-        /* v8 ignore next -- @preserve Fresh activation cannot receive an explicit recovery-only reacquisition transition. */
-        transition._tag === "CommitTaskClaimReacquisitionIntent"
-          ? runClaimReacquisition(transition, execution)
-          : transition._tag === "ObservePlannedAttemptContinuationGraph" ||
-              transition._tag === "ObservePlannedAttemptContinuationClaim" ||
-              transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
-              transition._tag === "ObservePlannedAttemptContinuationTargetLineage" ||
-              transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
-              transition._tag === "ObserveResponsibleTaskClaim" ||
-              transition._tag === "ReleaseExternallyCompletedTaskClaim"
-            ? runObservedOperation(transition)
-            : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-                transition._tag === "SuspendPlannedAttemptExecutorWork"
-              ? Effect.gen(function* () {
-                  const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-                  if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
-                    yield* execution.bindPlannedAttemptExecutorPosition(correlation)
-                  }
-                  const report = yield* transition._tag === "ContinuePlannedAttemptExecutorWork"
-                    ? continueAttempt(transition.plannedAttempt)
-                    : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
-                        Effect.provideService(PlannedAttemptExecutor, executor),
-                        Effect.provideService(InRunJournal, journal)
-                      )
-                  if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
-                    yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
-                  }
-                })
-              : provideJournal(runIntegrationTransition(transition, integrationResources)).pipe(
-                  Effect.flatMap((handled) =>
-                    handled ? Effect.void : Effect.die(`fresh journal activation cannot run ${transition._tag}`)
-                  )
-                ),
-      waitForNextExecutorWake: Effect.void
-    })
-  }
-)
+const recoveryProjectionSnapshot = (
+  projection: Effect.Success<ReturnType<typeof readRecoveredProjection>>,
+  frontier: RunnableFrontier = projection.frontier
+): RunRecoveryProjectionSnapshot => ({
+  evidence: {
+    _tag: "AvailableDeliveryProjectionEvidence",
+    acceptedAt: projection.acceptedAt,
+    facts: projection.responsibilityFacts,
+    integrationWaits: projection.integrationWaits
+  },
+  frontier
+})
 
-export const makeJournaledFreshRunRecoveryActivation = (
-  runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget,
-  candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit,
-  options?: {
-    readonly integrationResources?: IntegrationTargetResourceController
-    readonly workflowTrace?: Option.Option<WorkflowTrace["Service"]>
-  }
-) =>
-  makeJournaledFreshRunRecoveryActivationEffect(
-    runId,
-    Option.fromUndefinedOr(configuredIntegrationTarget),
-    Option.fromUndefinedOr(candidateCorrectionLimit),
-    Option.fromUndefinedOr(candidateContinuationLimit),
-    options?.workflowTrace,
-    options?.integrationResources
-  )
-
-export const journaledFreshRunRecoveryActivationLayer = (
-  runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget,
-  candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit
-) =>
-  Layer.effect(
-    RunRecoveryActivation,
-    makeJournaledFreshRunRecoveryActivation(
-      runId,
-      configuredIntegrationTarget,
-      candidateCorrectionLimit,
-      candidateContinuationLimit
-    )
-  )
-
-const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRecoverySource")(function* (
+const makeJournaledFreshRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeJournaledFresh")(function* (
   runId: RunId,
   integrationTarget: Option.Option<IntegrationTarget>,
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
   integrationResourcesOverride: IntegrationTargetResourceController | undefined
 ) {
-  const dependencies = yield* Effect.context<InRunJournal | WorkflowInterpreter | WorkflowTrace>()
-  const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
-  const plannedAttemptExecutor = yield* PlannedAttemptExecutor
-  const workflowInterpreter = yield* WorkflowInterpreter
-  const workflowTrace = yield* WorkflowTrace
-  const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
-  const provideDependencies = <A, E>(
-    effect: Effect.Effect<A, E, InRunJournal | WorkflowInterpreter | WorkflowTrace>
-  ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
   const journal = yield* InRunJournal
+  const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
+  const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
+  const projection = readRecoveredProjection(
+    runId,
+    integrationResources,
+    integrationTarget,
+    activationBaselinePosition,
+    candidateCorrectionLimit,
+    candidateContinuationLimit
+  ).pipe(
+    Effect.map((current) =>
+      recoveryProjectionSnapshot(
+        current,
+        journaledFreshFrontierOf(current.frontier, current.allowRecoveredContinuation)
+      )
+    ),
+    Effect.provideService(InRunJournal, journal)
+  )
+  return RunRecoveryProjection.of({
+    _tag: "JournaledFreshRunProjection",
+    readDeliveryProjection: projection,
+    reconstructedPlannedAttemptPositions: [],
+    runId
+  })
+})
+
+/** Read-only projection for a live Run begun by this process. */
+export const makeJournaledFreshRunRecoveryProjection = (
+  runId: RunId,
+  configuredIntegrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit,
+  integrationResources?: IntegrationTargetResourceController
+) =>
+  makeJournaledFreshRunRecoveryProjectionEffect(
+    runId,
+    Option.fromUndefinedOr(configuredIntegrationTarget),
+    Option.fromUndefinedOr(candidateCorrectionLimit),
+    Option.fromUndefinedOr(candidateContinuationLimit),
+    integrationResources
+  )
+
+const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAuthoritative")(function* (
+  runId: RunId,
+  integrationTarget: Option.Option<IntegrationTarget>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
+  integrationResourcesOverride: IntegrationTargetResourceController | undefined
+) {
+  const journal = yield* InRunJournal
+  const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
   const initialReduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-  if (initialReduction._tag === "InvalidWorkflowJournalHistory") {
-    return yield* Effect.fail(initialReduction)
-  }
+  if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(initialReduction)
   const initialRecords = initialReduction.runState.workflowHistory.records
   const activationBaselinePosition = latestJournalPosition(initialRecords)
   const reconstructedPlannedAttemptPositions = initialReduction.runState.responsibility.entries.flatMap(
@@ -1868,169 +1446,31 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
           ]
     }
   )
-  const readFrontier = Effect.fn("RunRecoveryActivation.readActivationFrontier")(function* () {
-    return yield* readRecoveredFrontier(
-      runId,
-      integrationResources,
-      integrationTarget,
-      activationBaselinePosition,
-      candidateCorrectionLimit,
-      candidateContinuationLimit
-    )
-  })
-  const waitForNextExecutorWake = Effect.fn("RunRecoveryActivation.waitForNextExecutorWake")(() => Effect.void)
-  // eslint-disable-next-line complexity -- Closed observation tags route to their matching journaled authority boundary.
-  const runObservedOperation = Effect.fn("RunRecoveryActivation.runObservedOperation")(function* (
-    transition: ObservedOperationTransition
-  ) {
-    if (transition._tag === "ObservePlannedAttemptContinuationWorktree") {
-      const plannedAttempt = transition.operation.plannedAttempt
-      const runState = yield* readRecoveredRunState(runId)
-      if (
-        !attemptMayContinue(
-          runState,
-          plannedAttempt,
-          Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
-        )
-      )
-        return
-    }
-    yield* workflowTrace.emit(OperationSelected.make({ operation: transition.operation }))
-    switch (transition._tag) {
-      case "ObservePlannedAttemptContinuationClaim":
-      case "ObserveResponsibleTaskClaim":
-        yield* workflowInterpreter.readTaskClaim(transition.operation)
-        return
-      case "ObservePlannedAttemptContinuationGraph":
-        yield* workflowInterpreter.readTrackerGraph(transition.operation)
-        return
-      case "ObservePlannedAttemptContinuationSpecification":
-        yield* workflowInterpreter.readTaskWorkSpecification(transition.operation)
-        return
-      case "ObservePlannedAttemptContinuationTargetLineage":
-        yield* workflowInterpreter.readTargetLineage(transition.operation)
-        return
-      case "ObservePlannedAttemptContinuationWorktree":
-        yield* workflowInterpreter.readTaskWorktree(transition.operation)
-        return
-      case "ReleaseExternallyCompletedTaskClaim":
-        yield* workflowInterpreter.releaseTaskClaim(transition.operation)
-        return
-    }
-  })
-  const runClaimReacquisition = (
-    transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>,
-    execution: OwnedTransitionExecution
-  ) =>
-    runTaskClaimReacquisition({
-      execution,
-      interpreter: workflowInterpreter,
-      journal,
-      planner: claimPlanner,
-      runId,
-      trace: Option.some(workflowTrace),
-      transition
-    })
-  const runExecutorTransition = Effect.fn("RunRecoveryActivation.runExecutorTransition")(function* (
-    transition: Extract<
-      RunnableFrontierTransition,
-      { readonly _tag: "ContinuePlannedAttemptExecutorWork" | "SuspendPlannedAttemptExecutorWork" }
-    >,
-    execution: OwnedTransitionExecution
-  ) {
-    const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-    if (transition._tag === "ContinuePlannedAttemptExecutorWork") {
-      yield* execution.bindPlannedAttemptExecutorPosition(correlation)
-    }
-    const report = yield* (
-      transition._tag === "ContinuePlannedAttemptExecutorWork"
-        ? continuePlannedAttemptExecutorWork(transition.plannedAttempt)
-        : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt)
-    ).pipe(Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor))
-    if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
-      yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
-    }
-  })
-  const runTransition = Effect.fn("RunRecoveryActivation.runTransition")(function* (
-    transition: RunnableFrontierTransition,
-    execution: OwnedTransitionExecution
-  ) {
-    if (yield* runIntegrationTransition(transition, integrationResources)) return
-    if (transition._tag === "CommitTaskClaimReacquisitionIntent") {
-      yield* runClaimReacquisition(transition, execution)
-      return
-    }
-    if (isObservedOperationTransition(transition)) {
-      yield* runObservedOperation(transition)
-      return
-    }
-    if (
-      transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-      transition._tag === "SuspendPlannedAttemptExecutorWork"
-    ) {
-      yield* runExecutorTransition(transition, execution)
-      return
-    }
-    yield* recoverRunnableTransition(runId, transition)
-  })
-  return {
-    _tag: "AuthoritativeRunRecoveryActivation",
-    continueFreshPlannedAttemptExecutorWork: (plannedAttempt) =>
-      provideDependencies(
-        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-          Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
-        )
-      ),
-    continuePlannedAttemptExecutorWork: (plannedAttempt) =>
-      provideDependencies(
-        continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-          Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor)
-        )
-      ),
-    readFrontier: provideDependencies(readFrontier()),
-    readFinalityFrontier: provideDependencies(readFrontier()),
-    readResponsibility: provideDependencies(
-      readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
-    ),
-    readDeliveryProjection: provideDependencies(
-      readRecoveredProjection(
-        runId,
-        integrationResources,
-        integrationTarget,
-        activationBaselinePosition,
-        candidateCorrectionLimit,
-        candidateContinuationLimit
-      ).pipe(
-        Effect.map(({ acceptedAt, frontier, integrationWaits, responsibilityFacts }) => ({
-          evidence: {
-            _tag: "AvailableDeliveryProjectionEvidence" as const,
-            acceptedAt,
-            facts: responsibilityFacts,
-            integrationWaits
-          },
-          frontier
-        }))
-      )
-    ),
-    readContinuationRequiresFreshFacts: provideDependencies(
-      readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
-    ),
-    readPauseState: provideDependencies(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
-    reconstructedPlannedAttemptPositions,
+  const projection = readRecoveredProjection(
     runId,
-    runTransition: (transition, execution) => provideDependencies(runTransition(transition, execution)),
-    waitForNextExecutorWake: provideDependencies(waitForNextExecutorWake())
-  } satisfies AuthoritativeRunRecoveryActivation
+    integrationResources,
+    integrationTarget,
+    activationBaselinePosition,
+    candidateCorrectionLimit,
+    candidateContinuationLimit
+  ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
+  return RunRecoveryProjection.of({
+    _tag: "AuthoritativeRunRecoveryProjection",
+    readDeliveryProjection: projection,
+    reconstructedPlannedAttemptPositions,
+    runId
+  })
 })
 
-export const makeRunRecoveryActivation = (
+/** Read-only projection reconstructed from the exact accepted Run history. */
+export const makeRunRecoveryProjection = (
   runId: RunId,
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   integrationResources?: IntegrationTargetResourceController
 ) =>
-  makeRunRecoveryActivationEffect(
+  makeRunRecoveryProjectionEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
@@ -2038,60 +1478,18 @@ export const makeRunRecoveryActivation = (
     integrationResources
   )
 
-/**
- * Routes every already-intended recovered responsibility through the same
- * serial selector/admission/ownership loop used by fresh activation.
- */
-export const activateRecoveredResponsibilities = Effect.fn("RunRecoveryActivation.activateRecoveredResponsibilities")(
-  function* (
-    runId: RunId,
-    input: {
-      readonly candidateContinuationLimit?: CandidateContinuationLimit
-      readonly candidateCorrectionLimit?: CandidateCorrectionLimit
-      readonly capacity: TaskWorkCapacity
-      readonly integrationTarget: IntegrationTarget | undefined
-    }
-  ) {
-    const recovery = yield* makeRunRecoveryActivation(
+export const journaledFreshRunRecoveryProjectionLayer = (
+  runId: RunId,
+  configuredIntegrationTarget?: IntegrationTarget,
+  candidateCorrectionLimit?: CandidateCorrectionLimit,
+  candidateContinuationLimit?: CandidateContinuationLimit
+) =>
+  Layer.effect(
+    RunRecoveryProjection,
+    makeJournaledFreshRunRecoveryProjection(
       runId,
-      input.integrationTarget,
-      input.candidateCorrectionLimit,
-      input.candidateContinuationLimit
+      configuredIntegrationTarget,
+      candidateCorrectionLimit,
+      candidateContinuationLimit
     )
-    const admissionController = yield* makeTaskAdmissionController({
-      capacity: input.capacity,
-      reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
-    })
-    const completed = yield* Queue.unbounded<Exit.Exit<void, RunRecoveryActivationError>>()
-    const readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError> = recovery.readFrontier
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const coordinator = yield* makeActivationCoordinator({
-          admissionController,
-          readFrontier,
-          runId,
-          runTransition: (transition, execution): Effect.Effect<void, RunRecoveryActivationError> =>
-            Effect.gen(function* () {
-              const exit = yield* recovery.runTransition(transition, execution).pipe(Effect.exit)
-              yield* Queue.offer(completed, exit)
-              yield* Exit.match(exit, { onFailure: Effect.failCause, onSuccess: () => Effect.void })
-            })
-        })
-
-        function drainRecoveredResponsibilities(): Effect.Effect<void, RunRecoveryActivationError> {
-          return Effect.gen(function* () {
-            yield* coordinator.signal(ActivationCause.Restart()).pipe(Effect.orDie)
-            const next = (yield* recovery.readFrontier).transitions[0]
-            if (next === undefined && (yield* coordinator.isIdle)) {
-              yield* recovery.waitForNextExecutorWake
-              return
-            }
-            yield* Queue.take(completed).pipe(Effect.flatten, Effect.andThen(drainRecoveredResponsibilities))
-          })
-        }
-        yield* drainRecoveredResponsibilities()
-      })
-    )
-  }
-)
+  )

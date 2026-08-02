@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -29,8 +29,6 @@ import {
   deriveUnqueuedAcceptedResults,
   integrationTargetSelectionLayer,
   IntegrationTargetSelection,
-  PreIntegrationCancellationCapability,
-  QueuedIntegrationResponsibility,
   queueAcceptedResultIntegrationResponsibility,
   selectStartableIntegrationResponsibilities,
   startQueuedIntegration
@@ -72,16 +70,9 @@ import { reduceWorkflowJournalHistory } from "../../../coordination/reconstructi
 import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
-import {
-  IntegrationCandidateBoundaryUnavailable,
-  runIntegrationTransition
-} from "../../../coordination/run/integration-transition-runtime.js"
 import { runnableTransitionTaskId, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { OperationId } from "../../identity.js"
-import {
-  makeJournaledFreshRunRecoveryActivation,
-  makeRunRecoveryActivation
-} from "../../../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../../test/controlled-planned-attempt-executor.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../../workflow/interpretation/interpreter.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
@@ -90,10 +81,6 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { CandidateContinuationLimit, CandidateCorrectionLimit } from "../integration-candidate-construction/events.js"
-import {
-  IntegrationCandidateAgent,
-  IntegrationCandidateAgentReport
-} from "../integration-candidate-construction/protocol.js"
 
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
@@ -411,7 +398,14 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
     ])
     expect(frontier.transitions).toHaveLength(1)
 
-    const recovery = yield* makeRunRecoveryActivation(runId, integrationTarget)
+    const integrationResources = yield* makeIntegrationTargetResourceController()
+    const recovery = yield* makeRunRecoveryProjection(
+      runId,
+      integrationTarget,
+      undefined,
+      undefined,
+      integrationResources
+    )
     for (const attempt of [firstAttempt, secondAttempt]) {
       const read = makeTaskClaimObservationOperation(
         OperationId.make(`post-restart-claim:${attempt.attemptId}`),
@@ -425,22 +419,34 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
         taskTrackerFactsObservedEvent(read.operationId, makeFocusedTaskClaimFactsObserved(read, claimFor(attempt)))
       )
     }
-    const firstTransition = (yield* recovery.readFrontier).transitions[0]
+    const firstTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (firstTransition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
       return yield* Effect.die("expected queue reconciliation")
     }
     expect(runnableTransitionTaskId(firstTransition)).toBe(firstAttempt.taskId)
-    yield* recovery.runTransition(firstTransition, undefined as never)
-    yield* recovery.runTransition(firstTransition, undefined as never)
+    yield* queueAcceptedResultIntegrationResponsibility(
+      firstTransition.accepted.plannedAttempt,
+      firstTransition.accepted.acceptedResult,
+      firstTransition.integrationTarget
+    )
+    yield* queueAcceptedResultIntegrationResponsibility(
+      firstTransition.accepted.plannedAttempt,
+      firstTransition.accepted.acceptedResult,
+      firstTransition.integrationTarget
+    )
 
-    const secondFrontier = yield* recovery.readFrontier
+    const secondFrontier = (yield* recovery.readDeliveryProjection).frontier
     expect(secondFrontier.transitions).toHaveLength(1)
     const secondTransition = secondFrontier.transitions[0]
     if (secondTransition?._tag !== "QueueAcceptedResultIntegrationResponsibility") {
       return yield* Effect.die("expected second queue reconciliation")
     }
     expect(runnableTransitionTaskId(secondTransition)).toBe(secondAttempt.taskId)
-    yield* recovery.runTransition(secondTransition, undefined as never)
+    yield* queueAcceptedResultIntegrationResponsibility(
+      secondTransition.accepted.plannedAttempt,
+      secondTransition.accepted.acceptedResult,
+      secondTransition.integrationTarget
+    )
 
     const responsibilities = deriveIntegrationAdmission(yield* journal.read(runId)).responsibilities
     expect(responsibilities.map(({ plannedAttempt }) => plannedAttempt.attemptId)).toEqual([
@@ -448,7 +454,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
       secondAttempt.attemptId
     ])
     expect(responsibilities[0]?.queuedAt).toBeLessThan(responsibilities[1]?.queuedAt ?? JournalPosition.make(1))
-    const waitingFrontier = yield* recovery.readFrontier
+    const waitingFrontier = (yield* recovery.readDeliveryProjection).frontier
     expect(waitingFrontier.explanations.filter(({ _tag }) => _tag === "IntegrationTrackerFactsWait")).toEqual([
       { _tag: "IntegrationTrackerFactsWait", plannedAttempt: firstAttempt, wakeCondition: "TaskTrackerFactsObserved" },
       { _tag: "IntegrationTrackerFactsWait", plannedAttempt: secondAttempt, wakeCondition: "TaskTrackerFactsObserved" }
@@ -485,7 +491,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
         )
       )
     )
-    expect((yield* recovery.readFrontier).transitions).toEqual([])
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([])
 
     const graphRead = makeTrackerGraphObservationOperation(
       OperationId.make("post-restart-integration-facts"),
@@ -500,7 +506,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
         taskIds: [firstAttempt.taskId, secondAttempt.taskId]
       })
     )
-    expect(yield* recovery.readFrontier).toMatchObject({
+    expect((yield* recovery.readDeliveryProjection).frontier).toMatchObject({
       transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
     })
   }).pipe(
@@ -524,27 +530,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
   )
 )
 
-it.effect("journaled fresh activation fails closed on a non-integration recovered transition", () =>
-  Effect.gen(function* () {
-    const activation = yield* makeJournaledFreshRunRecoveryActivation(runId, integrationTarget)
-    if (activation._tag !== "JournaledFreshRunActivation") {
-      return yield* Effect.die("expected journaled fresh activation")
-    }
-    const exit = yield* Effect.exit(
-      activation.runTransition(
-        RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-          operationId: OperationId.make("not-recovered-in-fresh"),
-          taskId: TaskId.make("A")
-        }),
-        undefined as never
-      )
-    )
-
-    expect(exit._tag).toBe("Failure")
-  }).pipe(Effect.provide(Layer.merge(legacyMemoryJournalStoreLayer, controlledFakePlannedAttemptExecutorLayer)))
-)
-
-it.effect("acquires, releases, and reacquires the process-local target around one started responsibility", () =>
+it.effect("composes exact integration start with process-local target acquisition and release", () =>
   Effect.gen(function* () {
     const attempt = plannedAttempt("A", 0)
     const result = acceptedResult("a")
@@ -553,12 +539,8 @@ it.effect("acquires, releases, and reacquires the process-local target around on
     const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
     const resources = yield* makeIntegrationTargetResourceController()
 
-    expect(
-      yield* runIntegrationTransition(
-        RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued }),
-        resources
-      )
-    ).toBe(true)
+    yield* resources.acquire(queued)
+    yield* startQueuedIntegration(queued)
     const started = deriveIntegrationAdmission(
       yield* JournalStore.pipe(Effect.flatMap((journal) => journal.read(runId)))
     ).responsibilities[0]
@@ -566,33 +548,6 @@ it.effect("acquires, releases, and reacquires the process-local target around on
       return yield* Effect.die("expected started responsibility")
     }
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
-
-    const candidateTransition = RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-      continuationLimit: CandidateContinuationLimit.make(2),
-      correctionLimit: CandidateCorrectionLimit.make(1),
-      lineage: TargetLineageObservation.make({
-        plannedBaseIsAncestorOfTargetHead: true,
-        plannedBaseSha: attempt.baseSha,
-        targetHeadSha: GitCommitSha.make("f".repeat(40))
-      }),
-      responsibility: started
-    })
-    expect(yield* Effect.flip(runIntegrationTransition(candidateTransition, resources))).toEqual(
-      new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
-    )
-    expect(
-      yield* Effect.flip(
-        runIntegrationTransition(candidateTransition, resources).pipe(
-          Effect.provideService(
-            IntegrationCandidateAgent,
-            IntegrationCandidateAgent.of({
-              startOrContinue: (request) =>
-                Effect.succeed(IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation }))
-            })
-          )
-        )
-      )
-    ).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
 
     const runState = reconstructRunState(
       runId,
@@ -610,55 +565,10 @@ it.effect("acquires, releases, and reacquires the process-local target around on
     ).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }))
     yield* resources.acquire(started)
 
-    expect(
-      yield* runIntegrationTransition(
-        RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started }),
-        resources
-      )
-    ).toBe(true)
+    yield* resources.release(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
-    expect(
-      yield* runIntegrationTransition(
-        RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }),
-        resources
-      )
-    ).toBe(true)
+    yield* resources.acquire(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
-    expect(
-      yield* runIntegrationTransition(
-        RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-          operationId: OperationId.make("not-integration"),
-          taskId: attempt.taskId
-        }),
-        resources
-      )
-    ).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
-)
-
-it.effect("releases the process-local target when the cutoff append fails", () =>
-  Effect.gen(function* () {
-    const attempt = plannedAttempt("A", 0)
-    yield* beginRun
-    yield* JournalStore.pipe(Effect.flatMap((journal) => journal.terminateRun(runId)))
-    const queued = QueuedIntegrationResponsibility.make({
-      acceptedResult: acceptedResult("a"),
-      integrationTarget,
-      plannedAttempt: attempt,
-      preIntegrationCancellation: PreIntegrationCancellationCapability.make({
-        attemptId: attempt.attemptId,
-        queuedAt: JournalPosition.make(1),
-        runId: attempt.runId
-      }),
-      queuedAt: JournalPosition.make(1)
-    })
-    const resources = yield* makeIntegrationTargetResourceController()
-
-    yield* Effect.flip(
-      runIntegrationTransition(RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued }), resources)
-    )
-
-    expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
@@ -863,11 +773,13 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
       })
     )
 
-    const recovery = yield* makeRunRecoveryActivation(
+    const integrationResources = yield* makeIntegrationTargetResourceController()
+    const recovery = yield* makeRunRecoveryProjection(
       runId,
       integrationTarget,
       CandidateCorrectionLimit.make(1),
-      CandidateContinuationLimit.make(2)
+      CandidateContinuationLimit.make(2),
+      integrationResources
     )
     const claimRead = makeTaskClaimObservationOperation(
       OperationId.make("post-restart-stale-lineage-claim"),
@@ -897,15 +809,15 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
       })
     )
 
-    const acquisition = (yield* recovery.readFrontier).transitions.find(
+    const acquisition = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
     )
     if (acquisition?._tag !== "AcquireStartedIntegrationTarget") {
       return yield* Effect.die("expected restarted integration target acquisition")
     }
-    yield* recovery.runTransition(acquisition, undefined as never)
+    yield* integrationResources.acquire(acquisition.responsibility)
 
-    const lineageRead = (yield* recovery.readFrontier).transitions.find(
+    const lineageRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
     )
     expect(lineageRead).toMatchObject({

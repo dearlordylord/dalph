@@ -51,7 +51,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../protocols/planned-attempt-executor-work/events.js"
-import { makeRunRecoveryActivation, RunRecoveryActivation } from "../../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection, RunRecoveryProjection } from "../../coordination/run/recovery-activation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskClaimAcquisitionPlanner } from "../protocols/task-claim-acquisition/plan.js"
 import {
@@ -66,7 +66,6 @@ import {
   makeTrackerGraphObservationOperation
 } from "./operation.js"
 import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
-import { runRecoveredWorkflow } from "../../coordination/run/run.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
 import {
   AppliedControlDirection,
@@ -814,7 +813,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         controlledFakePlannedAttemptExecutorLayer
       )
-      const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provide(startupLayer))
       const journalLayer = Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read }))
       const workflowLayer = Layer.mergeAll(
         journalLayer,
@@ -828,7 +827,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
             terminateRun: journal.terminateRun
           })
         ),
-        Layer.succeed(RunRecoveryActivation, recovery),
+        Layer.succeed(RunRecoveryProjection, recovery),
         journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter)).pipe(
           Layer.provide(journalLayer)
         ),
@@ -859,7 +858,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("no eligible startup task") })
         )
       )
-      yield* runRecoveredWorkflow(target).pipe(Effect.provide(workflowLayer))
+      yield* interpreter.readTrackerGraph(operation).pipe(Effect.provide(workflowLayer))
       expect(yield* Ref.get(trackerReads)).toBe(1)
     }
 

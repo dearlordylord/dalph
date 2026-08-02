@@ -68,7 +68,7 @@ import type {
   IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
-import { IntegrationCandidateBoundaryUnavailable } from "../run/integration-transition-runtime.js"
+import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import { executeFreshAttemptPlanning, executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"

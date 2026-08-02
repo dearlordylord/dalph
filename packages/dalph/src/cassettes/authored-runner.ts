@@ -1,11 +1,10 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   ControlDirectionApplication,
   controlDirectionApplicationLayer,
-  TaskClaimReacquisitionControl,
   taskClaimReacquisitionControlLayer,
   CoordinatorOwnership,
   controlledTrackerMutationLayerFrom,
@@ -14,15 +13,6 @@ import {
   deterministicTaskClaimAcquisitionPlannerLayer,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
-  AcceptedFactPublicationGateway,
-  type AllocatedFreshWorkflowRunId,
-  delivery,
-  DeliveryActionExecutor,
-  JournaledRunBootstrap,
-  makeLiveDeliveryActionExecutor,
-  makeReactiveDeliveryRelationsLayer,
-  runDeliveryRuntime,
-  RunRecoveryActivation,
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
@@ -36,6 +26,7 @@ import {
   type JournalRecord,
   JournalStore,
   journalStoreCapabilities,
+  JournaledRunBootstrap,
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
@@ -49,7 +40,6 @@ import {
   runWorkflow,
   validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
-  TaskWorkCapacityControl,
   TargetLineageObservation,
   TestGitWorktree,
   TrackerMutation,
@@ -59,6 +49,7 @@ import {
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   AuthoredScenarioCassette,
+  type AuthoredCassetteStoryItem,
   type AuthoredObservedBehavior,
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
@@ -84,44 +75,8 @@ const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
 const authoredSettlementYieldTurns = 10
 
-type AuthoredRuntimeSelection = "CandidateDeliveryRuntime" | "ProductionScheduler"
-
-const runCandidateDeliveryProgram = (runId: RunId, target: Parameters<typeof runWorkflow>[0]) =>
-  Effect.gen(function* () {
-    const gateway = yield* AcceptedFactPublicationGateway
-    const control = yield* TaskWorkCapacityControl
-    const recovery = yield* RunRecoveryActivation
-    const executor = yield* makeLiveDeliveryActionExecutor(runId, target)
-    const candidateGateway = AcceptedFactPublicationGateway.of({
-      ...gateway,
-      readCurrent: control.read(runId).pipe(Effect.orDie, Effect.andThen(gateway.readCurrent))
-    })
-    const relations = yield* makeReactiveDeliveryRelationsLayer(runId, target, candidateGateway, recovery)
-    const relation = yield* delivery.pipe(Effect.provide(relations))
-    return yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, executor))
-  })
-
-const runCandidateFreshWorkflow = (
-  target: Parameters<typeof runWorkflow>[0],
-  initialPolicy: Parameters<typeof runWorkflow>[1],
-  runId: AllocatedFreshWorkflowRunId
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.fresh(target, initialPolicy, runId, runCandidateDeliveryProgram(runId, target))
-  })
-
-const runCandidateRecoveredWorkflow = (runId: RunId, target: Parameters<typeof runRecoveredWorkflow>[0]) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.recovered(target, runCandidateDeliveryProgram(runId, target))
-  })
-
-/** Decodes and drives one story through the selected production-shaped activation program. */
-const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (
-  input: unknown,
-  runtimeSelection: AuthoredRuntimeSelection
-) {
+/** Decodes and drives one story through the production flat-delivery program. */
+const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
   return yield* Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
     Effect.gen(function* () {
@@ -156,10 +111,6 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorDies = cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
       const trace = controlledTrace(cursor)
-      const tracesFreshRecovery = cassette.story.some(
-        (item) =>
-          item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
-      )
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
@@ -241,54 +192,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
       const baseControlPolicyLayer = taskWorkCapacityControlLayer
       const operatorControlLayer = Layer.merge(controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
-      const controlledControlPolicyLayer = Layer.effect(
-        TaskWorkCapacityControl,
-        Effect.gen(function* () {
-          const control = yield* TaskWorkCapacityControl
-          const controlDirection = yield* ControlDirectionApplication
-          const claimReacquisitionControl = yield* TaskClaimReacquisitionControl
-          return TaskWorkCapacityControl.of({
-            ...control,
-            read: (requestedRunId) =>
-              Effect.gen(function* () {
-                const change = yield* cursor.consumeCapacityChange
-                if (Option.isSome(change)) {
-                  const current = yield* control.read(requestedRunId)
-                  yield* control
-                    .apply({
-                      capacity: change.value.capacity,
-                      expectedRevision: current.revision,
-                      runId: requestedRunId
-                    })
-                    .pipe(Effect.orDie)
-                }
-                const direction = yield* cursor.consumeControlDirection
-                if (Option.isSome(direction)) {
-                  yield* controlDirection
-                    .apply({
-                      direction: direction.value.direction,
-                      subject:
-                        direction.value.subject._tag === "Run"
-                          ? { _tag: "Run", runId: requestedRunId }
-                          : { _tag: "Task", runId: requestedRunId, taskId: direction.value.subject.taskId }
-                    })
-                    .pipe(Effect.orDie)
-                }
-                const reacquisition = yield* cursor.consumeClaimReacquisitionDirection
-                if (Option.isSome(reacquisition)) {
-                  yield* claimReacquisitionControl
-                    .apply({
-                      requestId: reacquisition.value.requestId,
-                      subject: { runId: requestedRunId, taskId: reacquisition.value.taskId }
-                    })
-                    .pipe(Effect.orDie)
-                }
-                yield* cursor.pauseAtCoordinatorProcessDeath
-                return yield* control.read(requestedRunId)
-              })
-          })
-        })
-      ).pipe(Layer.provide(baseControlPolicyLayer), Layer.provideMerge(operatorControlLayer))
+      const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer)
       const planningLayer = (phase: "fresh" | "recovery") =>
         Layer.mergeAll(
@@ -391,18 +295,17 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             const controlDirection = yield* ControlDirectionApplication
             return controlledExecutorLayer(cursor, runId, applyNextControlDirection(controlDirection))
           })
-        ).pipe(Layer.provide(controlledControlPolicyLayer))
+        ).pipe(Layer.provide(controlPolicyLayer))
         const startupLayer = validatedStartupRecoveryLayer(
           runId,
           command.integrationTarget,
           startup,
           CandidateCorrectionLimit.make(1),
-          CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
-          { freshRecoveryTrace: tracesFreshRecovery ? "Emit" : "Suppress" }
+          CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),
-          Layer.provide(controlledControlPolicyLayer),
+          Layer.provide(controlPolicyLayer),
           Layer.provide(executorLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
           Layer.provide(planning)
@@ -414,18 +317,67 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         Layer.provide(coordinatorOwnershipLayer)
       )
 
+      const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const bootstrap = yield* JournaledRunBootstrap
+            const driveCapacityChange = Effect.gen(function* () {
+              const change = yield* cursor.consumeCapacityChange
+              /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
+              if (Option.isNone(change)) return
+              /* v8 ignore stop */
+              const current = yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)
+              yield* bootstrap.operatorControl.setTaskWorkCapacity({
+                capacity: change.value.capacity,
+                expectedRevision: current.revision,
+                runId
+              })
+            }).pipe(Effect.orDie)
+            const driveControlDirection = Effect.gen(function* () {
+              const direction = yield* cursor.consumeControlDirection
+              /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
+              if (Option.isNone(direction)) return
+              /* v8 ignore stop */
+              yield* bootstrap.operatorControl.applyControlDirection({
+                direction: direction.value.direction,
+                subject:
+                  direction.value.subject._tag === "Run"
+                    ? { _tag: "Run", runId }
+                    : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
+              })
+            }).pipe(Effect.orDie)
+            const driveClaimReacquisition = Effect.gen(function* () {
+              const direction = yield* cursor.consumeClaimReacquisitionDirection
+              /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
+              if (Option.isNone(direction)) return
+              /* v8 ignore stop */
+              yield* bootstrap.operatorControl.applyTaskClaimReacquisition({
+                requestId: direction.value.requestId,
+                subject: { runId, taskId: direction.value.taskId }
+              })
+            }).pipe(Effect.orDie)
+            const drivers: Partial<Record<AuthoredCassetteStoryItem["_tag"], Effect.Effect<void>>> = {
+              CoordinatorProcessDies: cursor.pauseAtCoordinatorProcessDeath,
+              OperatorAppliesControlDirection: driveControlDirection,
+              OperatorDirectsTaskClaimReacquisition: driveClaimReacquisition,
+              SetTaskExecutionCapacity: driveCapacityChange
+            }
+            const driveAuthoredOperatorItem = (item: AuthoredCassetteStoryItem | undefined) => {
+              /* v8 ignore start -- scoped execution stops before the cursor can publish its out-of-range sentinel. */
+              if (item === undefined) return Effect.void
+              /* v8 ignore stop */
+              return drivers[item._tag] ?? Effect.void
+            }
+            yield* cursor.storyItems.pipe(Stream.runForEach(driveAuthoredOperatorItem), Effect.forkScoped)
+            return yield* program
+          })
+        )
+
       const execution = yield* Effect.scoped(
         Effect.gen(function* () {
-          const freshRun = Effect.gen(function* () {
-            if (runtimeSelection === "CandidateDeliveryRuntime") {
-              return yield* runCandidateFreshWorkflow(command.target, initial.policy, runId).pipe(
-                Effect.provide(planningLayer("fresh"))
-              )
-            }
-            return yield* runWorkflow(command.target, initial.policy, runId).pipe(
-              Effect.provide(planningLayer("fresh"))
-            )
-          })
+          const freshRun = withAuthoredOperatorDriver(
+            runWorkflow(command.target, initial.policy, runId).pipe(Effect.provide(planningLayer("fresh")))
+          )
           if (coordinatorDies) {
             const coordinator = yield* Effect.forkScoped(freshRun)
             yield* Effect.raceFirst(
@@ -435,14 +387,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               )
             )
             yield* Fiber.interrupt(coordinator)
-            const recoveredRun = Effect.gen(function* () {
-              if (runtimeSelection === "CandidateDeliveryRuntime") {
-                return yield* runCandidateRecoveredWorkflow(runId, command.target).pipe(
-                  Effect.provide(planningLayer("recovery"))
-                )
-              }
-              return yield* runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
-            })
+            const recoveredRun = withAuthoredOperatorDriver(
+              runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
+            )
             const recovered = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
             yield* Effect.raceFirst(
               cursor.awaitTerminalAssertions,
@@ -461,12 +408,12 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         }).pipe(Effect.provide(application))
       )
       const { records, recoveredCoordinatorExit } = execution
+      if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
+        return yield* Effect.failCause(recoveredCoordinatorExit.cause)
+      }
       const assertions = yield* cursor.consumeTerminalAssertions
       const behaviorExit = yield* Effect.exit(assertAuthoredExpectedBehavior(records, assertions))
       if (Exit.isFailure(behaviorExit)) {
-        if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
-          return yield* Effect.failCause(recoveredCoordinatorExit.cause)
-        }
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
@@ -484,10 +431,5 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
 
 /** Decodes and drives one story through the production coordinator activation program. */
 export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")((input: unknown) =>
-  runAuthoredScenarioCassetteWith(input, "ProductionScheduler")
-)
-
-/** Package-private #183 seam; no public barrel exports this candidate scheduler. */
-export const runAuthoredScenarioCassetteWithCandidateRuntime = Effect.fn("AuthoredCassette.runCandidate")(
-  (input: unknown) => runAuthoredScenarioCassetteWith(input, "CandidateDeliveryRuntime")
+  runAuthoredScenarioCassetteWith(input)
 )

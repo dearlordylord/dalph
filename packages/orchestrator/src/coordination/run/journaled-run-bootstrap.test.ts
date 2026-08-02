@@ -25,7 +25,7 @@ import { makeTrackerGraphObservationOperation } from "../../workflow/registry/op
 import { intentRecordKey } from "../../workflow-journal/record-key.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
-import { RunRecoveryActivation } from "./recovery-activation.js"
+import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
@@ -34,6 +34,11 @@ import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/tas
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+const finalityProof = (
+  decision:
+    | ReturnType<typeof RunFinalityDecision.RunMayTerminate>
+    | ReturnType<typeof RunFinalityDecision.RunMustRemainActive>
+) => ({ acceptedAt: JournalPosition.make(1), decision })
 const ownershipLayer = Layer.succeed(
   CoordinatorOwnership,
   CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
@@ -42,7 +47,14 @@ const runtimeLayer = Layer.mergeAll(
   Layer.effect(InRunJournal, InRunJournal),
   controlDirectionApplicationLayer,
   Layer.mock(PlannedAttemptExecutor, {}),
-  Layer.mock(RunRecoveryActivation, { _tag: "SyntheticFreshOnlyActivation", reconstructedPlannedAttemptPositions: [] }),
+  Layer.mock(RunRecoveryProjection, {
+    _tag: "SyntheticFreshOnlyProjection",
+    readDeliveryProjection: Effect.succeed({
+      evidence: { _tag: "UnavailableDeliveryProjectionEvidence" as const },
+      frontier: { explanations: [], transitions: [] }
+    }),
+    reconstructedPlannedAttemptPositions: []
+  }),
   taskWorkCapacityControlLayer,
   taskClaimReacquisitionControlLayer,
   deliveryRuntimeResourcesLayer,
@@ -91,7 +103,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
               hasTrackerGraph: Option.isSome(Context.getOption(context, TrackerGraphRelation))
             })
           )
-          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+          return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
         })
       )
 
@@ -123,7 +135,7 @@ it.effect("rejects a different fresh Run identity before recording its beginning
           requestedTarget,
           initialPolicy,
           requestedRunId,
-          Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
         )
         .pipe(Effect.flip)
 
@@ -163,7 +175,7 @@ it.effect("blocks runtime construction when the freshly read journal prefix is i
           initialPolicy,
           runId,
           Ref.set(runtimeEntered, true).pipe(
-            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
           )
         )
         .pipe(Effect.flip)
@@ -187,7 +199,7 @@ it.effect("uses the configured Run identity when recovery finds no unfinished Ru
       const failure = yield* bootstrap
         .recovered(
           target,
-          Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
         )
         .pipe(Effect.flip)
 
@@ -219,7 +231,7 @@ it.effect("publishes an Operator Pause through the active gateway without exposi
             yield* Deferred.await(inspectPause)
             yield* Deferred.succeed(observedPause, (yield* gateway.readCurrent).reconstructed.pause.run._tag)
             yield* Deferred.await(finish)
-            return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
           })
         )
         .pipe(Effect.forkChild)
@@ -283,7 +295,7 @@ it.effect(
               )
               yield* Deferred.succeed(firstAppended, undefined)
               yield* Deferred.await(finishFirst)
-              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+              return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             })
           )
           .pipe(Effect.forkChild)
@@ -303,7 +315,7 @@ it.effect(
                 intentRecordKey(secondOperation.operationId),
                 taskTrackerReadIntent(secondOperation)
               )
-              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+              return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             })
           )
           .pipe(Effect.forkChild)
@@ -358,7 +370,7 @@ it.effect("drains accepted Operator calls and records termination before another
           Effect.gen(function* () {
             yield* Deferred.succeed(runtimeActive, undefined)
             yield* Deferred.await(finishRuntime)
-            return RunFinalityDecision.RunMayTerminate()
+            return finalityProof(RunFinalityDecision.RunMayTerminate())
           })
         )
         .pipe(Effect.forkChild)
@@ -389,7 +401,7 @@ it.effect("drains accepted Operator calls and records termination before another
         .recovered(
           target,
           Deferred.succeed(recoveryActive, undefined).pipe(
-            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
           )
         )
         .pipe(Effect.flip, Effect.forkChild)
@@ -403,6 +415,58 @@ it.effect("drains accepted Operator calls and records termination before another
         "WorkflowRunBegan",
         "TaskWorkCapacityChanged",
         "WorkflowRunTerminated"
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rechecks a terminal decision after an already-accepted Operator Pause finishes appending", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-pause-before-termination")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const pauseAppendStarted = yield* Deferred.make<void>()
+      const releasePauseAppend = yield* Deferred.make<void>()
+      const runtimeActive = yield* Deferred.make<void>()
+      const finishRuntime = yield* Deferred.make<void>()
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "ControlDirectionApplied"
+            ? Deferred.succeed(pauseAppendStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releasePauseAppend)),
+                Effect.andThen(delegate.append(requestedRunId, key, event))
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const running = yield* bootstrap
+        .fresh(
+          target,
+          initialPolicy,
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(Deferred.await(finishRuntime)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMayTerminate()))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+      const pause = yield* bootstrap.operatorControl
+        .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(pauseAppendStarted)
+      yield* Deferred.succeed(finishRuntime, undefined)
+      yield* Effect.yieldNow
+
+      yield* Deferred.succeed(releasePauseAppend, undefined)
+      yield* Fiber.join(pause)
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "ControlDirectionApplied"
       ])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))

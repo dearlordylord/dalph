@@ -57,7 +57,7 @@ export type DeliveryProposalOrderEvidence =
       readonly taskId: TaskId
       readonly terminalAt: JournalPosition
     }
-  | { readonly _tag: "TrackerGraphOrder"; readonly acceptedAt: JournalPosition }
+  | { readonly _tag: "TrackerGraphOrder"; readonly acceptedAt: JournalPosition | null }
 
 /** The task-work position the runtime must prove before it may perform this action. */
 export type TaskWorkPositionRequirement =
@@ -159,7 +159,6 @@ export type FreshOperationOnlyRoute =
   | { readonly _tag: "RecoveredNewActionRoute"; readonly action: NewRecoveredWorkflowAction }
   | {
       readonly _tag: "TrackerGraphReadRoute"
-      readonly acceptedAt: JournalPosition
       readonly purpose: "EstablishCurrentGraph" | "QuiescenceProbe"
       readonly target: TrackerTarget
     }
@@ -266,8 +265,6 @@ export type TrackerGraphActionProposal = FreshIdentityDeliveryProposal & {
 export interface DeliveryProposalContributions {
   readonly deliverySettlement: ReadonlyArray<DeliveryActionProposal>
   readonly issues: ReadonlyArray<DeliveryProposalDerivationIssue>
-  /** Diagnostic-only mapping retained outside proposal values during shadow cutover. */
-  readonly selectedTransitionKeys: ReadonlyArray<string>
   readonly ticketDelivery: ReadonlyArray<DeliveryActionProposal>
 }
 
@@ -309,7 +306,7 @@ export interface DeliveryProposalsInput {
 }
 
 export interface TrackerGraphReadProposalInput {
-  readonly acceptedAt: JournalPosition
+  readonly acceptedAt: JournalPosition | null
   readonly purpose: "EstablishCurrentGraph" | "QuiescenceProbe"
   readonly runId: RunId
   readonly target: TrackerTarget
@@ -332,12 +329,7 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
 
 /** Describes one fresh complete-graph read without allocating or recording its OperationId. */
 export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput): TrackerGraphActionProposal => {
-  const route: FreshOperationRoute = {
-    _tag: "TrackerGraphReadRoute",
-    acceptedAt: input.acceptedAt,
-    purpose: input.purpose,
-    target: input.target
-  }
+  const route: FreshOperationRoute = { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
   return {
     _tag: "DeliveryActionProposal",
     actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },

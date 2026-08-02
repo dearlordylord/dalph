@@ -1,6 +1,6 @@
 import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import {
-  emptyRunRecoveryActivationLayer,
+  emptyRunRecoveryProjectionLayer,
   makeDryRunWorkflowInterpreterLayer,
   makeLiveWorkflowInterpreterLayer
 } from "@dalph/orchestrator"
@@ -8,7 +8,8 @@ import { Layer } from "effect"
 
 export { makeLiveWorkflowInterpreterLayer }
 
-export const dryRunWorkflowInterpreterLayer = Layer.merge(
+export const dryRunWorkflowInterpreterLayer = Layer.mergeAll(
   makeDryRunWorkflowInterpreterLayer(),
-  emptyRunRecoveryActivationLayer.pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
+  controlledFakePlannedAttemptExecutorLayer,
+  emptyRunRecoveryProjectionLayer
 )

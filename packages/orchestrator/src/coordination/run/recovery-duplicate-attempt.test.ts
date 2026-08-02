@@ -15,7 +15,6 @@ import {
 } from "@dalph/contracts"
 import { JournalDatabaseLocator, JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { TaskWorkCapacity } from "../admission/capacity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
@@ -23,12 +22,12 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal, JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
-import { activateRecoveredResponsibilities } from "./recovery-activation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { legacySqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { causalClaimForAttempt } from "./recovery-authority.js"
+import { makeRunRecoveryProjection } from "./recovery-activation.js"
 
 const runId = RunId.make("duplicate-attempt-production-recovery")
 const taskId = TaskId.make("A")
@@ -153,10 +152,10 @@ it.effect(
       }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
       expect(roundTrippedRecords).toEqual(invalidRecords)
 
-      const failure = yield* activateRecoveredResponsibilities(runId, {
-        capacity: TaskWorkCapacity.make(1),
-        integrationTarget: undefined
-      }).pipe(Effect.provide(boundaryLayer(roundTrippedRecords)), Effect.flip)
+      const failure = yield* makeRunRecoveryProjection(runId).pipe(
+        Effect.provide(boundaryLayer(roundTrippedRecords)),
+        Effect.flip
+      )
 
       expect(failure).toMatchObject({
         _tag: "InvalidWorkflowJournalHistory",

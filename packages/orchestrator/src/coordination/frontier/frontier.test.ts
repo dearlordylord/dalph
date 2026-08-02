@@ -1,6 +1,4 @@
-import { it } from "@effect/vitest"
-import { Effect, Option } from "effect"
-import { expect } from "vitest"
+import { expect, it } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -18,7 +16,6 @@ import {
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { TaskWorkCapacity } from "../admission/capacity.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "../reconstruction/state.js"
 import {
   deriveRunFinalityDecision,
@@ -27,8 +24,6 @@ import {
   RunnableFrontierTransition,
   runnableTransitionTaskId
 } from "./frontier.js"
-import { makeSelectedTransitionIdentity } from "../activation/selected-transition.js"
-import { makeTaskAdmissionController, type NextAdmissionDecision } from "../admission/controller.js"
 import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   makeTaskClaimReleaseOperation,
@@ -38,12 +33,8 @@ import {
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
 const taskC = TaskId.make("task-C")
-const taskD = TaskId.make("task-D")
 const frontierRunId = RunId.make("frontier-test-run")
 const freshTask = (taskId: TaskId) => ({ taskId, taskRevision: TaskRevision.make(`revision:${taskId}`) })
-
-const admittedTransitions = (decision: NextAdmissionDecision): ReadonlyArray<RunnableFrontierTransition> =>
-  Option.toArray(decision.transition)
 
 const executionResponsibilityFor = (taskId: TaskId, operationIdentity: string = taskId) => {
   const plannedAttempt = PlannedTaskAttempt.make({
@@ -74,28 +65,15 @@ const operationResponsibilityFor = (taskId: TaskId) =>
     taskId
   })
 
-it.effect("admits only the canonical first fresh task when one position is available", () =>
-  Effect.gen(function* () {
-    const frontier = deriveRunnableFrontier({
-      freshEligibleTasks: [freshTask(taskB), freshTask(taskA)],
-      responsibility: WorkflowResponsibilityState.make({ entries: [] }),
-      responsibilityFacts: []
-    })
-    const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
-
-    const admission = yield* controller.admit(frontier, frontierRunId)
-
-    expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB])
-    expect(admittedTransitions(admission)).toEqual([{ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskA) }])
-    expect(yield* controller.snapshot()).toEqual({
-      capacity: 1,
-      reservedPositions: [
-        { correlation: { _tag: "SelectedTransitionReservation", selected: expect.any(Object) }, taskId: taskA }
-      ],
-      reservedTaskIds: [taskA]
-    })
+it("orders fresh tasks canonically before runtime admission", () => {
+  const frontier = deriveRunnableFrontier({
+    freshEligibleTasks: [freshTask(taskB), freshTask(taskA)],
+    responsibility: WorkflowResponsibilityState.make({ entries: [] }),
+    responsibilityFacts: []
   })
-)
+
+  expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB])
+})
 
 it("orders owned work by earliest outstanding journal position before task identity", () => {
   const laterA = { ...executionResponsibilityFor(taskA, "task-A-later"), beganAt: JournalPosition.make(3) }
@@ -171,102 +149,62 @@ it("retains a terminal executor report for the exact planned attempt", () => {
   ).toEqual({ _tag: "RunMayTerminate" })
 })
 
-it.effect("gives a resumed responsibility the next released position before fresh work", () =>
-  Effect.gen(function* () {
-    const responsibility = executionResponsibilityFor(taskA)
-    const responsibilityState = WorkflowResponsibilityState.make({ entries: [responsibility] })
-    const pausedFrontier = deriveRunnableFrontier({
-      freshEligibleTasks: [freshTask(taskD)],
-      responsibility: responsibilityState,
-      responsibilityFacts: [
-        {
-          _tag: "PlannedAttemptExecutorFreshFacts",
-          disposition: ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
-            correlation: {
-              attemptId: responsibility.plannedAttempt.attemptId,
-              runId: responsibility.plannedAttempt.runId
-            }
-          }),
-          responsibility
-        }
-      ]
-    })
-    const resumedFrontier = deriveRunnableFrontier({
-      freshEligibleTasks: [freshTask(taskD)],
-      responsibility: responsibilityState,
-      responsibilityFacts: [
-        { _tag: "PlannedAttemptExecutorFreshFacts", disposition: ResponsibilityDisposition.Ready(), responsibility }
-      ]
-    })
-    for (const occupiedTaskIds of [[taskB], [taskB, taskC]]) {
-      const controller = yield* makeTaskAdmissionController({
-        capacity: TaskWorkCapacity.make(occupiedTaskIds.length),
-        reconstructedPlannedAttemptPositions: occupiedTaskIds.map((taskId) => ({
-          attemptId: AttemptId.make(`occupied-${taskId}`),
-          runId: frontierRunId,
-          taskId
-        }))
-      })
-      const restartedController = yield* makeTaskAdmissionController({
-        capacity: TaskWorkCapacity.make(occupiedTaskIds.length),
-        reconstructedPlannedAttemptPositions: occupiedTaskIds.map((taskId) => ({
-          attemptId: AttemptId.make(`occupied-${taskId}`),
-          runId: frontierRunId,
-          taskId
-        }))
-      })
-      expect(admittedTransitions(yield* controller.admit(pausedFrontier, frontierRunId))).toEqual([])
-      const whileBusy = yield* controller.admit(resumedFrontier, frontierRunId)
-      const restartedWhileBusy = yield* restartedController.admit(resumedFrontier, frontierRunId)
-      expect(restartedWhileBusy).toEqual(whileBusy)
-      expect(admittedTransitions(whileBusy)).toEqual([])
-      expect(whileBusy.explanations).toContainEqual({
-        _tag: "CapacityWait",
-        taskId: taskA,
-        wakeCondition: "CapacityReleasedOrReconstructedStateChanged"
-      })
+it("keeps delivery active for a non-terminal wait but accepts an externally settled attempt", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+  expect(
+    deriveRunFinalityDecision(
+      {
+        explanations: [
+          {
+            _tag: "PlannedAttemptTaskLifecycleConstraint",
+            correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+            lifecycle: "TerminalWithoutSuccess",
+            taskId: taskA,
+            wakeCondition: "TaskTrackerFactsObserved"
+          }
+        ],
+        transitions: []
+      },
+      state,
+      true
+    )
+  ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  expect(
+    deriveRunFinalityDecision(
+      {
+        explanations: [
+          {
+            _tag: "PlannedAttemptTaskExternalSuccessSettled",
+            correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+            taskId: taskA
+          }
+        ],
+        transitions: []
+      },
+      state,
+      true
+    )
+  ).toEqual({ _tag: "RunMayTerminate" })
+})
 
-      yield* controller.releasePlannedAttemptPosition({
-        attemptId: AttemptId.make(`occupied-${taskB}`),
-        runId: frontierRunId
-      })
-      yield* restartedController.releasePlannedAttemptPosition({
-        attemptId: AttemptId.make(`occupied-${taskB}`),
-        runId: frontierRunId
-      })
-      const afterInterruption = yield* controller.admit(resumedFrontier, frontierRunId)
-      expect(yield* restartedController.admit(resumedFrontier, frontierRunId)).toEqual(afterInterruption)
-      expect(admittedTransitions(afterInterruption)).toEqual([
-        { _tag: "ContinuePlannedAttemptExecutorWork", plannedAttempt: responsibility.plannedAttempt }
-      ])
-    }
-  })
-)
-
-it.effect("continues independent work for each local constraint at capacities one and two", () =>
-  Effect.gen(function* () {
-    const responsibility = operationResponsibilityFor(taskA)
-    const constraints = [
-      ResponsibilityDisposition.Paused(),
-      ResponsibilityDisposition.DependencyWait({ prerequisiteTaskIds: [taskB] }),
-      ResponsibilityDisposition.ForeignClaimIsolation(),
-      ResponsibilityDisposition.UnreadableFactWait({ boundary: "TaskTracker" })
-    ]
-    for (const capacity of [1, 2]) {
-      for (const disposition of constraints) {
-        const frontier = deriveRunnableFrontier({
-          freshEligibleTasks: [freshTask(taskC)],
-          responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
-          responsibilityFacts: [{ _tag: "WorkflowOperationFreshFacts", disposition, responsibility }]
-        })
-        const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(capacity) })
-        expect(admittedTransitions(yield* controller.admit(frontier, frontierRunId))).toEqual([
-          { _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) }
-        ])
-      }
-    }
-  })
-)
+it("keeps independent fresh work runnable beside each local constraint", () => {
+  const responsibility = operationResponsibilityFor(taskA)
+  const constraints = [
+    ResponsibilityDisposition.Paused(),
+    ResponsibilityDisposition.DependencyWait({ prerequisiteTaskIds: [taskB] }),
+    ResponsibilityDisposition.ForeignClaimIsolation(),
+    ResponsibilityDisposition.UnreadableFactWait({ boundary: "TaskTracker" })
+  ]
+  for (const disposition of constraints) {
+    const frontier = deriveRunnableFrontier({
+      freshEligibleTasks: [freshTask(taskC)],
+      responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+      responsibilityFacts: [{ _tag: "WorkflowOperationFreshFacts", disposition, responsibility }]
+    })
+    expect(frontier.transitions).toContainEqual({ _tag: "CommitFreshTaskClaimIntent", ...freshTask(taskC) })
+  }
+})
 
 it("explains every non-runnable responsibility without treating quiescence as termination", () => {
   const responsibility = operationResponsibilityFor(taskA)
@@ -568,51 +506,3 @@ it("explains each task-authority constraint without changing the planned attempt
     ).toEqual({ explanations: [explanation], transitions: [] })
   }
 })
-
-it.effect("rejects binding, cancellation, and release for positions it does not own", () =>
-  Effect.gen(function* () {
-    const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
-    const responsibility = executionResponsibilityFor(taskA)
-    const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-      plannedAttempt: responsibility.plannedAttempt
-    })
-    const selected = makeSelectedTransitionIdentity(frontierRunId, transition)
-    expect(
-      (yield* controller
-        .bindPlannedAttemptPosition(selected, {
-          attemptId: responsibility.plannedAttempt.attemptId,
-          runId: frontierRunId
-        })
-        .pipe(Effect.flip))._tag
-    ).toBe("PlannedAttemptPositionBindingIssue")
-    expect((yield* controller.cancelReservedPosition(selected).pipe(Effect.flip))._tag).toBe(
-      "TaskAdmissionPositionCancellationIssue"
-    )
-    expect(
-      (yield* controller
-        .releasePlannedAttemptPosition({ attemptId: responsibility.plannedAttempt.attemptId, runId: frontierRunId })
-        .pipe(Effect.flip))._tag
-    ).toBe("PlannedAttemptPositionReleaseIssue")
-  })
-)
-
-it.effect("binds the selected task when another task already names the same planned attempt", () =>
-  Effect.gen(function* () {
-    const correlation = { attemptId: AttemptId.make("shared-attempt"), runId: frontierRunId }
-    const controller = yield* makeTaskAdmissionController({
-      capacity: TaskWorkCapacity.make(2),
-      reconstructedPlannedAttemptPositions: [{ ...correlation, taskId: taskB }]
-    })
-    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: taskA,
-      taskRevision: TaskRevision.make("task-A-revision")
-    })
-    yield* controller.admit({ explanations: [], transitions: [transition] }, frontierRunId)
-    yield* controller.bindPlannedAttemptPosition(makeSelectedTransitionIdentity(frontierRunId, transition), correlation)
-
-    expect((yield* controller.snapshot()).reservedPositions).toEqual([
-      { correlation: { _tag: "PlannedAttemptReservation", ...correlation }, taskId: taskA },
-      { correlation: { _tag: "PlannedAttemptReservation", ...correlation }, taskId: taskB }
-    ])
-  })
-)

@@ -5,8 +5,8 @@ import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 
-/** A boundary result accepted by the non-durable workflow composition. */
-export type SyntheticWorkflowFact = Data.TaggedEnum<{
+/** One boundary result available to the process-local fresh-workflow projection. */
+export type FreshWorkflowActionFact = Data.TaggedEnum<{
   CurrentTaskGraphObserved: {
     readonly operationId: OperationId
     readonly snapshot: TaskDagSnapshot
@@ -39,4 +39,4 @@ export type SyntheticWorkflowFact = Data.TaggedEnum<{
   }
 }>
 
-export const SyntheticWorkflowFact = Data.taggedEnum<SyntheticWorkflowFact>()
+export const FreshWorkflowActionFact = Data.taggedEnum<FreshWorkflowActionFact>()

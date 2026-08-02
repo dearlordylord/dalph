@@ -6,8 +6,8 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import type { CurrentDeliveryFrame } from "./current-delivery-relation.js"
-import type { SyntheticWorkflowFact } from "./fresh-workflow-fact.js"
+import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
+import type { FreshWorkflowActionFact } from "./fresh-workflow-fact.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 
@@ -173,7 +173,7 @@ const journaledStepFor = (
 // eslint-disable-next-line complexity -- Accepted non-durable facts derive the same next workflow operation families.
 const syntheticStepFor = (
   task: Task,
-  facts: ReadonlyArray<SyntheticWorkflowFact>,
+  facts: ReadonlyArray<FreshWorkflowActionFact>,
   currentGraphOperationId: OperationId
 ): FreshWorkflowStepType | undefined => {
   const fact = facts.findLast(({ taskId }) => taskId === task.id)

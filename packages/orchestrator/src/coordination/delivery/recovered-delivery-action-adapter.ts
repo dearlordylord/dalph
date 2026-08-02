@@ -5,13 +5,12 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
-import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import {
   recoverTaskClaimOperation,
   recoverTaskClaimReleaseOperation,
   recoverTaskWorktreeOperation
 } from "../frontier/recovery.js"
-import { runTaskClaimReacquisition } from "../run/recovery-activation.js"
+import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type { DeliveryActionExecutionLease } from "./delivery-action-executor.js"
 import type { AcceptedWorkflowTransition, NewRecoveredWorkflowAction } from "./delivery-action-proposal.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -57,13 +56,10 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
       interpreter,
       journal,
       planner: Option.some(planner),
+      requestId: action.requestId,
       runId,
-      trace: Option.some(trace),
-      transition: RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
-        plannedAttempt: action.plannedAttempt,
-        requestId: action.requestId,
-        taskId: action.taskId
-      })
+      taskId: action.taskId,
+      trace: Option.some(trace)
     })
     return
   }

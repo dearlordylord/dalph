@@ -14,15 +14,17 @@ import type {
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
-import type { runTaskClaimReacquisition } from "../run/recovery-activation.js"
+import type { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type {
   recoverTaskClaimOperation,
   recoverTaskClaimReleaseOperation,
   recoverTaskWorktreeOperation
 } from "../frontier/recovery.js"
-import type { IntegrationCandidateBoundaryUnavailable } from "../run/integration-transition-runtime.js"
+import type { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
+import type { FreshWorkflowActionFact } from "../run/fresh-workflow-fact.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import type {
   AcceptedIdentityDeliveryProposal,
@@ -69,6 +71,11 @@ export interface DeliveryActionExecutionLease {
 export type DeliveryActionResult =
   | { readonly _tag: "ActionCompleted"; readonly proposalId: DeliveryProposalId }
   | {
+      readonly _tag: "FreshWorkflowActionFactProduced"
+      readonly fact: FreshWorkflowActionFact
+      readonly proposalId: DeliveryProposalId
+    }
+  | {
       readonly _tag: "ExecutorReportPublished"
       readonly plannedAttempt: PlannedTaskAttempt
       readonly proposalId: DeliveryProposalId
@@ -84,6 +91,7 @@ export type DeliveryActionResult =
       readonly _tag: "TrackerGraphObservationPublished"
       readonly operationId: OperationId
       readonly proposalId: DeliveryProposalId
+      readonly snapshot: TaskDagSnapshot
     }
 
 type ServiceFailure<S> = {

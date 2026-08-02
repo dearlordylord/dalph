@@ -17,7 +17,6 @@ import {
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
-  activateRecoveredResponsibilities,
   ActiveTaskClaim,
   attemptPlanRecordKey,
   ClaimOwner,
@@ -31,7 +30,6 @@ import {
   JournalDatabaseLocator,
   JournaledRunBootstrap,
   JournalStore,
-  InRunJournal,
   InitialControlPolicy,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -50,6 +48,7 @@ import {
   PlannedWorktreeReady,
   PlannedTaskAttemptPlanner,
   projectTrackerSnapshot,
+  runRecoveredWorkflow,
   runWorkflow,
   legacySqliteJournalStoreLayer,
   RunFinalityDecision,
@@ -65,7 +64,6 @@ import {
   TrackerGraphReader,
   TrackerMutation,
   TrackerRevision,
-  WorkflowInterpreter,
   WorkflowRunAlreadyBegan,
   workflowJournalEventVersion,
   WorkflowTrace
@@ -172,6 +170,291 @@ it.effect("continues a fresh production task after its claim is journaled", () =
       )
 
       expect(yield* Ref.get(specificationReads)).toBe(1)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("ticket delivery checks the tracker after a lost claim response and reuses the exact claim", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-lost-claim-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const runId = RunId.make("production-lost-claim-run")
+      const target = FixtureTarget.make("production-lost-claim-target")
+      const taskId = TaskId.make("A")
+      const graphRead = makeTrackerGraphObservationOperation(OperationId.make("production-lost-claim-graph"), target)
+      const acquisition = {
+        operationId: OperationId.make("production-lost-claim-operation"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("production-lost-claim-token")
+      }
+      const claim = ActiveTaskClaim.make(acquisition)
+      const claimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition,
+        predecessorOperationIds: [graphRead.operationId]
+      })
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(graphRead.operationId),
+          taskTrackerGraphFactsObserved(graphRead, {
+            revision: TrackerRevision.make("production-lost-claim-before-crash"),
+            taskIds: [taskId]
+          })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+
+      const current = projectTrackerSnapshot({ revision: "production-lost-claim-current", tasks: [] })
+      if (current._tag === "Invalid") return yield* Effect.die("current graph must be valid")
+      const acquireCalls = yield* Ref.make(0)
+      const claimReads = yield* Ref.make(0)
+      const trackerLayer = Layer.succeed(
+        TrackerMutation,
+        TrackerMutation.of({
+          acquireTaskClaim: () => Ref.update(acquireCalls, (count) => count + 1).pipe(Effect.as(claim)),
+          readTaskClaim: () => Ref.update(claimReads, (count) => count + 1).pipe(Effect.as(claim)),
+          releaseTaskClaim: () => Effect.void
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
+        trackerLayer
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.succeed(current.snapshot),
+              readTaskWorkSpecification: () => Effect.die("removed task has no specification")
+            })
+          )
+        ),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+
+      yield* runRecoveredWorkflow(target).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () => Effect.succeed(OperationId.make("production-lost-claim-current-graph"))
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("recovery must reuse the accepted claim identity") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("removed task must not plan an attempt") })
+        ),
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      expect(yield* Ref.get(acquireCalls)).toBe(0)
+      expect(yield* Ref.get(claimReads)).toBeGreaterThan(0)
+      const records = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      expect(records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
+      expect(records.find(({ event }) => event._tag === "TaskClaimAcquired")?.event).toMatchObject({
+        _tag: "TaskClaimAcquired",
+        claim: { operationId: acquisition.operationId }
+      })
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("ticket delivery reads Git after ambiguous worktree creation and preserves the exact registration", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-ambiguous-worktree-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+      yield* fileSystem.writeFileString(`${directory}/README.md`, "ambiguous worktree\n")
+      yield* git.runInWorktree(directory, ["add", "README.md"])
+      yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+      const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const runId = RunId.make("production-ambiguous-worktree-run")
+      const target = FixtureTarget.make("production-ambiguous-worktree-target")
+      const specification = makeTaskWorkSpecification({
+        body: "Complete A.",
+        taskId: TaskId.make("A"),
+        title: "Complete A"
+      })
+      const projected = projectTrackerSnapshot({
+        revision: "production-ambiguous-worktree-current",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (projected._tag === "Invalid") return yield* Effect.die("current graph must be valid")
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("production-ambiguous-worktree-attempt"),
+        baseSha,
+        branch: TaskBranchRef.make("refs/heads/dalph/production-ambiguous-worktree"),
+        executor: TaskExecutorLocator.make("executor:production-controlled-fake"),
+        runId,
+        taskId: specification.taskId,
+        taskRevision: specification.fingerprint,
+        worktree: WorktreeLocator.make(`${directory}/worktree`)
+      })
+      yield* git.runInWorktree(directory, [
+        "worktree",
+        "add",
+        "-b",
+        "dalph/production-ambiguous-worktree",
+        plannedAttempt.worktree,
+        plannedAttempt.baseSha
+      ])
+      const worktreesBefore = (yield* git.runInWorktree(directory, ["worktree", "list", "--porcelain"])).stdout
+      const acquisition = {
+        operationId: OperationId.make("production-ambiguous-worktree-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId: plannedAttempt.taskId,
+        token: ClaimToken.make("production-ambiguous-worktree-token")
+      }
+      const claim = ActiveTaskClaim.make(acquisition)
+      const graphRead = makeTrackerGraphObservationOperation(
+        OperationId.make("production-ambiguous-worktree-graph"),
+        target
+      )
+      const claimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition,
+        predecessorOperationIds: [graphRead.operationId]
+      })
+      const plan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("production-ambiguous-worktree-plan"),
+        plannedAttempt,
+        predecessorOperationIds: [claimOperation.acquisition.operationId]
+      })
+      const worktree = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("production-ambiguous-worktree-operation"),
+        plannedAttempt,
+        predecessorOperationIds: [plan.operationId]
+      })
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(graphRead.operationId),
+          taskTrackerGraphFactsObserved(graphRead, {
+            revision: TrackerRevision.make("production-ambiguous-worktree-before-crash"),
+            taskIds: [plannedAttempt.taskId]
+          })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(acquisition.operationId),
+          TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          attemptPlanRecordKey(plannedAttempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(worktree.operationId),
+          TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+        )
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+
+      const trackerLayer = Layer.succeed(
+        TrackerMutation,
+        TrackerMutation.of({
+          acquireTaskClaim: () => Effect.die("recovery must not acquire another claim"),
+          readTaskClaim: () => Effect.succeed(claim),
+          releaseTaskClaim: () => Effect.void
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
+        trackerLayer
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.succeed(projected.snapshot),
+              readTaskWorkSpecification: () => Effect.succeed(specification)
+            })
+          )
+        ),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const nextOperation = yield* Ref.make(0)
+      yield* runRecoveredWorkflow(target).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-ambiguous-worktree-recovery-${value}`))
+              )
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("recovery must reuse the exact claim") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("recovery must reuse the exact attempt") })
+        ),
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      const worktreesAfter = (yield* git.runInWorktree(directory, ["worktree", "list", "--porcelain"])).stdout
+      expect(worktreesAfter).toBe(worktreesBefore)
+      const records = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      expect(records.filter(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
+      expect(records.find(({ event }) => event._tag === "TaskWorktreeReady")?.event).toMatchObject({
+        _tag: "TaskWorktreeReady",
+        operationId: worktree.operationId,
+        proof: {
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }
+      })
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
@@ -514,54 +797,59 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
         ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
-      yield* Effect.gen(function* () {
-        const bootstrap = yield* JournaledRunBootstrap
-        yield* bootstrap.recovered(
-          trackerTarget,
-          Effect.gen(function* () {
-            yield* (yield* WorkflowInterpreter).reconcileTaskWorktree(worktree)
-            const failure = yield* activateRecoveredResponsibilities(runId, {
-              capacity: TaskWorkCapacity.make(1),
-              integrationTarget: retryTarget
-            }).pipe(Effect.flip)
-            expect(failure._tag).toBe("GitTargetLineageReadFailure")
-            const failedRecords = yield* (yield* InRunJournal).read(runId)
-            const targetReadIntents = failedRecords.filter(
-              ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
-            )
-            expect(targetReadIntents).toHaveLength(1)
-            expect(failedRecords.some(({ event }) => event._tag === "TargetLineageObserved")).toBe(false)
-
-            yield* git.runInWorktree(directory, ["update-ref", retryTarget.ref, plannedAttempt.baseSha])
-            yield* activateRecoveredResponsibilities(runId, {
-              capacity: TaskWorkCapacity.make(1),
-              integrationTarget: retryTarget
-            })
-            const recoveredRecords = yield* (yield* InRunJournal).read(runId)
-            const originalTargetReadOperationId =
-              targetReadIntents[0]?.event._tag === "GitReadIntentRecorded"
-                ? targetReadIntents[0].event.operation.operationId
-                : undefined
-            expect(
-              recoveredRecords.some(
-                ({ event }) =>
-                  event._tag === "TargetLineageObserved" && event.operationId === originalTargetReadOperationId
+      const nextOperation = yield* Ref.make(0)
+      const runRecovered = runRecoveredWorkflow(trackerTarget).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-recovery-operation-${value}`))
               )
-            ).toBe(true)
-            return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
           })
-        )
-      }).pipe(
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("recovery must not acquire another claim") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("recovery must not plan another attempt") })
+        ),
         Effect.provide(application),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
+      const failure = yield* runRecovered.pipe(Effect.flip)
+      expect(failure._tag).toBe("GitTargetLineageReadFailure")
+      const failedRecords = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      const targetReadIntents = failedRecords.filter(
+        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+      )
+      expect(targetReadIntents).toHaveLength(1)
+      expect(failedRecords.some(({ event }) => event._tag === "TargetLineageObserved")).toBe(false)
+
+      yield* git.runInWorktree(directory, ["update-ref", retryTarget.ref, plannedAttempt.baseSha])
+      yield* runRecovered
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
-      expect(records.at(-1)?.event).toMatchObject({
-        _tag: "PlannedAttemptExecutorWorkReported",
-        report: { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
-      })
+      const originalTargetReadOperationId =
+        targetReadIntents[0]?.event._tag === "GitReadIntentRecorded"
+          ? targetReadIntents[0].event.operation.operationId
+          : undefined
+      expect(
+        records.some(
+          ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === originalTargetReadOperationId
+        )
+      ).toBe(true)
+      expect(records.findLast(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")?.event).toMatchObject(
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
+        }
+      )
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
@@ -620,7 +908,10 @@ it.effect("blocks startup when any preserved run has an invalid causal history",
         Effect.flatMap((bootstrap) =>
           bootstrap.recovered(
             FixtureTarget.make("current-production-target"),
-            Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            Effect.succeed({
+              acceptedAt: null,
+              decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+            })
           )
         ),
         Effect.provide(application),
@@ -685,7 +976,10 @@ it.effect("blocks startup instead of ignoring another run's unfinished responsib
         Effect.flatMap((bootstrap) =>
           bootstrap.recovered(
             FixtureTarget.make("requested-production-target"),
-            Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            Effect.succeed({
+              acceptedAt: null,
+              decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+            })
           )
         ),
         Effect.provide(application),
@@ -737,7 +1031,10 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
         Effect.flatMap((bootstrap) =>
           bootstrap.recovered(
             FixtureTarget.make("new-run-after-began-only-target"),
-            Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            Effect.succeed({
+              acceptedAt: null,
+              decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+            })
           )
         ),
         Effect.provide(application),
@@ -813,7 +1110,10 @@ it.effect("does not block startup for another run's completed responsibility", (
               requestedTarget,
               InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
               requestedRunId,
-              Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+              Effect.succeed({
+                acceptedAt: null,
+                decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+              })
             )
           ),
           Effect.provide(application),

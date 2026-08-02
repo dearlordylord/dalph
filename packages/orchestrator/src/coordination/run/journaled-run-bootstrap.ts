@@ -4,10 +4,16 @@ import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ow
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
-import type { AcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
-import { acceptedFactPublicationGatewayLayer } from "../delivery/accepted-fact-gateway.js"
+import {
+  AcceptedFactPublicationGateway,
+  acceptedFactPublicationGatewayLayer
+} from "../delivery/accepted-fact-gateway.js"
 import type { TrackerGraphRelation } from "../delivery/relations.js"
-import type { RunFinalityDecision } from "../frontier/frontier.js"
+import {
+  RunFinalityDecision,
+  type RunFinalityDecision as RunFinalityDecisionType,
+  type RunFinalityProof
+} from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory, ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import {
@@ -137,7 +143,8 @@ export const journaledRunBootstrapLayer = (
         target: Parameters<JournaledRunBootstrapService["fresh"]>[0],
         initial: ValidWorkflowJournalHistory,
         startup: "Fresh" | "Recovered",
-        program: Effect.Effect<RunFinalityDecision, E, R>
+        recheckJournalAfterProof: boolean,
+        program: Effect.Effect<RunFinalityProof, E, R>
       ) =>
         Effect.scoped(
           Effect.uninterruptibleMask((restore) =>
@@ -149,6 +156,7 @@ export const journaledRunBootstrapLayer = (
                 Layer.provideMerge(acceptedFactPublicationGatewayLayer(runId, target, initial, storage))
               )
               const context = yield* Layer.build(gateway)
+              const acceptedFacts = Context.get(context, AcceptedFactPublicationGateway)
               const controls: RuntimeControls = {
                 controlDirection: Context.get(context, ControlDirectionApplication),
                 taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
@@ -158,28 +166,60 @@ export const journaledRunBootstrapLayer = (
               yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
               const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
               yield* closeControlAdmission()
-              return yield* Exit.match(result, { onFailure: Effect.failCause, onSuccess: Effect.succeed })
+              return yield* Exit.match(result, {
+                onFailure: Effect.failCause,
+                onSuccess: (proof) =>
+                  proof.decision._tag === "RunMustRemainActive" || !recheckJournalAfterProof
+                    ? Effect.succeed(proof.decision)
+                    : acceptedFacts.readCurrent.pipe(
+                        Effect.map(({ records }) =>
+                          records.some(
+                            ({ event, position }) =>
+                              (proof.acceptedAt === null || position > proof.acceptedAt) &&
+                              event._tag !== "TaskWorkCapacityChanged"
+                          )
+                            ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                            : proof.decision
+                        )
+                      )
+              })
             })
           )
         )
 
-      const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (runId: RunId, finality: RunFinalityDecision) {
+      const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (
+        runId: RunId,
+        finality: RunFinalityDecisionType
+      ) {
         if (finality._tag === "RunMayTerminate") yield* lifecycle.terminateRun(runId)
         return finality
       })
 
-      const fresh: JournaledRunBootstrapService["fresh"] = (target, initialControlPolicy, runId, program) =>
-        activation.withPermit(
-          Effect.gen(function* () {
-            if (runId !== expectedRunId) {
-              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
-            }
-            yield* inspectStartupRecovery(runId, lifecycle)
-            yield* lifecycle.beginRun(runId, target, initialControlPolicy)
-            const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Fresh", program))
-          })
-        )
+      const startNewRun =
+        (recheckJournalAfterProof: boolean) =>
+        <E, R>(
+          target: Parameters<JournaledRunBootstrapService["fresh"]>[0],
+          initialControlPolicy: Parameters<JournaledRunBootstrapService["fresh"]>[1],
+          runId: RunId,
+          program: Effect.Effect<RunFinalityProof, E, R>
+        ) =>
+          activation.withPermit(
+            Effect.gen(function* () {
+              if (runId !== expectedRunId) {
+                return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
+              }
+              yield* inspectStartupRecovery(runId, lifecycle)
+              yield* lifecycle.beginRun(runId, target, initialControlPolicy)
+              const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
+              return yield* finish(
+                runId,
+                yield* runWithGateway(runId, target, initial, "Fresh", recheckJournalAfterProof, program)
+              )
+            })
+          )
+
+      const fresh: JournaledRunBootstrapService["fresh"] = startNewRun(true)
+      const synthetic: JournaledRunBootstrapService["synthetic"] = startNewRun(false)
 
       const recovered: JournaledRunBootstrapService["recovered"] = (target, program) =>
         activation.withPermit(
@@ -188,7 +228,7 @@ export const journaledRunBootstrapLayer = (
             const runId = current?.runId ?? expectedRunId
             yield* lifecycle.readRunForRecovery(runId, target)
             const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Recovered", program))
+            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Recovered", true, program))
           })
         )
 
@@ -200,6 +240,6 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({ fresh, operatorControl, recovered })
+      return JournaledRunBootstrap.of({ fresh, operatorControl, recovered, synthetic })
     })
   )

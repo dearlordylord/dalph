@@ -1,6 +1,7 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "@dalph/contracts"
 import { Data } from "effect"
 import { workflowResponsibilityOperationId, type WorkflowResponsibilityState } from "../reconstruction/state.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { RunnableFrontier } from "./frontier.js"
 
 export type RunFinalityDecision = Data.TaggedEnum<{
@@ -9,6 +10,12 @@ export type RunFinalityDecision = Data.TaggedEnum<{
 }>
 
 export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
+
+/** The accepted journal prefix used by the exact relation evaluation that proved finality. */
+export interface RunFinalityProof {
+  readonly acceptedAt: JournalPosition | null
+  readonly decision: RunFinalityDecision
+}
 
 /** Run termination requires tracker settlement and no runnable or unsettled responsibility. */
 export const deriveRunFinalityDecision = (

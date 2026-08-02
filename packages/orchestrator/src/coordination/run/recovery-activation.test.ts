@@ -123,6 +123,9 @@ it("suspends a running grouping descendant and reopens it after current facts mo
     reconfirmedGroupingGraphRead,
     graph
   )
+  const responsibilityBegan = records[1]
+  const taskPaused = records[2]
+  if (responsibilityBegan === undefined || taskPaused === undefined) return expect.fail("expected pause records")
   const lateGroupingRecords = [
     {
       position: JournalPosition.make(1),
@@ -131,8 +134,8 @@ it("suspends a running grouping descendant and reopens it after current facts mo
         makeCompleteTaskTrackerFactsObserved(graphRead, regrouped)
       )
     },
-    records[1]!,
-    records[2]!,
+    responsibilityBegan,
+    taskPaused,
     {
       position: JournalPosition.make(5),
       event: PlannedAttemptExecutorWorkReportedEvent.make({
@@ -169,14 +172,17 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ]
   expect(taskPauseSuspensionIsOwed(lateGroupingRecords, plannedAttempt, JournalPosition.make(2), regrouped)).toBe(true)
 
-  const activePauseWithoutGraph = [records[1]!, records[2]!]
+  const activePauseWithoutGraph = [responsibilityBegan, taskPaused]
   expect(taskPauseSuspensionIsOwed(activePauseWithoutGraph, plannedAttempt, JournalPosition.make(2), graph)).toBe(true)
   expect(taskPauseSuspensionIsOwed(activePauseWithoutGraph, plannedAttempt, JournalPosition.make(2), regrouped)).toBe(
     false
   )
   expect(
     taskPauseSuspensionIsOwed(
-      [activePauseWithoutGraph[0]!, activePauseWithoutGraph[1]!, lateGroupingRecords.at(-1)!],
+      [
+        ...activePauseWithoutGraph,
+        { position: JournalPosition.make(9), event: lateGroupingRecords.at(-1)?.event ?? taskPaused.event }
+      ],
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -204,7 +210,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(false)
   expect(
     taskPauseSuspensionIsOwed(
-      [{ position: JournalPosition.make(1), event: records[2]!.event }],
+      [{ position: JournalPosition.make(1), event: taskPaused.event }],
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -220,7 +226,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   })
   expect(
     taskPauseSuspensionIsOwed(
-      [records[1]!, { position: JournalPosition.make(4), event: exactTaskPause }],
+      [responsibilityBegan, { position: JournalPosition.make(4), event: exactTaskPause }],
       plannedAttempt,
       JournalPosition.make(2),
       undefined
@@ -228,7 +234,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(true)
   expect(
     taskPauseSuspensionIsOwed(
-      [records[1]!, records[2]!, { position: JournalPosition.make(5), event: reconfirmedGroupingGraphEvent }],
+      [responsibilityBegan, taskPaused, { position: JournalPosition.make(5), event: reconfirmedGroupingGraphEvent }],
       plannedAttempt,
       JournalPosition.make(2),
       graph

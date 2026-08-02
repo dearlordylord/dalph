@@ -45,7 +45,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
     const input = yield* SubscriptionRef.make<CoherentInput>({
       facts: {
         acceptedAt: JournalPosition.make(1),
-        quiescence: { _tag: "QuiescencePassive" },
+        quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
         revision: firstRevision,
         taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
       },
@@ -92,7 +92,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
             SubscriptionRef.set(input, {
               facts: {
                 acceptedAt: JournalPosition.make(2),
-                quiescence: { _tag: "QuiescencePassive" },
+                quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
                 revision: secondRevision,
                 taskWork: { capacity: TaskWorkCapacity.make(2), held: [] }
               },

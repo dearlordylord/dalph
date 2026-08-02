@@ -7,7 +7,7 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { OperationId } from "../../workflow/identity.js"
-import type { RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
+import type { RunFinalityProof } from "../frontier/run-finality.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -123,7 +123,11 @@ const proposalTaskId = (proposal: DeliveryActionProposal) => {
 }
 
 const materializedOperationId = (action: MaterializedDeliveryAction): OperationId | null =>
-  action._tag === "FreshOperationAction" || action._tag === "FreshAttemptAction" ? action.operationId : null
+  action._tag === "AcceptedOperationAction"
+    ? action.proposal.actionIdentity.operationId
+    : action._tag === "FreshOperationAction" || action._tag === "FreshAttemptAction"
+      ? action.operationId
+      : null
 
 const makeLease = (
   admission: DeliveryRuntimeAdmissionController,
@@ -146,7 +150,7 @@ const makeLease = (
 export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>(
   relation: DeliveryRuntimeRelation<E>
 ): Effect.fn.Return<
-  RunFinalityDecisionType,
+  RunFinalityProof,
   E | DeliveryActionExecutionError | DeliveryRuntimeProposalOwnershipConflict | PlannedTaskAttemptError,
   DeliveryActionExecutor | DeliveryRuntimeResources | OperationIdAllocator | PlannedTaskAttemptPlanner
 > {
@@ -334,7 +338,8 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
         )
         const requiredRevision = yield* relation.invalidate({
           _tag: "ProposalCompleted",
-          proposalId: completion.proposalId
+          proposalId: completion.proposalId,
+          result: Exit.isSuccess(completion.exit) ? completion.exit.value : null
         })
         yield* Ref.set(awaitingEvaluation, requiredRevision)
         yield* Deferred.succeed(completion.acknowledged, undefined)
@@ -351,19 +356,21 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
           })
         }
         if (live.size !== 0 || current.proposedActions.proposals.length !== 0) {
-          return Option.none<RunFinalityDecisionType>()
+          return Option.none<RunFinalityProof>()
         }
-        if (current.quiescence._tag === "QuiescencePassive") return Option.some(current.finality)
+        if (current.quiescence._tag === "QuiescencePassive") {
+          return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
+        }
         const currentProbe = yield* Ref.get(probe)
         if (currentProbe._tag === "ProbeCompleted" && current.revision > currentProbe.startedRevision) {
-          return Option.some(current.finality)
+          return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
         }
         if (currentProbe._tag === "NoProbe") {
           yield* Ref.set(probe, { _tag: "ProbeRequested", requestedRevision: current.revision })
           const requiredRevision = yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
           yield* Ref.set(awaitingEvaluation, requiredRevision)
         }
-        return Option.none<RunFinalityDecisionType>()
+        return Option.none<RunFinalityProof>()
       })
 
       const nextRuntimeEvent = Effect.fn("DeliveryRuntime.nextEvent")(function* (
