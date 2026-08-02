@@ -117,8 +117,8 @@ importers:
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
       '@effect/sql-sqlite-node':
-        specifier: 4.0.0-beta.99
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)
+        specifier: 4.0.0-beta.102
+        version: 4.0.0-beta.102(effect@4.0.0-beta.99)
       effect:
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99
@@ -250,10 +250,10 @@ packages:
       effect: ^4.0.0-beta.99
       ioredis: ^5.7.0
 
-  '@effect/sql-sqlite-node@4.0.0-beta.99':
-    resolution: {integrity: sha512-43fKlLxWADCDdRYU+ZTig/xeYfyXQOR+j+A0Tp1dZRpztfH8xIkz7o8XxAgcAZMlW3a0EmaHdlgFSU7itziRog==}
+  '@effect/sql-sqlite-node@4.0.0-beta.102':
+    resolution: {integrity: sha512-MtHf58b33hP8t5wJ9SrQCoLwIWQntxtFdcAN3aSLTSczBgKk+d/BPGfyv6iIgDkWWyMKHOYrJ29C7vprgjqeyA==}
     peerDependencies:
-      effect: ^4.0.0-beta.99
+      effect: ^4.0.0-beta.102
 
   '@effect/tsgo-darwin-arm64@0.24.3':
     resolution: {integrity: sha512-eO83D7ZmpAsocA5WJQ8SSAPnAOZ+dEduFIozg9c2SmH36PCHG1Eb++I0UiQml+2LAr4o/QE2wKdWj7LExebjZA==}
@@ -2265,7 +2265,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@effect/sql-sqlite-node@4.0.0-beta.99(effect@4.0.0-beta.99)':
+  '@effect/sql-sqlite-node@4.0.0-beta.102(effect@4.0.0-beta.99)':
     dependencies:
       effect: 4.0.0-beta.99
 
