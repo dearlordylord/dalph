@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "97dbf5f6-9f28-4ae8-ae99-0956dfbb7eb8",
+  "scenario": "C0-before-claim",
+  "sourceRevision": "f8e8b8a670c799f6e0ade7a8c25c4bf4a4a56ec7",
+  "creatorPid": 4070850,
+  "uid": 1000,
+  "createdAt": "2026-07-30T20:47:47.607Z",
+  "temporaryRoot": "/tmp/dalph-symphony-c0-NG4Q4x",
+  "device": 4194355,
+  "inode": 126830698,
+  "evidenceDirectory": "/workspace/typescript/dalph/research/experiments/results/symphony-c0-20260730T204747602Z-97dbf5f6-blocked",
+  "evidenceDevice": 35,
+  "evidenceInode": 11838307
+}
