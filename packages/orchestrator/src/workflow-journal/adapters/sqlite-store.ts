@@ -17,8 +17,9 @@ import {
   decideWorkflowRunTermination,
   readRecoverableRunBeginning
 } from "../run-lifecycle.js"
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Effect service tags and typed errors require runtime identities.
 import {
+  journalStoreCapabilities,
+  legacyUnpublishedInRunJournalLayer,
   JournalDataCorruption,
   JournalSchemaIncompatible,
   JournalStorageAccessDenied,
@@ -244,51 +245,50 @@ const acquireExclusiveWriter = Effect.fn("JournalStore.Sqlite.acquireExclusiveWr
  * connection; WAL and exclusive locking are configured before the store is
  * exposed, so all acknowledged appends pass through one live writer.
  */
-export const sqliteJournalStoreLayer = (
-  config: SqliteJournalStoreConfig
-): Layer.Layer<JournalStore, JournalStoreError> =>
-  Layer.effect(
-    JournalStore,
-    Effect.gen(function* () {
-      const sql = yield* SqliteClient.make({ disableWAL: false, filename: config.filename }).pipe(
-        Effect.catchCauseIf(
-          (cause) => !Cause.hasInterrupts(cause),
-          (cause) => Effect.fail(classifyJournalStorageFailure("JournalStore.open", cause))
+export const sqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) =>
+  journalStoreCapabilities(
+    Layer.effect(
+      JournalStore,
+      Effect.gen(function* () {
+        const sql = yield* SqliteClient.make({ disableWAL: false, filename: config.filename }).pipe(
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) => Effect.fail(classifyJournalStorageFailure("JournalStore.open", cause))
+          )
         )
-      )
-      yield* migrate(sql)
-      yield* acquireExclusiveWriter(sql)
+        yield* migrate(sql)
+        yield* acquireExclusiveWriter(sql)
 
-      const loadRunRecords = Effect.fn("JournalStore.Sqlite.loadRunRecords")(function* (
-        runId: RunId,
-        operation:
-          | "JournalStore.append"
-          | "JournalStore.beginRun"
-          | "JournalStore.read"
-          | "JournalStore.readRunForRecovery"
-          | "JournalStore.terminateRun"
-      ) {
-        const rows = yield* sql`
+        const loadRunRecords = Effect.fn("JournalStore.Sqlite.loadRunRecords")(function* (
+          runId: RunId,
+          operation:
+            | "JournalStore.append"
+            | "JournalStore.beginRun"
+            | "JournalStore.read"
+            | "JournalStore.readRunForRecovery"
+            | "JournalStore.terminateRun"
+        ) {
+          const rows = yield* sql`
           SELECT run_id, position, record_key, event_kind, event_version, payload_json
           FROM journal_records
           WHERE run_id = ${runId}
           ORDER BY position ASC
         `.pipe(
-          Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
-          Effect.flatMap((input) => decodeBoundary(PersistedJournalRows, input, operation))
-        )
-        return yield* Effect.forEach(rows, (row) =>
-          fromPersistedRow(row).pipe(
-            Effect.mapError((cause) => new JournalDataCorruption({ detail: cause.detail, operation }))
+            Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+            Effect.flatMap((input) => decodeBoundary(PersistedJournalRows, input, operation))
           )
-        )
-      })
+          return yield* Effect.forEach(rows, (row) =>
+            fromPersistedRow(row).pipe(
+              Effect.mapError((cause) => new JournalDataCorruption({ detail: cause.detail, operation }))
+            )
+          )
+        })
 
-      const insertLifecycleRecord = Effect.fn("JournalStore.Sqlite.insertLifecycleRecord")(function* (
-        record: JournalRecord
-      ) {
-        const encoded = encodeJournalEvent(record.event)
-        yield* sql`
+        const insertLifecycleRecord = Effect.fn("JournalStore.Sqlite.insertLifecycleRecord")(function* (
+          record: JournalRecord
+        ) {
+          const encoded = encodeJournalEvent(record.event)
+          yield* sql`
           INSERT INTO journal_records (
             run_id, position, record_key, event_kind, event_version, payload_json
           ) VALUES (
@@ -296,154 +296,159 @@ export const sqliteJournalStoreLayer = (
             ${encoded.payloadJson}
           )
         `
-      })
+        })
 
-      const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
-        runId: RunId,
-        target: TrackerTarget,
-        initialControlPolicy: InitialControlPolicy
-      ) {
-        return yield* Effect.gen(function* () {
-          const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
-          const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
-          if (decision._tag === "LifecycleTransitionRejected") {
-            return yield* decision.failure
-          }
-          const record = decision.record
-          yield* insertLifecycleRecord(record)
-          return record
-        }).pipe(
-          sql.withTransaction,
-          Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.beginRun", cause))
-        )
-      })
+        const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
+          runId: RunId,
+          target: TrackerTarget,
+          initialControlPolicy: InitialControlPolicy
+        ) {
+          return yield* Effect.gen(function* () {
+            const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
+            const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
+            if (decision._tag === "LifecycleTransitionRejected") {
+              return yield* decision.failure
+            }
+            const record = decision.record
+            yield* insertLifecycleRecord(record)
+            return record
+          }).pipe(
+            sql.withTransaction,
+            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.beginRun", cause))
+          )
+        })
 
-      const append = Effect.fn("JournalStore.Sqlite.append")(function* (
-        runId: RunId,
-        key: JournalRecordKey,
-        event: AppendableWorkflowJournalEvent
-      ) {
-        const encoded = encodeJournalEvent(event)
-        return yield* Effect.gen(function* () {
-          const records = yield* loadRunRecords(runId, "JournalStore.append")
-          const terminated = records.find(({ event: recorded }) => recorded._tag === "WorkflowRunTerminated")
-          if (terminated !== undefined) {
-            return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminated.position })
-          }
-          const existingRows = yield* sql`
+        const append = Effect.fn("JournalStore.Sqlite.append")(function* (
+          runId: RunId,
+          key: JournalRecordKey,
+          event: AppendableWorkflowJournalEvent
+        ) {
+          const encoded = encodeJournalEvent(event)
+          return yield* Effect.gen(function* () {
+            const records = yield* loadRunRecords(runId, "JournalStore.append")
+            const terminated = records.find(({ event: recorded }) => recorded._tag === "WorkflowRunTerminated")
+            if (terminated !== undefined) {
+              return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminated.position })
+            }
+            const existingRows = yield* sql`
             SELECT position, event_kind, event_version, payload_json
             FROM journal_records
             WHERE run_id = ${runId} AND record_key = ${key}
           `.pipe(Effect.flatMap((rows) => decodeBoundary(ExistingRecordRows, rows, "JournalStore.append")))
-          const existing = existingRows[0]
-          if (existing !== undefined) {
-            const existingEvent = yield* parseEvent(existing, "JournalStore.append")
-            if (equalJournalEvents(existingEvent, event)) {
-              return { event, key, position: existing.position, runId } satisfies JournalRecord
+            const existing = existingRows[0]
+            if (existing !== undefined) {
+              const existingEvent = yield* parseEvent(existing, "JournalStore.append")
+              if (equalJournalEvents(existingEvent, event)) {
+                return { event, key, position: existing.position, runId } satisfies JournalRecord
+              }
+              return yield* new JournalStoreContradiction({ existingPosition: existing.position, key, runId })
             }
-            return yield* new JournalStoreContradiction({ existingPosition: existing.position, key, runId })
-          }
 
-          const positions = yield* sql`
+            const positions = yield* sql`
             SELECT COALESCE(MAX(position), 0) + 1 AS next_position
             FROM journal_records
             WHERE run_id = ${runId}
           `.pipe(Effect.flatMap((rows) => decodeBoundary(NextPositionRows, rows, "JournalStore.append")))
-          const position = positions[0].next_position
-          yield* sql`
+            const position = positions[0].next_position
+            yield* sql`
             INSERT INTO journal_records (
               run_id, position, record_key, event_kind, event_version, payload_json
             ) VALUES (
               ${runId}, ${position}, ${key}, ${encoded.kind}, ${encoded.version}, ${encoded.payloadJson}
             )
           `
-          return { event, key, position, runId } satisfies JournalRecord
-        }).pipe(
-          sql.withTransaction,
-          Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.append", cause))
-        )
-      })
+            return { event, key, position, runId } satisfies JournalRecord
+          }).pipe(
+            sql.withTransaction,
+            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.append", cause))
+          )
+        })
 
-      const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
-        return yield* loadRunRecords(runId, "JournalStore.read")
-      })
+        const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
+          return yield* loadRunRecords(runId, "JournalStore.read")
+        })
 
-      const readRunForRecovery = Effect.fn("JournalStore.Sqlite.readRunForRecovery")(function* (
-        runId: RunId,
-        target: TrackerTarget
-      ) {
-        return yield* readRecoverableRunBeginning(
-          yield* loadRunRecords(runId, "JournalStore.readRunForRecovery"),
-          runId,
-          target
-        )
-      })
+        const readRunForRecovery = Effect.fn("JournalStore.Sqlite.readRunForRecovery")(function* (
+          runId: RunId,
+          target: TrackerTarget
+        ) {
+          return yield* readRecoverableRunBeginning(
+            yield* loadRunRecords(runId, "JournalStore.readRunForRecovery"),
+            runId,
+            target
+          )
+        })
 
-      const scan = Effect.fn("JournalStore.Sqlite.scan")(function* () {
-        const rows = yield* sql`
+        const scan = Effect.fn("JournalStore.Sqlite.scan")(function* () {
+          const rows = yield* sql`
           SELECT run_id, position, record_key, event_kind, event_version, payload_json
           FROM journal_records
           ORDER BY run_id ASC, position ASC
         `.pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, "JournalStore.read")))
-        const issues = new Array<JournalBoundaryDecodeIssue>()
-        const recordsByRun = new Map<RunId, Array<JournalRecord>>()
-        for (const [index, input] of rows.entries()) {
-          const rowOrdinal = index + 1
-          const identity = yield* decodeBoundary(PersistedRunIdentity, input, "JournalStore.read").pipe(Effect.result)
-          const decoded = yield* decodeBoundary(PersistedJournalRow, input, "JournalStore.read").pipe(Effect.result)
-          if (Result.isFailure(decoded)) {
-            issues.push(
-              new JournalBoundaryDecodeIssue({
-                detail: decoded.failure.detail,
-                rowOrdinal,
-                runId: Result.isSuccess(identity) ? identity.success.run_id : null
-              })
-            )
-            continue
+          const issues = new Array<JournalBoundaryDecodeIssue>()
+          const recordsByRun = new Map<RunId, Array<JournalRecord>>()
+          for (const [index, input] of rows.entries()) {
+            const rowOrdinal = index + 1
+            const identity = yield* decodeBoundary(PersistedRunIdentity, input, "JournalStore.read").pipe(Effect.result)
+            const decoded = yield* decodeBoundary(PersistedJournalRow, input, "JournalStore.read").pipe(Effect.result)
+            if (Result.isFailure(decoded)) {
+              issues.push(
+                new JournalBoundaryDecodeIssue({
+                  detail: decoded.failure.detail,
+                  rowOrdinal,
+                  runId: Result.isSuccess(identity) ? identity.success.run_id : null
+                })
+              )
+              continue
+            }
+            const event = yield* parseEvent(decoded.success, "JournalStore.read").pipe(Effect.result)
+            if (Result.isFailure(event)) {
+              issues.push(
+                new JournalBoundaryDecodeIssue({
+                  detail: event.failure.detail,
+                  rowOrdinal,
+                  runId: decoded.success.run_id
+                })
+              )
+              continue
+            }
+            const record: JournalRecord = {
+              event: event.success,
+              key: decoded.success.record_key,
+              position: decoded.success.position,
+              runId: decoded.success.run_id
+            }
+            const current = recordsByRun.get(record.runId) ?? []
+            current.push(record)
+            recordsByRun.set(record.runId, current)
           }
-          const event = yield* parseEvent(decoded.success, "JournalStore.read").pipe(Effect.result)
-          if (Result.isFailure(event)) {
-            issues.push(
-              new JournalBoundaryDecodeIssue({
-                detail: event.failure.detail,
-                rowOrdinal,
-                runId: decoded.success.run_id
-              })
-            )
-            continue
-          }
-          const record: JournalRecord = {
-            event: event.success,
-            key: decoded.success.record_key,
-            position: decoded.success.position,
-            runId: decoded.success.run_id
-          }
-          const current = recordsByRun.get(record.runId) ?? []
-          current.push(record)
-          recordsByRun.set(record.runId, current)
-        }
-        return { issues, runs: [...recordsByRun].map(([runId, records]) => ({ records, runId })) }
-      })
+          return { issues, runs: [...recordsByRun].map(([runId, records]) => ({ records, runId })) }
+        })
 
-      const terminateRun = Effect.fn("JournalStore.Sqlite.terminateRun")(function* (runId: RunId) {
-        return yield* Effect.gen(function* () {
-          const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
-          const decision = decideWorkflowRunTermination(records, runId)
-          if (decision._tag === "LifecycleTransitionRejected") {
-            return yield* decision.failure
-          }
-          const record = decision.record
-          yield* insertLifecycleRecord(record)
-          return record
-        }).pipe(
-          sql.withTransaction,
-          Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.terminateRun", cause))
-        )
-      })
+        const terminateRun = Effect.fn("JournalStore.Sqlite.terminateRun")(function* (runId: RunId) {
+          return yield* Effect.gen(function* () {
+            const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
+            const decision = decideWorkflowRunTermination(records, runId)
+            if (decision._tag === "LifecycleTransitionRejected") {
+              return yield* decision.failure
+            }
+            const record = decision.record
+            yield* insertLifecycleRecord(record)
+            return record
+          }).pipe(
+            sql.withTransaction,
+            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.terminateRun", cause))
+          )
+        })
 
-      return JournalStore.of({ append, beginRun, read, readRunForRecovery, scan, terminateRun })
-    })
-  ).pipe(Layer.provide(Reactivity.layer))
+        return JournalStore.of({ append, beginRun, read, readRunForRecovery, scan, terminateRun })
+      })
+    ).pipe(Layer.provide(Reactivity.layer))
+  )
+
+/** Explicit test-only composition whose appends are not gateway-published. */
+export const legacySqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) =>
+  legacyUnpublishedInRunJournalLayer.pipe(Layer.provideMerge(sqliteJournalStoreLayer(config)))
 
 export const journalDatabaseLocatorConfig = Config.schema(JournalDatabaseLocator, "DALPH_JOURNAL_DATABASE")
 

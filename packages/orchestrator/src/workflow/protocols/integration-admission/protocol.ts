@@ -12,7 +12,7 @@ import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { integrationResponsibilityEquivalence } from "./responsibility.js"
@@ -228,7 +228,7 @@ export const selectStartableIntegrationResponsibilities = (
 export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
   "IntegrationAdmission.queueAcceptedResultResponsibility"
 )(function* (plannedAttempt: PlannedTaskAttempt, acceptedResult: AcceptedResult, integrationTarget: IntegrationTarget) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const records = yield* journal.read(plannedAttempt.runId)
   if (!hasDurableAcceptedResult(records, plannedAttempt, acceptedResult)) {
     return yield* new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
@@ -263,7 +263,7 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
 export const startQueuedIntegration = Effect.fn("IntegrationAdmission.startQueuedIntegration")(function* (
   queued: QueuedIntegrationResponsibility
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const record = yield* journal.append(
     queued.plannedAttempt.runId,
     integrationStartedRecordKey(queued.plannedAttempt.attemptId),

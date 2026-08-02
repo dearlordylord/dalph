@@ -1,23 +1,30 @@
 import { it } from "@effect/vitest"
+import { RunId, TaskId } from "@dalph/contracts"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
-import { RunId, TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeAcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import { JournalStore } from "../../workflow-journal/store.js"
-import { CurrentDeliveryGraphUnavailable, makeJournaledCurrentDeliveryRelation } from "./current-delivery-relation.js"
+import {
+  CurrentDeliveryGraphUnavailable,
+  makeJournaledCurrentDeliveryRelation,
+  makeLegacyJournaledCurrentDeliveryRelation,
+  makeLegacySchedulerCurrentDeliveryCompatibility
+} from "./current-delivery-relation.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const currentPolicy = RunControlPolicy.make({
@@ -40,69 +47,125 @@ const graph = (revision: string, taskIds: ReadonlyArray<string>) => {
 }
 
 const appendAcceptedGraph = Effect.fn("CurrentDeliveryRelationTest.appendAcceptedGraph")(function* (
+  gateway: Effect.Success<ReturnType<typeof makeAcceptedFactPublicationGateway>>,
   runId: RunId,
   operationId: OperationId,
   snapshot: ReturnType<typeof graph>
 ) {
-  const journal = yield* JournalStore
   const operation = makeTrackerGraphObservationOperation(operationId, target)
-  yield* journal.append(runId, intentRecordKey(operationId), taskTrackerReadIntent(operation))
-  yield* journal.append(
+  yield* gateway.journal.append(runId, intentRecordKey(operationId), taskTrackerReadIntent(operation))
+  yield* gateway.journal.append(
     runId,
     outcomeRecordKey(operationId),
     taskTrackerFactsObservedEvent(operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
   )
 })
 
-it.effect("rejects raw and incomplete graph knowledge before frontier derivation", () =>
+const installGateway = Effect.fn("CurrentDeliveryRelationTest.installGateway")(function* (runId: RunId) {
+  const storage = yield* JournalStore
+  const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+  if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+  return yield* makeAcceptedFactPublicationGateway(runId, initial, storage)
+})
+
+it.effect("reads only complete graph knowledge published through the gateway", () =>
   Effect.gen(function* () {
     const runId = RunId.make("current-delivery-unaccepted")
-    const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, policy)
-    const relation = yield* makeJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), journal)
-    const acceptedGraph = graph("accepted", ["A"])
-    expect(yield* relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
-    yield* relation.refreshAcceptedHistory
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, policy)
+    const gateway = yield* installGateway(runId)
+    const relation = makeJournaledCurrentDeliveryRelation(gateway)
     expect(yield* relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
 
-    const incompleteOperation = makeTrackerGraphObservationOperation(OperationId.make("incomplete-read"), target)
-    yield* journal.append(
+    const operation = makeTrackerGraphObservationOperation(OperationId.make("incomplete-read"), target)
+    yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    expect(yield* relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
+
+    yield* gateway.journal.append(
       runId,
-      intentRecordKey(incompleteOperation.operationId),
-      taskTrackerReadIntent(incompleteOperation)
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, graph("accepted", ["A"]))
+      )
     )
-    yield* relation.refreshAcceptedHistory
-    expect(yield* relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
-
-    yield* appendAcceptedGraph(runId, incompleteOperation.operationId, acceptedGraph)
-    const accepted = yield* journal.read(runId)
-    const last = Option.getOrThrow(Option.fromUndefinedOr(accepted.at(-1)))
-    const invalid = yield* makeJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), {
-      read: () => Effect.succeed([...accepted, { ...last, position: JournalPosition.make(accepted.length + 1) }])
-    }).pipe(Effect.flip)
-    expect(invalid._tag).toBe("InvalidWorkflowJournalHistory")
+    const accepted = yield* relation.read
+    expect(accepted.currentGraph.taskIds()).toEqual(["A"])
+    expect(accepted.currentGraphOperationId).toBe("incomplete-read")
+    expect(accepted.runControlPolicy).toEqual(currentPolicy)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("coalesces accepted observations to the latest frame and reconstructs it after restart", () =>
+it.effect("reports unavailable and invalid prefixes through the temporary journal compatibility relation", () =>
   Effect.gen(function* () {
-    const runId = RunId.make("current-delivery-coalesced")
-    const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, policy)
-    const relation = yield* makeJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), journal)
-    yield* appendAcceptedGraph(runId, OperationId.make("accepted-one"), graph("one", ["A", "removed"]))
-    yield* appendAcceptedGraph(runId, OperationId.make("accepted-two"), graph("two", ["A", "newly-eligible"]))
+    const runId = RunId.make("current-delivery-compatibility-errors")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, policy)
+    const begun = yield* storage.read(runId)
+    const journal = { read: () => Effect.succeed(begun) }
+    const unavailable = makeLegacyJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), journal)
+    expect(yield* unavailable.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
 
-    yield* relation.refreshAcceptedHistory
+    const first = Option.getOrThrow(Option.fromUndefinedOr(begun[0]))
+    const invalid = makeLegacyJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), {
+      read: () => Effect.succeed([...begun, { ...first, position: JournalPosition.make(2) }])
+    })
+    expect(yield* invalid.read.pipe(Effect.flip)).toMatchObject({ _tag: "InvalidWorkflowJournalHistory" })
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("hides reconstructed old graph knowledge until restart accepts a fresh complete graph", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("current-delivery-restarted")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, policy)
+    const beforeCrash = makeTrackerGraphObservationOperation(OperationId.make("accepted-before-crash"), target)
+    yield* storage.append(runId, intentRecordKey(beforeCrash.operationId), taskTrackerReadIntent(beforeCrash))
+    yield* storage.append(
+      runId,
+      outcomeRecordKey(beforeCrash.operationId),
+      taskTrackerFactsObservedEvent(
+        beforeCrash.operationId,
+        makeCompleteTaskTrackerFactsObserved(beforeCrash, graph("one", ["old"]))
+      )
+    )
+
+    const restarted = yield* installGateway(runId)
+    const relation = makeJournaledCurrentDeliveryRelation(restarted)
+    const reconstructed = yield* restarted.readCurrent
+    expect(reconstructed.records).toHaveLength(3)
+    expect(reconstructed.reconstructed.graphKnowledge.taskTrackerFacts).toHaveLength(1)
+    expect(yield* relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
+
+    yield* appendAcceptedGraph(restarted, runId, OperationId.make("accepted-after-restart"), graph("two", ["current"]))
     const current = yield* relation.read
-    expect(current.currentGraph.taskIds()).toEqual(["A", "newly-eligible"])
-    expect(current.currentGraphOperationId).toBe("accepted-two")
+    expect(current.currentGraph.taskIds()).toEqual(["current"])
+    expect(current.currentGraphOperationId).toBe("accepted-after-restart")
     expect(current.responsibility.entries).toEqual([])
-    expect(current.runControlPolicy).toEqual(currentPolicy)
     expect(Object.keys(current)).not.toContain("ownership")
     expect(Object.keys(current)).not.toContain("positions")
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
 
-    const restarted = yield* makeJournaledCurrentDeliveryRelation(runId, Effect.succeed(currentPolicy), journal)
-    expect((yield* restarted.read).currentGraph.taskIds()).toEqual(["A", "newly-eligible"])
+it.effect("keeps the gateway live while the legacy scheduler samples accepted operation boundaries", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("current-delivery-compatibility-epoch")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, policy)
+    const gateway = yield* installGateway(runId)
+    const compatibility = yield* makeLegacySchedulerCurrentDeliveryCompatibility(gateway, Effect.succeed(currentPolicy))
+
+    yield* appendAcceptedGraph(gateway, runId, OperationId.make("initial"), graph("one", ["A"]))
+    expect(yield* compatibility.relation.read.pipe(Effect.flip)).toBeInstanceOf(CurrentDeliveryGraphUnavailable)
+
+    yield* compatibility.afterGraphAccepted
+    expect((yield* compatibility.relation.read).currentGraph.taskIds()).toEqual(["A"])
+
+    yield* appendAcceptedGraph(gateway, runId, OperationId.make("later"), graph("two", ["B"]))
+    expect((yield* makeJournaledCurrentDeliveryRelation(gateway).read).currentGraph.taskIds()).toEqual(["B"])
+    expect((yield* compatibility.relation.read).currentGraph.taskIds()).toEqual(["A"])
+
+    yield* compatibility.afterOperationSucceeded
+    expect((yield* compatibility.relation.read).currentGraph.taskIds()).toEqual(["B"])
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )

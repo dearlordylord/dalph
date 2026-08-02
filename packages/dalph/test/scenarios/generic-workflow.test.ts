@@ -25,7 +25,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
-  memoryJournalStoreLayer,
+  legacyMemoryJournalStoreLayer,
   OperationId,
   PlannedWorktreeReady,
   projectTrackerSnapshot,
@@ -98,7 +98,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))
+  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(legacyMemoryJournalStoreLayer))
 
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -158,7 +158,9 @@ it.effect("journals simulated generic boundaries and rejects cross-run plans", (
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const testLayer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalStoreLayer))
+  const testLayer = journaledWorkflowInterpreterLayer(runId, base).pipe(
+    Layer.provideMerge(legacyMemoryJournalStoreLayer)
+  )
 
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter

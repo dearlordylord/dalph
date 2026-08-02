@@ -135,6 +135,9 @@ export * from "./workflow/kernel/event.js"
 export * from "./workflow-journal/record-key.js"
 export * from "./workflow-journal/recovery-model.js"
 export {
+  AcceptedJournalHistoryInvalid,
+  AcceptedJournalPositionGap,
+  AcceptedJournalRecordMismatch,
   JournalDataCorruption,
   type JournalAppendError,
   JournalSchemaIncompatible,
@@ -142,10 +145,16 @@ export {
   JournalStorageCapacityExhausted,
   JournalStorageLocked,
   JournalStorageUnavailable,
+  InRunJournal,
+  InRunJournalRunMismatch,
+  journalStoreCapabilities,
+  legacyUnpublishedInRunJournalLayer,
   JournalStore,
   JournalStoreContradiction,
   type JournalStoreError,
+  type JournalStorageAppendError,
   JournalRecord,
+  RunLifecycleJournal,
   WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
   WorkflowRunIdentityAlreadyUsed,
@@ -176,7 +185,7 @@ export {
 } from "./workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 export * from "./workflow/protocols/git-reconciliation/decision.js"
 export { responsibilityDispositionForTargetLineage } from "./workflow/protocols/git-reconciliation/frontier-adapter.js"
-export { memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
+export { legacyMemoryJournalStoreLayer, memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
 export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"
 export {
   coordinatorOwnedGitWorktreeLayer,
@@ -188,7 +197,10 @@ export * from "./coordination/reconstruction/history.js"
 export * from "./coordination/reconstruction/history-result.js"
 export * from "./coordination/frontier/recovery-frontier.js"
 export * from "./coordination/run/recovery-activation.js"
-export { CurrentDeliveryGraphUnavailable } from "./coordination/run/current-delivery-relation.js"
+export {
+  CurrentDeliveryControlPolicyUnavailable,
+  CurrentDeliveryGraphUnavailable
+} from "./coordination/run/current-delivery-relation.js"
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
@@ -206,6 +218,7 @@ export * from "./coordination/frontier/frontier.js"
 export * from "./coordination/admission/controller.js"
 export {
   journalDatabaseLocatorConfig,
+  legacySqliteJournalStoreLayer,
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./workflow-journal/adapters/sqlite-store.js"
@@ -296,13 +309,25 @@ export {
   type AllocatedFreshWorkflowRunId,
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
-export { runRecoveredWorkflow, runSyntheticWorkflow, runWorkflow } from "./coordination/run/run.js"
+export {
+  JournaledRunBootstrap,
+  JournaledRunIdentityMismatch,
+  JournaledRunNotActive,
+  runRecoveredWorkflow,
+  runSyntheticWorkflow,
+  runWorkflow
+} from "./coordination/run/run.js"
+export {
+  journaledRunBootstrapLayer,
+  type JournaledRuntimeLayerInput
+} from "./coordination/run/journaled-run-bootstrap.js"
 export { IntegrationCandidateBoundaryUnavailable } from "./coordination/run/integration-transition-runtime.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,
-  startupRecoveryLayer
+  validatedStartupRecoveryLayer
 } from "./coordination/run/startup-recovery.js"
+export { AcceptedFactGatewayInitialHistoryInvalid } from "./coordination/delivery/accepted-fact-gateway.js"
 export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,

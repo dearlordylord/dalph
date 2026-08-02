@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
-import { JournalStore } from "./store.js"
+import { InRunJournal } from "./store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -62,7 +62,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
     WorkflowInterpreter,
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
-      const journal = yield* JournalStore
+      const journal = yield* InRunJournal
 
       const readTrackerGraph = Effect.fn("WorkflowInterpreter.Journaled.readTrackerGraph")(function* (
         operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type

@@ -14,7 +14,7 @@ import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
-import { memoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -53,7 +53,7 @@ const provider = Layer.effect(
     })
   })
 )
-const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalStoreLayer))
+const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
 
 it.effect("records exact claim-release intent and outcome once before replay returns", () =>
   Effect.gen(function* () {
@@ -92,5 +92,5 @@ it.effect("records exact claim-release intent and outcome once before replay ret
         .map(({ event }) => event._tag)
         .filter((tag) => tag === "TaskClaimReleaseIntended" || tag === "TaskClaimReleased")
     ).toEqual(["TaskClaimReleaseIntended", "TaskClaimReleased"])
-  }).pipe(Effect.provide(journaled), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(journaled), Effect.provide(legacyMemoryJournalStoreLayer))
 )

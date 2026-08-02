@@ -19,6 +19,8 @@ import {
   continuePlannedAttemptExecutorWork,
   type JournalRecord,
   JournalStore,
+  journalStoreCapabilities,
+  legacyUnpublishedInRunJournalLayer,
   JournalPosition,
   makeTaskAdmissionController,
   requestPlannedAttemptExecutorSuspension,
@@ -120,10 +122,10 @@ const executorConformanceDriver = defineDriver(
       scan: () => Effect.die("executor conformance never scans the journal"),
       terminateRun: () => Effect.die("executor conformance never terminates a Run")
     })
-    const workflowLayer = Layer.merge(
-      Layer.succeed(JournalStore, journal),
-      Layer.succeed(PlannedAttemptExecutor, executor)
+    const legacyJournalLayer = legacyUnpublishedInRunJournalLayer.pipe(
+      Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
+    const workflowLayer = Layer.merge(legacyJournalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
     const continueExecutorWorkflow = () =>
       continuePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
     const suspendExecutorWorkflow = () =>

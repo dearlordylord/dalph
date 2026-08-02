@@ -32,7 +32,7 @@ import {
   makeTaskWorktreeObservationOperation
 } from "../workflow/registry/operation.js"
 import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
-import { memoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -70,7 +70,7 @@ const integrationTarget = IntegrationTarget.make({
 })
 
 const journaledTestLayer = (base: Layer.Layer<WorkflowInterpreter>) =>
-  journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(memoryJournalStoreLayer))
+  journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
 
 const replayingLostWorktreeLayer = journaledTestLayer(
   Layer.effect(
@@ -190,7 +190,7 @@ it.effect("records exact worktree loss and replays it without another Git read",
         .map(({ event }) => event._tag)
         .filter((tag) => tag === "GitReadIntentRecorded" || tag === "PlannedAttemptWorktreeObserved")
     ).toEqual(["GitReadIntentRecorded", "PlannedAttemptWorktreeObserved"])
-  }).pipe(Effect.provide(replayingLostWorktreeLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(replayingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("reopens an intent-only Git read with the same operation identity", () =>
@@ -223,7 +223,7 @@ it.effect("reopens an intent-only Git read with the same operation identity", ()
             : []
       )
     ).toEqual([operation.operationId, operation.operationId])
-  }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("retains the ready worktree while retrying a failed target-lineage read with the same identity", () =>
@@ -270,5 +270,5 @@ it.effect("retains the ready worktree while retrying a failed target-lineage rea
         .filter(({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage")
         .map(({ event }) => (event._tag === "GitReadIntentRecorded" ? event.operation.operationId : undefined))
     ).toEqual([lineageOperation.operationId])
-  }).pipe(Effect.provide(retryingTargetLineageLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(retryingTargetLineageLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

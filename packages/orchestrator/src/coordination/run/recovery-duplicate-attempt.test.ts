@@ -21,13 +21,13 @@ import {
   attemptPlanRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalRecord, JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
 import { activateRecoveredResponsibilities } from "./recovery-activation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { sqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
+import { legacySqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { causalClaimForAttempt } from "./recovery-authority.js"
 
 const runId = RunId.make("duplicate-attempt-production-recovery")
@@ -102,15 +102,8 @@ const failIfCalled = (boundary: string) =>
 const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
   Layer.mergeAll(
     Layer.succeed(
-      JournalStore,
-      JournalStore.of({
-        append: () => failIfCalled("journal append"),
-        beginRun: () => failIfCalled("journal begin Run"),
-        read: () => Effect.succeed(records),
-        readRunForRecovery: () => failIfCalled("journal recover Run"),
-        scan: () => failIfCalled("journal scan"),
-        terminateRun: () => failIfCalled("journal terminate Run")
-      })
+      InRunJournal,
+      InRunJournal.of({ append: () => failIfCalled("journal append"), read: () => Effect.succeed(records) })
     ),
     Layer.succeed(
       WorkflowInterpreter,
@@ -157,7 +150,7 @@ it.effect(
           }
         }
         return yield* journal.read(runId)
-      }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
       expect(roundTrippedRecords).toEqual(invalidRecords)
 
       const failure = yield* activateRecoveredResponsibilities(runId, {

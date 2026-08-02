@@ -11,7 +11,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -31,7 +31,7 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
   plannedAttempt: PlannedTaskAttempt,
   command: "StartOrContinue" | "Suspend"
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const records = yield* journal.read(plannedAttempt.runId)

@@ -7,8 +7,8 @@ import { TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
 import { taskWorkCapacityPolicyRecordKey } from "../workflow-journal/record-key.js"
 import {
   type JournalAppendError,
-  type JournalStoreError,
-  JournalStore,
+  type JournalReadError,
+  InRunJournal,
   WorkflowRunNotBegan
 } from "../workflow-journal/store.js"
 import { RunControlPolicy, RunPolicyRevision } from "./policy.js"
@@ -38,14 +38,13 @@ interface TaskWorkCapacityControlService {
     RunControlPolicy,
     | InvalidWorkflowJournalHistory
     | JournalAppendError
-    | JournalStoreError
     | Schema.SchemaError
     | TaskWorkCapacityPolicyRevisionConflict
     | WorkflowRunNotBegan
   >
   readonly read: (
     runId: RunId
-  ) => Effect.Effect<RunControlPolicy, InvalidWorkflowJournalHistory | JournalStoreError | WorkflowRunNotBegan>
+  ) => Effect.Effect<RunControlPolicy, InvalidWorkflowJournalHistory | JournalReadError | WorkflowRunNotBegan>
 }
 
 /** Decodes, journals, and reconstructs one Run's Operator-applied task-work capacity. */
@@ -68,7 +67,7 @@ export const reconstructTaskWorkCapacityPolicy = Effect.fn("TaskWorkCapacityCont
 export const taskWorkCapacityControlLayer = Layer.effect(
   TaskWorkCapacityControl,
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const read = Effect.fn("TaskWorkCapacityControl.read")(function* (runId: RunId) {
       return yield* reconstructTaskWorkCapacityPolicy(runId, yield* journal.read(runId))
     })

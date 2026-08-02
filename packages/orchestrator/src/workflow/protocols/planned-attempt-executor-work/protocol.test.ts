@@ -41,7 +41,7 @@ import {
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent
 } from "../../registry/event.js"
-import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   activateRecoveredResponsibilities,
   makeRunRecoveryActivation
@@ -259,7 +259,7 @@ it.effect("rejects an executor report correlated to another attempt", () =>
       Effect.flip
     )
     expect(mismatch._tag).toBe("PlannedAttemptExecutorCorrelationMismatch")
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("continues an exact planned attempt through the recovered source capability", () =>
@@ -281,7 +281,7 @@ it.effect("continues an exact planned attempt through the recovered source capab
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(
       makeControlledFakePlannedAttemptExecutorLayer([
         ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -363,7 +363,7 @@ it.effect("recreates the fake executor and continues the same attempt after shar
             : []
       )
     ).toEqual([plannedAttempt.attemptId, plannedAttempt.attemptId, plannedAttempt.attemptId])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("reports safe suspension for the same planned attempt", () =>
@@ -387,7 +387,7 @@ it.effect("reports safe suspension for the same planned attempt", () =>
         })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -452,7 +452,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
   }).pipe(
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -547,7 +547,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -631,7 +631,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
     Effect.provide(controlDirectionApplicationLayer),
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -712,6 +712,6 @@ it.effect("generic activation continues reconstructed work through the controlle
     ),
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )

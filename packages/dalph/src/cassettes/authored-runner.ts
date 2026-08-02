@@ -26,9 +26,10 @@ import {
   gitWorktreeTestLayer,
   type JournalRecord,
   JournalStore,
-  journaledFreshRunRecoveryActivationLayer,
+  journalStoreCapabilities,
+  journaledRunBootstrapLayer,
+  type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
-  integrationTargetSelectionLayer,
   makeLiveWorkflowInterpreterLayer,
   memoryJournalStoreLayer,
   observePlannedAttemptWorktreeThrough,
@@ -37,7 +38,7 @@ import {
   runGitWorktreeReconciliation,
   runRecoveredWorkflow,
   runWorkflow,
-  startupRecoveryLayer,
+  validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
   TaskWorkCapacityControl,
   TargetLineageObservation,
@@ -110,12 +111,10 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorDies = cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
       const trace = controlledTrace(cursor)
-      const journaledFreshTraceLayer = cassette.story.some(
+      const tracesFreshRecovery = cassette.story.some(
         (item) =>
           item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
       )
-        ? Layer.succeed(WorkflowTrace, trace)
-        : Layer.empty
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
@@ -132,39 +131,38 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
-      const journalLayer = Layer.succeed(
-        JournalStore,
-        JournalStore.of({
-          ...sharedJournal,
-          append: (requestedRunId, key, event) =>
-            sharedJournal
-              .append(requestedRunId, key, event)
-              .pipe(
-                Effect.tap(() =>
-                  candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag
-                    ? Deferred.succeed(candidateOutcomeRecorded, undefined)
-                    : Effect.void
+      const journalLayer = journalStoreCapabilities(
+        Layer.succeed(
+          JournalStore,
+          JournalStore.of({
+            ...sharedJournal,
+            append: (requestedRunId, key, event) =>
+              sharedJournal
+                .append(requestedRunId, key, event)
+                .pipe(
+                  Effect.tap(() =>
+                    candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag
+                      ? Deferred.succeed(candidateOutcomeRecorded, undefined)
+                      : Effect.void
+                  )
                 )
-              )
-        })
-      )
-      const executorControlDirection = Context.get(
-        yield* Layer.build(controlDirectionApplicationLayer.pipe(Layer.provide(journalLayer))),
-        ControlDirectionApplication
-      )
-      const applyNextControlDirection = Effect.gen(function* () {
-        const direction = yield* cursor.consumeInFlightExecutorControlDirection
-        if (Option.isNone(direction)) return
-        yield* executorControlDirection
-          .apply({
-            direction: direction.value.direction,
-            subject:
-              direction.value.subject._tag === "Run"
-                ? { _tag: "Run", runId }
-                : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
           })
-          .pipe(Effect.orDie)
-      })
+        )
+      )
+      const applyNextControlDirection = (executorControlDirection: ControlDirectionApplication["Service"]) =>
+        Effect.gen(function* () {
+          const direction = yield* cursor.consumeInFlightExecutorControlDirection
+          if (Option.isNone(direction)) return
+          yield* executorControlDirection
+            .apply({
+              direction: direction.value.direction,
+              subject:
+                direction.value.subject._tag === "Run"
+                  ? { _tag: "Run", runId }
+                  : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
+            })
+            .pipe(Effect.orDie)
+        })
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
@@ -196,7 +194,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           })
         })
       ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
-      const baseControlPolicyLayer = taskWorkCapacityControlLayer.pipe(Layer.provide(journalLayer))
+      const baseControlPolicyLayer = taskWorkCapacityControlLayer
+      const operatorControlLayer = Layer.merge(controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
       const controlledControlPolicyLayer = Layer.effect(
         TaskWorkCapacityControl,
         Effect.gen(function* () {
@@ -244,15 +243,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               })
           })
         })
-      ).pipe(
-        Layer.provide(
-          Layer.mergeAll(baseControlPolicyLayer, controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
-        ),
-        Layer.provide(journalLayer)
-      )
-      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer).pipe(
-        Layer.provide(journalLayer)
-      )
+      ).pipe(Layer.provide(baseControlPolicyLayer), Layer.provideMerge(operatorControlLayer))
+      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer)
       const planningLayer = (phase: "fresh" | "recovery") =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(
@@ -342,54 +334,45 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
           })
         )
       )
-      const freshExecutorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection)
-      const freshWorkflowLayer = Layer.mergeAll(
-        candidateLayer,
-        interpreterLayer,
-        journaledFreshRunRecoveryActivationLayer(
-          runId,
-          command.integrationTarget,
-          CandidateCorrectionLimit.make(1),
-          CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
-        ).pipe(
-          Layer.provide(candidateLayer),
-          Layer.provide(freshExecutorLayer),
-          Layer.provide(interpreterLayer),
-          Layer.provide(journaledFreshTraceLayer)
-        ),
-        integrationTargetSelectionLayer(command.integrationTarget),
-        planningLayer("fresh"),
-        controlledControlPolicyLayer
-      ).pipe(Layer.provideMerge(journalLayer))
       const coordinatorOwnershipLayer = Layer.succeed(
         CoordinatorOwnership,
         /* v8 ignore next -- startup only requires capability presence; cassette mutations use controlled authorities. */
         CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
       )
-      const recoveryExecutorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection)
-      const recoveryPlanningLayer = planningLayer("recovery")
-      const recoveryStartupLayer = startupRecoveryLayer(
-        runId,
-        command.integrationTarget,
-        CandidateCorrectionLimit.make(1),
-        CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
-      ).pipe(
-        Layer.provide(candidateLayer),
-        Layer.provide(interpreterLayer),
-        Layer.provide(controlledControlPolicyLayer),
-        Layer.provide(recoveryExecutorLayer),
+      const runtimeLayer = ({ startup }: JournaledRuntimeLayerInput) => {
+        const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery")
+        const executorLayer = Layer.unwrap(
+          Effect.gen(function* () {
+            const controlDirection = yield* ControlDirectionApplication
+            return controlledExecutorLayer(cursor, runId, applyNextControlDirection(controlDirection))
+          })
+        ).pipe(Layer.provide(controlledControlPolicyLayer))
+        const startupLayer = validatedStartupRecoveryLayer(
+          runId,
+          command.integrationTarget,
+          startup,
+          CandidateCorrectionLimit.make(1),
+          CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
+          { freshRecoveryTrace: tracesFreshRecovery ? "Emit" : "Suppress" }
+        ).pipe(
+          Layer.provide(candidateLayer),
+          Layer.provide(interpreterLayer),
+          Layer.provide(controlledControlPolicyLayer),
+          Layer.provide(executorLayer),
+          Layer.provide(Layer.succeed(WorkflowTrace, trace)),
+          Layer.provide(planning)
+        )
+        return startupLayer
+      }
+      const application = journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
         Layer.provide(journalLayer),
-        Layer.provide(coordinatorOwnershipLayer),
-        Layer.provide(Layer.succeed(WorkflowTrace, trace)),
-        Layer.provide(recoveryPlanningLayer)
+        Layer.provide(coordinatorOwnershipLayer)
       )
-      const recoveryWorkflowLayer = Layer.merge(recoveryStartupLayer, recoveryPlanningLayer)
 
       const execution = yield* Effect.scoped(
         Effect.gen(function* () {
           const freshRun = runWorkflow(command.target, initial.policy, runId).pipe(
-            Effect.provideService(WorkflowTrace, trace),
-            Effect.provide(freshWorkflowLayer)
+            Effect.provide(planningLayer("fresh"))
           )
           if (coordinatorDies) {
             const coordinator = yield* Effect.forkScoped(freshRun)
@@ -400,9 +383,8 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               )
             )
             yield* Fiber.interrupt(coordinator)
-            const recoveryContext = yield* Layer.build(recoveryWorkflowLayer)
             const recovered = yield* runRecoveredWorkflow(command.target).pipe(
-              Effect.provide(recoveryContext),
+              Effect.provide(planningLayer("recovery")),
               Effect.forkScoped({ startImmediately: true })
             )
             yield* Effect.raceFirst(
@@ -415,11 +397,11 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
             for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
             const recoveredCoordinatorExit = recovered.pollUnsafe()
             yield* Fiber.interrupt(recovered)
-            return { records: yield* (yield* JournalStore).read(runId), recoveredCoordinatorExit }
+            return { records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
           }
           yield* freshRun
-          return { records: yield* (yield* JournalStore).read(runId), recoveredCoordinatorExit: undefined }
-        }).pipe(Effect.provide(journalLayer))
+          return { records: yield* sharedJournal.read(runId), recoveredCoordinatorExit: undefined }
+        }).pipe(Effect.provide(application))
       )
       const { records, recoveredCoordinatorExit } = execution
       const assertions = yield* cursor.consumeTerminalAssertions

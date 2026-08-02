@@ -19,8 +19,9 @@ import { makeTaskAdmissionController } from "../coordination/admission/controlle
 import { RunnableFrontierTransition } from "../coordination/frontier/frontier.js"
 import { makeRunRecoveryActivation } from "../coordination/run/recovery-activation.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
-import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../workflow-journal/store.js"
+import { legacyMemoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
+import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
+import { JournalPosition } from "../workflow-journal/identity.js"
 import { OperationId } from "../workflow/identity.js"
 import { TaskAttemptPlannedEvent, TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
 import { makeTaskAttemptPlanOperation } from "../workflow/registry/operation.js"
@@ -33,7 +34,33 @@ import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../workflow/
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { projectWorkflowOccurrences } from "../workflow/registry/occurrence-projection.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunPolicyRevision } from "./policy.js"
-import { taskWorkCapacityControlLayer, TaskWorkCapacityControl } from "./task-work-capacity.js"
+import {
+  reconstructTaskWorkCapacityPolicy,
+  taskWorkCapacityControlLayer,
+  TaskWorkCapacityControl
+} from "./task-work-capacity.js"
+
+it.effect("rejects an invalid journal prefix instead of deriving a capacity", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("invalid-capacity-prefix")
+    const target = FixtureTarget.make("invalid-capacity-target")
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+    )
+    const records = yield* journal.read(runId)
+    const began = Option.getOrThrow(Option.fromUndefinedOr(records[0]))
+
+    expect(
+      yield* reconstructTaskWorkCapacityPolicy(runId, [
+        ...records,
+        { ...began, position: JournalPosition.make(2) }
+      ]).pipe(Effect.flip)
+    ).toMatchObject({ _tag: "InvalidWorkflowJournalHistory" })
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
 
 it.effect(
   "records initial task-work capacity with the run beginning and reconstructs the latest applied revision",
@@ -71,7 +98,7 @@ it.effect(
           runId
         }
       ])
-    }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rejects a stale capacity revision without appending another applied change", () =>
@@ -100,7 +127,7 @@ it.effect("rejects a stale capacity revision without appending another applied c
       "WorkflowRunBegan",
       "TaskWorkCapacityChanged"
     ])
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("reports that capacity has no durable value before the Run begins", () =>
@@ -109,7 +136,7 @@ it.effect("reports that capacity has no durable value before the Run begins", ()
     const failure = yield* control.read(RunId.make("unbegun-capacity-run")).pipe(Effect.flip)
 
     expect(failure).toMatchObject({ _tag: "WorkflowRunNotBegan", runId: "unbegun-capacity-run" })
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rereads the winning policy when another writer commits the requested revision first", () =>
@@ -139,7 +166,9 @@ it.effect("rereads the winning policy when another writer commits the requested 
       const control = yield* TaskWorkCapacityControl
       return yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId }).pipe(Effect.flip)
     }).pipe(
-      Effect.provide(taskWorkCapacityControlLayer.pipe(Layer.provide(Layer.succeed(JournalStore, racingJournal))))
+      Effect.provide(
+        taskWorkCapacityControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(racingJournal))))
+      )
     )
 
     expect(conflict).toMatchObject({
@@ -148,7 +177,7 @@ it.effect("rereads the winning policy when another writer commits the requested 
       expectedRevision: 1,
       runId
     })
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("restart reconstructs the latest applied capacity and both unfinished task positions", () =>
@@ -242,5 +271,5 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })
     expect((yield* controller.snapshot()).reservedTaskIds).toEqual([TaskId.make("A"), TaskId.make("B")])
     expect((yield* controller.admit({ explanations: [], transitions: [freshC] }, runId)).transition._tag).toBe("None")
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

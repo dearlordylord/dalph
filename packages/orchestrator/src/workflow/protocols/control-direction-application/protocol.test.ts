@@ -7,10 +7,10 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
-import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { legacySqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import { controlDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { ControlDirectionApplicationOrdinal, ControlDirectionAppliedEvent } from "./events.js"
@@ -29,11 +29,11 @@ const makeJournalReadBarrier = Effect.gen(function* () {
   const firstReadEntered = yield* Deferred.make<void>()
   const releaseReads = yield* Deferred.make<void>()
   const layer = Layer.effect(
-    JournalStore,
+    InRunJournal,
     Effect.gen(function* () {
       const delegate = yield* JournalStore
-      return JournalStore.of({
-        ...delegate,
+      return InRunJournal.of({
+        append: delegate.append,
         read: (readRunId) =>
           Effect.gen(function* () {
             if (!(yield* Ref.get(armed))) return yield* delegate.read(readRunId)
@@ -47,7 +47,7 @@ const makeJournalReadBarrier = Effect.gen(function* () {
           })
       })
     })
-  ).pipe(Layer.provide(memoryJournalStoreLayer))
+  ).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
   return { activeReads, armed, firstReadEntered, layer, peakReads, releaseReads }
 })
 
@@ -85,7 +85,7 @@ describe("ControlDirectionApplication", () => {
           tasks: { _tag: "TaskPauses", taskIds: [taskId] }
         })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("leaves no durable direction when Alice's process dies before apply", () =>
@@ -102,7 +102,7 @@ describe("ControlDirectionApplication", () => {
       if (reopened._tag === "ValidWorkflowJournalHistory") {
         expect(reopened.runState.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
       }
-    }).pipe(Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("applies run and task directions in order without claiming downstream effects", () =>
@@ -130,7 +130,7 @@ describe("ControlDirectionApplication", () => {
       if (reopened._tag === "ValidWorkflowJournalHistory") {
         expect(reopened.runState.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("unpauses A without clearing an independent Pause on C", () =>
@@ -152,7 +152,7 @@ describe("ControlDirectionApplication", () => {
           tasks: { _tag: "TaskPauses", taskIds: [independentTaskId] }
         })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("serializes concurrent applications before either can allocate a run-local ordinal", () =>
@@ -178,7 +178,10 @@ describe("ControlDirectionApplication", () => {
 
         const applied = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
         expect(applied.map(({ event }) => event._tag === "ControlDirectionApplied" && event.ordinal)).toEqual([1, 2])
-      }).pipe(Effect.provide(controlDirectionApplicationLayer.pipe(Layer.provideMerge(barrier.layer))))
+      }).pipe(
+        Effect.provide(controlDirectionApplicationLayer.pipe(Layer.provideMerge(barrier.layer))),
+        Effect.provide(legacyMemoryJournalStoreLayer)
+      )
     })
   )
 
@@ -206,7 +209,7 @@ describe("ControlDirectionApplication", () => {
           expect.objectContaining({ detail: "control direction expected ordinal 1, found 2" })
         )
       }
-    }).pipe(Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("rejects malformed input and a Run that has not begun without appending", () =>
@@ -224,7 +227,7 @@ describe("ControlDirectionApplication", () => {
       const missingRun = yield* Effect.flip(control.apply({ direction: "Pause", subject: { _tag: "Run", runId } }))
       expect(missingRun).toMatchObject({ _tag: "WorkflowRunNotBegan", runId })
       expect(yield* journal.read(runId)).toEqual([])
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
   )
 
   it.effect("reopens an applied direction from persisted SQLite after the response is lost", () =>
@@ -239,13 +242,13 @@ describe("ControlDirectionApplication", () => {
             // The caller does not retain the returned record, modeling a lost response.
           }).pipe(
             Effect.provide(controlDirectionApplicationLayer),
-            Effect.provide(sqliteJournalStoreLayer({ filename }))
+            Effect.provide(legacySqliteJournalStoreLayer({ filename }))
           )
 
           const records = yield* Effect.gen(function* () {
             const journal = yield* JournalStore
             return yield* journal.read(runId)
-          }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+          }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
           const reopened = reduceWorkflowJournalHistory(runId, records)
           expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
           if (reopened._tag === "ValidWorkflowJournalHistory") {

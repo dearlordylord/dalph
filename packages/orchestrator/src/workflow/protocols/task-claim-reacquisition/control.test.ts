@@ -5,7 +5,7 @@ import { RunId, TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import {
   TaskClaimReacquisitionControl,
@@ -25,7 +25,7 @@ it.effect("rejects an operator claim-reacquisition direction before the Run begi
     )
     expect(failure).toMatchObject({ _tag: "WorkflowRunNotBegan", runId })
     expect(yield* (yield* JournalStore).read(runId)).toEqual([])
-  }).pipe(Effect.provide(taskClaimReacquisitionControlLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskClaimReacquisitionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("coalesces exact request redelivery and rejects identity reuse for another task", () =>
@@ -52,5 +52,5 @@ it.effect("coalesces exact request redelivery and rejects identity reuse for ano
     expect(contradiction).toEqual(
       new TaskClaimReacquisitionRequestIdentityContradiction({ existingPosition: first.position, requestId, runId })
     )
-  }).pipe(Effect.provide(taskClaimReacquisitionControlLayer), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskClaimReacquisitionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

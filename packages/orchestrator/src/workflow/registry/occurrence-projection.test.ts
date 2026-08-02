@@ -25,7 +25,7 @@ import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
-import { type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord, JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   GitReadIntentRecordedEvent,
@@ -809,15 +809,25 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         terminateRun: () => Effect.succeed(terminated)
       })
       const startupLayer = Layer.mergeAll(
-        Layer.succeed(JournalStore, journal),
+        Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         controlledFakePlannedAttemptExecutorLayer
       )
       const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provide(startupLayer))
-      const journalLayer = Layer.succeed(JournalStore, journal)
+      const journalLayer = Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read }))
       const workflowLayer = Layer.mergeAll(
         journalLayer,
+        Layer.succeed(
+          RunLifecycleJournal,
+          RunLifecycleJournal.of({
+            beginRun: journal.beginRun,
+            read: journal.read,
+            readRunForRecovery: journal.readRunForRecovery,
+            scan: journal.scan,
+            terminateRun: journal.terminateRun
+          })
+        ),
         Layer.succeed(RunRecoveryActivation, recovery),
         journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter)).pipe(
           Layer.provide(journalLayer)

@@ -10,7 +10,7 @@ import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { OperationId } from "../workflow/identity.js"
 import { AuthoritativeTaskClaimObserved, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimObservationOperation } from "../workflow/registry/operation.js"
-import { memoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -76,8 +76,8 @@ it.effect("records one exact claim observation and replays it without another pr
             )
           )
         )
-      ).pipe(Layer.provide(memoryJournalStoreLayer))
+      ).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )

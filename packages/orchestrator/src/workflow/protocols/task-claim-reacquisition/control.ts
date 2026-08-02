@@ -4,9 +4,10 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { taskClaimReacquisitionDirectedRecordKey } from "../../../workflow-journal/record-key.js"
 import {
+  type JournalAppendError,
   type JournalRecord,
   type JournalStoreError,
-  JournalStore,
+  InRunJournal,
   type WorkflowRunAlreadyTerminated,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
@@ -32,6 +33,7 @@ interface TaskClaimReacquisitionControlService {
     input: unknown
   ) => Effect.Effect<
     JournalRecord,
+    | JournalAppendError
     | JournalStoreError
     | Schema.SchemaError
     | TaskClaimReacquisitionRequestIdentityContradiction
@@ -49,7 +51,7 @@ export class TaskClaimReacquisitionControl extends Context.Service<
 export const taskClaimReacquisitionControlLayer = Layer.effect(
   TaskClaimReacquisitionControl,
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const apply = Effect.fn("TaskClaimReacquisitionControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyTaskClaimReacquisitionRequest, {
         onExcessProperty: "error"

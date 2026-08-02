@@ -15,7 +15,7 @@ import {
 import { type TaskWorkCapacity } from "../admission/capacity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
-  JournalStore,
+  InRunJournal,
   type JournalAppendError,
   type JournalRecord,
   type JournalStoreError
@@ -301,7 +301,7 @@ const planningFailureDetail = (failure: unknown): string =>
 const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimReacquisition")(function* (input: {
   readonly execution: OwnedTransitionExecution
   readonly interpreter: WorkflowInterpreterService
-  readonly journal: JournalStore["Service"]
+  readonly journal: InRunJournal["Service"]
   readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
   readonly runId: RunId
   readonly trace: Option.Option<WorkflowTrace["Service"]>
@@ -666,7 +666,7 @@ export const hasUnfinishedRunResponsibility = (runState: ReconstructedRunState):
   )
 
 const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunState")(function* (runId: RunId) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
   if (reduction._tag === "InvalidWorkflowJournalHistory") {
     return yield* Effect.fail(reduction)
@@ -1601,21 +1601,24 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
     runId: RunId,
     integrationTarget: Option.Option<IntegrationTarget>,
     candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-    candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
+    candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
+    workflowTraceOverride: Option.Option<WorkflowTrace["Service"]> | undefined
   ) {
     const executor = yield* PlannedAttemptExecutor
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const workflowInterpreter = Context.getOption(yield* Effect.context<never>(), WorkflowInterpreter)
-    const workflowTrace = Context.getOption(yield* Effect.context<never>(), WorkflowTrace)
+    const workflowTrace = workflowTraceOverride ?? Context.getOption(yield* Effect.context<never>(), WorkflowTrace)
     const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
-    const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
+    // Fresh work has no recovered-history freshness boundary. This must remain
+    // explicit now that runtime construction correctly follows WorkflowRunBegan.
+    const activationBaselinePosition = Option.none<JournalPosition>()
     const integrationResources = yield* makeIntegrationTargetResourceController()
-    const provideJournal = <A, E>(effect: Effect.Effect<A, E, JournalStore>): Effect.Effect<A, E> =>
-      Effect.provideService(effect, JournalStore, journal)
+    const provideJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal>): Effect.Effect<A, E> =>
+      Effect.provideService(effect, InRunJournal, journal)
     const continueAttempt = (plannedAttempt: PlannedTaskAttempt) =>
       continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
         Effect.provideService(PlannedAttemptExecutor, executor),
-        Effect.provideService(JournalStore, journal)
+        Effect.provideService(InRunJournal, journal)
       )
     const runObservedOperation = (
       transition: ObservedOperationTransition
@@ -1729,7 +1732,7 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
                     ? continueAttempt(transition.plannedAttempt)
                     : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt).pipe(
                         Effect.provideService(PlannedAttemptExecutor, executor),
-                        Effect.provideService(JournalStore, journal)
+                        Effect.provideService(InRunJournal, journal)
                       )
                   if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
                     yield* execution.releasePlannedAttemptExecutorWorkPosition(correlation)
@@ -1749,13 +1752,15 @@ export const makeJournaledFreshRunRecoveryActivation = (
   runId: RunId,
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit
+  candidateContinuationLimit?: CandidateContinuationLimit,
+  options?: { readonly workflowTrace?: Option.Option<WorkflowTrace["Service"]> }
 ) =>
   makeJournaledFreshRunRecoveryActivationEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
-    Option.fromUndefinedOr(candidateContinuationLimit)
+    Option.fromUndefinedOr(candidateContinuationLimit),
+    options?.workflowTrace
   )
 
 export const journaledFreshRunRecoveryActivationLayer = (
@@ -1780,16 +1785,16 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
-  const dependencies = yield* Effect.context<JournalStore | WorkflowInterpreter | WorkflowTrace>()
+  const dependencies = yield* Effect.context<InRunJournal | WorkflowInterpreter | WorkflowTrace>()
   const integrationResources = yield* makeIntegrationTargetResourceController()
   const plannedAttemptExecutor = yield* PlannedAttemptExecutor
   const workflowInterpreter = yield* WorkflowInterpreter
   const workflowTrace = yield* WorkflowTrace
   const claimPlanner = Context.getOption(yield* Effect.context<never>(), TaskClaimAcquisitionPlanner)
   const provideDependencies = <A, E>(
-    effect: Effect.Effect<A, E, JournalStore | WorkflowInterpreter | WorkflowTrace>
+    effect: Effect.Effect<A, E, InRunJournal | WorkflowInterpreter | WorkflowTrace>
   ): Effect.Effect<A, E> => Effect.provide(effect, dependencies)
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const initialReduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
   if (initialReduction._tag === "InvalidWorkflowJournalHistory") {
     return yield* Effect.fail(initialReduction)

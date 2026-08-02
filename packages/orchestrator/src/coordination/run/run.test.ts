@@ -37,7 +37,7 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { JournalStore, WorkflowRunAlreadyBegan, WorkflowRunAlreadyTerminated } from "../../workflow-journal/store.js"
-import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { WorkflowResponsibilityState } from "../reconstruction/state.js"
@@ -45,8 +45,8 @@ import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.j
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const durableRunLayer = Layer.merge(
-  memoryJournalStoreLayer,
-  taskWorkCapacityControlLayer.pipe(Layer.provide(memoryJournalStoreLayer))
+  legacyMemoryJournalStoreLayer,
+  taskWorkCapacityControlLayer.pipe(Layer.provide(legacyMemoryJournalStoreLayer))
 )
 
 const journaledInterpreter = (runId: RunId, interpreter: WorkflowInterpreter["Service"]) =>

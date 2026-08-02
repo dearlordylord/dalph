@@ -24,7 +24,7 @@ import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeRunRecoveryActivation } from "./recovery-activation.js"
 import { makeOwnedTransitionExecutionFixture } from "../activation/coordinator.js"
-import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -382,7 +382,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
     expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskClaimAcquired" }))
     expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskAttemptPlanned" }))
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -766,7 +766,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       plannedAttempt
     })
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,

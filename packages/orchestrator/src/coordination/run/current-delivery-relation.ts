@@ -1,11 +1,8 @@
 import { Effect, Option, Ref, Schema } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import type { RunId } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import type { RunControlPolicy } from "../../control/policy.js"
-import type { JournalRecord, JournalStoreError } from "../../workflow-journal/store.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
-import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   ReconstructedPauseState,
   ReconstructedRunPauseState,
@@ -14,10 +11,29 @@ import {
   WorkflowResponsibilityState
 } from "../reconstruction/state.js"
 import type { SyntheticWorkflowFact } from "./fresh-workflow-fact.js"
+import type {
+  AcceptedFactPublicationGatewayService,
+  AcceptedFactPublicationState
+} from "../delivery/accepted-fact-gateway.js"
+import type { RunId } from "@dalph/contracts"
+import type {
+  AcceptedFactPublicationError,
+  InRunJournalRunMismatch,
+  JournalRecord,
+  JournalStoreError
+} from "../../workflow-journal/store.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 
 /** Accepted journal history does not yet contain a complete graph usable by a delivery turn. */
 export class CurrentDeliveryGraphUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryGraphUnavailable>()(
   "CurrentDeliveryGraphUnavailable",
+  {}
+) {}
+
+/** Validated accepted history unexpectedly lacks the Run policy established by its beginning. */
+export class CurrentDeliveryControlPolicyUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryControlPolicyUnavailable>()(
+  "CurrentDeliveryControlPolicyUnavailable",
   {}
 ) {}
 
@@ -43,11 +59,6 @@ export type CurrentDeliveryFrame = CurrentDeliveryFrameBase &
     | { readonly _tag: "SyntheticCurrentDeliveryFrame"; readonly workflowFacts: ReadonlyArray<SyntheticWorkflowFact> }
   )
 
-interface JournaledCurrentDeliveryState {
-  readonly _tag: "JournaledCurrentDeliveryState"
-  readonly reconstructed: ReconstructedRunState
-}
-
 interface SyntheticCurrentDeliveryState {
   readonly _tag: "SyntheticCurrentDeliveryState"
   readonly currentGraph: TaskDagSnapshot
@@ -61,7 +72,6 @@ export interface CurrentDeliveryRelation<E> {
 
 export interface JournaledCurrentDeliveryRelation<E> extends CurrentDeliveryRelation<E> {
   readonly _tag: "JournaledCurrentDeliveryRelation"
-  readonly refreshAcceptedHistory: Effect.Effect<void, E>
 }
 
 export interface SyntheticCurrentDeliveryRelation<E> extends CurrentDeliveryRelation<E> {
@@ -70,41 +80,107 @@ export interface SyntheticCurrentDeliveryRelation<E> extends CurrentDeliveryRela
   readonly acceptTrackerGraphObservation: (operationId: OperationId, snapshot: TaskDagSnapshot) => Effect.Effect<void>
 }
 
-/** Minimal durable-history boundary needed to reconstruct a delivery frame. */
-export interface CurrentDeliveryJournalReader {
-  readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
-}
-
 const emptyPause = ReconstructedPauseState.make({
   run: ReconstructedRunPauseState.cases.RunUnpaused.make({}),
   tasks: ReconstructedTaskPauseState.cases.NoTaskPauses.make({})
 })
 
-/** Creates the live relation only after complete journal history has been validated. */
-export const makeJournaledCurrentDeliveryRelation = Effect.fn("CurrentDeliveryRelation.makeJournaled")(function* <E>(
-  runId: ReconstructedRunState["runId"],
-  readRunControlPolicy: Effect.Effect<RunControlPolicy, E>,
-  journal: CurrentDeliveryJournalReader
-) {
-  const readAcceptedState = Effect.gen(function* () {
-    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-    if (reduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(reduction)
-    return reduction.runState
-  })
-  const state = yield* Ref.make<JournaledCurrentDeliveryState>({
-    _tag: "JournaledCurrentDeliveryState",
-    reconstructed: yield* readAcceptedState
-  })
-  const refreshAcceptedHistory = readAcceptedState.pipe(
-    Effect.flatMap((reconstructed) =>
-      Ref.set(state, { _tag: "JournaledCurrentDeliveryState", reconstructed } satisfies JournaledCurrentDeliveryState)
-    )
-  )
+const makeJournaledRelationFromAcceptedState = <E, F>(
+  readAcceptedState: Effect.Effect<AcceptedFactPublicationState, F>,
+  selectRunControlPolicy: (published: RunControlPolicy) => Effect.Effect<RunControlPolicy, E>
+): JournaledCurrentDeliveryRelation<CurrentDeliveryControlPolicyUnavailable | E | F> => {
   const read = Effect.gen(function* () {
-    const current = yield* Ref.get(state)
+    const current = yield* readAcceptedState
+    if (current.graph._tag === "GraphNotEstablished") return yield* new CurrentDeliveryGraphUnavailable()
     const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(current.reconstructed.graphKnowledge))
+    /* v8 ignore start -- Gateway GraphEstablished is projected from this exact reconstructed graph knowledge. */
     if (currentGraph === undefined) return yield* new CurrentDeliveryGraphUnavailable()
+    /* v8 ignore stop */
     const currentGraphOperationId = current.reconstructed.graphKnowledge.taskTrackerFacts.findLast(
+      (observation) =>
+        observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+    )?.operationId
+    /* v8 ignore start -- A latest reconstructed complete graph necessarily retains its originating accepted observation. */
+    if (currentGraphOperationId === undefined) return yield* new CurrentDeliveryGraphUnavailable()
+    /* v8 ignore stop */
+    const publishedRunControlPolicy = Option.getOrUndefined(current.reconstructed.controlPolicy)
+    /* v8 ignore start -- Bootstrap accepts only a Run history whose beginning establishes this policy. */
+    if (publishedRunControlPolicy === undefined) return yield* new CurrentDeliveryControlPolicyUnavailable()
+    /* v8 ignore stop */
+    return {
+      _tag: "JournaledCurrentDeliveryFrame",
+      currentGraph,
+      currentGraphOperationId,
+      pause: current.reconstructed.pause,
+      responsibility: current.reconstructed.responsibility,
+      runControlPolicy: yield* selectRunControlPolicy(publishedRunControlPolicy),
+      workflowHistory: current.reconstructed.workflowHistory
+    } satisfies CurrentDeliveryFrame
+  })
+  return { _tag: "JournaledCurrentDeliveryRelation", read }
+}
+
+/** Reads one immutable frame from the gateway's latest already-published current value. */
+export const makeJournaledCurrentDeliveryRelation = (
+  gateway: AcceptedFactPublicationGatewayService
+): JournaledCurrentDeliveryRelation<AcceptedFactPublicationError | CurrentDeliveryControlPolicyUnavailable> =>
+  makeJournaledRelationFromAcceptedState(gateway.readCurrent, Effect.succeed)
+
+/**
+ * Temporary view for the scheduler deleted by #184. The gateway remains live;
+ * fresh planning sees accepted state sampled at the old scheduler's successful
+ * operation boundaries while recovery reads the live gateway-backed journal.
+ */
+export interface LegacySchedulerCurrentDeliveryCompatibility<E> {
+  readonly afterGraphAccepted: Effect.Effect<void, AcceptedFactPublicationError>
+  readonly afterOperationSucceeded: Effect.Effect<void, AcceptedFactPublicationError>
+  readonly relation: JournaledCurrentDeliveryRelation<
+    AcceptedFactPublicationError | CurrentDeliveryControlPolicyUnavailable | E
+  >
+}
+
+export const makeLegacySchedulerCurrentDeliveryCompatibility = Effect.fn(
+  "CurrentDeliveryRelation.makeLegacySchedulerCompatibility"
+)(function* <E>(
+  gateway: AcceptedFactPublicationGatewayService,
+  readRunControlPolicy: Effect.Effect<RunControlPolicy, E>
+) {
+  const acceptedEpoch = yield* Ref.make(yield* gateway.readCurrent)
+  const samplePublishedState = Effect.flatMap(gateway.readCurrent, (current) => Ref.set(acceptedEpoch, current))
+  return {
+    afterGraphAccepted: samplePublishedState,
+    afterOperationSucceeded: samplePublishedState,
+    relation: makeJournaledRelationFromAcceptedState(Ref.get(acceptedEpoch), () => readRunControlPolicy)
+  } satisfies LegacySchedulerCurrentDeliveryCompatibility<E>
+})
+
+/**
+ * Compatibility view for deterministic and authored harnesses that do not
+ * install the production gateway. It owns no private cache: every read folds
+ * the currently accepted in-Run prefix.
+ */
+export const makeLegacyJournaledCurrentDeliveryRelation = <E>(
+  runId: RunId,
+  readRunControlPolicy: Effect.Effect<RunControlPolicy, E>,
+  journal: {
+    readonly read: (
+      runId: RunId
+    ) => Effect.Effect<
+      ReadonlyArray<JournalRecord>,
+      AcceptedFactPublicationError | InRunJournalRunMismatch | JournalStoreError
+    >
+  }
+): JournaledCurrentDeliveryRelation<
+  AcceptedFactPublicationError | E | InRunJournalRunMismatch | InvalidWorkflowJournalHistory | JournalStoreError
+> => ({
+  _tag: "JournaledCurrentDeliveryRelation",
+  read: Effect.gen(function* () {
+    const runControlPolicy = yield* readRunControlPolicy
+    const reduced = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+    if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(reduced)
+    const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(reduced.runState.graphKnowledge))
+    if (currentGraph === undefined) return yield* new CurrentDeliveryGraphUnavailable()
+    const currentGraphOperationId = reduced.runState.graphKnowledge.taskTrackerFacts.findLast(
       (observation) =>
         observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
     )?.operationId
@@ -115,13 +191,12 @@ export const makeJournaledCurrentDeliveryRelation = Effect.fn("CurrentDeliveryRe
       _tag: "JournaledCurrentDeliveryFrame",
       currentGraph,
       currentGraphOperationId,
-      pause: current.reconstructed.pause,
-      responsibility: current.reconstructed.responsibility,
-      runControlPolicy: yield* readRunControlPolicy,
-      workflowHistory: current.reconstructed.workflowHistory
+      pause: reduced.runState.pause,
+      responsibility: reduced.runState.responsibility,
+      runControlPolicy,
+      workflowHistory: reduced.runState.workflowHistory
     } satisfies CurrentDeliveryFrame
   })
-  return { _tag: "JournaledCurrentDeliveryRelation" as const, read, refreshAcceptedHistory }
 })
 
 /** Creates the non-durable relation used by dry-run and deterministic tests. */

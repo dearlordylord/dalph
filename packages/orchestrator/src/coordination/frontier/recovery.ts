@@ -1,12 +1,12 @@
 import { Effect } from "effect"
 import { type RunId } from "@dalph/contracts"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
 import type { RunnableFrontierTransition } from "./frontier.js"
 import { WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
 import { startQueuedIntegration } from "../../workflow/protocols/integration-admission/protocol.js"
 
 const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId: RunId, operationId: string) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const intent = (yield* journal.read(runId)).find(
     ({ event }) =>
@@ -18,7 +18,7 @@ const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId
 })
 
 const recoverWorktree = Effect.fn("WorkflowRecovery.recoverWorktree")(function* (runId: RunId, operationId: string) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const intent = (yield* journal.read(runId)).find(
     ({ event }) => event._tag === "TaskWorktreeReconciliationIntended" && event.operation.operationId === operationId
@@ -32,7 +32,7 @@ const recoverClaimRelease = Effect.fn("WorkflowRecovery.recoverClaimRelease")(fu
   runId: RunId,
   operationId: string
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const intent = (yield* journal.read(runId)).find(
     ({ event }) => event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === operationId

@@ -1,6 +1,5 @@
 // @effect-diagnostics lazyEffect:off
-import type { Effect } from "effect"
-import { Context, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
 import { TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -86,6 +85,36 @@ export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalSt
   { runId: RunId, key: JournalRecordKey, existingPosition: JournalPosition }
 ) {}
 
+/** An in-Run capability was used for a Run other than the one installed behind it. */
+export class InRunJournalRunMismatch extends Schema.TaggedErrorClass<InRunJournalRunMismatch>()(
+  "InRunJournalRunMismatch",
+  { expectedRunId: RunId, requestedRunId: RunId }
+) {}
+
+/** Storage accepted a non-successor position while the coordinator held exclusive ownership. */
+export class AcceptedJournalPositionGap extends Schema.TaggedErrorClass<AcceptedJournalPositionGap>()(
+  "AcceptedJournalPositionGap",
+  { acceptedPosition: JournalPosition, expectedPosition: JournalPosition, runId: RunId }
+) {}
+
+/** Idempotent append returned a record unequal to the already-published record at that position. */
+export class AcceptedJournalRecordMismatch extends Schema.TaggedErrorClass<AcceptedJournalRecordMismatch>()(
+  "AcceptedJournalRecordMismatch",
+  { acceptedPosition: JournalPosition, key: JournalRecordKey, runId: RunId }
+) {}
+
+/** A newly accepted record made the in-process journal prefix invalid and publication stopped. */
+export class AcceptedJournalHistoryInvalid extends Schema.TaggedErrorClass<AcceptedJournalHistoryInvalid>()(
+  "AcceptedJournalHistoryInvalid",
+  { acceptedPosition: JournalPosition, detail: Schema.String, runId: RunId }
+) {}
+
+/** A durable append could not be reconciled with the process-local accepted prefix. */
+export type AcceptedFactPublicationError =
+  | AcceptedJournalHistoryInvalid
+  | AcceptedJournalPositionGap
+  | AcceptedJournalRecordMismatch
+
 /** The fresh-start boundary submitted an identity whose Run already began. */
 export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(
   "WorkflowRunAlreadyBegan",
@@ -115,9 +144,16 @@ export class WorkflowRunAlreadyTerminated extends Schema.TaggedErrorClass<Workfl
   { runId: RunId, terminatedAt: JournalPosition }
 ) {}
 
-export type JournalAppendError = JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated
+/** Failures owned by raw persistence before accepted-fact publication exists. */
+export type JournalStorageAppendError = JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated
 
-interface JournalStoreService {
+/** Failures from raw persistence or the installed accepted-fact publication gateway. */
+export type JournalAppendError = AcceptedFactPublicationError | InRunJournalRunMismatch | JournalStorageAppendError
+
+/** Failures that prevent a caller from reading one coherent in-Run accepted prefix. */
+export type JournalReadError = AcceptedFactPublicationError | InRunJournalRunMismatch | JournalStoreError
+
+export interface JournalStoreService {
   readonly beginRun: (
     runId: RunId,
     target: TrackerTarget,
@@ -127,7 +163,7 @@ interface JournalStoreService {
     runId: RunId,
     key: JournalRecordKey,
     event: AppendableWorkflowJournalEvent
-  ) => Effect.Effect<JournalRecord, JournalAppendError>
+  ) => Effect.Effect<JournalRecord, JournalStorageAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
   readonly readRunForRecovery: (
     runId: RunId,
@@ -143,3 +179,61 @@ interface JournalStoreService {
 }
 
 export class JournalStore extends Context.Service<JournalStore, JournalStoreService>()("@dalph/JournalStore") {}
+
+/** Fixed-process access to ordinary Run history; it cannot begin, recover, scan, or terminate a Run. */
+export interface InRunJournalService {
+  readonly append: (
+    runId: RunId,
+    key: JournalRecordKey,
+    event: AppendableWorkflowJournalEvent
+  ) => Effect.Effect<JournalRecord, JournalAppendError>
+  readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalReadError>
+}
+
+export class InRunJournal extends Context.Service<InRunJournal, InRunJournalService>()("@dalph/InRunJournal") {}
+
+/** Bootstrap and post-runtime Run lifecycle access; ordinary workflow services never receive it. */
+export interface RunLifecycleJournalService {
+  readonly beginRun: JournalStoreService["beginRun"]
+  readonly read: JournalStoreService["read"]
+  readonly readRunForRecovery: JournalStoreService["readRunForRecovery"]
+  readonly scan: JournalStoreService["scan"]
+  readonly terminateRun: JournalStoreService["terminateRun"]
+}
+
+export class RunLifecycleJournal extends Context.Service<RunLifecycleJournal, RunLifecycleJournalService>()(
+  "@dalph/RunLifecycleJournal"
+) {}
+
+/** Exposes raw storage and lifecycle operations without fabricating accepted-fact publication. */
+export const journalStoreCapabilities = <E, R>(
+  storage: Layer.Layer<JournalStore, E, R>
+): Layer.Layer<JournalStore | RunLifecycleJournal, E, R> =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      return Context.empty().pipe(
+        Context.add(JournalStore, journal),
+        Context.add(
+          RunLifecycleJournal,
+          RunLifecycleJournal.of({
+            beginRun: journal.beginRun,
+            read: journal.read,
+            readRunForRecovery: journal.readRunForRecovery,
+            scan: journal.scan,
+            terminateRun: journal.terminateRun
+          })
+        )
+      )
+    })
+  ).pipe(Layer.provide(storage))
+
+/**
+ * Temporary adapter for pre-gateway test and scheduler compositions. Production
+ * bootstrap must receive raw storage and install its own published capability.
+ * #184 deletes the remaining scheduler consumers.
+ */
+export const legacyUnpublishedInRunJournalLayer = Layer.effect(
+  InRunJournal,
+  JournalStore.pipe(Effect.map((journal) => InRunJournal.of({ append: journal.append, read: journal.read })))
+)

@@ -21,9 +21,9 @@ import { TargetLineageObservation } from "../../../authorities/git/target-lineag
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { runIntegrationCandidateConstruction as runIntegrationCandidateConstructionWithLimit } from "../../../coordination/run/integration-candidate-runtime.js"
-import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import {
   attemptPlanRecordKey,
   integrationCandidateAgentReportRecordKey,
@@ -330,7 +330,7 @@ it.effect("builds one candidate with current target first and accepted result se
         })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -341,7 +341,7 @@ it.effect("requires explicit candidate submission instead of inferring worktree 
     expect(result._tag).toBe("CandidateConstructionInProgress")
     const inspection = yield* CandidateBoundaryInspection
     expect(yield* inspection.gitReads).toBe(0)
-  }).pipe(Effect.provide(candidateBoundaryLayer([])), Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(candidateBoundaryLayer([])), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("keeps the first submitted candidate when later commits appear", () =>
@@ -385,7 +385,7 @@ it.effect("keeps the first submitted candidate when later commits appear", () =>
         })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -404,7 +404,7 @@ it.effect("reopens an ambiguously constructed candidate before retrying it", () 
       started,
       lineage,
       CandidateCorrectionLimit.make(2)
-    ).pipe(Effect.provide(Layer.succeed(JournalStore, crashingJournal)), Effect.exit)
+    ).pipe(Effect.provide(Layer.succeed(InRunJournal, InRunJournal.of(crashingJournal))), Effect.exit)
     expect(stopped._tag).toBe("Failure")
     expect(deriveIntegrationCandidateConstruction(yield* journal.read(runId), started)?._tag).toBe(
       "CandidateValidationPending"
@@ -424,7 +424,7 @@ it.effect("reopens an ambiguously constructed candidate before retrying it", () 
         })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -451,7 +451,7 @@ it.effect(
         "IntegrationResponsibilityBegan",
         "IntegrationStarted"
       ])
-    }).pipe(Effect.provide(candidateBoundaryLayer([])), Effect.provide(memoryJournalStoreLayer))
+    }).pipe(Effect.provide(candidateBoundaryLayer([])), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("keeps conflict edits bound to the same candidate and integration session", () =>
@@ -485,7 +485,7 @@ it.effect("keeps conflict edits bound to the same candidate and integration sess
         })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -513,7 +513,7 @@ it.effect("stops automatic agent continuation at the durable configured limit", 
         IntegrationCandidateAgentReport.cases.ExitedWithoutCandidate.make({ correlation: placeholderCorrelation })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -551,7 +551,7 @@ it.effect("preserves conflicting candidate work across restart", () =>
       candidateCommit: candidate,
       correlation: first._tag === "CandidateConstructionInProgress" ? first.correlation : undefined
     })
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("ignores agent reports addressed to another candidate responsibility", () =>
@@ -581,7 +581,7 @@ it.effect("ignores agent reports addressed to another candidate responsibility",
         IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: placeholderCorrelation })
       ])
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -624,7 +624,7 @@ it.effect(
           ]
         )
       ),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(legacyMemoryJournalStoreLayer)
     )
 )
 
@@ -687,7 +687,7 @@ it.effect("reconciles a limit-reaching Git observation after a crash before anot
         [IntegrationCandidateGitObservation.cases.Commit.make({ directParents: [] })]
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -721,7 +721,7 @@ it.effect("returns a missing or non-commit submission to the same integration ag
         ]
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -755,7 +755,7 @@ it.effect("fails closed before Git and preserves involved sessions without autom
         false
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -798,7 +798,7 @@ it.effect(
           ]
         )
       ),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(legacyMemoryJournalStoreLayer)
     )
 )
 
@@ -831,7 +831,7 @@ it.effect("resolves a later readable invalid Git result through same-session cor
         ]
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -861,7 +861,7 @@ it.effect("preserves non-convergent work and leaves the task incomplete after co
         ]
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
 
@@ -894,6 +894,6 @@ it.effect("releases the integration target after non-convergence so unrelated wo
         ]
       )
     ),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )

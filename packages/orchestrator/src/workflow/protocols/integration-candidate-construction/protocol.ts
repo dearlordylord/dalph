@@ -11,7 +11,7 @@ import {
   integrationCandidateCorrectionLimitReachedRecordKey,
   integrationCandidateContinuationLimitReachedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
@@ -332,7 +332,7 @@ const recordConstructedCandidate = Effect.fn("IntegrationCandidateConstruction.r
   report: SubmittedCandidateReport,
   gitObservationAt: JournalRecord["position"]
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const constructed = yield* journal.append(
     responsibility.plannedAttempt.runId,
     integrationCandidateConstructedRecordKey(report.correlation),
@@ -360,7 +360,7 @@ const recordGitValidationFailure = Effect.fn("IntegrationCandidateConstruction.r
   report: SubmittedCandidateReport,
   failure: IntegrationCandidateGitReadFailure
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const attemptOrdinal = IntegrationCandidateGitValidationAttemptOrdinal.make(
     records.filter(
       ({ event }) =>
@@ -397,7 +397,7 @@ const stateAfterGitObservation = Effect.fn("IntegrationCandidateConstruction.aft
   if (integrationCandidateHasExactParents(observation, report.correlation)) {
     return yield* recordConstructedCandidate(responsibility, report, observationRecord.position)
   }
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const current = yield* journal.read(responsibility.plannedAttempt.runId)
   const invalidCount = current.filter(
     ({ event }) =>
@@ -459,7 +459,7 @@ const validateSubmittedCandidate = Effect.fn("IntegrationCandidateConstruction.v
       correlation: correlationFor(responsibility, responsibility.plannedAttempt.baseSha)
     })
   }
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const runId = responsibility.plannedAttempt.runId
   const correlation = report.correlation
   const existingObservation = records.findLast(
@@ -526,7 +526,7 @@ const continueCandidateAfterIntent = Effect.fn("IntegrationCandidateConstruction
       )
       /* v8 ignore else -- @preserve A derived correction-required state necessarily has its invalid Git observation. */
       if (invalidObservation?.event._tag === "IntegrationCandidateGitObserved") {
-        const journal = yield* JournalStore
+        const journal = yield* InRunJournal
         yield* journal.append(
           responsibility.plannedAttempt.runId,
           integrationCandidateCorrectionLimitReachedRecordKey(correlation),
@@ -557,7 +557,7 @@ const continueCandidateAfterIntent = Effect.fn("IntegrationCandidateConstruction
       const lastReport = nonSubmittingReports[nonSubmittingReports.length - finalReportOffset]
       /* v8 ignore else -- @preserve The positive limit and length guard make the final report present. */
       if (lastReport !== undefined) {
-        const journal = yield* JournalStore
+        const journal = yield* InRunJournal
         yield* journal.append(
           responsibility.plannedAttempt.runId,
           integrationCandidateContinuationLimitReachedRecordKey(correlation),
@@ -587,7 +587,7 @@ const continueCandidateAfterIntent = Effect.fn("IntegrationCandidateConstruction
         correction: afterIntent._tag === "CandidateCorrectionRequired" ? afterIntent.detail : null
       })
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const reportRecord = yield* journal.append(
       responsibility.plannedAttempt.runId,
       integrationCandidateAgentReportRecordKey(correlation, reportOrdinal),
@@ -654,7 +654,7 @@ export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCa
         plannedBaseSha: responsibility.plannedAttempt.baseSha
       })
     }
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const runId = responsibility.plannedAttempt.runId
     let records = yield* journal.read(runId)
     const existing = deriveIntegrationCandidateConstruction(records, responsibility)

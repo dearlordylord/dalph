@@ -22,7 +22,7 @@ import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacit
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   AcceptedResultNotDurable,
   deriveIntegrationAdmission,
@@ -206,7 +206,7 @@ it.effect("rejects a responsibility before the matching accepted terminal report
     )
 
     expect(failure).toEqual(new AcceptedResultNotDurable({ attemptId: attempt.attemptId, runId: attempt.runId }))
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rejects a responsibility whose planned attempt differs from the durable executor responsibility", () =>
@@ -232,7 +232,7 @@ it.effect("rejects a responsibility whose planned attempt differs from the durab
         ({ event }) => event._tag === "IntegrationResponsibilityBegan"
       )
     ).toBe(false)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rejects persisted integration responsibility without a prior accepted terminal result", () =>
@@ -260,7 +260,7 @@ it.effect("rejects persisted integration responsibility without a prior accepted
         detail: `integration responsibility for attempt ${attempt.attemptId} has no prior matching accepted terminal result`
       })
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rejects a foreign-run responsibility and a start that points at itself", () =>
@@ -301,7 +301,7 @@ it.effect("rejects a foreign-run responsibility and a start that points at itsel
         `integration start for attempt ${attempt.attemptId} has no exact earlier responsibility at 3`
       ])
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("orders accepted results by committed responsibility position after restart", () =>
@@ -331,7 +331,7 @@ it.effect("orders accepted results by committed responsibility position after re
     expect(
       selectStartableIntegrationResponsibilities(recovered).map(({ plannedAttempt: attempt }) => attempt.taskId)
     ).toEqual(["A"])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("reconciles durable accepted terminals in order and idempotently after restart", () =>
@@ -454,7 +454,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
       transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
     })
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -491,7 +491,7 @@ it.effect("journaled fresh activation fails closed on a non-integration recovere
     )
 
     expect(exit._tag).toBe("Failure")
-  }).pipe(Effect.provide(Layer.merge(memoryJournalStoreLayer, controlledFakePlannedAttemptExecutorLayer)))
+  }).pipe(Effect.provide(Layer.merge(legacyMemoryJournalStoreLayer, controlledFakePlannedAttemptExecutorLayer)))
 )
 
 it.effect("acquires, releases, and reacquires the process-local target around one started responsibility", () =>
@@ -583,7 +583,7 @@ it.effect("acquires, releases, and reacquires the process-local target around on
         resources
       )
     ).toBe(false)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("releases the process-local target when the cutoff append fails", () =>
@@ -609,7 +609,7 @@ it.effect("releases the process-local target when the cutoff append fails", () =
     )
 
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("starts integration once and consumes only its pre-integration cancellation capability", () =>
@@ -636,7 +636,7 @@ it.effect("starts integration once and consumes only its pre-integration cancell
     expect("preIntegrationCancellation" in started).toBe(false)
     expect(selectStartableIntegrationResponsibilities(after)).toEqual([])
     expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("preserves same-target order while a blocker wait leaves another target usable", () =>
@@ -663,7 +663,7 @@ it.effect("preserves same-target order while a blocker wait leaves another targe
     expect(
       selectStartableIntegrationResponsibilities(admission).map(({ plannedAttempt: attempt }) => attempt.taskId)
     ).toEqual(["C"])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("fails closed without current tracker facts and orders authorized integration work", () =>
@@ -768,7 +768,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
         responsibility: expect.objectContaining({ queuedAt: queuedA.queuedAt })
       })
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("rereads target lineage after restart instead of authorizing a candidate from stale evidence", () =>
@@ -866,7 +866,7 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
       expect(lineageRead.operation.operationId).not.toBe(staleRead.operationId)
     }
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,

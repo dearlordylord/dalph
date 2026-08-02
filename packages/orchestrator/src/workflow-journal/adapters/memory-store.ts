@@ -6,6 +6,8 @@ import {
   type JournalRecord,
   JournalStore,
   JournalStoreContradiction,
+  journalStoreCapabilities,
+  legacyUnpublishedInRunJournalLayer,
   type WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
   type WorkflowRunIdentityAlreadyUsed,
@@ -28,7 +30,7 @@ const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boo
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
-export const memoryJournalStoreLayer = Layer.effect(
+const memoryRawJournalStoreLayer = Layer.effect(
   JournalStore,
   Effect.gen(function* () {
     const state = yield* Ref.make<MemoryJournalState>({ recordsByRun: new Map() })
@@ -128,4 +130,11 @@ export const memoryJournalStoreLayer = Layer.effect(
 
     return JournalStore.of({ append, beginRun, read, readRunForRecovery, scan, terminateRun })
   })
+)
+
+export const memoryJournalStoreLayer = journalStoreCapabilities(memoryRawJournalStoreLayer)
+
+/** Explicit test-only composition whose appends are not gateway-published. */
+export const legacyMemoryJournalStoreLayer = legacyUnpublishedInRunJournalLayer.pipe(
+  Layer.provideMerge(memoryJournalStoreLayer)
 )

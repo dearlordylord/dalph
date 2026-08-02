@@ -31,7 +31,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -40,7 +40,7 @@ import {
   taskTrackerReadIntent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
-import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   activateRecoveredResponsibilities,
   journaledFreshRunRecoveryActivationLayer,
@@ -143,7 +143,7 @@ it.effect("routes generic recovery transitions including exact claim-release int
       })
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 })
 
@@ -199,7 +199,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer)
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("keeps recovered executor work stopped when no tracker target can authorize a fresh read", () =>
@@ -244,7 +244,7 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
       transitions: []
     })
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -311,7 +311,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       transitions: []
     })
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -385,7 +385,7 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     Effect.provide(
       journaledFreshRunRecoveryActivationLayer(runId).pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
     ),
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -502,7 +502,7 @@ it.effect("routes journaled fresh fact reads, exact claim release, and suspensio
     expect(yield* Ref.get(calls)).toEqual(["graph", "specification", "release"])
     expect(yield* Ref.get(releasedPositions)).toBe(1)
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(
       makeControlledFakePlannedAttemptExecutorLayer([
         {
@@ -656,7 +656,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
       })
     )
     const interpreter = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-      Layer.provide(Layer.succeed(JournalStore, journal))
+      Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(journal)))
     )
     const execution = makeOwnedTransitionExecutionFixture({
       bindPlannedAttemptExecutorPosition: () => Effect.void,
@@ -747,7 +747,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
         operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
       })
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("runs a journaled fresh read when no optional trace output is installed", () =>
@@ -783,7 +783,7 @@ it.effect("runs a journaled fresh read when no optional trace output is installe
       })
     )
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -836,7 +836,7 @@ it.effect("fails closed when journaled fresh recovery has no interpreter for a s
       )
       .pipe(Effect.exit)
     expect(exit._tag).toBe("Failure")
-  }).pipe(Effect.provide(memoryJournalStoreLayer), Effect.provide(controlledFakePlannedAttemptExecutorLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer), Effect.provide(controlledFakePlannedAttemptExecutorLayer))
 )
 
 it.effect("a task leaving complete membership safely suspends its executor work before the local constraint", () =>
@@ -1142,7 +1142,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       { _tag: "ReconcileTaskClaimRelease", operationId: externalRelease.release.operationId, taskId }
     ])
   }).pipe(
-    Effect.provide(memoryJournalStoreLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -1237,7 +1237,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       "claim:recovered-claim",
       "worktree:recovered-worktree"
     ])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 })
 
 it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>
@@ -1268,13 +1268,18 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
       scan: () => Effect.succeed({ issues: [], runs: [] }),
       terminateRun: () => Effect.die("unused")
     })
-    const recovery = yield* makeRunRecoveryActivation(runId).pipe(Effect.provideService(JournalStore, changingJournal))
+    const recovery = yield* makeRunRecoveryActivation(runId).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({ append: changingJournal.append, read: changingJournal.read })
+      )
+    )
     expect((yield* recovery.readFrontier.pipe(Effect.flip))._tag).toBe("InvalidWorkflowJournalHistory")
 
     const initiallyInvalid = yield* makeRunRecoveryActivation(runId).pipe(
       Effect.provideService(
-        JournalStore,
-        JournalStore.of({ ...changingJournal, read: () => Effect.succeed([invalidRecord]) })
+        InRunJournal,
+        InRunJournal.of({ append: changingJournal.append, read: () => Effect.succeed([invalidRecord]) })
       ),
       Effect.flip
     )

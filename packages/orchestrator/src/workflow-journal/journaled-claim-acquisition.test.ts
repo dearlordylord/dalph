@@ -14,7 +14,7 @@ import { makeRunRecoveryActivation } from "../coordination/run/recovery-activati
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
-import { memoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -101,10 +101,10 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
             releaseTaskClaim: unused
           })
         )
-      ).pipe(Layer.provide(memoryJournalStoreLayer))
+      ).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
     ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalStoreLayer)
+    Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )

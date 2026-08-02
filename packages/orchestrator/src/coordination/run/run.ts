@@ -1,12 +1,13 @@
 /* eslint-disable max-lines -- The production Run keeps pause gating inside the one shared fresh/recovered activation loop. */
-import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Semaphore } from "effect"
+import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore } from "effect"
 import { ActivationCause, makeActivationCoordinator } from "../activation/coordinator.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../activation/selected-transition.js"
 import {
+  type PlannedAttemptExecutor,
   type AcceptedResult,
   type IntegrationTarget,
   type PlannedTaskAttempt,
-  type RunId,
+  RunId,
   type TaskId
 } from "@dalph/contracts"
 import { type InitialControlPolicy } from "../../control/policy.js"
@@ -15,6 +16,7 @@ import { type AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryActivation, type RunRecoveryActivationError } from "./recovery-activation.js"
 import {
   deriveRunFinalityDecision,
+  type RunFinalityDecision,
   type RunnableFrontier,
   type RunnableFrontierTransition,
   runnableTransitionTaskId
@@ -26,16 +28,28 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { OperationSelected, TaskTrackerFactsObservedTrace } from "../../presentation/tracker-workflow-trace.js"
 import { type TraceItem, WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, RunLifecycleJournal } from "../../workflow-journal/store.js"
+import type {
+  AcceptedFactPublicationError,
+  JournalStoreError,
+  WorkflowRunAlreadyBegan,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunIdentityAlreadyUsed,
+  WorkflowRunNotBegan,
+  WorkflowRunTargetMismatch,
+  InRunJournalRunMismatch
+} from "../../workflow-journal/store.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { RunControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
 import { makeIntegrationStageContext } from "./integration-stage-context.js"
 import {
   type CurrentDeliveryRelation,
+  type CurrentDeliveryControlPolicyUnavailable,
   type CurrentDeliveryGraphUnavailable,
   type JournaledCurrentDeliveryRelation,
+  makeLegacyJournaledCurrentDeliveryRelation,
+  makeLegacySchedulerCurrentDeliveryCompatibility,
   type SyntheticCurrentDeliveryRelation,
-  makeJournaledCurrentDeliveryRelation,
   makeSyntheticCurrentDeliveryRelation
 } from "./current-delivery-relation.js"
 import { deriveFreshWorkflowDecisions, type FreshWorkflowDecision } from "./fresh-workflow.js"
@@ -44,6 +58,15 @@ import {
   type FreshWorkflowExecutionError,
   type FreshWorkflowStepResult
 } from "./run-fresh-workflow-step.js"
+import type { StartupRecoveryBlocked } from "./startup-recovery.js"
+import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
+import {
+  type AcceptedFactGatewayInitialHistoryInvalid,
+  AcceptedFactPublicationGateway
+} from "../delivery/accepted-fact-gateway.js"
+import type { TrackerGraphRelation } from "../delivery/relations.js"
+import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
@@ -55,6 +78,8 @@ const rejectAllBoundaryTransitions = (_transition: RunnableFrontierTransition): 
 type RunControlPolicyReadError = Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
 
 type RunActivationError =
+  | AcceptedFactPublicationError
+  | CurrentDeliveryControlPolicyUnavailable
   | CurrentDeliveryGraphUnavailable
   | FreshWorkflowExecutionError
   | RunControlPolicyReadError
@@ -88,18 +113,28 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         ? yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         : startup.runId
   const initialControlPolicy = yield* readCurrentControlPolicy
+  const ambient = yield* Effect.context<never>()
+  const acceptedFactGateway = Context.getOption(ambient, AcceptedFactPublicationGateway)
+  const journaledCompatibility =
+    recovery._tag === "SyntheticFreshOnlyActivation"
+      ? undefined
+      : yield* Option.match(acceptedFactGateway, {
+          onNone: () => Effect.void,
+          onSome: (gateway) => makeLegacySchedulerCurrentDeliveryCompatibility(gateway, readCurrentControlPolicy)
+        })
   const journaledCurrentDelivery =
     recovery._tag === "SyntheticFreshOnlyActivation"
       ? undefined
-      : yield* makeJournaledCurrentDeliveryRelation(
+      : (journaledCompatibility?.relation ??
+        makeLegacyJournaledCurrentDeliveryRelation(
           runId,
           readCurrentControlPolicy,
           Option.getOrThrowWith(
-            Context.getOption(yield* Effect.context<never>(), JournalStore),
-            /* v8 ignore next -- Every journaled application composition provides its journal with recovery. */
-            () => new Error("journaled activation requires a workflow journal")
+            Context.getOption(ambient, InRunJournal),
+            /* v8 ignore next -- Compatibility journaled harnesses provide their in-Run capability. */
+            () => new Error("journaled activation requires an in-Run journal")
           )
-        )
+        ))
   const traceEmission = yield* Semaphore.make(1)
   const emit = (item: TraceItem) => traceEmission.withPermit(trace.emit(item))
   const admissionController = yield* makeTaskAdmissionController({
@@ -177,13 +212,12 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         const operation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
         yield* emit(OperationSelected.make({ operation }))
         const refreshed = yield* interpreter.readTrackerGraph(operation)
+        if (journaledCompatibility !== undefined) yield* journaledCompatibility.afterGraphAccepted
         const currentPhase = yield* Ref.get(phase)
         /* v8 ignore start -- Global refresh runs only after the delivery phase has been installed. */
         if (currentPhase._tag === "Boundary") return yield* Effect.die("delivery relation is not installed")
         /* v8 ignore stop */
-        if (currentPhase.currentDelivery._tag === "JournaledCurrentDeliveryRelation") {
-          yield* currentPhase.currentDelivery.refreshAcceptedHistory
-        } else {
+        if (currentPhase.currentDelivery._tag === "SyntheticCurrentDeliveryRelation") {
           yield* currentPhase.currentDelivery.acceptTrackerGraphObservation(operation.operationId, refreshed)
         }
         yield* emit(
@@ -240,13 +274,9 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
       ) {
         const { exit } = completion
         if (Exit.isSuccess(exit)) {
+          if (journaledCompatibility !== undefined) yield* journaledCompatibility.afterOperationSucceeded
           const currentPhase = yield* Ref.get(phase)
           if (
-            currentPhase._tag === "Delivery" &&
-            currentPhase.currentDelivery._tag === "JournaledCurrentDeliveryRelation"
-          ) {
-            yield* currentPhase.currentDelivery.refreshAcceptedHistory
-          } else if (
             currentPhase._tag === "Delivery" &&
             currentPhase.currentDelivery._tag === "SyntheticCurrentDeliveryRelation" &&
             exit.value !== undefined
@@ -343,9 +373,7 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         recovery._tag === "SyntheticFreshOnlyActivation"
           ? yield* makeSyntheticCurrentDeliveryRelation(snapshot, graphOperation.operationId, readCurrentControlPolicy)
           : Option.getOrThrow(Option.fromUndefinedOr(journaledCurrentDelivery))
-      if (currentDelivery._tag === "JournaledCurrentDeliveryRelation") {
-        yield* currentDelivery.refreshAcceptedHistory
-      }
+      if (journaledCompatibility !== undefined) yield* journaledCompatibility.afterGraphAccepted
       yield* Ref.set(phase, { _tag: "Delivery", currentDelivery })
 
       for (;;) {
@@ -387,6 +415,91 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
   )
 })
 
+export type JournaledRunServices =
+  | AcceptedFactPublicationGateway
+  | ControlDirectionApplication
+  | InRunJournal
+  | PlannedAttemptExecutor
+  | RunRecoveryActivation
+  | TaskWorkCapacityControl
+  | TaskClaimReacquisitionControl
+  | TrackerGraphRelation
+  | WorkflowInterpreter
+  | WorkflowTrace
+
+export type JournaledRunBootstrapError =
+  | AcceptedFactGatewayInitialHistoryInvalid
+  | AcceptedFactPublicationError
+  | InRunJournalRunMismatch
+  | InvalidWorkflowJournalHistory
+  | JournalStoreError
+  | StartupRecoveryBlocked
+  | WorkflowRunAlreadyBegan
+  | WorkflowRunAlreadyTerminated
+  | WorkflowRunIdentityAlreadyUsed
+  | WorkflowRunNotBegan
+  | WorkflowRunTargetMismatch
+
+/** A fixed production composition was asked to begin a different Run identity. */
+export class JournaledRunIdentityMismatch extends Schema.TaggedErrorClass<JournaledRunIdentityMismatch>()(
+  "JournaledRunIdentityMismatch",
+  { expectedRunId: RunId, requestedRunId: RunId }
+) {}
+
+/** An Operator request arrived while no fresh or recovered Run runtime was installed. */
+export class JournaledRunNotActive extends Schema.TaggedErrorClass<JournaledRunNotActive>()(
+  "JournaledRunNotActive",
+  {}
+) {}
+
+export interface JournaledRunBootstrapService {
+  readonly fresh: <E, R>(
+    target: TrackerTarget,
+    initialControlPolicy: InitialControlPolicy,
+    runId: AllocatedFreshWorkflowRunId,
+    program: Effect.Effect<RunFinalityDecision, E, R>
+  ) => Effect.Effect<
+    RunFinalityDecision,
+    E | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
+    Exclude<R, JournaledRunServices>
+  >
+  readonly recovered: <E, R>(
+    target: TrackerTarget,
+    program: Effect.Effect<RunFinalityDecision, E, R>
+  ) => Effect.Effect<RunFinalityDecision, E | JournaledRunBootstrapError, Exclude<R, JournaledRunServices>>
+  readonly operatorControl: {
+    readonly applyControlDirection: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<ControlDirectionApplication["Service"]["apply"]>>,
+      Effect.Error<ReturnType<ControlDirectionApplication["Service"]["apply"]>> | JournaledRunNotActive
+    >
+    readonly applyTaskClaimReacquisition: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>>,
+      Effect.Error<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
+    readonly readTaskWorkCapacity: (
+      runId: RunId
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>,
+      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>> | JournaledRunNotActive
+    >
+    readonly setTaskWorkCapacity: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>,
+      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
+  }
+}
+
+/** Owns fresh/recovered sequencing and constructs every in-Run service only after gateway installation. */
+export class JournaledRunBootstrap extends Context.Service<JournaledRunBootstrap, JournaledRunBootstrapService>()(
+  "@dalph/JournaledRunBootstrap"
+) {}
+
 /** Runs a production fresh workflow only with an identity minted by `freshWorkflowRunId`. */
 export const runWorkflow = (
   target: TrackerTarget,
@@ -394,14 +507,42 @@ export const runWorkflow = (
   runId: AllocatedFreshWorkflowRunId
 ) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    const control = yield* TaskWorkCapacityControl
+    const ambient = yield* Effect.context<never>()
+    const bootstrap = Context.getOption(ambient, JournaledRunBootstrap)
+    if (bootstrap._tag === "Some") {
+      return yield* bootstrap.value.fresh(
+        target,
+        initialControlPolicy,
+        runId,
+        Effect.gen(function* () {
+          const control = yield* TaskWorkCapacityControl
+          return yield* runDeliveryActivation(
+            target,
+            { _tag: "Fresh", initialControlPolicy, runId },
+            control.read(runId)
+          )
+        })
+      )
+    }
+    const journal = Option.getOrThrow(Context.getOption(ambient, RunLifecycleJournal))
+    const control = Option.getOrThrow(Context.getOption(ambient, TaskWorkCapacityControl))
+    const legacyActivation = Context.empty().pipe(
+      Context.add(OperationIdAllocator, Option.getOrThrow(Context.getOption(ambient, OperationIdAllocator))),
+      Context.add(PlannedTaskAttemptPlanner, Option.getOrThrow(Context.getOption(ambient, PlannedTaskAttemptPlanner))),
+      Context.add(RunRecoveryActivation, Option.getOrThrow(Context.getOption(ambient, RunRecoveryActivation))),
+      Context.add(
+        TaskClaimAcquisitionPlanner,
+        Option.getOrThrow(Context.getOption(ambient, TaskClaimAcquisitionPlanner))
+      ),
+      Context.add(WorkflowInterpreter, Option.getOrThrow(Context.getOption(ambient, WorkflowInterpreter))),
+      Context.add(WorkflowTrace, Option.getOrThrow(Context.getOption(ambient, WorkflowTrace)))
+    )
     yield* journal.beginRun(runId, target, initialControlPolicy)
     const finality = yield* runDeliveryActivation(
       target,
       { _tag: "Fresh", initialControlPolicy, runId },
       control.read(runId)
-    )
+    ).pipe(Effect.provide(legacyActivation))
     if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(runId)
     return finality
   })
@@ -409,16 +550,44 @@ export const runWorkflow = (
 /** Runs the exact reconstructed identity owned by authoritative recovery. */
 export const runRecoveredWorkflow = (target: TrackerTarget) =>
   Effect.gen(function* () {
-    const recovery = yield* RunRecoveryActivation
+    const ambient = yield* Effect.context<never>()
+    const bootstrap = Context.getOption(ambient, JournaledRunBootstrap)
+    if (bootstrap._tag === "Some") {
+      return yield* bootstrap.value.recovered(
+        target,
+        Effect.gen(function* () {
+          const recovery = yield* RunRecoveryActivation
+          if (recovery._tag !== "AuthoritativeRunRecoveryActivation") {
+            return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
+          }
+          const control = yield* TaskWorkCapacityControl
+          return yield* runDeliveryActivation(target, { _tag: "Recovered" }, control.read(recovery.runId))
+        })
+      )
+    }
+    const recovery = Option.getOrThrow(Context.getOption(ambient, RunRecoveryActivation))
     /* v8 ignore start -- The public application recovery layer always supplies authoritative recovery. */
     if (recovery._tag !== "AuthoritativeRunRecoveryActivation") {
       return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
     }
     /* v8 ignore stop */
-    const journal = yield* JournalStore
-    const control = yield* TaskWorkCapacityControl
+    const journal = Option.getOrThrow(Context.getOption(ambient, RunLifecycleJournal))
+    const control = Option.getOrThrow(Context.getOption(ambient, TaskWorkCapacityControl))
+    const legacyActivation = Context.empty().pipe(
+      Context.add(OperationIdAllocator, Option.getOrThrow(Context.getOption(ambient, OperationIdAllocator))),
+      Context.add(PlannedTaskAttemptPlanner, Option.getOrThrow(Context.getOption(ambient, PlannedTaskAttemptPlanner))),
+      Context.add(RunRecoveryActivation, recovery),
+      Context.add(
+        TaskClaimAcquisitionPlanner,
+        Option.getOrThrow(Context.getOption(ambient, TaskClaimAcquisitionPlanner))
+      ),
+      Context.add(WorkflowInterpreter, Option.getOrThrow(Context.getOption(ambient, WorkflowInterpreter))),
+      Context.add(WorkflowTrace, Option.getOrThrow(Context.getOption(ambient, WorkflowTrace)))
+    )
     yield* journal.readRunForRecovery(recovery.runId, target)
-    const finality = yield* runDeliveryActivation(target, { _tag: "Recovered" }, control.read(recovery.runId))
+    const finality = yield* runDeliveryActivation(target, { _tag: "Recovered" }, control.read(recovery.runId)).pipe(
+      Effect.provide(legacyActivation)
+    )
     if (finality._tag === "RunMayTerminate") yield* journal.terminateRun(recovery.runId)
     return finality
   })

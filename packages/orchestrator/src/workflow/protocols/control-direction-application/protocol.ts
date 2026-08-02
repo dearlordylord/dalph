@@ -7,7 +7,7 @@ import {
   type JournalAppendError,
   type JournalRecord,
   type JournalStoreError,
-  JournalStore,
+  InRunJournal,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
 
@@ -26,7 +26,7 @@ export class ControlDirectionApplication extends Context.Service<
 export const controlDirectionApplicationLayer = Layer.effect(
   ControlDirectionApplication,
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const applications = yield* Semaphore.make(1)
     const applyUnserialized = Effect.fn("ControlDirectionApplication.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyControlDirectionRequest, { onExcessProperty: "error" })(
