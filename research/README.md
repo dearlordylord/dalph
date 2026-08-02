@@ -106,6 +106,7 @@ Documents:
 - [Effect, Effect Workflow, and OTP for Dalph durability](./effect-otp-durable-workflow-comparison.md)
 - [Declarative Effect story and validation stack](./declarative-effect-story-and-validation.md) — exploratory candidate language connecting a graph signal, projections, composed delivery settlement, Quint, and conformance testing.
 - [Delivery-story production integration](./delivery-story-production-integration.md) — source audit and phased migration for making story-shaped Effects the governing production coordination code without duplicating production responsibility, admission, or recovery models.
+- [Flat delivery Effect production gap audit](./flat-delivery-production-gap-audit.md) — current corrective audit: fixes the literal outer Effect and its four coloured sub-stories as the production acceptance artifact; supersedes the earlier recommendation to postpone settlement and reflection composition.
 - [Post-cutover responsibility-composition decision](./issue-177-responsibility-composition-decision.md) — source-backed audit of the governing delivery activation at `3997fff9c`; chooses one focused non-behavioral prefactor to carry fresh/recovered transition provenance without hidden mutable dispatch state.
 - [Effect Workflow prerequisite subgraph](./effect-workflow-prerequisite-subgraph.md)
 - [Effect analyzer and Quint evaluation](./effect-analyzer-quint-evaluation.md)
