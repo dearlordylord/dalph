@@ -344,6 +344,44 @@ The reducer's reconstruction of usable task and edge facts from
 only by folding a later full observation or unchanged reconfirmation.
 _Avoid_: Current task graph, persisted frontier, tracker authority
 
+**Delivery frontier**:
+The process-local, evidence-bearing projection of each ticket's eligibility or
+graph-owned reason for exclusion from delivery. It is derived from one current
+complete task graph and does not include exact workflow responsibility,
+process-local ownership, held positions, or integration resources.
+_Avoid_: Runnable workflow transition, persisted frontier, admission result
+
+**Bounded parallel tickets**:
+The process-local desired tickets selected from one delivery frontier under the
+current control policy. The selection may include a ticket that cannot yet
+acquire a task-work position; it neither holds a position nor proves that an
+action or workflow responsibility began.
+_Avoid_: Admitted tasks, running attempts, capacity positions
+
+**Ticket delivery**:
+The process-local lifecycle relationship derived from desired ticket placement
+and every exact outstanding workflow responsibility for that ticket. It can
+describe a selected ticket before its first intent and can retain a ticket
+after planned-attempt executor work ends while integration or another delivery
+consequence remains outstanding. It is not persisted, is not proof that an
+outside action occurred, and does not make the Dalph executor responsible for
+claim acquisition, integration, cleanup, or tracker mutation.
+_Avoid_: Planned-attempt executor-work responsibility, integration responsibility, durable delivery flag
+
+**Delivery action proposal**:
+A pure description of one exact next Dalph protocol action, its immutable
+route, domain order evidence, and complete task-work or integration-resource
+requirements. Constructing, comparing, or observing a proposal performs no
+action and acquires no process-local resource.
+_Avoid_: Workflow occurrence, admitted action, runtime ownership
+
+**Delivery settlement**:
+An established terminal delivery fact backed by the accepted integration and
+exact resource-disposition protocols. A terminal executor report, accepted
+result, constructed candidate, request acknowledgement, or tracker command is
+not a delivery settlement.
+_Avoid_: Executor completion, integration candidate, tracker completion request
+
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
 all covered facts share one revision or instant; different facts may reflect
