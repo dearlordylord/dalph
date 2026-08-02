@@ -24,8 +24,8 @@ importers:
         specifier: 0.24.3
         version: 0.24.3
       '@effect/vitest':
-        specifier: 4.0.0-beta.99
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.0.18(@types/node@26.1.1)(yaml@2.9.0))
+        specifier: 4.0.0-beta.102
+        version: 4.0.0-beta.102(effect@4.0.0-beta.99)(vitest@4.0.18(@types/node@26.1.1)(yaml@2.9.0))
       '@firfi/quint-connect':
         specifier: 2.0.2-effect4.1
         version: 2.0.2-effect4.1(effect@4.0.0-beta.99)(vitest@4.0.18(@types/node@26.1.1)(yaml@2.9.0))(zod@4.1.12)
@@ -294,10 +294,10 @@ packages:
     resolution: {integrity: sha512-WQxKU3MFzWzI38GbE9cf0POkVX4y0xahD8QqDjLfixW1AEValuHNfOQvyKM2MDWOLdGff4hP8VnIOeduwQt66A==}
     hasBin: true
 
-  '@effect/vitest@4.0.0-beta.99':
-    resolution: {integrity: sha512-SiZo3UGTsG2itbqLU1SJVmFraK+0AkrEU7ZLRpQALx3lFRBaohzB/7UQKVsRjCHHjDg0kNkGitZusGRN3mVAhg==}
+  '@effect/vitest@4.0.0-beta.102':
+    resolution: {integrity: sha512-4dipFAYG6imOzrY3zy3BgzCJkbb9xESyzUef0WSx8bsK0/SpITqbJpdwKeOyDWLZ+rimjua8IbTFMAde865pIQ==}
     peerDependencies:
-      effect: ^4.0.0-beta.99
+      effect: ^4.0.0-beta.102
       vitest: ^3.0.0 || ^4.0.0
 
   '@esbuild/aix-ppc64@0.28.1':
@@ -2300,7 +2300,7 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.24.3
       '@effect/tsgo-win32-x64': 0.24.3
 
-  '@effect/vitest@4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.0.18(@types/node@26.1.1)(yaml@2.9.0))':
+  '@effect/vitest@4.0.0-beta.102(effect@4.0.0-beta.99)(vitest@4.0.18(@types/node@26.1.1)(yaml@2.9.0))':
     dependencies:
       effect: 4.0.0-beta.99
       vitest: 4.0.18(@types/node@26.1.1)(yaml@2.9.0)
