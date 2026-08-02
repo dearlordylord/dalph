@@ -114,15 +114,24 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
-  IntegrationConfigurationWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetConfigured" }
+  IntegrationConfigurationWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "IntegrationTargetConfigured"
+  }
   IntegrationTaskClaimConstraint: {
     readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
-    readonly taskId: TaskId
+    readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection" | "TaskClaimFactsObserved"
   }
-  IntegrationInProgress: { readonly taskId: TaskId }
-  IntegrationTrackerFactsWait: { readonly taskId: TaskId; readonly wakeCondition: "TaskTrackerFactsObserved" }
-  IntegrationTargetWait: { readonly taskId: TaskId; readonly wakeCondition: "IntegrationTargetReleased" }
+  IntegrationInProgress: { readonly plannedAttempt: PlannedTaskAttempt }
+  IntegrationTrackerFactsWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  IntegrationTargetWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "IntegrationTargetReleased"
+  }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId

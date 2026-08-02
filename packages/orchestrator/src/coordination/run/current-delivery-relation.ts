@@ -16,6 +16,7 @@ import type {
   AcceptedFactPublicationState
 } from "../delivery/accepted-fact-gateway.js"
 import type { RunId } from "@dalph/contracts"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   AcceptedFactPublicationError,
   InRunJournalRunMismatch,
@@ -54,6 +55,7 @@ export type CurrentDeliveryFrame = CurrentDeliveryFrameBase &
   (
     | {
         readonly _tag: "JournaledCurrentDeliveryFrame"
+        readonly acceptedAt: JournalPosition
         readonly workflowHistory: ReconstructedRunState["workflowHistory"]
       }
     | { readonly _tag: "SyntheticCurrentDeliveryFrame"; readonly workflowFacts: ReadonlyArray<SyntheticWorkflowFact> }
@@ -109,6 +111,7 @@ const makeJournaledRelationFromAcceptedState = <E, F>(
     /* v8 ignore stop */
     return {
       _tag: "JournaledCurrentDeliveryFrame",
+      acceptedAt: current.appliedPosition,
       currentGraph,
       currentGraphOperationId,
       pause: current.reconstructed.pause,
@@ -180,6 +183,10 @@ export const makeLegacyJournaledCurrentDeliveryRelation = <E>(
     if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(reduced)
     const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(reduced.runState.graphKnowledge))
     if (currentGraph === undefined) return yield* new CurrentDeliveryGraphUnavailable()
+    const acceptedAt = reduced.runState.appliedThrough
+    /* v8 ignore start -- A complete accepted graph cannot exist before any accepted journal record. */
+    if (acceptedAt === null) return yield* new CurrentDeliveryGraphUnavailable()
+    /* v8 ignore stop */
     const currentGraphOperationId = reduced.runState.graphKnowledge.taskTrackerFacts.findLast(
       (observation) =>
         observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
@@ -189,6 +196,7 @@ export const makeLegacyJournaledCurrentDeliveryRelation = <E>(
     /* v8 ignore stop */
     return {
       _tag: "JournaledCurrentDeliveryFrame",
+      acceptedAt,
       currentGraph,
       currentGraphOperationId,
       pause: reduced.runState.pause,

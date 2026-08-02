@@ -1,6 +1,6 @@
 import { it as effectIt } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, MutableRef, Option, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -21,7 +21,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { RunRecoveryActivation } from "./recovery-activation.js"
-import { FrontierExplanation, RunnableFrontierTransition } from "../frontier/frontier.js"
+import { FrontierExplanation, RunnableFrontierTransition, type RunnableFrontier } from "../frontier/frontier.js"
 import { TaskAttemptPlanRecordAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-tracker/graph.js"
@@ -42,6 +42,7 @@ import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journa
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { WorkflowResponsibilityState } from "../reconstruction/state.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
+import { DeliveryShadowDiagnostics } from "../delivery/delivery-shadow.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const durableRunLayer = Layer.merge(
@@ -52,11 +53,26 @@ const durableRunLayer = Layer.merge(
 const journaledInterpreter = (runId: RunId, interpreter: WorkflowInterpreter["Service"]) =>
   journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter))
 
+const availableDeliveryProjection = (frontier: RunnableFrontier = { explanations: [], transitions: [] }) =>
+  Effect.succeed({
+    evidence: {
+      _tag: "AvailableDeliveryProjectionEvidence" as const,
+      acceptedAt: null,
+      facts: [],
+      integrationWaits: []
+    },
+    frontier
+  })
+
+const unavailableDeliveryProjection = (frontier: RunnableFrontier = { explanations: [], transitions: [] }) =>
+  Effect.succeed({ evidence: { _tag: "UnavailableDeliveryProjectionEvidence" as const }, frontier })
+
 effectIt.effect("starts a production Run by recording its identity before reading the task tracker", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("first-record-target")
     const runId = yield* freshWorkflowRunId(target)
     const trackerReads = yield* Ref.make(0)
+    const shadowComparisons = MutableRef.make<ReadonlyArray<string>>([])
     const projected = projectTrackerSnapshot({ revision: "first-record-snapshot", tasks: [] })
     const snapshot = Option.getOrThrow(
       Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
@@ -74,6 +90,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readDeliveryProjection: unavailableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
         readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
@@ -96,6 +113,13 @@ effectIt.effect("starts a production Run by recording its identity before readin
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provideService(
+        DeliveryShadowDiagnostics,
+        DeliveryShadowDiagnostics.of({
+          record: (comparison) =>
+            void MutableRef.update(shadowComparisons, (comparisons) => [...comparisons, comparison._tag])
+        })
+      ),
+      Effect.provideService(
         OperationIdAllocator,
         OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("first-record-read")) })
       ),
@@ -110,6 +134,7 @@ effectIt.effect("starts a production Run by recording its identity before readin
     )
 
     expect(yield* Ref.get(trackerReads)).toBe(2)
+    expect(MutableRef.get(shadowComparisons)).toContain("SkippedDeliveryProjectionResponsibilityFactsUnavailable")
     expect((yield* (yield* JournalStore).read(runId)).map(({ event }) => event._tag)).toEqual([
       "WorkflowRunBegan",
       "WorkflowRunTerminated"
@@ -141,6 +166,7 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
         readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
@@ -213,6 +239,7 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
         readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
@@ -264,6 +291,7 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
         readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
@@ -348,31 +376,24 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
       recordTaskAttemptPlan: () => Effect.die("unused"),
       releaseTaskClaim: () => Effect.die("unused")
     })
+    const membershipFrontier: RunnableFrontier = {
+      explanations: [
+        FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
+          operationId,
+          taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        })
+      ],
+      transitions: []
+    }
     const recovery = RunRecoveryActivation.of({
       _tag: "AuthoritativeRunRecoveryActivation",
       continueFreshPlannedAttemptExecutorWork: () => Effect.die("unused"),
       continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
-      readFinalityFrontier: Effect.succeed({
-        explanations: [
-          FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
-            operationId,
-            taskId,
-            wakeCondition: "TaskTrackerFactsObserved"
-          })
-        ],
-        transitions: []
-      }),
-      readFrontier: Effect.succeed({
-        explanations: [
-          FrontierExplanation.WorkflowOperationTaskMembershipConstraint({
-            operationId,
-            taskId,
-            wakeCondition: "TaskTrackerFactsObserved"
-          })
-        ],
-        transitions: []
-      }),
+      readFinalityFrontier: Effect.succeed(membershipFrontier),
+      readFrontier: Effect.succeed(membershipFrontier),
       readResponsibility: Effect.succeed(responsibility),
+      readDeliveryProjection: availableDeliveryProjection(membershipFrontier),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
       readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
@@ -427,15 +448,19 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
     const active = yield* Ref.make(true)
     const ran = yield* Ref.make(0)
     const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+    const readActiveFrontier = Ref.get(active).pipe(
+      Effect.map((isActive) => ({ explanations: [], transitions: isActive ? [transition] : [] }))
+    )
     const recovery = RunRecoveryActivation.of({
       _tag: "AuthoritativeRunRecoveryActivation",
       continueFreshPlannedAttemptExecutorWork: () => Effect.die("unused"),
       continuePlannedAttemptExecutorWork: () => Effect.die("unused"),
       readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-      readFrontier: Ref.get(active).pipe(
-        Effect.map((isActive) => ({ explanations: [], transitions: isActive ? [transition] : [] }))
-      ),
+      readFrontier: readActiveFrontier,
       readResponsibility: Effect.succeed({ entries: [] }),
+      readDeliveryProjection: readActiveFrontier.pipe(
+        Effect.flatMap((frontier) => availableDeliveryProjection(frontier))
+      ),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
       readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
@@ -549,6 +574,21 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
       releaseTaskClaim: () => Effect.die("unused")
     })
     const frontierReads = yield* Ref.make(0)
+    const readFreshFrontier = Ref.getAndUpdate(frontierReads, (count) => count + 1).pipe(
+      Effect.map((count) =>
+        count === 0
+          ? {
+              explanations: [
+                FrontierExplanation.Pause({
+                  operationId: OperationId.make("recovered-fresh-boundary"),
+                  taskId: task.id
+                })
+              ],
+              transitions: []
+            }
+          : { explanations: [], transitions: [] }
+      )
+    )
     const recovery = RunRecoveryActivation.of({
       _tag: "SyntheticFreshOnlyActivation",
       continueFreshPlannedAttemptExecutorWork: () =>
@@ -566,22 +606,11 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
           })
         ),
       readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
-      readFrontier: Ref.getAndUpdate(frontierReads, (count) => count + 1).pipe(
-        Effect.map((count) =>
-          count === 0
-            ? {
-                explanations: [
-                  FrontierExplanation.Pause({
-                    operationId: OperationId.make("recovered-fresh-boundary"),
-                    taskId: task.id
-                  })
-                ],
-                transitions: []
-              }
-            : { explanations: [], transitions: [] }
-        )
-      ),
+      readFrontier: readFreshFrontier,
       readResponsibility: Effect.succeed({ entries: [] }),
+      readDeliveryProjection: readFreshFrontier.pipe(
+        Effect.flatMap((frontier) => availableDeliveryProjection(frontier))
+      ),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
       readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),

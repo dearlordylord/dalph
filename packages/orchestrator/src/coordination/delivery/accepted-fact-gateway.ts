@@ -1,6 +1,5 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
-import { TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -97,12 +96,7 @@ const graphStateFrom = (reconstructed: ReconstructedRunState): TrackerGraphState
   Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
-    onSome: (graph) => {
-      const wire = graph.toWire()
-      return TrackerGraphState.cases.GraphEstablished.make({
-        snapshot: TrackerSnapshot.make({ revision: wire.revision, tasks: wire.tasks })
-      })
-    }
+    onSome: (graph) => TrackerGraphState.cases.GraphEstablished.make({ snapshot: graph })
   })
 
 const acceptedGraphWasPublished = (records: ReadonlyArray<JournalRecord>, after: JournalPosition): boolean =>

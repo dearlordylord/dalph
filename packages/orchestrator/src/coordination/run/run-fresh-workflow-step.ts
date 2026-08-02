@@ -246,7 +246,7 @@ export const runFreshWorkflowStep = Effect.fn("DeliveryActivation.runFreshWorkfl
         return {
           acceptedFact: SyntheticWorkflowFact.PlannedAttemptExecutorWorkReported({
             plannedAttempt: step.plannedAttempt,
-            reportTag: report._tag,
+            report,
             taskId: step.task.id
           })
         }
@@ -267,7 +267,7 @@ export const runFreshWorkflowStep = Effect.fn("DeliveryActivation.runFreshWorkfl
       return {
         acceptedFact: SyntheticWorkflowFact.PlannedAttemptExecutorWorkReported({
           plannedAttempt: step.plannedAttempt,
-          reportTag: report._tag,
+          report,
           taskId: step.task.id
         })
       }

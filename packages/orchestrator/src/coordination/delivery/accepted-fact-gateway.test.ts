@@ -76,10 +76,11 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
 
     const values = Array.from(yield* Fiber.join(observed))
     expect(values.map(({ _tag }) => _tag)).toEqual(["GraphNotEstablished", "GraphNotEstablished", "GraphEstablished"])
-    expect((yield* gateway.readCurrent).graph).toMatchObject({
-      _tag: "GraphEstablished",
-      snapshot: { revision: "g1", tasks: [{ id: "A" }] }
-    })
+    const currentGraph = (yield* gateway.readCurrent).graph
+    expect(currentGraph._tag).toBe("GraphEstablished")
+    if (currentGraph._tag === "GraphEstablished") {
+      expect(currentGraph.snapshot.toWire()).toMatchObject({ revision: "g1", tasks: [{ id: "A" }] })
+    }
     expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
     expect(Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))).toEqual([])
   }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -210,10 +211,11 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
     expect(
       (yield* gateway.readCurrent).reconstructed.graphKnowledge.taskTrackerFacts.map(({ operationId }) => operationId)
     ).toEqual(["outcome-finished-first", "outcome-started-first"])
-    expect((yield* gateway.readCurrent).graph).toMatchObject({
-      _tag: "GraphEstablished",
-      snapshot: { revision: "first-completed-later", tasks: [{ id: "A" }] }
-    })
+    const currentGraph = (yield* gateway.readCurrent).graph
+    expect(currentGraph._tag).toBe("GraphEstablished")
+    if (currentGraph._tag === "GraphEstablished") {
+      expect(currentGraph.snapshot.toWire()).toMatchObject({ revision: "first-completed-later", tasks: [{ id: "A" }] })
+    }
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 

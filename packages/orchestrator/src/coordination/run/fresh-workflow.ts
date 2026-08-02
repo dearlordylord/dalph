@@ -239,7 +239,7 @@ const syntheticStepFor = (
     case "TaskWorktreeReconciled":
       return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: fact.plannedAttempt, task })
     case "PlannedAttemptExecutorWorkReported":
-      return fact.reportTag === "Running"
+      return fact.report._tag === "Running"
         ? FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({ plannedAttempt: fact.plannedAttempt, task })
         : undefined
   }

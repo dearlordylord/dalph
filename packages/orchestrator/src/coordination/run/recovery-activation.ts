@@ -35,6 +35,7 @@ import {
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection-evidence.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   deriveRunnableFrontier,
@@ -60,7 +61,7 @@ import {
   type AcceptedResultNotDurable,
   deriveIntegrationAdmission
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
+import { deriveIntegrationFrontier, integrationDeliveryWaitsOf } from "../frontier/integration-frontier.js"
 import {
   type IntegrationTargetResourceController,
   type IntegrationTargetResourceUnavailable,
@@ -1253,7 +1254,7 @@ const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>
   "StartQueuedIntegration"
 ])
 
-const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
+const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
   integrationTarget: Option.Option<IntegrationTarget>,
@@ -1271,10 +1272,11 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
   const currentTrackerTaskIds = new Set(
     currentTaskGraph?.taskIds().filter((taskId) => currentGraphObservationForTask(taskId) !== undefined) ?? []
   )
+  const responsibilityFacts = deriveJournalResponsibilityFacts(runState, activationBaselinePosition)
   const ordinary = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: runState.responsibility,
-    responsibilityFacts: deriveJournalResponsibilityFacts(runState, activationBaselinePosition)
+    responsibilityFacts
   })
   const pendingGitReadIntents = runState.workflowHistory.records
     .filter(
@@ -1426,7 +1428,7 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
     (explanation._tag === "WorkflowOperationTaskClaimConstraint" ||
       explanation._tag === "IntegrationTaskClaimConstraint") &&
     explanation.claimState === "Unobserved"
-      ? [explanation.taskId]
+      ? [explanation._tag === "IntegrationTaskClaimConstraint" ? explanation.plannedAttempt.taskId : explanation.taskId]
       : []
   )
   const claimObservationTransitions = [...new Set(unobservedClaimTaskIds)].sort().flatMap((taskId) => {
@@ -1468,13 +1470,49 @@ const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFron
         : []
     )
   )
-  return filterFrontierForActivePauses(
-    frontier,
-    runState,
-    currentTaskGraph,
-    pendingGitReadReconciliations,
-    heldIntegrationTaskIds
+  return {
+    acceptedAt: runState.appliedThrough,
+    allowRecoveredContinuation: continuationRequiresFreshFacts(runState),
+    frontier: filterFrontierForActivePauses(
+      frontier,
+      runState,
+      currentTaskGraph,
+      pendingGitReadReconciliations,
+      heldIntegrationTaskIds
+    ),
+    integrationWaits: integrationDeliveryWaitsOf(integration),
+    responsibilityFacts
+  }
+})
+
+const journaledFreshFrontierOf = (
+  frontier: RunnableFrontier,
+  allowRecoveredContinuation: boolean
+): RunnableFrontier => ({
+  explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
+  transitions: frontier.transitions.filter(
+    ({ _tag }) =>
+      journaledFreshTransitionTags.has(_tag) ||
+      (allowRecoveredContinuation && _tag === "ContinuePlannedAttemptExecutorWork")
   )
+})
+
+const readRecoveredFrontier = Effect.fn("RunRecoveryActivation.readRecoveredFrontier")(function* (
+  runId: RunId,
+  integrationResources: IntegrationTargetResourceController,
+  integrationTarget: Option.Option<IntegrationTarget>,
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
+) {
+  return (yield* readRecoveredProjection(
+    runId,
+    integrationResources,
+    integrationTarget,
+    activationBaselinePosition,
+    candidateCorrectionLimit,
+    candidateContinuationLimit
+  )).frontier
 })
 
 const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournaledFreshFrontier")(function* (
@@ -1485,7 +1523,7 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
 ) {
-  const frontier = yield* readRecoveredFrontier(
+  const projection = yield* readRecoveredProjection(
     runId,
     integrationResources,
     integrationTarget,
@@ -1493,15 +1531,7 @@ const readJournaledFreshFrontier = Effect.fn("RunRecoveryActivation.readJournale
     candidateCorrectionLimit,
     candidateContinuationLimit
   )
-  const allowRecoveredContinuation = continuationRequiresFreshFacts(yield* readRecoveredRunState(runId))
-  return {
-    explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
-    transitions: frontier.transitions.filter(
-      ({ _tag }) =>
-        journaledFreshTransitionTags.has(_tag) ||
-        (allowRecoveredContinuation && _tag === "ContinuePlannedAttemptExecutorWork")
-    )
-  }
+  return journaledFreshFrontierOf(projection.frontier, projection.allowRecoveredContinuation)
 })
 
 // eslint-disable-next-line functional/no-mixed-types -- The source pairs immutable reconstruction with its executor capability.
@@ -1517,6 +1547,8 @@ interface RunRecoveryActivationSource {
   readonly readFinalityFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readFrontier: Effect.Effect<RunnableFrontier, RunRecoveryActivationError, never>
   readonly readResponsibility: Effect.Effect<WorkflowResponsibilityState, RunRecoveryActivationError, never>
+  /** One coherent frontier plus its exact lower evidence for observational delivery comparison. */
+  readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryActivationError, never>
   /** True after a Run or task Unpause requires preserved work to discard pre-Unpause process-local stages. */
   readonly readContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
   /** Recovered tasks whose process-local stages must be discarded after the applicable Unpause. */
@@ -1528,6 +1560,12 @@ interface RunRecoveryActivationSource {
     readonly taskId: TaskId
   }>
   readonly waitForNextExecutorWake: Effect.Effect<void, RunRecoveryActivationError, never>
+}
+
+/** One reconstruction turn; process-local integration state is sampled exactly once. */
+export interface RunRecoveryProjectionSnapshot {
+  readonly evidence: DeliveryProjectionEvidence
+  readonly frontier: RunnableFrontier
 }
 
 /** A journal-backed source can execute recovered transitions for its exact run. */
@@ -1582,6 +1620,10 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
         readFinalityFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readFrontier: Effect.succeed({ explanations: [], transitions: [] }),
         readResponsibility: Effect.succeed({ entries: [] }),
+        readDeliveryProjection: Effect.succeed({
+          evidence: { _tag: "AvailableDeliveryProjectionEvidence", acceptedAt: null, facts: [], integrationWaits: [] },
+          frontier: { explanations: [], transitions: [] }
+        }),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
         readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set() }),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
@@ -1698,6 +1740,26 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       ),
       readResponsibility: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
+      ),
+      readDeliveryProjection: provideJournal(
+        readRecoveredProjection(
+          runId,
+          integrationResources,
+          integrationTarget,
+          activationBaselinePosition,
+          candidateCorrectionLimit,
+          candidateContinuationLimit
+        ).pipe(
+          Effect.map(({ acceptedAt, allowRecoveredContinuation, frontier, integrationWaits, responsibilityFacts }) => ({
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt,
+              facts: responsibilityFacts,
+              integrationWaits
+            },
+            frontier: journaledFreshFrontierOf(frontier, allowRecoveredContinuation)
+          }))
+        )
       ),
       readContinuationRequiresFreshFacts: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
@@ -1945,6 +2007,26 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     readFinalityFrontier: provideDependencies(readFrontier()),
     readResponsibility: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(({ responsibility }) => responsibility))
+    ),
+    readDeliveryProjection: provideDependencies(
+      readRecoveredProjection(
+        runId,
+        integrationResources,
+        integrationTarget,
+        activationBaselinePosition,
+        candidateCorrectionLimit,
+        candidateContinuationLimit
+      ).pipe(
+        Effect.map(({ acceptedAt, frontier, integrationWaits, responsibilityFacts }) => ({
+          evidence: {
+            _tag: "AvailableDeliveryProjectionEvidence" as const,
+            acceptedAt,
+            facts: responsibilityFacts,
+            integrationWaits
+          },
+          frontier
+        }))
+      )
     ),
     readContinuationRequiresFreshFacts: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))

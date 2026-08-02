@@ -65,6 +65,7 @@ import {
   AcceptedFactPublicationGateway
 } from "../delivery/accepted-fact-gateway.js"
 import type { TrackerGraphRelation } from "../delivery/relations.js"
+import { observeDeliveryShadow } from "../delivery/delivery-shadow.js"
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 
@@ -169,35 +170,48 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         readonly policy: RunControlPolicy
       }
       const phase = yield* Ref.make<ActivationPhase>({ _tag: "Boundary", mayRun: rejectAllBoundaryTransitions })
+      const readAcceptedPositionForShadow = Option.match(acceptedFactGateway, {
+        onNone: () => Effect.succeed(Option.none()),
+        onSome: (gateway) =>
+          gateway.readCurrent.pipe(Effect.option, Effect.map(Option.map(({ appliedPosition }) => appliedPosition)))
+      })
       const readDeliveryActivationTurn = Effect.fn("DeliveryActivation.readTurn")(function* (): Effect.fn.Return<
         DeliveryActivationTurn,
         RunActivationError
       > {
         const currentPhase = yield* Ref.get(phase)
-        const recovered = yield* recovery.readFrontier
+        const acceptedBefore = Option.getOrUndefined(yield* readAcceptedPositionForShadow)
         if (currentPhase._tag === "Boundary") {
+          const recovered = yield* recovery.readFrontier
           return {
             fresh: [],
             frontier: { ...recovered, transitions: recovered.transitions.filter(currentPhase.mayRun) },
             policy: yield* readCurrentControlPolicy
           }
         }
+        const recoveredProjection = yield* recovery.readDeliveryProjection
+        const recovered = recoveredProjection.frontier
         const frame = yield* currentPhase.currentDelivery.read
         const fresh = deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
         const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
         const remainingRecovered = recovered.transitions.filter(
           (transition) => !freshTaskIds.has(runnableTransitionTaskId(transition))
         )
-        return {
-          fresh,
-          policy: frame.runControlPolicy,
-          frontier: {
-            explanations: recovered.explanations.filter(
-              (explanation) => !explanationTaskIds(explanation).some((taskId) => freshTaskIds.has(taskId))
-            ),
-            transitions: [...remainingRecovered, ...fresh.map(({ transition }) => transition)]
-          }
+        const frontier = {
+          explanations: recovered.explanations.filter(
+            (explanation) => !explanationTaskIds(explanation).some((taskId) => freshTaskIds.has(taskId))
+          ),
+          transitions: [...remainingRecovered, ...fresh.map(({ transition }) => transition)]
         }
+        const acceptedAfter = Option.getOrUndefined(yield* readAcceptedPositionForShadow)
+        yield* observeDeliveryShadow({
+          acceptedAfter,
+          acceptedBefore,
+          evidence: recoveredProjection.evidence,
+          frame,
+          legacy: frontier
+        })
+        return { fresh, policy: frame.runControlPolicy, frontier }
       })
       const checkedTurn = yield* Ref.make<DeliveryActivationTurn>({
         fresh: [],

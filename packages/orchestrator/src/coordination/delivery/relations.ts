@@ -1,6 +1,23 @@
-import { PlannedAttemptExecutorReport, type AttemptId, type TaskId } from "@dalph/contracts"
-import { Context, Effect, Layer, Schema, Stream } from "effect"
-import { TrackerSnapshot } from "../../authorities/task-tracker/task.js"
+import {
+  PlannedAttemptExecutorReport,
+  type AttemptId,
+  type PlannedTaskAttempt,
+  type TaskId,
+  type TaskRevision
+} from "@dalph/contracts"
+import { Context, Effect, Schema, Stream } from "effect"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import type { RunControlPolicy } from "../../control/policy.js"
+import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import type {
+  QueuedIntegrationResponsibility,
+  StartedIntegrationResponsibility,
+  UnqueuedAcceptedResult
+} from "../../workflow/protocols/integration-admission/protocol.js"
+import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 
 /** A descriptive latest-value source. Observing it never performs a Dalph action. */
 export interface CurrentSignal<A, E = never> {
@@ -16,37 +33,131 @@ export const mapCurrentSignal = <A, E, B>(
   project: (value: A) => B
 ): CurrentSignal<B, E> => ({ changes: signal.changes.pipe(Stream.map(project)) })
 
-export const TrackerGraphState = Schema.TaggedUnion({
-  GraphEstablished: { snapshot: TrackerSnapshot },
-  GraphNotEstablished: {}
-})
-export type TrackerGraphState = typeof TrackerGraphState.Type
+/** Relates two current sources so a revision of either recomputes their shared projection. */
+export const zipCurrentSignals = <A, EA, B, EB>(
+  left: CurrentSignal<A, EA>,
+  right: CurrentSignal<B, EB>
+): CurrentSignal<readonly [A, B], EA | EB> => ({ changes: Stream.zipLatest(left.changes, right.changes) })
 
-const DeliveryFrontierTypeId: unique symbol = Symbol("DeliveryFrontier")
+/** The current usable graph is either absent or already normalized and structurally validated. */
+export type TrackerGraphState =
+  | { readonly _tag: "GraphEstablished"; readonly snapshot: TaskDagSnapshot }
+  | { readonly _tag: "GraphNotEstablished" }
+
+export const TrackerGraphState = {
+  cases: {
+    GraphEstablished: {
+      make: (fields: { readonly snapshot: TaskDagSnapshot }): TrackerGraphState => ({
+        _tag: "GraphEstablished",
+        ...fields
+      })
+    },
+    GraphNotEstablished: {
+      make: (_fields: Record<never, never>): TrackerGraphState => ({ _tag: "GraphNotEstablished" })
+    }
+  }
+}
+
+/** One graph-owned reason that a present ticket is not currently eligible. */
+export type DeliveryFrontierExclusion =
+  | { readonly _tag: "PrerequisitesIncomplete"; readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
+  | { readonly _tag: "SuccessfulCompletion" }
+  | { readonly _tag: "TerminalWithoutSuccess" }
+
+/** The exhaustive graph-only placement of one task in an established graph. */
+export type DeliveryFrontierStanding =
+  | { readonly _tag: "Eligible"; readonly taskId: TaskId; readonly taskRevision: TaskRevision }
+  | {
+      readonly _tag: "Excluded"
+      readonly reasons: readonly [DeliveryFrontierExclusion, ...ReadonlyArray<DeliveryFrontierExclusion>]
+      readonly taskId: TaskId
+    }
 
 /** Graph-only delivery evidence; workflow responsibility and runtime ownership are excluded. */
 export interface DeliveryFrontier {
-  readonly [DeliveryFrontierTypeId]: typeof DeliveryFrontierTypeId
   readonly _tag: "DeliveryFrontier"
   readonly source: TrackerGraphState
+  readonly standings: ReadonlyArray<DeliveryFrontierStanding>
 }
 
-/** The first structural projection; #181 supplies its exhaustive ticket standings. */
-export const frontierOf = (graph: TrackerGraphState): DeliveryFrontier => ({
-  [DeliveryFrontierTypeId]: DeliveryFrontierTypeId,
-  _tag: "DeliveryFrontier",
-  source: graph
-})
+/** Zero-based position in the deterministic graph-candidate order. */
+export const BoundedTicketRank = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("BoundedTicketRank")
+)
+export type BoundedTicketRank = typeof BoundedTicketRank.Type
 
-const BoundedParallelTicketsTypeId: unique symbol = Symbol("BoundedParallelTickets")
+/** Why one graph task is or is not in the current deterministic desired set. */
+export type BoundedTicketPlacement =
+  | { readonly _tag: "Selected"; readonly rank: BoundedTicketRank }
+  | { readonly _tag: "EligibleOutsideBound"; readonly rank: BoundedTicketRank }
+  | {
+      readonly _tag: "GraphExcluded"
+      readonly reasons: Extract<DeliveryFrontierStanding, { readonly _tag: "Excluded" }>["reasons"]
+    }
 
 /** Desired graph tickets under policy, not admitted work or held runtime positions. */
 export interface BoundedParallelTickets {
-  readonly [BoundedParallelTicketsTypeId]: typeof BoundedParallelTicketsTypeId
   readonly _tag: "BoundedParallelTickets"
+  readonly placements: ReadonlyArray<{ readonly placement: BoundedTicketPlacement; readonly taskId: TaskId }>
+  readonly policy: RunControlPolicy
   readonly source: DeliveryFrontier
-  readonly taskIds: ReadonlyArray<TaskId>
 }
+
+/** One exact journal-established obligation retained beneath broad ticket delivery. */
+export type ExactWorkflowObligation =
+  | { readonly _tag: "WorkflowResponsibility"; readonly responsibility: WorkflowResponsibilityEntry }
+  | { readonly _tag: "AcceptedAwaitingIntegration"; readonly accepted: UnqueuedAcceptedResult }
+  | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
+  | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
+
+/** Process-local delivery standing derived from exact accepted protocol facts. */
+export type TicketDeliveryStanding =
+  | { readonly _tag: "ProposedDelivery" }
+  | { readonly _tag: "ResponsibilitySituation"; readonly facts: ResponsibilityFreshFacts }
+  | { readonly _tag: "ExactEvidenceConflict"; readonly evidenceIdentities: readonly [string, ...ReadonlyArray<string>] }
+  | { readonly _tag: "AcceptedAwaitingIntegrationQueue"; readonly accepted: UnqueuedAcceptedResult }
+  | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
+  | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
+  | { readonly _tag: "CandidateWorkActive"; readonly state: IntegrationCandidateConstructionState }
+  | {
+      readonly _tag: "CandidateConstructedUnsettled"
+      readonly state: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>
+    }
+  | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
+  | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
+  | {
+      readonly _tag: "SyntheticExecutorSituation"
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly report: PlannedAttemptExecutorReport
+    }
+
+/** Graph/bound evidence for a retained broad delivery, including its negative space. */
+export type TicketDeliveryPlacement =
+  | BoundedTicketPlacement
+  | { readonly _tag: "AbsentFromCurrentGraph"; readonly graphRevision: TrackerRevision }
+  | { readonly _tag: "GraphNotEstablished" }
+
+/** Exact lower accepted evidence supplied to the pure broad-delivery projection. */
+export type ExactTicketDeliveryEvidence =
+  | { readonly _tag: "ResponsibilityFacts"; readonly facts: ResponsibilityFreshFacts }
+  | { readonly _tag: "AcceptedAwaitingIntegration"; readonly accepted: UnqueuedAcceptedResult }
+  | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
+  | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
+  | {
+      readonly _tag: "IntegrationCandidate"
+      readonly responsibility: StartedIntegrationResponsibility
+      readonly state: IntegrationCandidateConstructionState
+    }
+
+/** Exact accepted evidence plus non-authoritative regional and synthetic observations. */
+export type TicketDeliveryEvidence =
+  | ExactTicketDeliveryEvidence
+  | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
+  | {
+      readonly _tag: "SyntheticExecutorFacts"
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly report: PlannedAttemptExecutorReport
+    }
 
 /** Evidence that the executor reported a terminal result for one exact planned attempt. */
 export const PlannedAttemptExecutorTerminalEvidence = Schema.TaggedStruct("PlannedAttemptExecutorTerminal", {
@@ -57,15 +168,15 @@ export type PlannedAttemptExecutorTerminalEvidence = typeof PlannedAttemptExecut
 /** Current broad delivery knowledge for one ticket; it is never journal authority. */
 export interface TicketDelivery {
   readonly _tag: "TicketDelivery"
-  readonly evidence: ReadonlyArray<PlannedAttemptExecutorTerminalEvidence>
+  readonly evidence: ReadonlyArray<TicketDeliveryEvidence>
+  readonly obligations: ReadonlyArray<ExactWorkflowObligation>
+  readonly placement: TicketDeliveryPlacement
+  readonly standings: readonly [TicketDeliveryStanding, ...ReadonlyArray<TicketDeliveryStanding>]
   readonly taskId: TaskId
 }
 
-const TicketDeliveriesTypeId: unique symbol = Symbol("TicketDeliveries")
-
 /** Current ticket deliveries derived from desired tickets and exact lower obligations. */
 export interface TicketDeliveries {
-  readonly [TicketDeliveriesTypeId]: typeof TicketDeliveriesTypeId
   readonly _tag: "TicketDeliveries"
   readonly deliveries: ReadonlyArray<TicketDelivery>
   readonly source: BoundedParallelTickets
@@ -91,6 +202,17 @@ export interface DeliverySettlements {
   readonly source: TicketDeliveries
 }
 
+/** Constructs the current set of established settlements. */
+export const makeDeliverySettlements = (
+  source: TicketDeliveries,
+  settlements: ReadonlyArray<DeliverySettlement>
+): DeliverySettlements => ({
+  [DeliverySettlementsTypeId]: DeliverySettlementsTypeId,
+  _tag: "DeliverySettlements",
+  settlements,
+  source
+})
+
 const DeliveryReflectionTypeId: unique symbol = Symbol("DeliveryReflection")
 
 /** Current tracker-reflection meaning projected only from established settlements. */
@@ -99,6 +221,13 @@ export interface DeliveryReflection {
   readonly _tag: "DeliveryReflection"
   readonly source: DeliverySettlements
 }
+
+/** Constructs current tracker-reflection meaning from established settlements only. */
+export const makeDeliveryReflection = (source: DeliverySettlements): DeliveryReflection => ({
+  [DeliveryReflectionTypeId]: DeliveryReflectionTypeId,
+  _tag: "DeliveryReflection",
+  source
+})
 
 const DeliveryActionProposalTypeId: unique symbol = Symbol("DeliveryActionProposal")
 
@@ -227,72 +356,3 @@ export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySet
   const projection = yield* DeliveryReflectionProjection
   return projection.of(settlements)
 })
-
-export interface InMemoryDeliveryRelationsInput {
-  readonly graph: CurrentSignal<TrackerGraphState>
-  readonly executorResponsibilities: (tickets: BoundedParallelTickets) => ReadonlyArray<TicketDelivery>
-}
-
-/** Deterministic, action-free Layers used to evaluate the complete relation spine. */
-export const makeInMemoryDeliveryRelationsLayer = (input: InMemoryDeliveryRelationsInput) => {
-  const noActions = currentSignalOf<ReadonlyArray<DeliveryActionProposal>>([])
-  const trackerGraph = Layer.succeed(
-    TrackerGraphRelation,
-    TrackerGraphRelation.of({ proposedActions: noActions, signal: input.graph })
-  )
-  const bounded = Layer.succeed(
-    BoundedParallelTicketsProjection,
-    BoundedParallelTicketsProjection.of({
-      of: (frontier) =>
-        mapCurrentSignal(frontier, (source) => ({
-          [BoundedParallelTicketsTypeId]: BoundedParallelTicketsTypeId,
-          _tag: "BoundedParallelTickets",
-          source,
-          taskIds: []
-        }))
-    })
-  )
-  const deliveries = Layer.succeed(
-    TicketDeliveryProjection,
-    TicketDeliveryProjection.of({
-      of: (tickets) => ({
-        current: mapCurrentSignal(tickets, (source) => ({
-          [TicketDeliveriesTypeId]: TicketDeliveriesTypeId,
-          _tag: "TicketDeliveries",
-          deliveries: input.executorResponsibilities(source),
-          source
-        })),
-        proposedActions: noActions
-      })
-    })
-  )
-  const settlements = Layer.succeed(
-    DeliverySettlementProjection,
-    DeliverySettlementProjection.of({
-      of: (relation) => ({
-        current: mapCurrentSignal(relation.current, (source) => ({
-          [DeliverySettlementsTypeId]: DeliverySettlementsTypeId,
-          _tag: "DeliverySettlements",
-          settlements: [],
-          source
-        })),
-        proposedActions: noActions
-      })
-    })
-  )
-  const reflection = Layer.succeed(
-    DeliveryReflectionProjection,
-    DeliveryReflectionProjection.of({
-      of: (relation) => ({
-        current: mapCurrentSignal(relation.current, (source) => ({
-          [DeliveryReflectionTypeId]: DeliveryReflectionTypeId,
-          _tag: "DeliveryReflection",
-          source
-        })),
-        proposedActions: noActions
-      })
-    })
-  )
-
-  return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection)
-}

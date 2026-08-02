@@ -359,7 +359,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
     expect(deriveIntegrationFrontier(reconstructed.state).explanations).toContainEqual({
       _tag: "IntegrationTaskClaimConstraint",
       claimState: "Unobserved",
-      taskId: firstAttempt.taskId,
+      plannedAttempt: firstAttempt,
       wakeCondition: "TaskClaimFactsObserved"
     })
     expect(frontier.transitions).toMatchObject([
@@ -409,10 +409,19 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
     expect(responsibilities[0]?.queuedAt).toBeLessThan(responsibilities[1]?.queuedAt ?? JournalPosition.make(1))
     const waitingFrontier = yield* recovery.readFrontier
     expect(waitingFrontier.explanations.filter(({ _tag }) => _tag === "IntegrationTrackerFactsWait")).toEqual([
-      { _tag: "IntegrationTrackerFactsWait", taskId: "A", wakeCondition: "TaskTrackerFactsObserved" },
-      { _tag: "IntegrationTrackerFactsWait", taskId: "B", wakeCondition: "TaskTrackerFactsObserved" }
+      { _tag: "IntegrationTrackerFactsWait", plannedAttempt: firstAttempt, wakeCondition: "TaskTrackerFactsObserved" },
+      { _tag: "IntegrationTrackerFactsWait", plannedAttempt: secondAttempt, wakeCondition: "TaskTrackerFactsObserved" }
     ])
     expect(waitingFrontier.transitions).toEqual([])
+    const deliveryProjection = yield* recovery.readDeliveryProjection
+    expect(deliveryProjection.frontier).toEqual(waitingFrontier)
+    expect(deliveryProjection.evidence).toMatchObject({
+      _tag: "AvailableDeliveryProjectionEvidence",
+      integrationWaits: [
+        { _tag: "IntegrationTrackerFactsWait", plannedAttempt: firstAttempt },
+        { _tag: "IntegrationTrackerFactsWait", plannedAttempt: secondAttempt }
+      ]
+    })
 
     const focusedRead = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("post-restart-focused-specification"),
@@ -684,8 +693,8 @@ it.effect("fails closed without current tracker facts and orders authorized inte
     if (queuedRun._tag !== "ValidReconstructedRun") return yield* Effect.die("expected valid reconstruction")
     expect(deriveIntegrationFrontier(queuedRun.state)).toMatchObject({
       explanations: [
-        { _tag: "IntegrationTrackerFactsWait", taskId: "A" },
-        { _tag: "IntegrationTrackerFactsWait", taskId: "B" }
+        { _tag: "IntegrationTrackerFactsWait", plannedAttempt: { taskId: "A" } },
+        { _tag: "IntegrationTrackerFactsWait", plannedAttempt: { taskId: "B" } }
       ],
       transitions: []
     })
@@ -703,7 +712,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
     expect(foreignClaimFrontier.explanations).toContainEqual({
       _tag: "IntegrationTaskClaimConstraint",
       claimState: "Foreign",
-      taskId: a.taskId,
+      plannedAttempt: a,
       wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
     })
     expect(
@@ -714,7 +723,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(a.attemptId, b.attemptId)
       })
     ).toMatchObject({
-      explanations: [{ _tag: "IntegrationTargetWait", taskId: "B" }],
+      explanations: [{ _tag: "IntegrationTargetWait", plannedAttempt: { taskId: "B" } }],
       transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
     })
 
@@ -725,7 +734,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
     const staleStartedFrontier = deriveIntegrationFrontier(startedRun.state)
     expect(staleStartedFrontier.explanations).toContainEqual({
       _tag: "IntegrationTrackerFactsWait",
-      taskId: "A",
+      plannedAttempt: a,
       wakeCondition: "TaskTrackerFactsObserved"
     })
     expect(staleStartedFrontier.transitions).toEqual([])
@@ -738,8 +747,8 @@ it.effect("fails closed without current tracker facts and orders authorized inte
       })
     ).toMatchObject({
       explanations: [
-        { _tag: "IntegrationInProgress", taskId: "A" },
-        { _tag: "IntegrationTargetWait", taskId: "B" }
+        { _tag: "IntegrationInProgress", plannedAttempt: { taskId: "A" } },
+        { _tag: "IntegrationTargetWait", plannedAttempt: { taskId: "B" } }
       ],
       transitions: []
     })

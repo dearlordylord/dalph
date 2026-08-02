@@ -4,10 +4,10 @@ import {
   boundedParallelTickets,
   deliverySettlements,
   executorResponsibilities,
-  frontierOf,
   mapCurrentSignal,
   reflectDeliverySettlements
 } from "./relations.js"
+import { frontierOf } from "./ticket-delivery-projection.js"
 
 /** Shows, at one abstraction level, how current tracker facts become delivery consequences. */
 export const delivery = Effect.gen(function* () {

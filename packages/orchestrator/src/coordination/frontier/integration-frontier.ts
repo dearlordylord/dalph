@@ -1,5 +1,5 @@
 import { Option } from "effect"
-import { type AttemptId, type IntegrationTarget, type TaskId } from "@dalph/contracts"
+import { type AttemptId, type IntegrationTarget, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import {
@@ -23,6 +23,50 @@ import {
   type CandidateCorrectionLimit,
   type CandidateContinuationLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+
+/** A region-local reason that accepted integration work cannot advance now. */
+export type IntegrationDeliveryWait =
+  | {
+      readonly _tag: "IntegrationDependencyWait"
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
+    }
+  | { readonly _tag: "IntegrationConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
+  | {
+      readonly _tag: "IntegrationTaskClaimConstraint"
+      readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
+      readonly plannedAttempt: PlannedTaskAttempt
+    }
+  | { readonly _tag: "IntegrationTrackerFactsWait"; readonly plannedAttempt: PlannedTaskAttempt }
+  | { readonly _tag: "IntegrationTargetWait"; readonly plannedAttempt: PlannedTaskAttempt }
+
+const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): IntegrationDeliveryWait | undefined => {
+  if (explanation._tag === "IntegrationDependencyWait") {
+    return {
+      _tag: explanation._tag,
+      plannedAttempt: explanation.plannedAttempt,
+      prerequisiteTaskIds: explanation.prerequisiteTaskIds
+    }
+  }
+  if (explanation._tag === "IntegrationTaskClaimConstraint") {
+    return { _tag: explanation._tag, claimState: explanation.claimState, plannedAttempt: explanation.plannedAttempt }
+  }
+  if (
+    explanation._tag === "IntegrationConfigurationWait" ||
+    explanation._tag === "IntegrationTrackerFactsWait" ||
+    explanation._tag === "IntegrationTargetWait"
+  ) {
+    return { _tag: explanation._tag, plannedAttempt: explanation.plannedAttempt }
+  }
+  return undefined
+}
+
+/** Projects only integration waits from the lower integration relation, before scheduler merging. */
+export const integrationDeliveryWaitsOf = (frontier: RunnableFrontier): ReadonlyArray<IntegrationDeliveryWait> =>
+  frontier.explanations.flatMap((explanation) => {
+    const wait = integrationDeliveryWaitFrom(explanation)
+    return wait === undefined ? [] : [wait]
+  })
 
 export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
@@ -166,7 +210,7 @@ export const deriveIntegrationFrontier = (
                   const claimState = constraint._tag
                   return FrontierExplanation.IntegrationTaskClaimConstraint({
                     claimState,
-                    taskId: accepted.plannedAttempt.taskId,
+                    plannedAttempt: accepted.plannedAttempt,
                     wakeCondition:
                       claimState === "Missing" || claimState === "Foreign"
                         ? "ExplicitAppliedTaskClaimReacquisitionDirection"
@@ -182,7 +226,7 @@ export const deriveIntegrationFrontier = (
               /* v8 ignore next -- Configuration-wait mapping is exercised through the equivalent frontier explanation assertion. */
               .map(({ plannedAttempt }) =>
                 FrontierExplanation.IntegrationConfigurationWait({
-                  taskId: plannedAttempt.taskId,
+                  plannedAttempt,
                   wakeCondition: "IntegrationTargetConfigured"
                 })
               ),
@@ -196,7 +240,7 @@ export const deriveIntegrationFrontier = (
     .filter((responsibility) => !trackerFactsAreCurrentFor(responsibility))
     .map((responsibility) =>
       FrontierExplanation.IntegrationTrackerFactsWait({
-        taskId: responsibility.plannedAttempt.taskId,
+        plannedAttempt: responsibility.plannedAttempt,
         wakeCondition: "TaskTrackerFactsObserved"
       })
     )
@@ -208,7 +252,7 @@ export const deriveIntegrationFrontier = (
     return [
       FrontierExplanation.IntegrationTaskClaimConstraint({
         claimState,
-        taskId: responsibility.plannedAttempt.taskId,
+        plannedAttempt: responsibility.plannedAttempt,
         wakeCondition:
           claimState === "Missing" || claimState === "Foreign"
             ? "ExplicitAppliedTaskClaimReacquisitionDirection"
@@ -225,7 +269,7 @@ export const deriveIntegrationFrontier = (
         .map((responsibility) => {
           const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
           return prerequisiteTaskIds.length === 0
-            ? FrontierExplanation.IntegrationInProgress({ taskId: responsibility.plannedAttempt.taskId })
+            ? FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
             : FrontierExplanation.IntegrationDependencyWait({
                 plannedAttempt: responsibility.plannedAttempt,
                 prerequisiteTaskIds,
@@ -239,7 +283,7 @@ export const deriveIntegrationFrontier = (
             ? []
             : [
                 FrontierExplanation.IntegrationTargetWait({
-                  taskId: responsibility.plannedAttempt.taskId,
+                  plannedAttempt: responsibility.plannedAttempt,
                   wakeCondition: "IntegrationTargetReleased"
                 })
               ]

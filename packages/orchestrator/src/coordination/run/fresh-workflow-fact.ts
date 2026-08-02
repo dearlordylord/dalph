@@ -1,5 +1,5 @@
 import { Data } from "effect"
-import type { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import type { PlannedAttemptExecutorReport, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -34,7 +34,7 @@ export type SyntheticWorkflowFact = Data.TaggedEnum<{
   TaskWorktreeReconciled: { readonly plannedAttempt: PlannedTaskAttempt; readonly taskId: TaskId }
   PlannedAttemptExecutorWorkReported: {
     readonly plannedAttempt: PlannedTaskAttempt
-    readonly reportTag: "Running" | "SafelySuspended" | "Terminal"
+    readonly report: PlannedAttemptExecutorReport
     readonly taskId: TaskId
   }
 }>
