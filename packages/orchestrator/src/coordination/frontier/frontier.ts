@@ -36,7 +36,11 @@ export { deriveRunFinalityDecision, RunFinalityDecision } from "./run-finality.j
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   CommitFreshTaskClaimIntent: { readonly taskId: TaskId; readonly taskRevision: TaskRevision }
-  CommitTaskClaimReacquisitionIntent: { readonly requestId: TaskClaimReacquisitionRequestId; readonly taskId: TaskId }
+  CommitTaskClaimReacquisitionIntent: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly requestId: TaskClaimReacquisitionRequestId
+    readonly taskId: TaskId
+  }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
@@ -67,7 +71,10 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   ReconcileTaskClaimRelease: { readonly operationId: OperationId; readonly taskId: TaskId }
-  ReleaseExternallyCompletedTaskClaim: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
+  ReleaseExternallyCompletedTaskClaim: {
+    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
   ReconcileTaskWorktree: { readonly operationId: OperationId; readonly taskId: TaskId }
   QueueAcceptedResultIntegrationResponsibility: {
     readonly accepted: UnqueuedAcceptedResult
@@ -319,7 +326,10 @@ const executorDecisionFor = (
         })
       }),
       TaskExternalSuccessReleaseNeeded: ({ operation }) => ({
-        transition: RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation })
+        transition: RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({
+          operation,
+          plannedAttempt: facts.responsibility.plannedAttempt
+        })
       }),
       TaskExternalSuccessSettled: () => ({
         explanation: FrontierExplanation.PlannedAttemptTaskExternalSuccessSettled({
@@ -353,6 +363,7 @@ const executorDecisionFor = (
       }),
       AppliedTaskClaimReacquisitionDirection: ({ requestId }) => ({
         transition: RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
+          plannedAttempt: facts.responsibility.plannedAttempt,
           requestId,
           taskId: facts.responsibility.plannedAttempt.taskId
         })

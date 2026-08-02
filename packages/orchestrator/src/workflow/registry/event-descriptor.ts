@@ -341,3 +341,11 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       })
   }
 }
+
+/** Operation identity whose initiating journal fact has already been accepted. */
+export const acceptedOperationIdOf = (event: WorkflowJournalEvent): OperationId | undefined => {
+  const descriptor = describeJournalEvent(event)
+  return descriptor._tag === "OperationEventDescriptor" && descriptor.recordPredecessor._tag === "NoRecordPredecessor"
+    ? descriptor.operationId
+    : undefined
+}

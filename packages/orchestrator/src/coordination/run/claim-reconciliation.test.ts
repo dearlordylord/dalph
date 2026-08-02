@@ -571,7 +571,12 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     })
     yield* journal.append(runId, taskClaimReacquisitionDirectedRecordKey(requestId), direction)
     const reacquisitionTransition = (yield* recovery.readFrontier).transitions[0]
-    expect(reacquisitionTransition).toEqual({ _tag: "CommitTaskClaimReacquisitionIntent", requestId, taskId })
+    expect(reacquisitionTransition).toEqual({
+      _tag: "CommitTaskClaimReacquisitionIntent",
+      plannedAttempt,
+      requestId,
+      taskId
+    })
     if (reacquisitionTransition?._tag !== "CommitTaskClaimReacquisitionIntent") {
       return yield* Effect.die("expected explicit claim reacquisition")
     }

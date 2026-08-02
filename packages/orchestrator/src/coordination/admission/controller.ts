@@ -14,6 +14,7 @@ import {
   type RunnableFrontierTransition,
   runnableTransitionTaskId
 } from "../frontier/frontier.js"
+import { transitionTaskWorkPosition } from "../frontier/transition-task-work.js"
 
 type AdmissionAvailabilityChange = Data.TaggedEnum<{ AdmissionMayNowBePossible: Record<never, never> }>
 
@@ -76,9 +77,7 @@ interface MakeTaskAdmissionControllerInput {
 
 /** Task-work capacity starts at claim selection and ends at terminal result or safe suspension. */
 export const transitionRequiresTaskAdmissionPosition = (transition: RunnableFrontierTransition): boolean =>
-  transition._tag === "CommitFreshTaskClaimIntent" ||
-  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-  transition._tag === "StartPlannedAttemptExecutorWork"
+  transitionTaskWorkPosition(transition) === "ReserveOrReuse"
 
 /** One task's process-local use of task-work capacity before or after its planned attempt is known. */
 type TaskWorkPosition =

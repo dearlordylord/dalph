@@ -1,16 +1,13 @@
-import { Context, Effect, Option } from "effect"
+import { Effect, Option, Stream } from "effect"
 import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedTaskAttempt,
+  type RunId,
   type TaskId
 } from "@dalph/contracts"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  deriveIntegrationAdmission,
-  deriveUnqueuedAcceptedResults
-} from "../../workflow/protocols/integration-admission/protocol.js"
-import { deriveIntegrationCandidateConstruction } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import {
   deriveRunnableFrontier,
@@ -23,74 +20,35 @@ import { workflowResponsibilityKey } from "../reconstruction/state.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-relation.js"
 import {
   TrackerGraphState,
-  type ExactTicketDeliveryEvidence,
+  deliveryProposalFrontierOf,
+  currentSignalOf,
+  type DeliveryProposalFrontier,
+  type DeliveryRuntimeSnapshot,
   type TicketDeliveryEvidence,
-  type TicketDeliveries
+  type TicketDeliveries,
+  type TrackerGraphActionProposal
 } from "./relations.js"
 import { boundedParallelTicketsOf, frontierOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
 import { integrationDeliveryWaitsOf, type IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection-evidence.js"
+import type { FreshWorkflowDecision } from "../run/fresh-workflow.js"
+import { deliveryProposalsOf } from "./delivery-proposal.js"
+import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../activation/selected-transition.js"
+import type { OperationId } from "../../workflow/identity.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+import { acceptedOperationIdOf } from "../../workflow/registry/event-descriptor.js"
+import { delivery } from "./delivery.js"
+import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { recordDeliveryShadowComparison } from "./delivery-shadow-diagnostics.js"
+import { ticketDeliveryEvidenceOf } from "./delivery-shadow-evidence.js"
+
+export { DeliveryShadowDiagnostics } from "./delivery-shadow-diagnostics.js"
+export { ticketDeliveryEvidenceOf } from "./delivery-shadow-evidence.js"
 
 const responsibilityTaskId = (facts: ResponsibilityFreshFacts): TaskId =>
   facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
     ? facts.responsibility.plannedAttempt.taskId
     : facts.responsibility.taskId
-
-const syntheticExecutorEvidenceOf = (
-  frame: Extract<CurrentDeliveryFrame, { readonly _tag: "SyntheticCurrentDeliveryFrame" }>
-): ReadonlyArray<TicketDeliveryEvidence> => {
-  const latestByAttempt = new Map<
-    string,
-    Extract<(typeof frame.workflowFacts)[number], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
-  >()
-  for (const fact of frame.workflowFacts) {
-    if (fact._tag === "PlannedAttemptExecutorWorkReported") {
-      latestByAttempt.set(
-        plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(fact.plannedAttempt)),
-        fact
-      )
-    }
-  }
-  return [...latestByAttempt.values()].map((fact) => ({
-    _tag: "SyntheticExecutorFacts",
-    plannedAttempt: fact.plannedAttempt,
-    report: fact.report
-  }))
-}
-
-const journaledIntegrationEvidenceOf = (
-  frame: Extract<CurrentDeliveryFrame, { readonly _tag: "JournaledCurrentDeliveryFrame" }>
-): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  const evidence: Array<ExactTicketDeliveryEvidence> = deriveUnqueuedAcceptedResults(frame.workflowHistory.records).map(
-    (accepted) => ({ _tag: "AcceptedAwaitingIntegration", accepted })
-  )
-  for (const responsibility of deriveIntegrationAdmission(frame.workflowHistory.records).responsibilities) {
-    evidence.push(
-      responsibility._tag === "QueuedIntegrationResponsibility"
-        ? { _tag: "QueuedIntegration", responsibility }
-        : { _tag: "StartedIntegration", responsibility }
-    )
-    if (responsibility._tag === "StartedIntegrationResponsibility") {
-      const state = deriveIntegrationCandidateConstruction(frame.workflowHistory.records, responsibility)
-      if (state !== undefined) evidence.push({ _tag: "IntegrationCandidate", responsibility, state })
-    }
-  }
-  return evidence
-}
-
-/** Derives exact delivery evidence from accepted facts, never from the legacy runnable frontier. */
-export const ticketDeliveryEvidenceOf = (
-  frame: CurrentDeliveryFrame,
-  responsibilityFacts: ReadonlyArray<ResponsibilityFreshFacts>
-): ReadonlyArray<TicketDeliveryEvidence> => {
-  const evidence: ReadonlyArray<TicketDeliveryEvidence> = responsibilityFacts.map((facts) => ({
-    _tag: "ResponsibilityFacts",
-    facts
-  }))
-  return frame._tag === "SyntheticCurrentDeliveryFrame"
-    ? [...evidence, ...syntheticExecutorEvidenceOf(frame)]
-    : [...evidence, ...journaledIntegrationEvidenceOf(frame)]
-}
 
 const explanationTaskId = (
   explanation: FrontierExplanation,
@@ -107,9 +65,6 @@ const transitionResponsibilityKey = (transition: RunnableFrontierTransition): st
   if ("operationId" in transition) return `operation:${transition.operationId}`
   if ("plannedAttempt" in transition) {
     return JSON.stringify({ attemptId: transition.plannedAttempt.attemptId, runId: transition.plannedAttempt.runId })
-  }
-  if (transition._tag === "ReleaseExternallyCompletedTaskClaim") {
-    return `operation:${transition.operation.release.operationId}`
   }
   return undefined
 }
@@ -193,7 +148,7 @@ const legacyIntegrationIdentities = (frontier: RunnableFrontier): ReadonlySet<st
     )
   ])
 
-const symmetricDifference = (left: ReadonlySet<string>, right: ReadonlySet<string>): ReadonlyArray<string> =>
+export const symmetricDifference = (left: ReadonlySet<string>, right: ReadonlySet<string>): ReadonlyArray<string> =>
   [...[...left].filter((value) => !right.has(value)), ...[...right].filter((value) => !left.has(value))].toSorted()
 
 export type DeliveryShadowComparison =
@@ -207,6 +162,19 @@ export type DeliveryShadowComparison =
       readonly integrationWaitDifferences: ReadonlyArray<string>
       readonly responsibilityIdentityDifferences: ReadonlyArray<string>
       readonly responsibilitySituationDifferences: ReadonlyArray<string>
+      readonly proposalFrontier: DeliveryProposalFrontier
+      readonly proposalPresenceDifferences: ReadonlyArray<string>
+    }
+  | {
+      readonly _tag: "ComparedBoundaryDeliveryProposals"
+      readonly acceptedAt: JournalPosition | null
+      readonly proposalFrontier: DeliveryProposalFrontier
+      readonly proposalPresenceDifferences: ReadonlyArray<string>
+    }
+  | {
+      readonly _tag: "ComparedQuiescenceDeliveryProposal"
+      readonly acceptedAt: JournalPosition
+      readonly proposalFrontier: DeliveryProposalFrontier
     }
   | { readonly _tag: "SkippedDeliveryProjectionEpochUnavailable"; readonly frame: JournalPosition }
   | { readonly _tag: "SkippedDeliveryProjectionResponsibilityFactsUnavailable" }
@@ -223,8 +191,18 @@ export interface DeliveryShadowInput {
   readonly acceptedBefore: JournalPosition | void
   readonly evidence: DeliveryProjectionEvidence
   readonly frame: CurrentDeliveryFrame
+  readonly fresh: ReadonlyArray<FreshWorkflowDecision>
   readonly legacy: RunnableFrontier
+  readonly runId: RunId
 }
+
+interface EvaluatedDeliveryShadowRelation {
+  readonly proposalFrontier: DeliveryProposalFrontier
+  readonly snapshot: DeliveryRuntimeSnapshot
+}
+
+export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
+  new Set(records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))))
 
 const incoherentJournalEpoch = (
   input: DeliveryShadowInput & {
@@ -254,8 +232,115 @@ const incoherentJournalEpoch = (
   }
 }
 
+type AvailableProjectionEvidence = Extract<
+  DeliveryShadowInput["evidence"],
+  { readonly _tag: "AvailableDeliveryProjectionEvidence" }
+>
+
+const journalShadowFactsOf = (frame: CurrentDeliveryFrame) => {
+  if (frame._tag === "SyntheticCurrentDeliveryFrame") {
+    return { acceptedAt: null, integrationResponsibilities: [], records: [] } as const
+  }
+  return {
+    acceptedAt: frame.acceptedAt,
+    integrationResponsibilities: deriveIntegrationAdmission(frame.workflowHistory.records).responsibilities,
+    records: frame.workflowHistory.records
+  }
+}
+
+const deliveriesCompared = (
+  evaluated: EvaluatedDeliveryShadowRelation | undefined,
+  projected: TicketDeliveries
+): TicketDeliveries => (evaluated === undefined ? projected : evaluated.snapshot.ticketDeliveries)
+
+const proposalFrontierCompared = (
+  evaluated: EvaluatedDeliveryShadowRelation | undefined,
+  contributions: ReturnType<typeof deliveryProposalsOf>
+): DeliveryProposalFrontier =>
+  evaluated === undefined
+    ? deliveryProposalFrontierOf([contributions.ticketDelivery, contributions.deliverySettlement], contributions.issues)
+    : evaluated.proposalFrontier
+
+const selectedProposalKeys = (
+  proposalFrontier: DeliveryProposalFrontier,
+  contributions: ReturnType<typeof deliveryProposalsOf>
+): ReadonlySet<string> =>
+  new Set(proposalFrontier._tag === "DeliveryProposalsAvailable" ? contributions.selectedTransitionKeys : [])
+
+const comparedDeliveryProjection = (
+  input: DeliveryShadowInput,
+  evidence: AvailableProjectionEvidence,
+  evaluated?: EvaluatedDeliveryShadowRelation
+): Extract<DeliveryShadowComparison, { readonly _tag: "ComparedDeliveryProjection" }> => {
+  const graph = TrackerGraphState.cases.GraphEstablished.make({ snapshot: input.frame.currentGraph })
+  const tickets = boundedParallelTicketsOf(frontierOf(graph), input.frame.runControlPolicy)
+  const exactEvidence = ticketDeliveryEvidenceOf(input.frame, evidence.facts)
+  const projectedDeliveries = ticketDeliveriesOf(tickets, [
+    ...exactEvidence,
+    ...evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
+  ])
+  const responsibilityTaskIds = new Map(
+    evidence.facts.map((facts) => [workflowResponsibilityKey(facts.responsibility), responsibilityTaskId(facts)])
+  )
+  const legacyTaskIds = new Set<TaskId>([
+    ...input.legacy.transitions.map(runnableTransitionTaskId),
+    ...input.legacy.explanations.flatMap((explanation) =>
+      Option.toArray(Option.fromUndefinedOr(explanationTaskId(explanation, responsibilityTaskIds)))
+    )
+  ])
+  const deliveries = deliveriesCompared(evaluated, projectedDeliveries)
+  const deliveryTaskIds = new Set(deliveries.deliveries.map(({ taskId }) => taskId))
+  const exactResponsibilityKeys = new Set(
+    evidence.facts.map(({ responsibility }) => workflowResponsibilityKey(responsibility))
+  )
+  const legacyKeys = new Set(legacyResponsibilityKeys(input.legacy).filter((key) => exactResponsibilityKeys.has(key)))
+  const expectedSituations = new Set(
+    responsibilitySituationKeys(expectedResponsibilityFrontier(evidence.facts), exactResponsibilityKeys)
+  )
+  const legacySituations = new Set(responsibilitySituationKeys(input.legacy, exactResponsibilityKeys))
+  const journal = journalShadowFactsOf(input.frame)
+  const proposalContributions = deliveryProposalsOf({
+    acceptedAt: journal.acceptedAt,
+    acceptedOperationIds: acceptedOperationIdsOf(journal.records),
+    fresh: input.fresh,
+    integrationResponsibilities: journal.integrationResponsibilities,
+    runId: input.runId,
+    responsibilities: input.frame.responsibility.entries,
+    transitions: input.legacy.transitions
+  })
+  const proposalFrontier = proposalFrontierCompared(evaluated, proposalContributions)
+  const legacySelectionKeys = new Set(
+    input.legacy.transitions.map((transition) =>
+      selectedTransitionKey(makeSelectedTransitionIdentity(input.runId, transition))
+    )
+  )
+  const proposedSelectionKeys = selectedProposalKeys(proposalFrontier, proposalContributions)
+  return {
+    _tag: "ComparedDeliveryProjection",
+    acceptedAt: journal.acceptedAt,
+    deliveries,
+    integrationIdentityDifferences: symmetricDifference(
+      exactIntegrationIdentities(exactEvidence),
+      legacyIntegrationIdentities(input.legacy)
+    ),
+    integrationWaitDifferences: symmetricDifference(
+      new Set(evidence.integrationWaits.map(integrationWaitIdentity)),
+      new Set(integrationDeliveryWaitsOf(input.legacy).map(integrationWaitIdentity))
+    ),
+    legacyOnlyTaskIds: [...legacyTaskIds].filter((taskId) => !deliveryTaskIds.has(taskId)).toSorted(),
+    newOnlyTaskIds: [...deliveryTaskIds].filter((taskId) => !legacyTaskIds.has(taskId)).toSorted(),
+    proposalFrontier,
+    proposalPresenceDifferences: symmetricDifference(legacySelectionKeys, proposedSelectionKeys),
+    responsibilityIdentityDifferences: symmetricDifference(exactResponsibilityKeys, legacyKeys),
+    responsibilitySituationDifferences: symmetricDifference(expectedSituations, legacySituations)
+  }
+}
+
 /** Produces non-authoritative comparison evidence and never changes the legacy turn. */
-export const compareDeliveryShadow = (input: DeliveryShadowInput): DeliveryShadowComparison => {
+export const compareDeliveryShadow = (
+  input: DeliveryShadowInput,
+  evaluated?: EvaluatedDeliveryShadowRelation
+): DeliveryShadowComparison => {
   if (input.evidence._tag === "UnavailableDeliveryProjectionEvidence") {
     return { _tag: "SkippedDeliveryProjectionResponsibilityFactsUnavailable" }
   }
@@ -263,74 +348,64 @@ export const compareDeliveryShadow = (input: DeliveryShadowInput): DeliveryShado
     const skipped = incoherentJournalEpoch({ ...input, evidence: input.evidence, frame: input.frame })
     if (skipped !== undefined) return skipped
   }
-  const graph = TrackerGraphState.cases.GraphEstablished.make({ snapshot: input.frame.currentGraph })
-  const tickets = boundedParallelTicketsOf(frontierOf(graph), input.frame.runControlPolicy)
-  const exactEvidence = ticketDeliveryEvidenceOf(input.frame, input.evidence.facts)
-  const deliveries = ticketDeliveriesOf(tickets, [
-    ...exactEvidence,
-    ...input.evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
-  ])
-  const responsibilityTaskIds = new Map(
-    input.evidence.facts.map((facts) => [workflowResponsibilityKey(facts.responsibility), responsibilityTaskId(facts)])
-  )
-  const legacyTaskIds = new Set<TaskId>([
-    ...input.legacy.transitions.map(runnableTransitionTaskId),
-    ...input.legacy.explanations.flatMap((explanation) => {
-      const taskId = explanationTaskId(explanation, responsibilityTaskIds)
-      return taskId === undefined ? [] : [taskId]
-    })
-  ])
-  const deliveryTaskIds = new Set(deliveries.deliveries.map(({ taskId }) => taskId))
-  const exactResponsibilityKeys = new Set(
-    input.evidence.facts.map(({ responsibility }) => workflowResponsibilityKey(responsibility))
-  )
-  const legacyKeys = new Set(legacyResponsibilityKeys(input.legacy).filter((key) => exactResponsibilityKeys.has(key)))
-  const expectedSituations = new Set(
-    responsibilitySituationKeys(expectedResponsibilityFrontier(input.evidence.facts), exactResponsibilityKeys)
-  )
-  const legacySituations = new Set(responsibilitySituationKeys(input.legacy, exactResponsibilityKeys))
-  return {
-    _tag: "ComparedDeliveryProjection",
+  return comparedDeliveryProjection(input, input.evidence, evaluated)
+}
+
+export const evaluateDeliveryRelation = (input: {
+  readonly exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
+  readonly graph: TrackerGraphState
+  readonly policy: CurrentDeliveryFrame["runControlPolicy"]
+  readonly proposalContributions: ReturnType<typeof deliveryProposalsOf>
+  readonly trackerGraphProposals?: ReadonlyArray<TrackerGraphActionProposal>
+}) =>
+  Effect.gen(function* () {
+    const layerInput = {
+      exactEvidence: currentSignalOf(input.exactEvidence),
+      graph: currentSignalOf(input.graph),
+      policy: currentSignalOf(input.policy),
+      proposalContributions: currentSignalOf(input.proposalContributions),
+      ...(input.trackerGraphProposals === undefined
+        ? {}
+        : { trackerGraphProposals: currentSignalOf(input.trackerGraphProposals) })
+    }
+    const relation = yield* delivery.pipe(Effect.provide(makeDeliveryRelationsLayer(layerInput)))
+    const snapshot = yield* relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+    const proposalFrontier = yield* relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+    return { proposalFrontier, snapshot } satisfies EvaluatedDeliveryShadowRelation
+  })
+
+/** Evaluates the literal flat delivery Effect as a side-effect-free production shadow. */
+const evaluateDeliveryShadowRelation = (input: DeliveryShadowInput) => {
+  const records = input.frame._tag === "JournaledCurrentDeliveryFrame" ? input.frame.workflowHistory.records : []
+  const proposalContributions = deliveryProposalsOf({
     acceptedAt: input.frame._tag === "JournaledCurrentDeliveryFrame" ? input.frame.acceptedAt : null,
-    deliveries,
-    integrationIdentityDifferences: symmetricDifference(
-      exactIntegrationIdentities(exactEvidence),
-      legacyIntegrationIdentities(input.legacy)
-    ),
-    integrationWaitDifferences: symmetricDifference(
-      new Set(input.evidence.integrationWaits.map(integrationWaitIdentity)),
-      new Set(integrationDeliveryWaitsOf(input.legacy).map(integrationWaitIdentity))
-    ),
-    legacyOnlyTaskIds: [...legacyTaskIds].filter((taskId) => !deliveryTaskIds.has(taskId)).toSorted(),
-    newOnlyTaskIds: [...deliveryTaskIds].filter((taskId) => !legacyTaskIds.has(taskId)).toSorted(),
-    responsibilityIdentityDifferences: symmetricDifference(exactResponsibilityKeys, legacyKeys),
-    responsibilitySituationDifferences: symmetricDifference(expectedSituations, legacySituations)
-  }
+    acceptedOperationIds: acceptedOperationIdsOf(records),
+    fresh: input.fresh,
+    integrationResponsibilities:
+      input.frame._tag === "JournaledCurrentDeliveryFrame" ? deriveIntegrationAdmission(records).responsibilities : [],
+    responsibilities: input.frame.responsibility.entries,
+    runId: input.runId,
+    transitions: input.legacy.transitions
+  })
+  const exactEvidence =
+    input.evidence._tag === "AvailableDeliveryProjectionEvidence"
+      ? [
+          ...ticketDeliveryEvidenceOf(input.frame, input.evidence.facts),
+          ...input.evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
+        ]
+      : []
+  return evaluateDeliveryRelation({
+    exactEvidence,
+    graph: TrackerGraphState.cases.GraphEstablished.make({ snapshot: input.frame.currentGraph }),
+    policy: input.frame.runControlPolicy,
+    proposalContributions
+  })
 }
-
-export interface DeliveryShadowDiagnosticsService {
-  /** Records immediately into a bounded process-local sink; it must not perform an Effect or boundary call. */
-  readonly record: (comparison: DeliveryShadowComparison) => void
-}
-
-/** Optional process-local diagnostic sink; absence means the shadow remains silent. */
-export class DeliveryShadowDiagnostics extends Context.Service<
-  DeliveryShadowDiagnostics,
-  DeliveryShadowDiagnosticsService
->()("@dalph/DeliveryShadowDiagnostics") {}
 
 /** Evaluates and records the observational shadow without entering the production failure channel. */
 export const observeDeliveryShadow = (input: DeliveryShadowInput) =>
-  Effect.sync(() => compareDeliveryShadow(input)).pipe(
-    Effect.flatMap((comparison) =>
-      Effect.context<never>().pipe(
-        Effect.flatMap((context) =>
-          Option.match(Context.getOption(context, DeliveryShadowDiagnostics), {
-            onNone: () => Effect.void,
-            onSome: ({ record }) => Effect.sync(() => record(comparison))
-          })
-        )
-      )
-    ),
+  evaluateDeliveryShadowRelation(input).pipe(
+    Effect.map((evaluated) => compareDeliveryShadow(input, evaluated)),
+    Effect.flatMap(recordDeliveryShadowComparison),
     Effect.ignoreCause
   )

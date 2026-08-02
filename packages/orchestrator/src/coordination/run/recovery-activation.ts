@@ -767,24 +767,6 @@ const continuationFreshnessBaselineForTask = (
   return positions.length === 0 ? Option.none() : Option.some(JournalPosition.make(Math.max(...positions)))
 }
 
-export type ContinuationFreshnessScope =
-  | { readonly _tag: "AllRecoveredTasks" }
-  | { readonly _tag: "SpecificTasks"; readonly taskIds: ReadonlySet<TaskId> }
-
-const continuationFreshnessScope = (runState: ReconstructedRunState): ContinuationFreshnessScope => {
-  if (latestCompletedRunPauseCyclePosition(runState) !== undefined) return { _tag: "AllRecoveredTasks" }
-  const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
-  return {
-    _tag: "SpecificTasks",
-    taskIds: new Set(
-      completedTaskPauseCycles(runState).flatMap(({ taskId }) => [
-        taskId,
-        ...(currentGraph?.groupingSubtreeOf(taskId) ?? [])
-      ])
-    )
-  }
-}
-
 const continuationRequiresFreshFacts = (runState: ReconstructedRunState): boolean => {
   return latestCompletedPauseCyclePosition(runState) !== undefined
 }
@@ -1551,8 +1533,6 @@ interface RunRecoveryActivationSource {
   readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryActivationError, never>
   /** True after a Run or task Unpause requires preserved work to discard pre-Unpause process-local stages. */
   readonly readContinuationRequiresFreshFacts: Effect.Effect<boolean, RunRecoveryActivationError, never>
-  /** Recovered tasks whose process-local stages must be discarded after the applicable Unpause. */
-  readonly readContinuationFreshnessScope: Effect.Effect<ContinuationFreshnessScope, RunRecoveryActivationError, never>
   readonly readPauseState: Effect.Effect<ReconstructedPauseState, RunRecoveryActivationError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
     readonly attemptId: AttemptId
@@ -1625,7 +1605,6 @@ export const emptyRunRecoveryActivationLayer = Layer.effect(
           frontier: { explanations: [], transitions: [] }
         }),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set() }),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
@@ -1763,9 +1742,6 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
       ),
       readContinuationRequiresFreshFacts: provideJournal(
         readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
-      ),
-      readContinuationFreshnessScope: provideJournal(
-        readRecoveredRunState(runId).pipe(Effect.map(continuationFreshnessScope))
       ),
       readPauseState: provideJournal(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
       reconstructedPlannedAttemptPositions: [],
@@ -2030,9 +2006,6 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
     ),
     readContinuationRequiresFreshFacts: provideDependencies(
       readRecoveredRunState(runId).pipe(Effect.map(continuationRequiresFreshFacts))
-    ),
-    readContinuationFreshnessScope: provideDependencies(
-      readRecoveredRunState(runId).pipe(Effect.map(continuationFreshnessScope))
     ),
     readPauseState: provideDependencies(readRecoveredRunState(runId).pipe(Effect.map(({ pause }) => pause))),
     reconstructedPlannedAttemptPositions,

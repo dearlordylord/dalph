@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Option, Queue, Ref, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Queue, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { ActivationCause, makeActivationCoordinator } from "./coordinator.js"
 import {
@@ -59,6 +59,144 @@ it.effect("coalesces concurrent triggers into one owner for one exact transition
       expect((yield* controller.snapshot()).reservedTaskIds).toEqual([taskId])
 
       yield* Deferred.succeed(releaseRunner, undefined)
+    })
+  )
+)
+
+it.effect("acknowledges a signal only after the pass assigned to that signal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstReadEntered = yield* Deferred.make<void>()
+      const releaseFirstRead = yield* Deferred.make<void>()
+      const secondReadEntered = yield* Deferred.make<void>()
+      const releaseSecondRead = yield* Deferred.make<void>()
+      const readCount = yield* Ref.make(0)
+      const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController: controller,
+        readFrontier: Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 0
+              ? Deferred.succeed(firstReadEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseFirstRead)))
+              : Deferred.succeed(secondReadEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseSecondRead)))
+          ),
+          Effect.as({ explanations: [], transitions: [] })
+        ),
+        runId: RunId.make("signal-causality-run"),
+        runTransition: () => Effect.void
+      })
+
+      const firstSignal = yield* coordinator.signal(ActivationCause.Startup()).pipe(Effect.forkScoped)
+      yield* Deferred.await(firstReadEntered)
+      const secondSignal = yield* coordinator.signal(ActivationCause.Resume()).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+
+      yield* Deferred.succeed(releaseFirstRead, undefined)
+      yield* Fiber.join(firstSignal)
+      yield* Deferred.await(secondReadEntered)
+
+      expect(secondSignal.pollUnsafe()).toBeUndefined()
+
+      yield* Deferred.succeed(releaseSecondRead, undefined)
+      yield* Fiber.join(secondSignal)
+      expect(yield* Ref.get(readCount)).toBe(2)
+    })
+  )
+)
+
+it.effect("publishes the first wake even when its signalling fiber is interrupted after registration", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registrationReached = yield* Deferred.make<void>()
+      const registrationCount = yield* Ref.make(0)
+      const readCount = yield* Ref.make(0)
+      const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+      const control: ActivationCoordinatorControl = {
+        afterSignalRegistration: Ref.getAndUpdate(registrationCount, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 0
+              ? Deferred.succeed(registrationReached, undefined).pipe(Effect.andThen(Effect.yieldNow))
+              : Effect.void
+          )
+        ),
+        checkpoint: () => Effect.void
+      }
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController: controller,
+        control,
+        readFrontier: Ref.update(readCount, (count) => count + 1).pipe(
+          Effect.as({ explanations: [], transitions: [] })
+        ),
+        runId: RunId.make("interrupted-signal-registration-run"),
+        runTransition: () => Effect.void
+      })
+
+      const interruptedSignal = yield* coordinator.signal(ActivationCause.Startup()).pipe(Effect.forkScoped)
+      yield* Deferred.await(registrationReached)
+      yield* Fiber.interrupt(interruptedSignal)
+
+      yield* coordinator.signal(ActivationCause.Resume()).pipe(Effect.timeout("1 second"))
+
+      expect(yield* Ref.get(readCount)).toBeGreaterThanOrEqual(1)
+    })
+  )
+)
+
+it.effect("keeps stale frontier snapshots from readmitting a runner whose ownership is being released", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const taskId = TaskId.make("stale-owner-task")
+      const transition = freshTransition(taskId)
+      const frontier = yield* Ref.make<ReadonlyArray<RunnableFrontierTransition>>([transition])
+      const readCount = yield* Ref.make(0)
+      const runnerCount = yield* Ref.make(0)
+      const runnerStarted = yield* Deferred.make<void>()
+      const releaseRunner = yield* Deferred.make<void>()
+      const staleReadEntered = yield* Deferred.make<void>()
+      const releaseStaleRead = yield* Deferred.make<void>()
+      const operationReturned = yield* Deferred.make<void>()
+      const ownershipReleased = yield* Deferred.make<void>()
+      const controller = yield* makeTaskAdmissionController({ capacity: TaskWorkCapacity.make(1) })
+      const control: ActivationCoordinatorControl = {
+        checkpoint: (checkpoint) =>
+          checkpoint._tag === "OperationReturned"
+            ? Deferred.succeed(operationReturned, undefined)
+            : checkpoint._tag === "OwnershipReleased"
+              ? Deferred.succeed(ownershipReleased, undefined)
+              : Effect.void
+      }
+      const coordinator = yield* makeActivationCoordinator({
+        admissionController: controller,
+        control,
+        readFrontier: Effect.gen(function* () {
+          const snapshot = yield* Ref.get(frontier)
+          const index = yield* Ref.getAndUpdate(readCount, (count) => count + 1)
+          if (index === 1) {
+            yield* Deferred.succeed(staleReadEntered, undefined)
+            yield* Deferred.await(releaseStaleRead)
+          }
+          return { explanations: [], transitions: snapshot }
+        }),
+        runId: RunId.make("stale-owner-run"),
+        runTransition: () =>
+          Ref.update(runnerCount, (count) => count + 1).pipe(
+            Effect.andThen(Deferred.succeed(runnerStarted, undefined)),
+            Effect.andThen(Deferred.await(releaseRunner)),
+            Effect.andThen(Ref.set(frontier, []))
+          )
+      })
+
+      const startup = yield* coordinator.signal(ActivationCause.Startup()).pipe(Effect.forkScoped)
+      yield* Deferred.await(runnerStarted)
+      yield* Deferred.await(staleReadEntered)
+      yield* Deferred.succeed(releaseRunner, undefined)
+      yield* Deferred.await(operationReturned)
+
+      yield* Deferred.succeed(releaseStaleRead, undefined)
+      yield* Fiber.join(startup)
+      yield* Deferred.await(ownershipReleased)
+
+      expect(yield* Ref.get(runnerCount)).toBe(1)
     })
   )
 )

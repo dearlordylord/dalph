@@ -1,42 +1,15 @@
-import { Data, Option } from "effect"
-import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import { Option } from "effect"
+import type { AttemptId, TaskId } from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
-import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-relation.js"
 import type { SyntheticWorkflowFact } from "./fresh-workflow-fact.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
-
-/** One fresh task's next workflow operation, derived without a successor callback. */
-export type FreshWorkflowStep = Data.TaggedEnum<{
-  ReadCurrentTaskGraph: { readonly predecessorOperationId: OperationId; readonly task: Task }
-  AcquireTaskClaim: { readonly predecessorOperationId: OperationId; readonly task: Task }
-  ReadPostClaimGraph: {
-    readonly claimOperation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
-    readonly predecessorOperationId: OperationId
-    readonly task: Task
-  }
-  ReadTaskWorkSpecification: { readonly predecessorOperationId: OperationId; readonly task: Task }
-  RecordTaskAttemptPlan: {
-    readonly predecessorOperationId: OperationId
-    readonly specification: TaskWorkSpecification
-    readonly task: Task
-  }
-  ReconcileTaskWorktree: {
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly predecessorOperationId: OperationId
-    readonly task: Task
-  }
-  StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt; readonly task: Task }
-  ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt; readonly task: Task }
-}>
-
-export const FreshWorkflowStep = Data.taggedEnum<FreshWorkflowStep>()
+import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -45,7 +18,7 @@ const otherWorkflowOperationRank = 3
 const executorWorkRank = 4
 
 export interface FreshWorkflowDecision {
-  readonly step: FreshWorkflowStep
+  readonly step: FreshWorkflowStepType
   readonly transition: Transition
 }
 
@@ -57,7 +30,7 @@ const responsibilityTaskId = (responsibility: WorkflowResponsibilityEntry): Task
 const continued = (taskId: TaskId, predecessorOperationId: OperationId): Transition =>
   RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId: predecessorOperationId, taskId })
 
-const decisionFor = (step: FreshWorkflowStep): FreshWorkflowDecision => ({
+const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
   step,
   transition:
     step._tag === "AcquireTaskClaim"
@@ -85,7 +58,7 @@ const journaledStepFor = (
   records: ReadonlyArray<JournalRecord>,
   currentGraphOperationId: OperationId,
   recoveredAttemptIds: ReadonlySet<AttemptId>
-): FreshWorkflowStep => {
+): FreshWorkflowStepType => {
   const executorResponsibility = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === task.id
@@ -202,7 +175,7 @@ const syntheticStepFor = (
   task: Task,
   facts: ReadonlyArray<SyntheticWorkflowFact>,
   currentGraphOperationId: OperationId
-): FreshWorkflowStep | undefined => {
+): FreshWorkflowStepType | undefined => {
   const fact = facts.findLast(({ taskId }) => taskId === task.id)
   if (fact === undefined) {
     return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: currentGraphOperationId, task })
@@ -348,7 +321,7 @@ export const deriveFreshWorkflowDecisions = (
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
     return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
   }
-  const rank = (step: FreshWorkflowStep): number =>
+  const rank = (step: FreshWorkflowStepType): number =>
     step._tag === "ReadPostClaimGraph"
       ? postClaimGraphRank
       : step._tag === "AcquireTaskClaim"

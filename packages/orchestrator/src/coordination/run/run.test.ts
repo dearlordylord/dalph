@@ -92,7 +92,6 @@ effectIt.effect("starts a production Run by recording its identity before readin
         readResponsibility: Effect.succeed({ entries: [] }),
         readDeliveryProjection: unavailableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
@@ -168,7 +167,6 @@ effectIt.effect("rejects a second fresh start for the same Run before any tracke
         readResponsibility: Effect.succeed({ entries: [] }),
         readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
         reconstructedPlannedAttemptPositions: [],
         waitForNextExecutorWake: Effect.void
@@ -241,7 +239,6 @@ effectIt.effect("recovers a Run that crashed immediately after its beginning was
         readResponsibility: Effect.succeed({ entries: [] }),
         readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
         reconstructedPlannedAttemptPositions: [],
         runId,
@@ -293,7 +290,6 @@ effectIt.effect("rejects recovery of a terminated Run before any tracker read", 
         readResponsibility: Effect.succeed({ entries: [] }),
         readDeliveryProjection: availableDeliveryProjection(),
         readContinuationRequiresFreshFacts: Effect.succeed(false),
-        readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
         readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } } as const),
         reconstructedPlannedAttemptPositions: [],
         runId,
@@ -395,7 +391,6 @@ effectIt.effect("keeps a membership-constrained recovered Run active after a qui
       readResponsibility: Effect.succeed(responsibility),
       readDeliveryProjection: availableDeliveryProjection(membershipFrontier),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
-      readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
       reconstructedPlannedAttemptPositions: [],
       runId,
@@ -462,7 +457,6 @@ effectIt.effect("runs an authoritative recovered transition in the shared activa
         Effect.flatMap((frontier) => availableDeliveryProjection(frontier))
       ),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
-      readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
       reconstructedPlannedAttemptPositions: [
         { attemptId: plannedAttempt.attemptId, runId, taskId: plannedAttempt.taskId }
@@ -612,7 +606,6 @@ effectIt.effect("runs the authoritative fresh claim path through one complete at
         Effect.flatMap((frontier) => availableDeliveryProjection(frontier))
       ),
       readContinuationRequiresFreshFacts: Effect.succeed(false),
-      readContinuationFreshnessScope: Effect.succeed({ _tag: "SpecificTasks", taskIds: new Set<TaskId>() } as const),
       readPauseState: Effect.succeed({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }),
       reconstructedPlannedAttemptPositions: [],
       waitForNextExecutorWake: Effect.void

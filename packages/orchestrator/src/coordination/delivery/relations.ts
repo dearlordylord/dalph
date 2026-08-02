@@ -18,6 +18,23 @@ import type {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
+import type {
+  DeliveryActionProposal,
+  DeliveryProposalContributions,
+  DeliveryProposalDerivationIssue,
+  DeliveryProposalId,
+  DeliveryProposalOwner,
+  TrackerGraphActionProposal
+} from "./delivery-proposal.js"
+
+export type {
+  DeliveryActionProposal,
+  DeliveryAdmissionRequirements,
+  DeliveryProposalId,
+  DeliveryProposalOrderEvidence,
+  DeliveryProposalOwner,
+  TrackerGraphActionProposal
+} from "./delivery-proposal.js"
 
 /** A descriptive latest-value source. Observing it never performs a Dalph action. */
 export interface CurrentSignal<A, E = never> {
@@ -229,14 +246,6 @@ export const makeDeliveryReflection = (source: DeliverySettlements): DeliveryRef
   source
 })
 
-const DeliveryActionProposalTypeId: unique symbol = Symbol("DeliveryActionProposal")
-
-/** Pure next-action description; constructing or observing it performs no action. */
-export interface DeliveryActionProposal {
-  readonly [DeliveryActionProposalTypeId]: typeof DeliveryActionProposalTypeId
-  readonly _tag: "DeliveryActionProposal"
-}
-
 export class TrackerGraphRelationError extends Schema.TaggedErrorClass<TrackerGraphRelationError>()(
   "TrackerGraphRelationError",
   { summary: Schema.String }
@@ -257,7 +266,7 @@ export class DeliveryReflectionError extends Schema.TaggedErrorClass<DeliveryRef
 ) {}
 
 export interface TrackerGraphRelationService {
-  readonly proposedActions: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, TrackerGraphRelationError>
+  readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, TrackerGraphRelationError>
   readonly signal: CurrentSignal<TrackerGraphState, TrackerGraphRelationError>
 }
 
@@ -271,6 +280,10 @@ export interface TicketDeliveryRelation<E = TicketDeliveryError> {
   readonly current: CurrentSignal<TicketDeliveries, E>
   /** Pure exact next actions; observing them acquires no position and performs no request. */
   readonly proposedActions: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, E>
+  /** One coherent derivation supplies both ticket and settlement-owned proposal partitions. */
+  readonly proposalContributions: CurrentSignal<DeliveryProposalContributions, E>
+  /** The checked desired-ticket relation from which this lifecycle was reconciled. */
+  readonly source: CurrentSignal<BoundedParallelTickets, E>
 }
 
 export interface DeliverySettlementRelation<E = DeliverySettlementError> {
@@ -278,6 +291,10 @@ export interface DeliverySettlementRelation<E = DeliverySettlementError> {
   readonly current: CurrentSignal<DeliverySettlements, E>
   /** Pure integration/disposition actions that may eventually establish settlement. */
   readonly proposedActions: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, E>
+  /** The unchanged coherent partitions inherited from ticket reconciliation. */
+  readonly proposalContributions: CurrentSignal<DeliveryProposalContributions, E>
+  /** The complete ticket-delivery relation retained for later composition. */
+  readonly source: TicketDeliveryRelation<E>
 }
 
 export interface DeliveryReflectionRelation<E = DeliveryReflectionError> {
@@ -285,6 +302,133 @@ export interface DeliveryReflectionRelation<E = DeliveryReflectionError> {
   readonly current: CurrentSignal<DeliveryReflection, E>
   /** Pure tracker-reflection actions; the current empty settlement set produces none. */
   readonly proposedActions: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, E>
+  /** The settlement relation from which tracker reflection was projected. */
+  readonly source: DeliverySettlementRelation<E>
+}
+
+/** Two lower relations claimed ownership of the same exact proposed action. */
+export interface DeliveryProposalOwnershipConflict {
+  readonly id: DeliveryProposalId
+  readonly owners: readonly [DeliveryProposalOwner, DeliveryProposalOwner, ...ReadonlyArray<DeliveryProposalOwner>]
+}
+
+/** The immutable proposal frontier either authorizes its order or fails closed as a value. */
+export type DeliveryProposalFrontier =
+  | {
+      readonly _tag: "DeliveryProposalsAvailable"
+      readonly isolatedIssues: ReadonlyArray<DeliveryProposalDerivationIssue>
+      readonly proposals: ReadonlyArray<DeliveryActionProposal>
+    }
+  | {
+      readonly _tag: "DeliveryProposalOwnershipConflict"
+      readonly conflicts: readonly [
+        DeliveryProposalOwnershipConflict,
+        ...ReadonlyArray<DeliveryProposalOwnershipConflict>
+      ]
+    }
+
+/** One coherent current value assembled from every relation visible in the flat Effect. */
+export interface DeliveryRuntimeSnapshot {
+  readonly _tag: "DeliveryRuntimeSnapshot"
+  readonly reflection: DeliveryReflection
+  readonly settlements: DeliverySettlements
+  readonly ticketDeliveries: TicketDeliveries
+  readonly trackerGraph: TrackerGraphState
+}
+
+/** Process-local reason for the runtime to request a fresh evaluation of descriptive relations. */
+export type DeliveryInvalidation =
+  | { readonly _tag: "AcceptedFactsChanged" }
+  | { readonly _tag: "ProposalCompleted"; readonly proposalId: DeliveryProposalId }
+  | { readonly _tag: "QuiescenceProbeRequested" }
+
+export interface DeliveryRuntimeRelation<E = DeliveryReflectionError> {
+  readonly current: CurrentSignal<DeliveryRuntimeSnapshot, E>
+  readonly invalidate: (cause: DeliveryInvalidation) => Effect.Effect<void>
+  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
+}
+
+const proposalOrdinal = (proposal: DeliveryActionProposal): number =>
+  proposal.order._tag === "TrackerGraphOrder" ? Number.MAX_SAFE_INTEGER : proposal.order.frontierOrdinal
+
+const trackerProposalsFor = (
+  graph: TrackerGraphState,
+  proposals: ReadonlyArray<TrackerGraphActionProposal>
+): ReadonlyArray<TrackerGraphActionProposal> =>
+  proposals.filter(({ route }) =>
+    graph._tag === "GraphNotEstablished"
+      ? route.purpose === "EstablishCurrentGraph"
+      : route.purpose === "QuiescenceProbe"
+  )
+
+/** Combines lower owners without consulting live positions or silently deduplicating identities. */
+export const deliveryProposalFrontierOf = (
+  contributions: ReadonlyArray<ReadonlyArray<DeliveryActionProposal>>,
+  issues: ReadonlyArray<DeliveryProposalDerivationIssue> = []
+): DeliveryProposalFrontier => {
+  const proposals = contributions.flat().toSorted((left, right) => {
+    const byOrdinal = proposalOrdinal(left) - proposalOrdinal(right)
+    return byOrdinal !== 0 ? byOrdinal : left.id.localeCompare(right.id)
+  })
+  const firstById = new Map<DeliveryProposalId, DeliveryActionProposal>()
+  const conflictsById = new Map<DeliveryProposalId, DeliveryProposalOwnershipConflict>()
+  for (const proposal of proposals) {
+    const first = firstById.get(proposal.id)
+    if (first === undefined) {
+      firstById.set(proposal.id, proposal)
+      continue
+    }
+    const conflict = conflictsById.get(proposal.id)
+    conflictsById.set(
+      proposal.id,
+      conflict === undefined
+        ? { id: proposal.id, owners: [first.owner, proposal.owner] }
+        : { id: proposal.id, owners: [...conflict.owners, proposal.owner] }
+    )
+  }
+  const conflicts = [...conflictsById.values()]
+  const [firstConflict, ...remainingConflicts] = conflicts
+  return firstConflict === undefined
+    ? { _tag: "DeliveryProposalsAvailable", isolatedIssues: issues, proposals }
+    : { _tag: "DeliveryProposalOwnershipConflict", conflicts: [firstConflict, ...remainingConflicts] }
+}
+
+/** Assembles the final descriptive value and pure proposal frontier returned by the flat Effect. */
+export const makeDeliveryRuntimeRelation = <E>(input: {
+  readonly reflection: DeliveryReflectionRelation<E>
+  readonly trackerGraph: TrackerGraphRelationService
+  readonly invalidate?: DeliveryRuntimeRelation<E>["invalidate"]
+}): DeliveryRuntimeRelation<E | TrackerGraphRelationError> => {
+  const snapshot = mapCurrentSignal(input.reflection.current, (reflection) => ({
+    _tag: "DeliveryRuntimeSnapshot" as const,
+    reflection,
+    settlements: reflection.source,
+    ticketDeliveries: reflection.source.source,
+    trackerGraph: reflection.source.source.source.source.source
+  }))
+  const lower = input.reflection.source.source
+  const contributions = zipCurrentSignals(
+    snapshot,
+    zipCurrentSignals(
+      input.trackerGraph.proposedActions,
+      zipCurrentSignals(lower.proposalContributions, input.reflection.proposedActions)
+    )
+  )
+  return {
+    current: snapshot,
+    invalidate: input.invalidate ?? (() => Effect.void),
+    proposedActions: mapCurrentSignal(contributions, ([current, [tracker, [lowerContributions, reflection]]]) =>
+      deliveryProposalFrontierOf(
+        [
+          trackerProposalsFor(current.trackerGraph, tracker),
+          lowerContributions.ticketDelivery,
+          lowerContributions.deliverySettlement,
+          reflection
+        ],
+        lowerContributions.issues
+      )
+    )
+  }
 }
 
 export interface BoundedParallelTicketsProjectionService {
@@ -325,6 +469,17 @@ export class DeliveryReflectionProjection extends Context.Service<
   DeliveryReflectionProjectionService
 >()("@dalph/DeliveryReflectionProjection") {}
 
+export interface DeliveryRuntimeAssemblyService {
+  readonly of: <E>(input: {
+    readonly reflection: DeliveryReflectionRelation<E>
+    readonly trackerGraph: TrackerGraphRelationService
+  }) => DeliveryRuntimeRelation<E | TrackerGraphRelationError>
+}
+
+export class DeliveryRuntimeAssembly extends Context.Service<DeliveryRuntimeAssembly, DeliveryRuntimeAssemblyService>()(
+  "@dalph/DeliveryRuntimeAssembly"
+) {}
+
 /** Hides policy projection while preserving the flat delivery-level sentence. */
 export const boundedParallelTickets = Effect.fn("Delivery.boundedParallelTickets")(function* <E>(
   frontier: CurrentSignal<DeliveryFrontier, E>
@@ -349,10 +504,12 @@ export const deliverySettlements = Effect.fn("Delivery.deliverySettlements")(fun
   return projection.of(deliveries)
 })
 
-/** Projects only established settlements toward tracker reflection. */
+/** Projects established settlements, then assembles the final descriptive runtime relation. */
 export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySettlements")(function* <E>(
   settlements: DeliverySettlementRelation<E>
 ) {
   const projection = yield* DeliveryReflectionProjection
-  return projection.of(settlements)
+  const assembly = yield* DeliveryRuntimeAssembly
+  const trackerGraph = yield* TrackerGraphRelation
+  return assembly.of({ reflection: projection.of(settlements), trackerGraph })
 })

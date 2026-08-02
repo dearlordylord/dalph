@@ -144,6 +144,19 @@ describe("#181 graph and bounded projections", () => {
     ])
   })
 
+  it("sorts multiple incomplete prerequisites into deterministic task order", () => {
+    const prerequisiteB = TaskId.make("B")
+    const prerequisiteC = TaskId.make("C")
+    const frontier = frontierOf(
+      graph([task("A", TaskLifecycle.cases.Open.make({}), [prerequisiteC, prerequisiteB]), task("B"), task("C")])
+    )
+
+    expect(frontier.standings.find(({ taskId }) => taskId === TaskId.make("A"))).toMatchObject({
+      _tag: "Excluded",
+      reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [prerequisiteB, prerequisiteC] }]
+    })
+  })
+
   it("selects deterministic lexical candidates and retains the complete outside-bound explanation", () => {
     const bounded = boundedParallelTicketsOf(frontierOf(graph([task("C"), task("A"), task("B")])), policy(2))
 
@@ -408,5 +421,18 @@ describe("#181 ticket-delivery positive and negative space", () => {
     expect(result.deliveries.find(({ taskId }) => taskId === TaskId.make("B"))?.standings).toEqual([
       { _tag: "ProposedDelivery" }
     ])
+  })
+
+  it("reports each distinct duplicate evidence identity once", () => {
+    const taskA = TaskId.make("A")
+    const executor = exactExecutorEvidence(taskA)
+    const claim = exactClaimEvidence(taskA)
+    const result = project([task("A")], 1, [executor, executor, claim, claim])
+    const conflict = result.deliveries[0]?.standings.find(({ _tag }) => _tag === "ExactEvidenceConflict")
+
+    expect(conflict).toMatchObject({ _tag: "ExactEvidenceConflict" })
+    if (conflict?._tag !== "ExactEvidenceConflict") return expect.fail("duplicate evidence must be isolated")
+    expect(conflict.evidenceIdentities).toHaveLength(2)
+    expect(new Set(conflict.evidenceIdentities).size).toBe(2)
   })
 })

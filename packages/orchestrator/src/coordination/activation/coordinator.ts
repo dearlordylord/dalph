@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Activation ownership, its controlled production boundaries, and scoped cleanup remain one domain owner. */
-import { Data, Deferred, Effect, Exit, Option, Queue, Ref, Schema } from "effect"
+import { Data, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore } from "effect"
 import type * as Scope from "effect/Scope"
 import {
   SelectedTransitionIdentity as SelectedTransitionIdentitySchema,
@@ -142,6 +142,7 @@ type ActivationCoordinatorCheckpoint =
     }
 
 interface ActivationCoordinatorControl {
+  readonly afterSignalRegistration?: Effect.Effect<void>
   readonly attemptCompetingOwnershipRegistration?: (attempt: Effect.Effect<void>) => Effect.Effect<void>
   readonly checkpoint: (
     checkpoint: ActivationCoordinatorCheckpoint
@@ -289,6 +290,7 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
     readonly closed: boolean
   }>({ acknowledgements: [], closed: false })
   const ownership = yield* makeActivationOwnershipRegistry(input.runId)
+  const selectionGate = yield* Semaphore.make(1)
   const checkpoint = (
     make: (observation: ActivationCoordinatorObservation) => ActivationCoordinatorCheckpoint
   ): Effect.Effect<void, ActivationCoordinatorCheckpointFailure> => {
@@ -299,17 +301,25 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
     )
   }
 
-  const signal = Effect.fn("ActivationCoordinator.signal")(function* (cause: ActivationCause) {
-    const acknowledgement = yield* Deferred.make<void, ActivationCoordinatorClosed>()
-    const accepted = yield* Ref.modify(signalState, (current) =>
-      current.closed
-        ? ([false, current] as const)
-        : ([true, { ...current, acknowledgements: [...current.acknowledgements, acknowledgement] }] as const)
+  const signal = Effect.fn("ActivationCoordinator.signal")((cause: ActivationCause) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const acknowledgement = yield* Deferred.make<void, ActivationCoordinatorClosed>()
+        const accepted = yield* Ref.modify(signalState, (current) =>
+          current.closed
+            ? ([Option.none<boolean>(), current] as const)
+            : ([
+                Option.some(current.acknowledgements.length === 0),
+                { ...current, acknowledgements: [...current.acknowledgements, acknowledgement] }
+              ] as const)
+        )
+        if (Option.isNone(accepted)) return yield* new ActivationCoordinatorClosed()
+        yield* input.control?.afterSignalRegistration ?? Effect.void
+        if (accepted.value) yield* Queue.offer(triggers, cause)
+        yield* restore(Deferred.await(acknowledgement))
+      })
     )
-    if (!accepted) return yield* new ActivationCoordinatorClosed()
-    yield* Queue.offer(triggers, cause)
-    yield* Deferred.await(acknowledgement)
-  })
+  )
 
   const runOwnedTransition = (key: string, entry: ActivationOwnershipEntry): Effect.Effect<void, never, R> => {
     const settleRunnerAdmission = (owned: ActivationOwnershipEntry): Effect.Effect<void> => {
@@ -367,18 +377,22 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
               runnerExit,
               transition: entry.transition
             })).pipe(Effect.orDie)
-            yield* settleRunnerAdmission(owned)
-            yield* ownership.remove(key)
-            if (Exit.isFailure(exit)) {
-              yield* Ref.update(retryWaitKeys, (keys) => new Set(keys).add(key))
-            }
-            yield* checkpoint((observation) => ({
-              _tag: "OwnershipReleased",
-              observation,
-              operationId,
-              runnerExit,
-              transition: entry.transition
-            })).pipe(Effect.orDie)
+            yield* selectionGate.withPermit(
+              Effect.gen(function* () {
+                yield* settleRunnerAdmission(owned)
+                yield* ownership.remove(key)
+                if (Exit.isFailure(exit)) {
+                  yield* Ref.update(retryWaitKeys, (keys) => new Set(keys).add(key))
+                }
+                yield* checkpoint((observation) => ({
+                  _tag: "OwnershipReleased",
+                  observation,
+                  operationId,
+                  runnerExit,
+                  transition: entry.transition
+                })).pipe(Effect.orDie)
+              })
+            )
             if (Exit.isSuccess(exit)) {
               yield* signal(ActivationCause.WorkflowResultRecorded()).pipe(
                 Effect.catchTag("ActivationCoordinatorClosed", () => Effect.void)
@@ -491,44 +505,64 @@ export const makeActivationCoordinator = Effect.fn("ActivationCoordinator.make")
     )
   )
 
-  const runPass = Effect.fn("ActivationCoordinator.runPass")(function* () {
-    const frontier = yield* input.readFrontier
-    yield* checkpoint((observation) => ({ _tag: "FrontierDerived", frontier, observation })).pipe(Effect.orDie)
-    const waiting = yield* Ref.get(retryWaitKeys)
-    const selectable = yield* ownership.exclude({
-      ...frontier,
-      transitions: frontier.transitions.filter(
-        (transition) => !waiting.has(selectedTransitionKey(makeSelectedTransitionIdentity(input.runId, transition)))
+  const runPass = Effect.fn("ActivationCoordinator.runPass")(() =>
+    selectionGate
+      .withPermit(
+        Effect.gen(function* () {
+          const frontier = yield* input.readFrontier
+          yield* checkpoint((observation) => ({ _tag: "FrontierDerived", frontier, observation })).pipe(Effect.orDie)
+          const waiting = yield* Ref.get(retryWaitKeys)
+          const selectable = yield* ownership.exclude({
+            ...frontier,
+            transitions: frontier.transitions.filter(
+              (transition) =>
+                !waiting.has(selectedTransitionKey(makeSelectedTransitionIdentity(input.runId, transition)))
+            )
+          })
+          const exclusionCheckpoint = yield* checkpoint((observation) => ({
+            _tag: "OwnedTransitionsExcluded",
+            frontier: selectable,
+            observation
+          })).pipe(Effect.result)
+          if (exclusionCheckpoint._tag === "Failure") return false
+          return yield* handoff(selectable)
+        })
       )
-    })
-    const exclusionCheckpoint = yield* checkpoint((observation) => ({
-      _tag: "OwnedTransitionsExcluded",
-      frontier: selectable,
-      observation
-    })).pipe(Effect.result)
-    if (exclusionCheckpoint._tag === "Failure") return false
-    const started = yield* handoff(selectable)
-    if (!started) return false
-    // Let the newly scoped child reach its first boundary before this pass
-    // acknowledges startup; deterministic clocks can then observe its schedule.
-    yield* Effect.yieldNow
-    return started
-  })
+      .pipe(
+        Effect.tap((started) =>
+          // Release selection before giving the new child a turn. A runner that
+          // already returned can then settle ownership before the next read.
+          started ? Effect.yieldNow : Effect.void
+        )
+      )
+  )
 
   const runTriggeredPasses = Effect.fn("ActivationCoordinator.runTriggeredPasses")(function* () {
     for (;;) {
       yield* Queue.take(triggers)
-      yield* Ref.set(retryWaitKeys, new Set())
-      while (yield* runPass()) {
-        // Each established handoff causes a fresh read before another choice.
-      }
+      // Freeze the callers represented by this wake before reading any
+      // boundary. A later signal cannot be acknowledged by an older pass.
       const acknowledgements = yield* Ref.modify(
         signalState,
         (current) => [current.acknowledgements, { ...current, acknowledgements: [] }] as const
       )
-      yield* Effect.forEach(acknowledgements, (acknowledgement) => Deferred.succeed(acknowledgement, undefined), {
-        discard: true
-      })
+      yield* Effect.gen(function* () {
+        yield* Ref.set(retryWaitKeys, new Set())
+        while (yield* runPass()) {
+          // Each established handoff causes a fresh read before another choice.
+        }
+        yield* Effect.forEach(acknowledgements, (acknowledgement) => Deferred.succeed(acknowledgement, undefined), {
+          discard: true
+        })
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.forEach(
+            acknowledgements,
+            (acknowledgement) => Deferred.fail(acknowledgement, new ActivationCoordinatorClosed()),
+            { discard: true }
+          ).pipe(Effect.andThen(Effect.failCause(cause)))
+        )
+      )
     }
   })
 

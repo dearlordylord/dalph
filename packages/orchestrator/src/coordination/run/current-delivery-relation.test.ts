@@ -65,7 +65,7 @@ const installGateway = Effect.fn("CurrentDeliveryRelationTest.installGateway")(f
   const storage = yield* JournalStore
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-  return yield* makeAcceptedFactPublicationGateway(runId, initial, storage)
+  return yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
 })
 
 it.effect("reads only complete graph knowledge published through the gateway", () =>

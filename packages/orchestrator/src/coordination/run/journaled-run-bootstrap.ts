@@ -134,6 +134,7 @@ export const journaledRunBootstrapLayer = (
 
       const runWithGateway = <E, R>(
         runId: RunId,
+        target: Parameters<JournaledRunBootstrapService["fresh"]>[0],
         initial: ValidWorkflowJournalHistory,
         startup: "Fresh" | "Recovered",
         program: Effect.Effect<RunFinalityDecision, E, R>
@@ -145,7 +146,7 @@ export const journaledRunBootstrapLayer = (
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
               const gateway = downstream.pipe(
-                Layer.provideMerge(acceptedFactPublicationGatewayLayer(runId, initial, storage))
+                Layer.provideMerge(acceptedFactPublicationGatewayLayer(runId, target, initial, storage))
               )
               const context = yield* Layer.build(gateway)
               const controls: RuntimeControls = {
@@ -176,7 +177,7 @@ export const journaledRunBootstrapLayer = (
             yield* inspectStartupRecovery(runId, lifecycle)
             yield* lifecycle.beginRun(runId, target, initialControlPolicy)
             const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithGateway(runId, initial, "Fresh", program))
+            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Fresh", program))
           })
         )
 
@@ -187,7 +188,7 @@ export const journaledRunBootstrapLayer = (
             const runId = current?.runId ?? expectedRunId
             yield* lifecycle.readRunForRecovery(runId, target)
             const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithGateway(runId, initial, "Recovered", program))
+            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Recovered", program))
           })
         )
 

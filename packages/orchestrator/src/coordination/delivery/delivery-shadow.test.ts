@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import {
   AcceptedResult,
   AttemptId,
@@ -21,6 +22,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import {
   TaskLifecycle,
   TrackerRevision,
@@ -39,7 +41,10 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { UnqueuedAcceptedResult } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  StartedIntegrationResponsibility,
+  UnqueuedAcceptedResult
+} from "../../workflow/protocols/integration-admission/protocol.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -67,12 +72,17 @@ import type { CurrentDeliveryFrame } from "../run/current-delivery-relation.js"
 import {
   compareDeliveryShadow,
   DeliveryShadowDiagnostics,
+  type DeliveryShadowComparison,
   ticketDeliveryEvidenceOf,
   observeDeliveryShadow
 } from "./delivery-shadow.js"
+import { observeBoundaryDeliveryShadow } from "./boundary-delivery-shadow.js"
+import { observeQuiescenceDeliveryShadow } from "./quiescence-delivery-shadow.js"
 import { currentSignalOf, makeDeliveryReflection, makeDeliverySettlements, TrackerGraphState } from "./relations.js"
 import { delivery } from "./delivery.js"
-import { makeInMemoryDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { FreshWorkflowStep } from "./fresh-workflow-step.js"
+import { observeDeliveryShadowWithinTurn } from "./delivery-shadow-budget.js"
 
 const taskA = TaskId.make("A")
 const taskB = TaskId.make("B")
@@ -204,6 +214,8 @@ it.effect("compares accepted responsibility facts independently from the legacy 
       transitions: [RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt: attempt(taskB) })]
     }
     const comparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: undefined,
       acceptedBefore: undefined,
       evidence: availableEvidence(null, facts),
@@ -221,8 +233,75 @@ it.effect("compares accepted responsibility facts independently from the legacy 
     expect(comparison.newOnlyTaskIds).toEqual([])
     expect(comparison.integrationIdentityDifferences).toEqual([])
     expect(comparison.integrationWaitDifferences).toEqual([])
+    expect(comparison.proposalPresenceDifferences).toEqual([])
+    expect(comparison.proposalFrontier._tag).toBe("DeliveryProposalsAvailable")
     expect(comparison.responsibilityIdentityDifferences).toEqual([])
     expect(comparison.responsibilitySituationDifferences).toEqual([])
+  })
+)
+
+it.effect("compares duplicate proposal ownership as a conflict that authorizes no route", () =>
+  Effect.gen(function* () {
+    const frame = syntheticFrame(yield* graph())
+    const plannedAttempt = attempt(taskA)
+    const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+    const comparison = compareDeliveryShadow({
+      acceptedAfter: undefined,
+      acceptedBefore: undefined,
+      evidence: availableEvidence(null, [executorFacts(taskA, ResponsibilityDisposition.Ready())]),
+      frame,
+      fresh: [],
+      legacy: { explanations: [], transitions: [transition, transition, transition] },
+      runId
+    })
+
+    expect(comparison).toMatchObject({
+      _tag: "ComparedDeliveryProjection",
+      proposalFrontier: {
+        _tag: "DeliveryProposalOwnershipConflict",
+        conflicts: [{ owners: ["TicketDelivery", "TicketDelivery", "TicketDelivery"] }]
+      }
+    })
+  })
+)
+
+it.effect("preserves the fresh executor route instead of inferring provenance from its shared transition tag", () =>
+  Effect.gen(function* () {
+    const frame = syntheticFrame(yield* graph())
+    const plannedAttempt = attempt(taskA)
+    const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+    const comparison = compareDeliveryShadow({
+      acceptedAfter: undefined,
+      acceptedBefore: undefined,
+      evidence: availableEvidence(),
+      frame,
+      fresh: [
+        {
+          step: FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
+            plannedAttempt,
+            task: Option.getOrThrow(
+              Option.fromUndefinedOr(frame.currentGraph.eligibleTasks().find(({ id }) => id === taskA))
+            )
+          }),
+          transition
+        }
+      ],
+      legacy: { explanations: [], transitions: [transition] },
+      runId
+    })
+
+    expect(comparison._tag).toBe("ComparedDeliveryProjection")
+    if (comparison._tag !== "ComparedDeliveryProjection") return
+    expect(comparison.proposalPresenceDifferences).toEqual([])
+    expect(comparison.proposalFrontier).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [
+        {
+          actionIdentity: { _tag: "NoWorkflowOperationIdentity" },
+          route: { _tag: "FreshExecutorWorkflowRoute", step: { _tag: "ContinuePlannedAttemptExecutorWork" } }
+        }
+      ]
+    })
   })
 )
 
@@ -232,6 +311,8 @@ it.effect("distinguishes missing epoch evidence from a mixed accepted epoch", ()
     const journaled = withHistory(base, terminalAcceptedRecords())
     expect(
       compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: undefined,
         acceptedBefore: undefined,
         evidence: availableEvidence(),
@@ -241,6 +322,8 @@ it.effect("distinguishes missing epoch evidence from a mixed accepted epoch", ()
     ).toMatchObject({ _tag: "SkippedDeliveryProjectionEpochUnavailable" })
     expect(
       compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: JournalPosition.make(3),
         acceptedBefore: JournalPosition.make(2),
         evidence: availableEvidence(JournalPosition.make(2)),
@@ -250,6 +333,8 @@ it.effect("distinguishes missing epoch evidence from a mixed accepted epoch", ()
     ).toEqual({ _tag: "SkippedMixedAcceptedEpoch", after: 3, before: 2, frame: 2, responsibilities: 2 })
     expect(
       compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: JournalPosition.make(2),
         acceptedBefore: JournalPosition.make(2),
         evidence: availableEvidence(JournalPosition.make(3)),
@@ -271,6 +356,8 @@ it.effect("ends settled and successful terminal responsibilities without inventi
 
     for (const facts of [terminal, settled]) {
       const comparison = compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: undefined,
         acceptedBefore: undefined,
         evidence: availableEvidence(null, [facts]),
@@ -357,6 +444,8 @@ it.effect("retains Terminal Accepted through queue, start, active candidate, non
     const standings = (records: ReadonlyArray<JournalRecord>) => {
       const frame = withHistory(base, records)
       const comparison = compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: frame.acceptedAt,
         acceptedBefore: frame.acceptedAt,
         evidence: availableEvidence(frame.acceptedAt, terminalFacts),
@@ -387,6 +476,8 @@ it.effect("retains Terminal Accepted through queue, start, active candidate, non
     )
     const candidateFrame = withHistory(base, [...terminalAcceptedRecords(), queued, started, intended, constructed])
     const candidateComparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: candidateFrame.acceptedAt,
       acceptedBefore: candidateFrame.acceptedAt,
       evidence: availableEvidence(candidateFrame.acceptedAt, terminalFacts),
@@ -404,7 +495,7 @@ it.effect("retains Terminal Accepted through queue, start, active candidate, non
     const evaluateRestartedRelation = Effect.gen(function* () {
       const relation = yield* delivery.pipe(
         Effect.provide(
-          makeInMemoryDeliveryRelationsLayer({
+          makeDeliveryRelationsLayer({
             exactEvidence: currentSignalOf(reconstructedEvidence),
             graph: currentSignalOf(
               TrackerGraphState.cases.GraphEstablished.make({ snapshot: candidateFrame.currentGraph })
@@ -422,10 +513,10 @@ it.effect("retains Terminal Accepted through queue, start, active candidate, non
     const afterRestart = yield* evaluateRestartedRelation
 
     expect(afterRestart).toEqual(beforeStop)
-    expect(afterRestart.actions).toEqual([[]])
-    expect(afterRestart.reflections[0]?.source.settlements).toEqual([])
+    expect(afterRestart.actions).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
+    expect(afterRestart.reflections[0]?.settlements.settlements).toEqual([])
     expect(
-      afterRestart.reflections[0]?.source.source.deliveries
+      afterRestart.reflections[0]?.ticketDeliveries.deliveries
         .find(({ taskId }) => taskId === taskA)
         ?.standings.some(({ _tag }) => _tag === "CandidateConstructedUnsettled")
     ).toBe(true)
@@ -437,6 +528,8 @@ it.effect("reports a same-responsibility lifecycle disagreement instead of accep
     const frame = syntheticFrame(yield* graph())
     const facts = executorFacts(taskA, ResponsibilityDisposition.Ready())
     const comparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: undefined,
       acceptedBefore: undefined,
       evidence: availableEvidence(null, [facts]),
@@ -476,6 +569,8 @@ it.effect("reports different exact integration attempts even when they belong to
       terminalAt: JournalPosition.make(2)
     })
     const comparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: frame.acceptedAt,
       acceptedBefore: frame.acceptedAt,
       evidence: availableEvidence(frame.acceptedAt),
@@ -514,6 +609,8 @@ it.effect("keeps an integration configuration wait local while independent B rem
       terminalAcceptedRecords()
     )
     const comparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: frame.acceptedAt,
       acceptedBefore: frame.acceptedAt,
       evidence: availableEvidence(
@@ -567,6 +664,8 @@ it.effect("projects every lower integration wait independently of the legacy sch
 
     for (const wait of waits) {
       const comparison = compareDeliveryShadow({
+        fresh: [],
+        runId,
         acceptedAfter: undefined,
         acceptedBefore: undefined,
         evidence: availableEvidence(null, [], [wait]),
@@ -617,6 +716,8 @@ it.effect("recognizes exact attempt identity in every legacy integration situati
       })
     ]
     const comparison = compareDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: undefined,
       acceptedBefore: undefined,
       evidence: availableEvidence(),
@@ -631,6 +732,38 @@ it.effect("recognizes exact attempt identity in every legacy integration situati
       plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(plannedAttempt))
     ])
     expect(comparison.newOnlyTaskIds).toEqual([])
+  })
+)
+
+it.effect("recognizes a started integration transition as the same exact attempt", () =>
+  Effect.gen(function* () {
+    const plannedAttempt = attempt(taskA)
+    const responsibility = StartedIntegrationResponsibility.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      queuedAt: JournalPosition.make(3),
+      startedAt: JournalPosition.make(4)
+    })
+    const comparison = compareDeliveryShadow({
+      acceptedAfter: undefined,
+      acceptedBefore: undefined,
+      evidence: availableEvidence(),
+      frame: syntheticFrame(yield* graph()),
+      fresh: [],
+      legacy: {
+        explanations: [],
+        transitions: [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+      },
+      runId
+    })
+
+    if (comparison._tag !== "ComparedDeliveryProjection") {
+      return expect.fail("synthetic current facts must compare")
+    }
+    expect(comparison.integrationIdentityDifferences).toEqual([
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(plannedAttempt))
+    ])
   })
 )
 
@@ -660,6 +793,8 @@ it.effect("cannot let a synchronous diagnostic failure alter the delivery turn",
   Effect.gen(function* () {
     const frame = syntheticFrame(yield* graph())
     yield* observeDeliveryShadow({
+      fresh: [],
+      runId,
       acceptedAfter: undefined,
       acceptedBefore: undefined,
       evidence: availableEvidence(),
@@ -673,6 +808,256 @@ it.effect("cannot let a synchronous diagnostic failure alter the delivery turn",
   )
 )
 
+it.effect("lets the authoritative turn continue when a shadow read never completes", () =>
+  Effect.gen(function* () {
+    const fiber = yield* observeDeliveryShadowWithinTurn(Effect.never).pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    yield* TestClock.adjust("100 millis")
+    yield* Fiber.join(fiber)
+  })
+)
+
+it.effect("keeps required safe-boundary work in the paused boundary proposal shadow", () => {
+  const comparisons: Array<DeliveryShadowComparison> = []
+  const facts = executorFacts(taskA, ResponsibilityDisposition.Ready())
+  const plannedAttempt = attempt(taskA)
+  const transition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+  return observeBoundaryDeliveryShadow({
+    acceptedBefore: undefined,
+    evidence: availableEvidence(null, [facts]),
+    policy,
+    readAccepted: Effect.succeed(null),
+    requiresAcceptedEpoch: false,
+    runId,
+    transitions: [transition]
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        DeliveryShadowDiagnostics,
+        DeliveryShadowDiagnostics.of({ record: (comparison) => void comparisons.push(comparison) })
+      )
+    ),
+    Effect.tap(() =>
+      Effect.sync(() => {
+        expect(comparisons).toMatchObject([
+          {
+            _tag: "ComparedBoundaryDeliveryProposals",
+            proposalFrontier: {
+              _tag: "DeliveryProposalsAvailable",
+              isolatedIssues: [],
+              proposals: [
+                {
+                  admission: {
+                    taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId: taskA }
+                  },
+                  route: { _tag: "IdentityFreeWorkflowRoute", transition }
+                }
+              ]
+            },
+            proposalPresenceDifferences: []
+          }
+        ])
+      })
+    )
+  )
+})
+
+it.effect("records a boundary comparison only from one exact accepted epoch", () => {
+  const comparisons: Array<DeliveryShadowComparison> = []
+  return Effect.gen(function* () {
+    const acceptedAt = JournalPosition.make(1)
+    const later = JournalPosition.make(2)
+    const wait: IntegrationDeliveryWait = { _tag: "IntegrationConfigurationWait", plannedAttempt: attempt(taskA) }
+    const observe = (input: {
+      readonly acceptedBefore: JournalPosition | undefined
+      readonly accepted: {
+        readonly appliedPosition: JournalPosition
+        readonly records: ReadonlyArray<JournalRecord>
+      } | null
+      readonly evidence:
+        | ReturnType<typeof availableEvidence>
+        | { readonly _tag: "UnavailableDeliveryProjectionEvidence" }
+    }) =>
+      observeBoundaryDeliveryShadow({
+        acceptedBefore: input.acceptedBefore,
+        evidence: input.evidence,
+        policy,
+        readAccepted: Effect.succeed(input.accepted),
+        requiresAcceptedEpoch: true,
+        runId,
+        transitions: []
+      })
+
+    yield* observe({
+      accepted: { appliedPosition: acceptedAt, records: [] },
+      acceptedBefore: acceptedAt,
+      evidence: { _tag: "UnavailableDeliveryProjectionEvidence" }
+    })
+    yield* observe({
+      accepted: { appliedPosition: acceptedAt, records: [] },
+      acceptedBefore: undefined,
+      evidence: availableEvidence(acceptedAt)
+    })
+    yield* observe({ accepted: null, acceptedBefore: acceptedAt, evidence: availableEvidence(acceptedAt) })
+    yield* observe({
+      accepted: { appliedPosition: later, records: [] },
+      acceptedBefore: acceptedAt,
+      evidence: availableEvidence(later)
+    })
+    yield* observe({
+      accepted: { appliedPosition: acceptedAt, records: [] },
+      acceptedBefore: acceptedAt,
+      evidence: availableEvidence(later)
+    })
+    yield* observe({
+      accepted: { appliedPosition: acceptedAt, records: [] },
+      acceptedBefore: acceptedAt,
+      evidence: availableEvidence(acceptedAt, [], [wait])
+    })
+
+    expect(comparisons).toMatchObject([
+      { _tag: "ComparedBoundaryDeliveryProposals", acceptedAt, proposalPresenceDifferences: [] }
+    ])
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        DeliveryShadowDiagnostics,
+        DeliveryShadowDiagnostics.of({ record: (comparison) => void comparisons.push(comparison) })
+      )
+    )
+  )
+})
+
+it.effect("turns duplicate boundary proposal ownership into one fail-closed comparison", () => {
+  const comparisons: Array<DeliveryShadowComparison> = []
+  const plannedAttempt = attempt(taskA)
+  const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+  return observeBoundaryDeliveryShadow({
+    acceptedBefore: undefined,
+    evidence: availableEvidence(null, [executorFacts(taskA, ResponsibilityDisposition.Ready())]),
+    policy,
+    readAccepted: Effect.succeed(null),
+    requiresAcceptedEpoch: false,
+    runId,
+    transitions: [transition, transition]
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        DeliveryShadowDiagnostics,
+        DeliveryShadowDiagnostics.of({ record: (comparison) => void comparisons.push(comparison) })
+      )
+    ),
+    Effect.tap(() =>
+      Effect.sync(() => {
+        expect(comparisons).toMatchObject([
+          {
+            _tag: "ComparedBoundaryDeliveryProposals",
+            proposalFrontier: { _tag: "DeliveryProposalOwnershipConflict", conflicts: [expect.any(Object)] }
+          }
+        ])
+      })
+    )
+  )
+})
+
+it.effect("cannot let a boundary-shadow accepted-history failure alter the recovery turn", () =>
+  observeBoundaryDeliveryShadow({
+    acceptedBefore: JournalPosition.make(1),
+    evidence: availableEvidence(JournalPosition.make(1)),
+    policy,
+    readAccepted: Effect.fail("diagnostic accepted-history read failed"),
+    requiresAcceptedEpoch: true,
+    runId,
+    transitions: []
+  })
+)
+
+it.effect("represents the production quiescence reread in the literal proposal relation", () =>
+  Effect.gen(function* () {
+    const comparisons: Array<DeliveryShadowComparison> = []
+    const base = syntheticFrame(yield* graph())
+    const frame = withHistory(base, terminalAcceptedRecords())
+    yield* observeQuiescenceDeliveryShadow({
+      readAccepted: Effect.succeed({ appliedPosition: frame.acceptedAt }),
+      readEvidence: Effect.succeed(availableEvidence(frame.acceptedAt)),
+      readFrame: Effect.succeed(frame),
+      runId,
+      target: FixtureTarget.make("quiescence-shadow-target")
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(
+          DeliveryShadowDiagnostics,
+          DeliveryShadowDiagnostics.of({ record: (comparison) => void comparisons.push(comparison) })
+        )
+      )
+    )
+
+    expect(comparisons).toMatchObject([
+      {
+        _tag: "ComparedQuiescenceDeliveryProposal",
+        acceptedAt: frame.acceptedAt,
+        proposalFrontier: {
+          _tag: "DeliveryProposalsAvailable",
+          proposals: [{ owner: "TrackerGraph", route: { purpose: "QuiescenceProbe" } }]
+        }
+      }
+    ])
+  })
+)
+
+it.effect("records no quiescence proposal from an incomplete or mixed accepted epoch", () => {
+  const comparisons: Array<DeliveryShadowComparison> = []
+  return Effect.gen(function* () {
+    const acceptedAt = JournalPosition.make(2)
+    const later = JournalPosition.make(3)
+    const base = syntheticFrame(yield* graph())
+    const frame = withHistory(base, terminalAcceptedRecords())
+    const observe = (
+      reads: readonly [
+        { readonly appliedPosition: JournalPosition } | null,
+        { readonly appliedPosition: JournalPosition } | null
+      ],
+      currentFrame: CurrentDeliveryFrame,
+      evidence: ReturnType<typeof availableEvidence> | { readonly _tag: "UnavailableDeliveryProjectionEvidence" }
+    ) =>
+      Effect.gen(function* () {
+        const readIndex = yield* Ref.make(0)
+        yield* observeQuiescenceDeliveryShadow({
+          readAccepted: Ref.getAndUpdate(readIndex, (index) => index + 1).pipe(
+            Effect.map((index) => reads[index] ?? null)
+          ),
+          readEvidence: Effect.succeed(evidence),
+          readFrame: Effect.succeed(currentFrame),
+          runId,
+          target: FixtureTarget.make("invalid-quiescence-shadow-target")
+        })
+      })
+
+    yield* observe([null, { appliedPosition: acceptedAt }], frame, availableEvidence(acceptedAt))
+    yield* observe([{ appliedPosition: acceptedAt }, null], frame, availableEvidence(acceptedAt))
+    yield* observe([{ appliedPosition: acceptedAt }, { appliedPosition: later }], frame, availableEvidence(later))
+    yield* observe(
+      [{ appliedPosition: acceptedAt }, { appliedPosition: acceptedAt }],
+      base,
+      availableEvidence(acceptedAt)
+    )
+    yield* observe([{ appliedPosition: later }, { appliedPosition: later }], frame, availableEvidence(later))
+    yield* observe([{ appliedPosition: acceptedAt }, { appliedPosition: acceptedAt }], frame, {
+      _tag: "UnavailableDeliveryProjectionEvidence"
+    })
+    yield* observe([{ appliedPosition: acceptedAt }, { appliedPosition: acceptedAt }], frame, availableEvidence(later))
+
+    expect(comparisons).toEqual([])
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        DeliveryShadowDiagnostics,
+        DeliveryShadowDiagnostics.of({ record: (comparison) => void comparisons.push(comparison) })
+      )
+    )
+  )
+})
+
 it.effect("skips an unavailable diagnostic input and remains silent without a diagnostic sink", () =>
   Effect.gen(function* () {
     const frame = syntheticFrame(yield* graph())
@@ -681,10 +1066,13 @@ it.effect("skips an unavailable diagnostic input and remains silent without a di
       acceptedBefore: undefined,
       evidence: { _tag: "UnavailableDeliveryProjectionEvidence" },
       frame,
-      legacy: { explanations: [], transitions: [] }
+      fresh: [],
+      legacy: { explanations: [], transitions: [] },
+      runId
     } as const
 
     expect(compareDeliveryShadow(input)).toEqual({ _tag: "SkippedDeliveryProjectionResponsibilityFactsUnavailable" })
+    yield* observeDeliveryShadow(input)
     yield* observeDeliveryShadow({ ...input, evidence: availableEvidence() })
   })
 )

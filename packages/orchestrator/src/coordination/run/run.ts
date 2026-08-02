@@ -66,6 +66,9 @@ import {
 } from "../delivery/accepted-fact-gateway.js"
 import type { TrackerGraphRelation } from "../delivery/relations.js"
 import { observeDeliveryShadow } from "../delivery/delivery-shadow.js"
+import { observeBoundaryDeliveryShadow } from "../delivery/boundary-delivery-shadow.js"
+import { observeQuiescenceDeliveryShadow } from "../delivery/quiescence-delivery-shadow.js"
+import { observeDeliveryShadowWithinTurn } from "../delivery/delivery-shadow-budget.js"
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 
@@ -74,6 +77,7 @@ const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number
 
 /* v8 ignore start -- Every entry point replaces this construction-only boundary predicate before activation. */
 const rejectAllBoundaryTransitions = (_transition: RunnableFrontierTransition): boolean => false
+
 /* v8 ignore stop */
 
 type RunControlPolicyReadError = Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
@@ -175,6 +179,10 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         onSome: (gateway) =>
           gateway.readCurrent.pipe(Effect.option, Effect.map(Option.map(({ appliedPosition }) => appliedPosition)))
       })
+      const readAcceptedStateForShadow = Option.match(acceptedFactGateway, {
+        onNone: () => Effect.succeed(null),
+        onSome: (gateway) => gateway.readCurrent.pipe(Effect.option, Effect.map(Option.getOrNull))
+      })
       const readDeliveryActivationTurn = Effect.fn("DeliveryActivation.readTurn")(function* (): Effect.fn.Return<
         DeliveryActivationTurn,
         RunActivationError
@@ -182,12 +190,22 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         const currentPhase = yield* Ref.get(phase)
         const acceptedBefore = Option.getOrUndefined(yield* readAcceptedPositionForShadow)
         if (currentPhase._tag === "Boundary") {
-          const recovered = yield* recovery.readFrontier
-          return {
-            fresh: [],
-            frontier: { ...recovered, transitions: recovered.transitions.filter(currentPhase.mayRun) },
-            policy: yield* readCurrentControlPolicy
-          }
+          const recoveredProjection = yield* recovery.readDeliveryProjection
+          const recovered = recoveredProjection.frontier
+          const frontier = { ...recovered, transitions: recovered.transitions.filter(currentPhase.mayRun) }
+          const policy = yield* readCurrentControlPolicy
+          yield* observeDeliveryShadowWithinTurn(
+            observeBoundaryDeliveryShadow({
+              acceptedBefore,
+              evidence: recoveredProjection.evidence,
+              policy,
+              readAccepted: readAcceptedStateForShadow,
+              requiresAcceptedEpoch: Option.isSome(acceptedFactGateway),
+              runId,
+              transitions: frontier.transitions
+            })
+          )
+          return { fresh: [], frontier, policy }
         }
         const recoveredProjection = yield* recovery.readDeliveryProjection
         const recovered = recoveredProjection.frontier
@@ -209,7 +227,9 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
           acceptedBefore,
           evidence: recoveredProjection.evidence,
           frame,
-          legacy: frontier
+          fresh,
+          legacy: frontier,
+          runId
         })
         return { fresh, policy: frame.runControlPolicy, frontier }
       })
@@ -223,6 +243,21 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
         Effect.map(({ frontier }) => frontier)
       )
       const refreshCurrentGraph = Effect.fn("Workflow.refreshCurrentGraph")(function* () {
+        yield* observeDeliveryShadowWithinTurn(
+          observeQuiescenceDeliveryShadow({
+            readAccepted: readAcceptedStateForShadow,
+            readEvidence: recovery.readDeliveryProjection.pipe(Effect.map(({ evidence }) => evidence)),
+            readFrame: Ref.get(phase).pipe(
+              Effect.flatMap((currentPhase) =>
+                currentPhase._tag === "Delivery"
+                  ? currentPhase.currentDelivery.read
+                  : Effect.die("delivery not installed")
+              )
+            ),
+            runId,
+            target
+          })
+        )
         const operation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
         yield* emit(OperationSelected.make({ operation }))
         const refreshed = yield* interpreter.readTrackerGraph(operation)

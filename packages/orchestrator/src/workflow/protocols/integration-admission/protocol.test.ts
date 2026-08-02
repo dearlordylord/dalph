@@ -20,12 +20,15 @@ import {
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   AcceptedResultNotDurable,
   deriveIntegrationAdmission,
+  deriveUnqueuedAcceptedResults,
+  integrationTargetSelectionLayer,
+  IntegrationTargetSelection,
   PreIntegrationCancellationCapability,
   QueuedIntegrationResponsibility,
   queueAcceptedResultIntegrationResponsibility,
@@ -112,6 +115,12 @@ const otherIntegrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
 
+it.effect("provides the exact configured integration target to the settlement runtime", () =>
+  Effect.gen(function* () {
+    expect(yield* IntegrationTargetSelection).toEqual(integrationTarget)
+  }).pipe(Effect.provide(integrationTargetSelectionLayer(integrationTarget)))
+)
+
 const plannedAttempt = (taskId: "A" | "B" | "C", ordinal: number) =>
   PlannedTaskAttempt.make({
     attemptId: AttemptId.make(`attempt:${taskId}:${ordinal}`),
@@ -126,6 +135,26 @@ const plannedAttempt = (taskId: "A" | "B" | "C", ordinal: number) =>
 
 const acceptedResult = (commitDigit: string) =>
   AcceptedResult.make({ commit: GitCommitSha.make(commitDigit.repeat(40)) })
+
+it("does not offer an accepted report whose exact attempt responsibility is absent", () => {
+  const attempt = plannedAttempt("A", 0)
+  const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+  const orphanReport = JournalRecord.make({
+    event: PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal,
+      report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: attempt.attemptId, runId: attempt.runId },
+        result: { _tag: "Accepted", acceptedResult: acceptedResult("a") }
+      }),
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("orphan-accepted-report"),
+    position: JournalPosition.make(1),
+    runId
+  })
+
+  expect(deriveUnqueuedAcceptedResults([orphanReport])).toEqual([])
+})
 
 const claimFor = (attempt: PlannedTaskAttempt) =>
   ActiveTaskClaim.make({
@@ -361,6 +390,18 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
       claimState: "Unobserved",
       plannedAttempt: firstAttempt,
       wakeCondition: "TaskClaimFactsObserved"
+    })
+    expect(
+      deriveIntegrationFrontier(reconstructed.state, {
+        currentTrackerTaskIds: new Set([firstAttempt.taskId, secondAttempt.taskId]),
+        heldResponsibilityPositions: new Set(),
+        integrationTarget: Option.none(),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(firstAttempt.attemptId, secondAttempt.attemptId)
+      }).explanations
+    ).toContainEqual({
+      _tag: "IntegrationConfigurationWait",
+      plannedAttempt: firstAttempt,
+      wakeCondition: "IntegrationTargetConfigured"
     })
     expect(frontier.transitions).toMatchObject([
       {

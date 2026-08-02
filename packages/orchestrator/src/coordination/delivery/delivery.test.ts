@@ -14,17 +14,29 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Exit, Schema, Stream } from "effect"
+import { Effect, Exit, Option, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { delivery } from "./delivery.js"
-import { currentSignalOf, PlannedAttemptExecutorTerminalEvidence, TrackerGraphState } from "./relations.js"
-import { makeInMemoryDeliveryRelationsLayer } from "./in-memory-relations.js"
+import {
+  TrackerGraphRelation,
+  boundedParallelTickets,
+  currentSignalOf,
+  deliverySettlements,
+  executorResponsibilities,
+  mapCurrentSignal,
+  PlannedAttemptExecutorTerminalEvidence,
+  TrackerGraphState
+} from "./relations.js"
+import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { frontierOf } from "./ticket-delivery-projection.js"
 
 const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
@@ -70,7 +82,7 @@ const exactAttemptEvidence = (taskId: TaskId) => ({
 })
 it.effect("assembles the literal delivery relation with honestly empty settlements", () =>
   Effect.gen(function* () {
-    const layer = makeInMemoryDeliveryRelationsLayer({
+    const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
@@ -82,8 +94,8 @@ it.effect("assembles the literal delivery relation with honestly empty settlemen
 
     expect(first).toHaveLength(1)
     expect(second).toEqual(first)
-    expect(first[0]?.source.source.deliveries).toEqual([])
-    expect(first[0]?.source.settlements).toEqual([])
+    expect(first[0]?.ticketDeliveries.deliveries).toEqual([])
+    expect(first[0]?.settlements.settlements).toEqual([])
   })
 )
 
@@ -109,7 +121,7 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
 
 it.effect("keeps every descriptive subscription action-free", () =>
   Effect.gen(function* () {
-    const layer = makeInMemoryDeliveryRelationsLayer({
+    const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
@@ -118,9 +130,148 @@ it.effect("keeps every descriptive subscription action-free", () =>
 
     const first = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
     const second = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
+    yield* relation.invalidate({ _tag: "AcceptedFactsChanged" })
 
-    expect(first).toEqual([[]])
+    expect(first).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
     expect(second).toEqual(first)
+  })
+)
+
+it.effect("exposes each lower proposal stream without performing an action", () =>
+  Effect.gen(function* () {
+    const layer = makeDeliveryRelationsLayer({
+      graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+      exactEvidence: currentSignalOf([]),
+      policy: currentSignalOf(policy)
+    })
+    const lower = yield* Effect.gen(function* () {
+      const tracker = yield* TrackerGraphRelation
+      const tickets = yield* boundedParallelTickets(mapCurrentSignal(tracker.signal, frontierOf))
+      const responsibilities = yield* executorResponsibilities(tickets)
+      const settlements = yield* deliverySettlements(responsibilities)
+      return { responsibilities, settlements }
+    }).pipe(Effect.provide(layer))
+
+    expect(Array.from(yield* Stream.runCollect(lower.responsibilities.proposedActions.changes))).toEqual([[]])
+    expect(Array.from(yield* Stream.runCollect(lower.settlements.proposedActions.changes))).toEqual([[]])
+  })
+)
+
+it.effect("cannot carry an initial graph-read proposal into an established graph revision", () =>
+  Effect.gen(function* () {
+    const proposal = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(1),
+      purpose: "EstablishCurrentGraph",
+      runId: RunId.make("causal-tracker-proposal"),
+      target: FixtureTarget.make("causal-tracker-proposal-target")
+    })
+    const relation = yield* delivery.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: {
+            changes: Stream.make(
+              TrackerGraphState.cases.GraphNotEstablished.make({}),
+              TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("causal-established") })
+            )
+          },
+          policy: currentSignalOf(policy),
+          trackerGraphProposals: currentSignalOf([proposal])
+        })
+      )
+    )
+
+    const frontiers = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
+
+    expect(frontiers[0]).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [{ id: proposal.id, route: { purpose: "EstablishCurrentGraph" } }]
+    })
+    expect(frontiers.at(-1)).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+  })
+)
+
+it.effect("fails closed when two lower relations claim one exact proposal identity", () =>
+  Effect.gen(function* () {
+    const proposal = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(1),
+      purpose: "EstablishCurrentGraph",
+      runId: RunId.make("proposal-conflict"),
+      target: FixtureTarget.make("proposal-conflict-target")
+    })
+    const layer = makeDeliveryRelationsLayer({
+      exactEvidence: currentSignalOf([]),
+      graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+      policy: currentSignalOf(policy),
+      proposalContributions: currentSignalOf({
+        deliverySettlement: [],
+        issues: [],
+        selectedTransitionKeys: [],
+        ticketDelivery: [{ ...proposal, owner: "TicketDelivery" }]
+      }),
+      trackerGraphProposals: currentSignalOf([proposal])
+    })
+    const relation = yield* delivery.pipe(Effect.provide(layer))
+
+    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
+
+    expect(frontier).toEqual({
+      _tag: "DeliveryProposalOwnershipConflict",
+      conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery"] }]
+    })
+  })
+)
+
+it.effect("carries every lower owner's pure proposal through the literal delivery composition", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("proposal-composition-target")
+    const proposalFor = (
+      position: number,
+      owner: "DeliveryReflection" | "DeliverySettlement" | "TicketDelivery" | "TrackerGraph"
+    ) => ({
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(position),
+        purpose: position === 1 ? "EstablishCurrentGraph" : "QuiescenceProbe",
+        runId: RunId.make("proposal-composition"),
+        target
+      }),
+      owner
+    })
+    const tracker = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(1),
+      purpose: "EstablishCurrentGraph",
+      runId: RunId.make("proposal-composition"),
+      target
+    })
+    const ticket = proposalFor(2, "TicketDelivery")
+    const settlement = proposalFor(3, "DeliverySettlement")
+    const reflection = proposalFor(4, "DeliveryReflection")
+    const relation = yield* delivery.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+          policy: currentSignalOf(policy),
+          proposalContributions: currentSignalOf({
+            deliverySettlement: [settlement],
+            issues: [],
+            selectedTransitionKeys: [],
+            ticketDelivery: [ticket]
+          }),
+          reflectionProposals: currentSignalOf([reflection]),
+          trackerGraphProposals: currentSignalOf([tracker])
+        })
+      )
+    )
+
+    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
+
+    expect(frontier._tag).toBe("DeliveryProposalsAvailable")
+    if (frontier._tag === "DeliveryProposalsAvailable") {
+      expect(new Set(frontier.proposals.map(({ owner }) => owner))).toEqual(
+        new Set(["TrackerGraph", "TicketDelivery", "DeliverySettlement", "DeliveryReflection"])
+      )
+    }
   })
 )
 
@@ -132,7 +283,7 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
       policy: currentSignalOf(policy)
     }
     const evaluate = Effect.gen(function* () {
-      const relation = yield* delivery.pipe(Effect.provide(makeInMemoryDeliveryRelationsLayer(input)))
+      const relation = yield* delivery.pipe(Effect.provide(makeDeliveryRelationsLayer(input)))
       return {
         actions: Array.from(yield* Stream.runCollect(relation.proposedActions.changes)),
         current: Array.from(yield* Stream.runCollect(relation.current.changes))
@@ -142,9 +293,9 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
     const beforeStop = yield* evaluate
     const afterRestart = yield* evaluate
 
-    expect(beforeStop.actions).toEqual([[]])
+    expect(beforeStop.actions).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
     expect(afterRestart).toEqual(beforeStop)
-    expect(afterRestart.current[0]?.source.settlements).toEqual([])
+    expect(afterRestart.current[0]?.settlements.settlements).toEqual([])
   })
 )
 
@@ -152,7 +303,7 @@ it.effect("preserves each causal graph revision through final reflection", () =>
   Effect.gen(function* () {
     const graphOne = TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-1") })
     const graphTwo = TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-2") })
-    const layer = makeInMemoryDeliveryRelationsLayer({
+    const layer = makeDeliveryRelationsLayer({
       graph: { changes: Stream.fromIterable([graphOne, graphTwo]) },
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
@@ -161,7 +312,7 @@ it.effect("preserves each causal graph revision through final reflection", () =>
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
-    expect(reflections.map(({ source }) => source.source.source.source.source)).toEqual([graphOne, graphTwo])
+    expect(reflections.map(({ trackerGraph }) => trackerGraph)).toEqual([graphOne, graphTwo])
   })
 )
 
@@ -173,7 +324,7 @@ it.effect("recomputes the same flat relation when the current policy changes", (
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
-    const layer = makeInMemoryDeliveryRelationsLayer({
+    const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(
         TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-policy", [taskA, taskB]) })
       ),
@@ -184,7 +335,7 @@ it.effect("recomputes the same flat relation when the current policy changes", (
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
-    expect(reflections.map(({ source }) => source.source.deliveries.map(({ taskId }) => taskId))).toEqual([
+    expect(reflections.map(({ ticketDeliveries }) => ticketDeliveries.deliveries.map(({ taskId }) => taskId))).toEqual([
       [taskA],
       [taskA, taskB]
     ])
@@ -195,7 +346,7 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
   Effect.gen(function* () {
     const taskA = TaskId.make("A")
     const taskB = TaskId.make("B")
-    const layer = makeInMemoryDeliveryRelationsLayer({
+    const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(
         TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-evidence", [taskA, taskB]) })
       ),
@@ -206,11 +357,11 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
-    expect(reflections.map(({ source }) => source.source.deliveries.map(({ taskId }) => taskId))).toEqual([
+    expect(reflections.map(({ ticketDeliveries }) => ticketDeliveries.deliveries.map(({ taskId }) => taskId))).toEqual([
       [taskA],
       [taskA, taskB]
     ])
-    expect(reflections[1]?.source.source.deliveries.find(({ taskId }) => taskId === taskB)?.placement._tag).toBe(
+    expect(reflections[1]?.ticketDeliveries.deliveries.find(({ taskId }) => taskId === taskB)?.placement._tag).toBe(
       "EligibleOutsideBound"
     )
   })
@@ -223,6 +374,21 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
     fileURLToPath(new URL("./ticket-delivery-projection.ts", import.meta.url)),
     "utf8"
   )
+  const proposalSource = readFileSync(fileURLToPath(new URL("./delivery-proposal.ts", import.meta.url)), "utf8")
+  const proposalModelSource = readFileSync(
+    fileURLToPath(new URL("./delivery-action-proposal.ts", import.meta.url)),
+    "utf8"
+  )
+  const proposalDerivationSource = readFileSync(
+    fileURLToPath(new URL("./delivery-proposal-derivation.ts", import.meta.url)),
+    "utf8"
+  )
+  const proposalRouteSource = readFileSync(
+    fileURLToPath(new URL("./delivery-proposal-route.ts", import.meta.url)),
+    "utf8"
+  )
+  const shadowSource = readFileSync(fileURLToPath(new URL("./delivery-shadow.ts", import.meta.url)), "utf8")
+  const runSource = readFileSync(fileURLToPath(new URL("../run/run.ts", import.meta.url)), "utf8")
 
   const outerEffect = deliverySource.slice(deliverySource.indexOf("export const delivery"))
   expect(outerEffect).toBe(`export const delivery = Effect.gen(function* () {
@@ -238,7 +404,7 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
 })
 `)
 
-  const completeDeliverySource = `${deliverySource}\n${relationSource}\n${projectionSource}`
+  const completeDeliverySource = `${deliverySource}\n${relationSource}\n${projectionSource}\n${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`
   const importedModules = Array.from(
     deliverySource.matchAll(/^import\s+(?:(?:.|\n)*?\s+from\s+)?"([^"]+)"\s*$/gm),
     ([, moduleName]) => moduleName
@@ -248,4 +414,16 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
     /\b(?:JournalStore|WorkflowInterpreter|RunRecoveryActivation|TaskAdmissionController|makeActivationCoordinator|Queue|Ref|Semaphore|fork|runDeliveryActivation)\b/
   )
   expect(projectionSource).not.toMatch(/coordination\/(?:admission|frontier|run)/)
+  expect(`${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`).not.toMatch(
+    /(?:\.\.\/admission\/controller|\.\.\/run\/|\b(?:Effect|Queue|Ref|Semaphore|WorkflowInterpreter)\b)/
+  )
+  expect(shadowSource).toContain('import { delivery } from "./delivery.js"')
+  expect(shadowSource).toContain("const relation = yield* delivery.pipe(")
+  expect(runSource).toContain("observeBoundaryDeliveryShadow({")
+  expect(runSource).toContain("yield* observeDeliveryShadow({")
+  expect(runSource).toContain("observeQuiescenceDeliveryShadow({")
+  expect(runSource).toMatch(
+    /const frontier = \{ \.\.\.recovered, transitions: recovered\.transitions\.filter\(currentPhase\.mayRun\) \}[\s\S]*?observeBoundaryDeliveryShadow\(/
+  )
+  expect(runSource.match(/yield\* observeDeliveryShadowWithinTurn\(/g)).toHaveLength(2)
 })

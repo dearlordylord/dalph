@@ -2307,6 +2307,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
           taskId: "A"
         },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         expected
       ]
     }

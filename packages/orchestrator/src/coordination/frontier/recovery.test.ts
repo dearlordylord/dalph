@@ -467,7 +467,7 @@ it.effect("routes journaled fresh fact reads, exact claim release, and suspensio
         execution
       )
       yield* recovery.runTransition(
-        RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation: release }),
+        RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation: release, plannedAttempt }),
         execution
       )
       yield* recovery.runTransition(
@@ -1088,7 +1088,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
     })
     expect(yield* recovery.readFrontier).toEqual({
       explanations: [claimSettlement],
-      transitions: [{ _tag: "ReleaseExternallyCompletedTaskClaim", operation: externalRelease }]
+      transitions: [{ _tag: "ReleaseExternallyCompletedTaskClaim", operation: externalRelease, plannedAttempt }]
     })
     yield* journal.append(
       runId,

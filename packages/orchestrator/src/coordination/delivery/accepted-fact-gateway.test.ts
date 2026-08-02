@@ -53,7 +53,18 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
     yield* storage.beginRun(runId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(runId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+    const initialProposal = Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))
+    const repeatedSubscription = Option.getOrThrow(
+      yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead)
+    )
+    expect(repeatedSubscription).toEqual(initialProposal)
+    expect(initialProposal).toHaveLength(1)
+    expect(initialProposal[0]).toMatchObject({
+      actionIdentity: { _tag: "FreshOperationIdRequired" },
+      owner: "TrackerGraph",
+      route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target }
+    })
     const operation = makeTrackerGraphObservationOperation(OperationId.make("gateway-read"), target)
     const subscriberAttached = yield* Deferred.make<void>()
     const observed = yield* gateway.trackerGraph.signal.changes.pipe(
@@ -91,19 +102,22 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the ga
     const storage = yield* JournalStore
     const empty = reduceWorkflowJournalHistory(runId, [])
     if (empty._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(empty)
-    const emptyFailure = yield* makeAcceptedFactPublicationGateway(runId, empty, storage).pipe(Effect.flip)
+    const emptyFailure = yield* makeAcceptedFactPublicationGateway(runId, target, empty, storage).pipe(Effect.flip)
     expect(emptyFailure).toMatchObject({ _tag: "AcceptedFactGatewayInitialHistoryInvalid", reason: "EmptyHistory" })
 
     yield* storage.beginRun(runId, target, initialPolicy)
     const begun = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (begun._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(begun)
+    const [runBeginning] = begun.records
+    if (runBeginning === undefined) return yield* Effect.die("begun history must contain its run beginning")
     const unbegunFailure = yield* makeAcceptedFactPublicationGateway(
       runId,
+      target,
       {
         ...begun,
         records: [
           {
-            ...begun.records[0]!,
+            ...runBeginning,
             event: taskTrackerReadIntent(
               makeTrackerGraphObservationOperation(OperationId.make("not-a-beginning"), target)
             )
@@ -118,7 +132,9 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the ga
     })
 
     const otherRunId = RunId.make("accepted-fact-other-initial-run")
-    const identityFailure = yield* makeAcceptedFactPublicationGateway(otherRunId, begun, storage).pipe(Effect.flip)
+    const identityFailure = yield* makeAcceptedFactPublicationGateway(otherRunId, target, begun, storage).pipe(
+      Effect.flip
+    )
     expect(identityFailure).toEqual(
       new AcceptedFactGatewayInitialHistoryInvalid({
         historyRunId: runId,
@@ -130,6 +146,7 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the ga
     const began = Option.getOrThrow(Option.fromUndefinedOr(begun.records[0]))
     const invalidFailure = yield* makeAcceptedFactPublicationGateway(
       runId,
+      target,
       { ...begun, records: [...begun.records, { ...began, position: JournalPosition.make(2), runId: otherRunId }] },
       storage
     ).pipe(Effect.flip)
@@ -144,7 +161,7 @@ it.effect("serializes concurrent accepted appends and publishes every position i
     yield* storage.beginRun(concurrentRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(concurrentRunId, yield* storage.read(concurrentRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(concurrentRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(concurrentRunId, target, initial, storage)
     const attached = yield* Deferred.make<void>()
     const positions = yield* gateway.current.changes.pipe(
       Stream.tap(() => Deferred.succeed(attached, undefined)),
@@ -174,7 +191,7 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
     yield* storage.beginRun(outcomeRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(outcomeRunId, yield* storage.read(outcomeRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(outcomeRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(outcomeRunId, target, initial, storage)
     const first = makeTrackerGraphObservationOperation(OperationId.make("outcome-started-first"), target)
     const second = makeTrackerGraphObservationOperation(OperationId.make("outcome-finished-first"), target)
     yield* gateway.journal.append(outcomeRunId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
@@ -226,7 +243,7 @@ it.effect("never loses the latest accepted graph when subscription and publicati
     yield* storage.beginRun(raceRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(raceRunId, yield* storage.read(raceRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(raceRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(raceRunId, target, initial, storage)
 
     for (let index = 0; index < 12; index += 1) {
       const start = yield* Deferred.make<void>()
@@ -274,7 +291,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
     const stoppedProcess = yield* Effect.scoped(
       Effect.gen(function* () {
         const failAfterDurableAppend = yield* Ref.make(false)
-        const crashingGateway = yield* makeAcceptedFactPublicationGateway(crashRunId, initial, {
+        const crashingGateway = yield* makeAcceptedFactPublicationGateway(crashRunId, target, initial, {
           append: (...args) =>
             storage
               .append(...args)
@@ -322,7 +339,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
 
     const recoveredHistory = reduceWorkflowJournalHistory(crashRunId, yield* storage.read(crashRunId))
     if (recoveredHistory._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(recoveredHistory)
-    const restarted = yield* makeAcceptedFactPublicationGateway(crashRunId, recoveredHistory, storage)
+    const restarted = yield* makeAcceptedFactPublicationGateway(crashRunId, target, recoveredHistory, storage)
     expect((yield* restarted.readCurrent).records).toHaveLength(3)
     expect((yield* restarted.readCurrent).reconstructed.graphKnowledge.taskTrackerFacts).toHaveLength(1)
     expect((yield* restarted.readCurrent).graph._tag).toBe("GraphNotEstablished")
@@ -337,7 +354,7 @@ it.effect("lets multiple graph subscribers observe one accepted read without per
     const initial = reduceWorkflowJournalHistory(subscriberRunId, yield* storage.read(subscriberRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
-    const gateway = yield* makeAcceptedFactPublicationGateway(subscriberRunId, initial, {
+    const gateway = yield* makeAcceptedFactPublicationGateway(subscriberRunId, target, initial, {
       append: (...args) => Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(storage.append(...args)))
     })
     const firstAttached = yield* Deferred.make<void>()
@@ -390,7 +407,7 @@ it.effect("does not republish an idempotent append and rejects a different Run",
     yield* storage.beginRun(fixedRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(fixedRunId, yield* storage.read(fixedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(fixedRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(fixedRunId, target, initial, storage)
     const publications = yield* Ref.make(0)
     const subscriber = yield* gateway.current.changes.pipe(
       Stream.runForEach(() => Ref.update(publications, (count) => count + 1)),
@@ -426,7 +443,7 @@ it.effect("does not replay queued open values to a subscriber after publication 
     yield* storage.beginRun(slowRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(slowRunId, yield* storage.read(slowRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(slowRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(slowRunId, target, initial, storage)
     const firstConsumed = yield* Deferred.make<void>()
     const releaseSlowConsumer = yield* Deferred.make<void>()
     const consumed = yield* Ref.make<ReadonlyArray<string>>([])
@@ -485,7 +502,7 @@ it.effect("fails closed when storage returns different content for an already pu
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
     const replacement = makeTrackerGraphObservationOperation(OperationId.make("replacement-content"), target)
-    const gateway = yield* makeAcceptedFactPublicationGateway(mismatchRunId, initial, {
+    const gateway = yield* makeAcceptedFactPublicationGateway(mismatchRunId, target, initial, {
       append: (...args) =>
         Ref.getAndUpdate(appendCalls, (count) => count + 1).pipe(
           Effect.flatMap((call) => storage.append(...args).pipe(Effect.map((record) => ({ call, record })))),
@@ -521,7 +538,7 @@ it.effect("fails every current reader and subscriber after an accepted event mak
     yield* storage.beginRun(invalidRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(invalidRunId, yield* storage.read(invalidRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const gateway = yield* makeAcceptedFactPublicationGateway(invalidRunId, initial, storage)
+    const gateway = yield* makeAcceptedFactPublicationGateway(invalidRunId, target, initial, storage)
     const subscriberAttached = yield* Deferred.make<void>()
     const existingSubscriber = yield* gateway.current.changes.pipe(
       Stream.tap(() => Deferred.succeed(subscriberAttached, undefined)),
@@ -565,7 +582,7 @@ it.effect("attempts no later storage append after an accepted position contradic
     const initial = reduceWorkflowJournalHistory(gapRunId, yield* storage.read(gapRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
-    const gateway = yield* makeAcceptedFactPublicationGateway(gapRunId, initial, {
+    const gateway = yield* makeAcceptedFactPublicationGateway(gapRunId, target, initial, {
       append: (...args) =>
         Ref.update(appendCalls, (count) => count + 1).pipe(
           Effect.andThen(storage.append(...args)),

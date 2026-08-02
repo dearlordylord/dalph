@@ -43,7 +43,7 @@ import {
   IntegrationTargetUnavailable,
   type queueAcceptedResultIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { FreshWorkflowStep } from "./fresh-workflow.js"
+import type { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { SyntheticWorkflowFact } from "./fresh-workflow-fact.js"
 import type { RunRecoveryActivationError } from "./recovery-activation.js"
 import type { TraceOutputError } from "../../presentation/trace-output.js"

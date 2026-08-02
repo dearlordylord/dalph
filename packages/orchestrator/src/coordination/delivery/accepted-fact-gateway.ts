@@ -28,6 +28,8 @@ import {
   type DeliveryActionProposal,
   type TrackerGraphRelationService
 } from "./relations.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
 
 const lastElementOffset = -1
 
@@ -134,6 +136,7 @@ const reduceAccepted = (
  */
 export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeGateway")(function* (
   runId: RunId,
+  target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
   storage: AcceptedFactJournalStorage
 ) {
@@ -250,9 +253,12 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
       )
     )
   }
-  const noDeliveryActions: ReadonlyArray<DeliveryActionProposal> = []
   const trackerGraph = TrackerGraphRelation.of({
-    proposedActions: mapCurrentSignal(graphCurrent, () => noDeliveryActions),
+    proposedActions: mapCurrentSignal(graphCurrent, ({ appliedPosition, graph }) =>
+      graph._tag === "GraphNotEstablished"
+        ? [trackerGraphReadProposalOf({ acceptedAt: appliedPosition, purpose: "EstablishCurrentGraph", runId, target })]
+        : ([] satisfies ReadonlyArray<DeliveryActionProposal>)
+    ),
     signal: mapCurrentSignal(graphCurrent, ({ graph }) => graph)
   })
   return { current, journal, readCurrent, trackerGraph } satisfies AcceptedFactPublicationGatewayService
@@ -261,11 +267,12 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
 /** Installs the one gateway and exposes only its in-Run and descriptive capabilities. */
 export const acceptedFactPublicationGatewayLayer = (
   runId: RunId,
+  target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
   storage: AcceptedFactJournalStorage
 ) =>
   Layer.effectContext(
-    makeAcceptedFactPublicationGateway(runId, initial, storage).pipe(
+    makeAcceptedFactPublicationGateway(runId, target, initial, storage).pipe(
       Effect.map((gateway) =>
         Context.empty().pipe(
           Context.add(AcceptedFactPublicationGateway, gateway),
