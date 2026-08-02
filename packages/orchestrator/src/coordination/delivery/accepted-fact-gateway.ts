@@ -1,5 +1,6 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import * as Cause from "effect/Cause"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -249,7 +250,11 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
   const graphCurrent: CurrentSignal<AcceptedFactPublicationState, TrackerGraphRelationError> = {
     changes: current.changes.pipe(
       Stream.mapError(
-        (failure) => new TrackerGraphRelationError({ summary: `${failure._tag} stopped accepted-fact publication` })
+        (failure) =>
+          new TrackerGraphRelationError({
+            cause: Cause.fail(failure),
+            summary: `${failure._tag} stopped accepted-fact publication`
+          })
       )
     )
   }

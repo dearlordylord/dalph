@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
 export {
   ActivationCause,
   type ActivationCoordinator,
@@ -311,6 +312,7 @@ export {
 } from "./coordination/run/fresh-run-identity.js"
 export {
   JournaledRunBootstrap,
+  type JournaledRunBootstrapError,
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   runRecoveredWorkflow,
@@ -327,7 +329,30 @@ export {
   StartupRecoveryIssue,
   validatedStartupRecoveryLayer
 } from "./coordination/run/startup-recovery.js"
-export { AcceptedFactGatewayInitialHistoryInvalid } from "./coordination/delivery/accepted-fact-gateway.js"
+export { RunRecoveryActivation } from "./coordination/run/recovery-activation.js"
+export {
+  AcceptedFactGatewayInitialHistoryInvalid,
+  AcceptedFactPublicationGateway
+} from "./coordination/delivery/accepted-fact-gateway.js"
+export { delivery } from "./coordination/delivery/delivery.js"
+export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
+export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
+export {
+  DeliveryControlPolicyMissing,
+  makeReactiveDeliveryRelationsLayer
+} from "./coordination/delivery/reactive-delivery-relations.js"
+export {
+  DeliveryReflectionError,
+  DeliveryRelationReconciliationError,
+  type DeliveryRelationSourceError,
+  DeliverySettlementError,
+  TicketDeliveryError,
+  TrackerGraphRelationError
+} from "./coordination/delivery/relations.js"
+export {
+  DeliveryRuntimeProposalOwnershipConflict,
+  runDeliveryRuntime
+} from "./coordination/delivery/run-delivery-runtime.js"
 export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,

@@ -1,0 +1,857 @@
+import { it } from "@effect/vitest"
+import {
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
+import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
+import { expect } from "vitest"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { IntegrationCandidateBoundaryUnavailable } from "../run/integration-transition-runtime.js"
+import {
+  deterministicOperationIdAllocatorLayer,
+  deterministicPlannedTaskAttemptLayer,
+  OperationIdAllocator
+} from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
+import { OperationId } from "../../workflow/identity.js"
+import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
+import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { DeliveryProposalId, deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { DeliveryActionExecutor, type DeliveryActionResult } from "./delivery-action-executor.js"
+import { delivery } from "./delivery.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import {
+  currentSignalOf,
+  type DeliveryActionProposal,
+  DeliveryRelationRevision,
+  type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeRelation,
+  TrackerGraphState
+} from "./relations.js"
+import { DeliveryRuntimeProposalOwnershipConflict, runDeliveryRuntime } from "./run-delivery-runtime.js"
+import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
+
+const runId = RunId.make("runtime-test-run")
+const target = FixtureTarget.make("runtime-test-target")
+const policy = RunControlPolicy.make({
+  revision: initialRunPolicyRevision,
+  taskExecutionCapacity: TaskWorkCapacity.make(2)
+})
+
+const plannerLayer = deterministicPlannedTaskAttemptLayer({
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  executor: TaskExecutorLocator.make("executor:runtime-test"),
+  runId,
+  worktreeRoot: WorktreeLocator.make("/runtime-test")
+})
+const identityLayers = Layer.mergeAll(
+  deterministicOperationIdAllocatorLayer("runtime-operation"),
+  plannerLayer,
+  deliveryRuntimeResourcesLayer
+)
+
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("runtime-test-attempt"),
+  baseSha: GitCommitSha.make("2".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/runtime-test"),
+  executor: TaskExecutorLocator.make("executor:runtime-test"),
+  runId,
+  taskId: TaskId.make("runtime-recovered-task"),
+  taskRevision: TaskRevision.make("runtime-test-revision"),
+  worktree: WorktreeLocator.make("/runtime-test/recovered")
+})
+
+const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
+  ...trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(ordinal + 1),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  }),
+  admission: {
+    integrationTarget: { _tag: "NoIntegrationTargetResource" },
+    taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+  },
+  id: DeliveryProposalId.make(`runtime-proposal:${ordinal}:${taskId}`),
+  order: { _tag: "FreshWorkflowOrder", frontierOrdinal: ordinal as never, step: "ReadCurrentTaskGraph", taskId },
+  owner: "TicketDelivery"
+})
+
+const recoveredProposalFor = (
+  transition: RunnableFrontierTransition,
+  acceptedOperationIds = new Set<OperationId>()
+) => {
+  const proposals = deliveryProposalsOf({
+    acceptedOperationIds,
+    fresh: [],
+    integrationResponsibilities: [],
+    responsibilities: [
+      { _tag: "PlannedAttemptExecutorWorkResponsibility" as const, beganAt: JournalPosition.make(1), plannedAttempt }
+    ],
+    runId,
+    transitions: [transition]
+  }).ticketDelivery
+  const recovered = proposals[0]
+  if (recovered === undefined) throw new Error(`no recovered proposal for ${transition._tag}`)
+  return recovered
+}
+
+const baseEvaluation = Effect.gen(function* () {
+  const relation = yield* delivery.pipe(
+    Effect.provide(
+      makeDeliveryRelationsLayer({
+        ...deterministicDeliveryRuntimeSupport(policy),
+        exactEvidence: currentSignalOf([]),
+        graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+        policy: currentSignalOf(policy)
+      })
+    )
+  )
+  return Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+})
+
+const dynamicRelation = Effect.fn("Test.dynamicDeliveryRuntimeRelation")(function* (
+  initial: DeliveryRuntimeEvaluation,
+  onInvalidate?: (
+    current: DeliveryRuntimeEvaluation,
+    cause: Parameters<DeliveryRuntimeRelation["invalidate"]>[0]
+  ) => DeliveryRuntimeEvaluation
+) {
+  const state = yield* SubscriptionRef.make(initial)
+  const evaluations = { changes: SubscriptionRef.changes(state) }
+  return {
+    current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+    evaluations,
+    invalidate: (cause) =>
+      SubscriptionRef.modify(state, (current) => {
+        const revision = DeliveryRelationRevision.make(current.revision + 1)
+        const next = onInvalidate === undefined ? current : onInvalidate(current, cause)
+        return [revision, { ...next, revision }] as const
+      }),
+    publish: (evaluation: DeliveryRuntimeEvaluation) => SubscriptionRef.set(state, evaluation),
+    proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+  } satisfies DeliveryRuntimeRelation<never> & {
+    readonly publish: (evaluation: DeliveryRuntimeEvaluation) => Effect.Effect<void>
+  }
+})
+
+const withProposals = (
+  evaluation: DeliveryRuntimeEvaluation,
+  proposals: ReadonlyArray<DeliveryActionProposal>,
+  capacity = 2
+): DeliveryRuntimeEvaluation => ({
+  ...evaluation,
+  finality:
+    proposals.length === 0
+      ? { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+      : { _tag: "RunMustRemainActive", reason: "RunnableTransition" },
+  proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals },
+  quiescence: { _tag: "QuiescencePassive" },
+  taskWork: { capacity: TaskWorkCapacity.make(capacity), held: [] }
+})
+
+it.effect("admits proposals in preserved order and never exceeds task-work capacity", () =>
+  Effect.gen(function* () {
+    const a = proposal(0, TaskId.make("A"))
+    const b = proposal(1, TaskId.make("B"))
+    const c = proposal(2, TaskId.make("C"))
+    const evaluation = withProposals(yield* baseEvaluation, [a, b, c], 2)
+    const relation = yield* dynamicRelation(evaluation, (current, cause) =>
+      cause._tag === "ProposalCompleted"
+        ? withProposals(
+            current,
+            current.proposedActions._tag === "DeliveryProposalsAvailable"
+              ? current.proposedActions.proposals.filter(({ id }) => id !== cause.proposalId)
+              : [],
+            2
+          )
+        : current
+    )
+    const started = yield* Ref.make<ReadonlyArray<string>>([])
+    const active = yield* Ref.make(0)
+    const maximum = yield* Ref.make(0)
+    const firstWaveStarted = yield* Deferred.make<void>()
+    const thirdStarted = yield* Deferred.make<void>()
+    const gates = new Map([
+      [a.id, yield* Deferred.make<void>()],
+      [b.id, yield* Deferred.make<void>()],
+      [c.id, yield* Deferred.make<void>()]
+    ])
+    const executor = DeliveryActionExecutor.of({
+      execute: (action, lease) =>
+        Effect.gen(function* () {
+          const id = action.proposal.id
+          const taskId = action.proposal.admission.taskWorkPosition
+          const correlation = {
+            attemptId: AttemptId.make(`attempt:${taskId._tag === "TaskWorkPositionRequired" ? taskId.taskId : id}`),
+            runId
+          }
+          const startedNow = yield* Ref.updateAndGet(started, (ids) => [...ids, id])
+          const now = yield* Ref.updateAndGet(active, (count) => count + 1)
+          yield* Ref.update(maximum, (prior) => Math.max(prior, now))
+          if (startedNow.length === 2) yield* Deferred.succeed(firstWaveStarted, undefined)
+          if (startedNow.length === 3) yield* Deferred.succeed(thirdStarted, undefined)
+          yield* Deferred.await(Option.getOrThrow(Option.fromUndefinedOr(gates.get(id))))
+          yield* lease.bindPlannedAttemptPosition(correlation)
+          yield* lease.releasePlannedAttemptPosition(correlation)
+          yield* Ref.update(active, (count) => count - 1)
+          return { _tag: "ActionCompleted", proposalId: id } satisfies DeliveryActionResult
+        })
+    })
+
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(firstWaveStarted)
+    expect(yield* Ref.get(started)).toEqual([a.id, b.id])
+    expect(yield* Ref.get(maximum)).toBe(2)
+
+    yield* Deferred.succeed(Option.getOrThrow(Option.fromUndefinedOr(gates.get(a.id))), undefined)
+    yield* Deferred.await(thirdStarted)
+    expect(yield* Ref.get(started)).toEqual([a.id, b.id, c.id])
+    yield* Deferred.succeed(Option.getOrThrow(Option.fromUndefinedOr(gates.get(b.id))), undefined)
+    yield* Deferred.succeed(Option.getOrThrow(Option.fromUndefinedOr(gates.get(c.id))), undefined)
+
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+  }).pipe(Effect.scoped)
+)
+
+it.effect("does not start a causal successor before its live operation owner is acknowledged", () =>
+  Effect.gen(function* () {
+    const ownedOperationId = OperationId.make("owned-operation")
+    const parent = proposal(0, TaskId.make("A"))
+    const successor = { ...proposal(1, TaskId.make("B")), waitsForLiveOperationId: ownedOperationId }
+    const relation = yield* dynamicRelation(
+      withProposals(yield* baseEvaluation, [parent, successor]),
+      (current, cause) =>
+        cause._tag === "ProposalCompleted"
+          ? withProposals(current, cause.proposalId === parent.id ? [successor] : [])
+          : current
+    )
+    const parentStarted = yield* Deferred.make<void>()
+    const successorStarted = yield* Deferred.make<void>()
+    const finishParent = yield* Deferred.make<void>()
+    const finishSuccessor = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        (action.proposal.id === parent.id
+          ? Deferred.succeed(parentStarted, undefined).pipe(Effect.andThen(Deferred.await(finishParent)))
+          : Deferred.succeed(successorStarted, undefined).pipe(Effect.andThen(Deferred.await(finishSuccessor)))
+        ).pipe(Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult))
+    })
+    const allocator = OperationIdAllocator.of({ allocate: () => Effect.succeed(ownedOperationId) })
+
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provideService(OperationIdAllocator, allocator),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(parentStarted)
+    yield* Effect.yieldNow
+    expect(yield* Deferred.isDone(successorStarted)).toBe(false)
+
+    yield* Deferred.succeed(finishParent, undefined)
+    yield* Deferred.await(successorStarted)
+    yield* Deferred.succeed(finishSuccessor, undefined)
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+  }).pipe(Effect.scoped)
+)
+
+it.effect("allocates no fresh identity until typed admission succeeds", () =>
+  Effect.gen(function* () {
+    const a = proposal(0, TaskId.make("A"))
+    const initial = {
+      ...withProposals(yield* baseEvaluation, [a], 1),
+      taskWork: {
+        capacity: TaskWorkCapacity.make(1),
+        held: [{ correlation: { attemptId: AttemptId.make("attempt:B"), runId }, taskId: TaskId.make("B") }]
+      }
+    }
+    const relation = yield* dynamicRelation(initial, (current, cause) =>
+      cause._tag === "ProposalCompleted" ? withProposals(current, [], 1) : current
+    )
+    const allocations = yield* Ref.make(0)
+    const allocator = OperationIdAllocator.of({
+      allocate: () =>
+        Ref.updateAndGet(allocations, (count) => count + 1).pipe(
+          Effect.map((ordinal) => `operation:${ordinal}` as never)
+        )
+    })
+    const executed = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Deferred.succeed(executed, undefined).pipe(
+          Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+        )
+    })
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provideService(OperationIdAllocator, allocator),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(allocations)).toBe(0)
+
+    yield* relation.publish(withProposals(initial, [a], 1))
+    yield* Deferred.await(executed)
+    expect(yield* Ref.get(allocations)).toBe(1)
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+  }).pipe(Effect.scoped)
+)
+
+it.effect("requests and executes one quiescence probe before returning finality", () =>
+  Effect.gen(function* () {
+    const probeProposal = {
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(10),
+        purpose: "QuiescenceProbe",
+        runId,
+        target
+      }),
+      id: DeliveryProposalId.make("quiescence-probe")
+    }
+    const initial = {
+      ...withProposals(yield* baseEvaluation, []),
+      quiescence: { _tag: "QuiescenceProbeAllowed" as const }
+    }
+    const relation = yield* dynamicRelation(initial, (current, cause) => {
+      if (cause._tag === "QuiescenceProbeRequested") {
+        return withProposals(current, [probeProposal])
+      }
+      return cause._tag === "ProposalCompleted"
+        ? { ...withProposals(current, []), finality: { _tag: "RunMayTerminate" } }
+        : current
+    })
+    const requests = yield* Ref.make(0)
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Ref.updateAndGet(requests, (count) => count + 1).pipe(
+          Effect.as({
+            _tag: "TrackerGraphObservationPublished",
+            operationId: action._tag === "FreshOperationAction" ? action.operationId : ("unexpected" as never),
+            proposalId: action.proposal.id
+          })
+        )
+    })
+
+    const finality = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor)
+    )
+
+    expect(finality).toEqual({ _tag: "RunMayTerminate" })
+    expect(yield* Ref.get(requests)).toBe(1)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("a quiescence probe that reveals work cannot satisfy the later idle state", () =>
+  Effect.gen(function* () {
+    const firstProbe = {
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(20),
+        purpose: "QuiescenceProbe",
+        runId,
+        target
+      }),
+      id: DeliveryProposalId.make("revealing-probe")
+    }
+    const work = proposal(0, TaskId.make("A"))
+    const secondProbe = {
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(21),
+        purpose: "QuiescenceProbe",
+        runId,
+        target
+      }),
+      id: DeliveryProposalId.make("final-probe")
+    }
+    const initial = {
+      ...withProposals(yield* baseEvaluation, []),
+      quiescence: { _tag: "QuiescenceProbeAllowed" as const }
+    }
+    const withProbeAllowed = (evaluation: DeliveryRuntimeEvaluation): DeliveryRuntimeEvaluation => ({
+      ...evaluation,
+      quiescence: { _tag: "QuiescenceProbeAllowed" }
+    })
+    const relation = yield* dynamicRelation(initial, (current, cause) => {
+      if (cause._tag === "QuiescenceProbeRequested") {
+        const next = current.acceptedAt === initial.acceptedAt ? firstProbe : secondProbe
+        return withProbeAllowed(withProposals(current, [next]))
+      }
+      if (cause._tag !== "ProposalCompleted") return current
+      if (cause.proposalId === firstProbe.id) {
+        return { ...withProbeAllowed(withProposals(current, [work])), acceptedAt: JournalPosition.make(21) }
+      }
+      if (cause.proposalId === work.id) {
+        return { ...withProbeAllowed(withProposals(current, [])), acceptedAt: JournalPosition.make(21) }
+      }
+      return { ...withProbeAllowed(withProposals(current, [])), finality: { _tag: "RunMayTerminate" } }
+    })
+    const executed = yield* Ref.make<ReadonlyArray<string>>([])
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Ref.update(executed, (ids) => [...ids, action.proposal.id]).pipe(
+          Effect.as(
+            action.proposal.route._tag === "TrackerGraphReadRoute" &&
+              action.proposal.route.purpose === "QuiescenceProbe"
+              ? {
+                  _tag: "TrackerGraphObservationPublished" as const,
+                  operationId: action._tag === "FreshOperationAction" ? action.operationId : ("unexpected" as never),
+                  proposalId: action.proposal.id
+                }
+              : { _tag: "ActionCompleted" as const, proposalId: action.proposal.id }
+          )
+        )
+    })
+
+    const finality = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor)
+    )
+    expect(yield* Ref.get(executed)).toEqual([firstProbe.id, work.id, secondProbe.id])
+    expect(finality).toEqual({ _tag: "RunMayTerminate" })
+  }).pipe(Effect.scoped)
+)
+
+it.effect("interrupts every scoped live action without manufacturing completion", () =>
+  Effect.gen(function* () {
+    const a = proposal(0, TaskId.make("A"))
+    const relation = yield* dynamicRelation(withProposals(yield* baseEvaluation, [a], 1))
+    const started = yield* Deferred.make<void>()
+    const interrupted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Deferred.succeed(interrupted, undefined))
+        )
+    })
+    const fiber = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(started)
+    yield* Fiber.interrupt(fiber)
+    yield* Deferred.await(interrupted)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("releases acquired integration ownership and its relation subscriber on interruption", () =>
+  Effect.gen(function* () {
+    const acquired = {
+      ...proposal(0, TaskId.make("A")),
+      admission: {
+        integrationTarget: {
+          _tag: "IntegrationTargetResourceRequired" as const,
+          access: "Acquire" as const,
+          integrationTarget: IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/runtime-test/repository.git"),
+            ref: IntegrationTargetRef.make("refs/heads/main")
+          }),
+          queuedAt: JournalPosition.make(40)
+        },
+        taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
+      }
+    }
+    const evaluation = withProposals(yield* baseEvaluation, [acquired])
+    const subscribers = yield* Ref.make(0)
+    const evaluations = {
+      changes: Stream.fromEffect(Ref.update(subscribers, (count) => count + 1).pipe(Effect.as(evaluation))).pipe(
+        Stream.concat(Stream.never),
+        Stream.ensuring(Ref.update(subscribers, (count) => count - 1))
+      )
+    }
+    const relation = {
+      current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+      evaluations,
+      invalidate: () => Effect.succeed(DeliveryRelationRevision.make(1)),
+      proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+    } satisfies DeliveryRuntimeRelation
+    const actionStarted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: () => Deferred.succeed(actionStarted, undefined).pipe(Effect.andThen(Effect.never))
+    })
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const fiber = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(deterministicOperationIdAllocatorLayer("interrupt-cleanup")),
+      Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of({ integrationTargets })),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(actionStarted)
+    expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(
+      new Set([JournalPosition.make(40)])
+    )
+    expect(yield* Ref.get(subscribers)).toBe(1)
+
+    yield* Fiber.interrupt(fiber)
+
+    expect(yield* integrationTargets.snapshot).toEqual({
+      activeResponsibilityPositions: new Set(),
+      heldResponsibilityPositions: new Set()
+    })
+    expect(yield* Ref.get(subscribers)).toBe(0)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("fails with the exact relation cause before admitting any proposal", () =>
+  Effect.gen(function* () {
+    const initial = yield* baseEvaluation
+    const relationFailure = { _tag: "TestRelationFailure" as const }
+    const relation = {
+      current: currentSignalOf(initial.current),
+      evaluations: { changes: Stream.fail(relationFailure) },
+      invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
+      proposedActions: currentSignalOf(initial.proposedActions)
+    } satisfies DeliveryRuntimeRelation<typeof relationFailure>
+    const executor = DeliveryActionExecutor.of({ execute: () => Effect.die("no action may start") })
+
+    const failure = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.flip
+    )
+
+    expect(failure).toEqual(relationFailure)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("fails closed when the assembled relation reports conflicting proposal ownership", () =>
+  Effect.gen(function* () {
+    const conflictedId = DeliveryProposalId.make("runtime-owner-conflict")
+    const conflicted = {
+      ...(yield* baseEvaluation),
+      proposedActions: {
+        _tag: "DeliveryProposalOwnershipConflict" as const,
+        conflicts: [{ id: conflictedId, owners: ["TrackerGraph" as const, "TicketDelivery" as const] }] as const
+      }
+    }
+    const relation = yield* dynamicRelation(conflicted)
+    const executor = DeliveryActionExecutor.of({ execute: () => Effect.die("conflict cannot authorize action") })
+
+    const failure = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(DeliveryRuntimeProposalOwnershipConflict)
+    if (!(failure instanceof DeliveryRuntimeProposalOwnershipConflict))
+      return expect.fail("expected ownership conflict")
+    expect(failure.proposalIds).toEqual([conflictedId])
+  }).pipe(Effect.scoped)
+)
+
+it.effect("returns the exact action failure after rolling back its process-local admission", () =>
+  Effect.gen(function* () {
+    const actionProposal = proposal(0, TaskId.make("action-failure"))
+    const initial = withProposals(yield* baseEvaluation, [actionProposal], 1)
+    const relation = yield* dynamicRelation(initial, (current, cause) =>
+      cause._tag === "ProposalCompleted" ? withProposals(current, [], 1) : current
+    )
+    const actionFailure = new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
+    const executor = DeliveryActionExecutor.of({ execute: () => Effect.fail(actionFailure) })
+
+    const failure = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.flip
+    )
+
+    expect(failure).toEqual(actionFailure)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("materializes accepted and source-derived operation identities only after admission", () =>
+  Effect.gen(function* () {
+    const requestId = TaskClaimReacquisitionRequestId.make("runtime-reacquisition-request")
+    const reacquisition = recoveredProposalFor(
+      RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
+        plannedAttempt,
+        requestId,
+        taskId: plannedAttempt.taskId
+      })
+    )
+    const claimOperationId = OperationId.make("runtime-external-claim")
+    const claim = ActiveTaskClaim.make({
+      operationId: claimOperationId,
+      owner: ClaimOwner.make("dalph"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("runtime-external-token")
+    })
+    const releaseOperation = makeTaskClaimReleaseOperation({
+      predecessorOperationIds: [claimOperationId],
+      release: { claim, operationId: OperationId.make("runtime-release-placeholder") }
+    })
+    const externalRelease = recoveredProposalFor(
+      RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation: releaseOperation, plannedAttempt })
+    )
+    const acceptedOperationId = OperationId.make("runtime-accepted-operation")
+    const accepted = recoveredProposalFor(
+      RunnableFrontierTransition.CheckTaskClaim({ operationId: acceptedOperationId, taskId: plannedAttempt.taskId }),
+      new Set([acceptedOperationId])
+    )
+    const initial = withProposals(yield* baseEvaluation, [reacquisition, externalRelease, accepted], 1)
+    const relation = yield* dynamicRelation(initial, (current, cause) =>
+      cause._tag === "ProposalCompleted" && current.proposedActions._tag === "DeliveryProposalsAvailable"
+        ? withProposals(
+            current,
+            current.proposedActions.proposals.filter(({ id }) => id !== cause.proposalId),
+            1
+          )
+        : current
+    )
+    const actions = yield* Ref.make<ReadonlyArray<{ readonly id: DeliveryProposalId; readonly operationId: string }>>(
+      []
+    )
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Ref.update(actions, (current) => [
+          ...current,
+          {
+            id: action.proposal.id,
+            operationId:
+              action._tag === "FreshOperationAction"
+                ? action.operationId
+                : action._tag === "AcceptedOperationAction"
+                  ? action.proposal.actionIdentity.operationId
+                  : "unexpected"
+          }
+        ]).pipe(Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } as const))
+    })
+
+    expect(
+      yield* runDeliveryRuntime(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor)
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+    expect(yield* Ref.get(actions)).toEqual([
+      { id: reacquisition.id, operationId: taskClaimReacquisitionOperationId(requestId) },
+      { id: externalRelease.id, operationId: `external-success-release:${claimOperationId}` },
+      { id: accepted.id, operationId: acceptedOperationId }
+    ])
+  }).pipe(Effect.scoped)
+)
+
+it.effect("passes a deferred proposal without reordering the later proposals", () =>
+  Effect.gen(function* () {
+    const live = proposal(0, TaskId.make("live"))
+    const blockedFirst = proposal(1, TaskId.make("blocked-first"))
+    const blockedLater = proposal(2, TaskId.make("blocked-later"))
+    const free = {
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(90),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      }),
+      id: DeliveryProposalId.make("runtime-free-later-proposal")
+    }
+    const initial = withProposals(yield* baseEvaluation, [live], 1)
+    const relation = yield* dynamicRelation(initial)
+    const liveStarted = yield* Deferred.make<void>()
+    const freeStarted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action, lease) =>
+        Effect.gen(function* () {
+          if (action.proposal.id === live.id) {
+            yield* Deferred.succeed(liveStarted, undefined)
+          } else if (action.proposal.id === free.id) {
+            yield* lease.bindPlannedAttemptPosition({ attemptId: plannedAttempt.attemptId, runId })
+            yield* Deferred.succeed(freeStarted, undefined)
+          }
+          return yield* Effect.never
+        })
+    })
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(liveStarted)
+    yield* relation.publish(withProposals(initial, [blockedFirst, live, blockedLater, free], 1))
+    yield* Deferred.await(freeStarted)
+    yield* Fiber.interrupt(runtime)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("returns a relation failure published after actions have started", () =>
+  Effect.gen(function* () {
+    const actionProposal = proposal(0, TaskId.make("later-relation-failure"))
+    const initial = withProposals(yield* baseEvaluation, [actionProposal], 1)
+    const fail = yield* Deferred.make<void>()
+    const relationFailure = { _tag: "LaterRelationFailure" as const }
+    const evaluations = {
+      changes: Stream.succeed(initial).pipe(
+        Stream.concat(Stream.fromEffect(Deferred.await(fail).pipe(Effect.andThen(Effect.fail(relationFailure)))))
+      )
+    }
+    const relation = {
+      current: currentSignalOf(initial.current),
+      evaluations,
+      invalidate: () => Effect.succeed(DeliveryRelationRevision.make(1)),
+      proposedActions: currentSignalOf(initial.proposedActions)
+    } satisfies DeliveryRuntimeRelation<typeof relationFailure>
+    const started = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+    })
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(started)
+    yield* Deferred.succeed(fail, undefined)
+
+    expect(yield* Effect.flip(Fiber.join(runtime))).toEqual(relationFailure)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("fails closed when a later evaluation introduces conflicting ownership", () =>
+  Effect.gen(function* () {
+    const actionProposal = proposal(0, TaskId.make("later-owner-conflict"))
+    const initial = withProposals(yield* baseEvaluation, [actionProposal], 1)
+    const dynamic = yield* dynamicRelation(initial)
+    const conflictedId = DeliveryProposalId.make("later-runtime-owner-conflict")
+    const conflicted = {
+      ...initial,
+      proposedActions: {
+        _tag: "DeliveryProposalOwnershipConflict" as const,
+        conflicts: [{ id: conflictedId, owners: ["TrackerGraph", "TicketDelivery"] }] as const
+      }
+    }
+    const relation = {
+      ...dynamic,
+      invalidate: () => dynamic.publish(conflicted).pipe(Effect.as(DeliveryRelationRevision.make(100)))
+    }
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) => Effect.succeed({ _tag: "ActionCompleted", proposalId: action.proposal.id })
+    })
+    const failure = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(DeliveryRuntimeProposalOwnershipConflict)
+    if (!(failure instanceof DeliveryRuntimeProposalOwnershipConflict))
+      return expect.fail("expected ownership conflict")
+    expect(failure.proposalIds).toEqual([conflictedId])
+  }).pipe(Effect.scoped)
+)
+
+it.effect("does not let a probe satisfy quiescence when work appears before its outcome", () =>
+  Effect.gen(function* () {
+    const probeProposal = {
+      ...trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(100),
+        purpose: "QuiescenceProbe",
+        runId,
+        target
+      }),
+      id: DeliveryProposalId.make("probe-with-concurrent-work")
+    }
+    const work = proposal(0, TaskId.make("work-revealed-before-probe-outcome"))
+    const initial = {
+      ...withProposals(yield* baseEvaluation, []),
+      quiescence: { _tag: "QuiescenceProbeAllowed" as const }
+    }
+    const relation = yield* dynamicRelation(initial, (current, cause) =>
+      cause._tag === "QuiescenceProbeRequested"
+        ? { ...withProposals(current, [probeProposal]), quiescence: { _tag: "QuiescenceProbeAllowed" } }
+        : current
+    )
+    const probeStarted = yield* Deferred.make<void>()
+    const finishProbe = yield* Deferred.make<void>()
+    const workStarted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        action.proposal.id === probeProposal.id
+          ? Deferred.succeed(probeStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishProbe)),
+              Effect.as({ _tag: "ActionCompleted", proposalId: probeProposal.id } as const)
+            )
+          : Deferred.succeed(workStarted, undefined).pipe(Effect.andThen(Effect.never))
+    })
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(probeStarted)
+    yield* relation.publish({
+      ...withProposals(initial, [probeProposal, work]),
+      quiescence: { _tag: "QuiescenceProbeAllowed" }
+    })
+    yield* Deferred.await(workStarted)
+    yield* Deferred.succeed(finishProbe, undefined)
+    yield* Fiber.interrupt(runtime)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("keeps one outstanding quiescence probe request while its relation revision is still empty", () =>
+  Effect.gen(function* () {
+    const initial = {
+      ...withProposals(yield* baseEvaluation, []),
+      quiescence: { _tag: "QuiescenceProbeAllowed" as const }
+    }
+    const state = yield* SubscriptionRef.make(initial)
+    const requests = yield* Ref.make(0)
+    const requested = yield* Deferred.make<void>()
+    const evaluations = { changes: SubscriptionRef.changes(state) }
+    const relation = {
+      current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+      evaluations,
+      invalidate: (cause) =>
+        SubscriptionRef.modify(state, (current) => {
+          const revision = DeliveryRelationRevision.make(current.revision + 1)
+          return [revision, { ...current, revision }] as const
+        }).pipe(
+          Effect.tap(() =>
+            cause._tag === "QuiescenceProbeRequested"
+              ? Ref.update(requests, (count) => count + 1).pipe(Effect.andThen(Deferred.succeed(requested, undefined)))
+              : Effect.void
+          )
+        ),
+      proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+    } satisfies DeliveryRuntimeRelation
+    const executor = DeliveryActionExecutor.of({ execute: () => Effect.die("no proposal may execute") })
+    const runtime = yield* runDeliveryRuntime(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(requested)
+    yield* Effect.yieldNow
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(requests)).toBe(1)
+    yield* Fiber.interrupt(runtime)
+  }).pipe(Effect.scoped)
+)

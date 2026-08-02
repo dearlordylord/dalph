@@ -71,6 +71,7 @@ import { observeQuiescenceDeliveryShadow } from "../delivery/quiescence-delivery
 import { observeDeliveryShadowWithinTurn } from "../delivery/delivery-shadow-budget.js"
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import type { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 
 const explanationTaskIds = (explanation: RunnableFrontier["explanations"][number]): ReadonlyArray<TaskId> =>
   Option.toArray(Option.fromUndefinedOr<TaskId>(Reflect.get(explanation, "taskId")))
@@ -467,6 +468,7 @@ const runDeliveryActivation = Effect.fn("DeliveryActivation.run")(function* (
 export type JournaledRunServices =
   | AcceptedFactPublicationGateway
   | ControlDirectionApplication
+  | DeliveryRuntimeResources
   | InRunJournal
   | PlannedAttemptExecutor
   | RunRecoveryActivation

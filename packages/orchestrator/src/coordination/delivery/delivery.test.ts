@@ -6,6 +6,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorResult,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -28,13 +29,17 @@ import {
   TrackerGraphRelation,
   boundedParallelTickets,
   currentSignalOf,
+  deliveryFinalityOf,
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
   PlannedAttemptExecutorTerminalEvidence,
   TrackerGraphState
 } from "./relations.js"
-import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import {
+  deterministicDeliveryRuntimeSupport,
+  makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
+} from "./in-memory-relations.js"
 import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 
@@ -42,6 +47,13 @@ const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
   taskExecutionCapacity: TaskWorkCapacity.make(1)
 })
+
+const makeDeliveryRelationsLayer = (
+  input: Omit<
+    Parameters<typeof makeDeliveryRelationsLayerWithRuntime>[0],
+    "evaluationConsistency" | "invalidate" | "runtimeFacts"
+  >
+) => makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input })
 
 const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) => {
   const projected = TaskDagSnapshot.project(
@@ -116,6 +128,63 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
       )
       expect(Exit.isFailure(decoded)).toBe(true)
     }
+  })
+)
+
+it.effect("treats only an accepted synthetic terminal report as unsettled delivery", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("synthetic-finality")
+    const current = Option.getOrThrow(
+      yield* delivery.pipe(
+        Effect.provide(
+          makeDeliveryRelationsLayer({
+            exactEvidence: currentSignalOf([]),
+            graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+            policy: currentSignalOf(policy)
+          })
+        ),
+        Effect.flatMap((relation) => relation.current.changes.pipe(Stream.runHead))
+      )
+    )
+    const correlation = { attemptId: AttemptId.make("synthetic-finality-attempt"), runId: RunId.make("synthetic") }
+    const finalityFor = (result: PlannedAttemptExecutorResult) =>
+      deliveryFinalityOf(
+        {
+          ...current,
+          ticketDeliveries: {
+            ...current.ticketDeliveries,
+            deliveries: [
+              {
+                _tag: "TicketDelivery",
+                evidence: [],
+                obligations: [],
+                placement: { _tag: "GraphNotEstablished" },
+                standings: [
+                  {
+                    _tag: "SyntheticExecutorSituation",
+                    plannedAttempt: exactAttemptEvidence(taskId).facts.responsibility.plannedAttempt,
+                    report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result })
+                  }
+                ],
+                taskId
+              }
+            ]
+          }
+        },
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      )
+
+    expect(finalityFor(PlannedAttemptExecutorResult.cases.Completed.make({}))).toEqual({
+      _tag: "RunMustRemainActive",
+      reason: "TrackerTargetUnsettled"
+    })
+    expect(
+      finalityFor(
+        PlannedAttemptExecutorResult.cases.Accepted.make({
+          acceptedResult: { commit: GitCommitSha.make("3".repeat(40)) }
+        })
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
 )
 
@@ -214,11 +283,13 @@ it.effect("fails closed when two lower relations claim one exact proposal identi
     const relation = yield* delivery.pipe(Effect.provide(layer))
 
     const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
+    const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
     expect(frontier).toEqual({
       _tag: "DeliveryProposalOwnershipConflict",
       conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery"] }]
     })
+    expect(evaluation.finality).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
 )
 
@@ -426,4 +497,17 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
     /const frontier = \{ \.\.\.recovered, transitions: recovered\.transitions\.filter\(currentPhase\.mayRun\) \}[\s\S]*?observeBoundaryDeliveryShadow\(/
   )
   expect(runSource.match(/yield\* observeDeliveryShadowWithinTurn\(/g)).toHaveLength(2)
+})
+
+it("keeps the live action dispatcher free of workflow protocol implementations", () => {
+  const dispatcherSource = readFileSync(
+    fileURLToPath(new URL("./live-delivery-action-executor.ts", import.meta.url)),
+    "utf8"
+  )
+
+  expect(dispatcherSource).not.toMatch(/workflow\/protocols|coordination\/run|workflow\/registry/)
+  expect(dispatcherSource).toContain('from "./fresh-delivery-action-adapter.js"')
+  expect(dispatcherSource).toContain('from "./recovered-delivery-action-adapter.js"')
+  expect(dispatcherSource).toContain('from "./planned-attempt-delivery-action-adapter.js"')
+  expect(dispatcherSource).toContain('from "./integration-delivery-action-adapter.js"')
 })

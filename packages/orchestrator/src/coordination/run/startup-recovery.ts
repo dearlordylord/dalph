@@ -26,6 +26,8 @@ import {
 } from "../reconstruction/history-result.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
+import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -93,6 +95,11 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const ambient = yield* Effect.context<never>()
   const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
   const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
+  const deliveryRuntimeResources = Context.getOption(ambient, DeliveryRuntimeResources)
+  const runtimeResources = Option.isSome(deliveryRuntimeResources)
+    ? deliveryRuntimeResources.value
+    : DeliveryRuntimeResources.of({ integrationTargets: yield* makeIntegrationTargetResourceController() })
+  const integrationResources = runtimeResources.integrationTargets
   const recovery =
     startup === "Fresh"
       ? yield* makeJournaledFreshRunRecoveryActivation(
@@ -100,9 +107,15 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
           integrationTarget,
           candidateCorrectionLimit,
           candidateContinuationLimit,
-          { workflowTrace: freshRecoveryTrace === "Emit" ? Option.some(trace) : Option.none() }
+          { integrationResources, workflowTrace: freshRecoveryTrace === "Emit" ? Option.some(trace) : Option.none() }
         )
-      : yield* makeRunRecoveryActivation(runId, integrationTarget, candidateCorrectionLimit, candidateContinuationLimit)
+      : yield* makeRunRecoveryActivation(
+          runId,
+          integrationTarget,
+          candidateCorrectionLimit,
+          candidateContinuationLimit,
+          integrationResources
+        )
   let context = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryActivation, recovery),
@@ -111,7 +124,8 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     Context.add(ControlDirectionApplication, controlDirectionApplication),
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
-    Context.add(WorkflowTrace, trace)
+    Context.add(WorkflowTrace, trace),
+    Context.add(DeliveryRuntimeResources, runtimeResources)
   )
   if (candidateAgent._tag === "Some") context = Context.add(context, IntegrationCandidateAgent, candidateAgent.value)
   if (candidateGit._tag === "Some") context = Context.add(context, IntegrationCandidateGit, candidateGit.value)

@@ -1,6 +1,8 @@
+/* eslint-disable max-lines -- The flat delivery relation algebra, service colours, and composition vocabulary stay co-located for auditability. */
 import {
   PlannedAttemptExecutorReport,
   type AttemptId,
+  type PlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt,
   type TaskId,
   type TaskRevision
@@ -18,6 +20,9 @@ import type {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
+import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
+import type { TaskWorkCapacity } from "../admission/capacity.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -248,8 +253,16 @@ export const makeDeliveryReflection = (source: DeliverySettlements): DeliveryRef
 
 export class TrackerGraphRelationError extends Schema.TaggedErrorClass<TrackerGraphRelationError>()(
   "TrackerGraphRelationError",
-  { summary: Schema.String }
+  { cause: Schema.Cause(Schema.Unknown, Schema.Unknown), summary: Schema.String }
 ) {}
+
+/** Shared delivery reconciliation failed before one coherent relation revision could be published. */
+export class DeliveryRelationReconciliationError extends Schema.TaggedErrorClass<DeliveryRelationReconciliationError>()(
+  "DeliveryRelationReconciliationError",
+  { cause: Schema.Cause(Schema.Unknown, Schema.Unknown) }
+) {}
+
+export type DeliveryRelationSourceError = TrackerGraphRelationError | DeliveryRelationReconciliationError
 
 export class TicketDeliveryError extends Schema.TaggedErrorClass<TicketDeliveryError>()("TicketDeliveryError", {
   summary: Schema.String
@@ -266,8 +279,8 @@ export class DeliveryReflectionError extends Schema.TaggedErrorClass<DeliveryRef
 ) {}
 
 export interface TrackerGraphRelationService {
-  readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, TrackerGraphRelationError>
-  readonly signal: CurrentSignal<TrackerGraphState, TrackerGraphRelationError>
+  readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
+  readonly signal: CurrentSignal<TrackerGraphState, DeliveryRelationSourceError>
 }
 
 /** Current accepted tracker-graph relation supplied to the flat delivery composition. */
@@ -336,6 +349,43 @@ export interface DeliveryRuntimeSnapshot {
   readonly trackerGraph: TrackerGraphState
 }
 
+/** Exact process-local admission facts reconstructed below the descriptive relation. */
+export interface DeliveryTaskWorkAdmissionBasis {
+  readonly capacity: TaskWorkCapacity
+  readonly held: ReadonlyArray<{ readonly correlation: PlannedAttemptExecutorCorrelation; readonly taskId: TaskId }>
+}
+
+/** Whether an empty relation may ask for one final graph read or must remain passive. */
+export type DeliveryQuiescenceDisposition =
+  | { readonly _tag: "QuiescenceProbeAllowed" }
+  | { readonly _tag: "QuiescencePassive" }
+
+/** Monotonic process-local version of one fully reconciled delivery relation value. */
+export const DeliveryRelationRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("DeliveryRelationRevision")
+)
+export type DeliveryRelationRevision = typeof DeliveryRelationRevision.Type
+
+/** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
+export interface DeliveryRuntimeFacts {
+  readonly acceptedAt: JournalPosition | null
+  readonly quiescence: DeliveryQuiescenceDisposition
+  readonly revision: DeliveryRelationRevision
+  readonly taskWork: DeliveryTaskWorkAdmissionBasis
+}
+
+/** One coherent value consumed by the runtime action owner. */
+export interface DeliveryRuntimeEvaluation {
+  readonly _tag: "DeliveryRuntimeEvaluation"
+  readonly acceptedAt: JournalPosition | null
+  readonly current: DeliveryRuntimeSnapshot
+  readonly finality: RunFinalityDecisionType
+  readonly proposedActions: DeliveryProposalFrontier
+  readonly quiescence: DeliveryQuiescenceDisposition
+  readonly revision: DeliveryRelationRevision
+  readonly taskWork: DeliveryTaskWorkAdmissionBasis
+}
+
 /** Process-local reason for the runtime to request a fresh evaluation of descriptive relations. */
 export type DeliveryInvalidation =
   | { readonly _tag: "AcceptedFactsChanged" }
@@ -344,8 +394,53 @@ export type DeliveryInvalidation =
 
 export interface DeliveryRuntimeRelation<E = DeliveryReflectionError> {
   readonly current: CurrentSignal<DeliveryRuntimeSnapshot, E>
-  readonly invalidate: (cause: DeliveryInvalidation) => Effect.Effect<void>
+  readonly evaluations: CurrentSignal<DeliveryRuntimeEvaluation, E>
+  readonly invalidate: (cause: DeliveryInvalidation) => Effect.Effect<DeliveryRelationRevision>
   readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
+}
+
+const trackerTargetIsSettled = (graph: TrackerGraphState): boolean =>
+  graph._tag === "GraphEstablished" &&
+  graph.snapshot.toWire().tasks.every(({ lifecycle }) => lifecycle._tag === "CompletedSuccessfully")
+
+const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
+  if (standing._tag === "ResponsibilitySituation") {
+    return ![
+      "FinalOutcome",
+      "PlannedAttemptExecutorWorkTerminal",
+      "Relinquished",
+      "Settled",
+      "TaskExternalSuccessSettled"
+    ].includes(standing.facts.disposition._tag)
+  }
+  return (
+    standing._tag !== "SyntheticExecutorSituation" ||
+    standing.report._tag !== "Terminal" ||
+    standing.report.result._tag === "Accepted"
+  )
+}
+
+/** Derives finality from the relation's own lifecycle facts, never from the legacy runnable frontier. */
+export const deliveryFinalityOf = (
+  current: DeliveryRuntimeSnapshot,
+  proposedActions: DeliveryProposalFrontier
+): RunFinalityDecisionType => {
+  if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+  }
+  if (proposedActions.proposals.length > 0) {
+    return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
+  }
+  if (
+    proposedActions.isolatedIssues.length > 0 ||
+    current.ticketDeliveries.deliveries.some(
+      ({ obligations, standings }) => obligations.length > 0 || standings.some(standingIsUnsettled)
+    )
+  )
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+  return trackerTargetIsSettled(current.trackerGraph)
+    ? RunFinalityDecision.RunMayTerminate()
+    : RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
 }
 
 const proposalOrdinal = (proposal: DeliveryActionProposal): number =>
@@ -395,10 +490,11 @@ export const deliveryProposalFrontierOf = (
 
 /** Assembles the final descriptive value and pure proposal frontier returned by the flat Effect. */
 export const makeDeliveryRuntimeRelation = <E>(input: {
+  readonly facts: CurrentSignal<DeliveryRuntimeFacts, E>
   readonly reflection: DeliveryReflectionRelation<E>
   readonly trackerGraph: TrackerGraphRelationService
-  readonly invalidate?: DeliveryRuntimeRelation<E>["invalidate"]
-}): DeliveryRuntimeRelation<E | TrackerGraphRelationError> => {
+  readonly invalidate: DeliveryRuntimeRelation<E>["invalidate"]
+}): DeliveryRuntimeRelation<E | DeliveryRelationSourceError> => {
   const snapshot = mapCurrentSignal(input.reflection.current, (reflection) => ({
     _tag: "DeliveryRuntimeSnapshot" as const,
     reflection,
@@ -414,25 +510,37 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
       zipCurrentSignals(lower.proposalContributions, input.reflection.proposedActions)
     )
   )
-  return {
-    current: snapshot,
-    invalidate: input.invalidate ?? (() => Effect.void),
-    proposedActions: mapCurrentSignal(contributions, ([current, [tracker, [lowerContributions, reflection]]]) =>
-      deliveryProposalFrontierOf(
-        [
-          trackerProposalsFor(current.trackerGraph, tracker),
-          lowerContributions.ticketDelivery,
-          lowerContributions.deliverySettlement,
-          reflection
-        ],
-        lowerContributions.issues
-      )
+  const proposedActions = mapCurrentSignal(contributions, ([current, [tracker, [lowerContributions, reflection]]]) =>
+    deliveryProposalFrontierOf(
+      [
+        trackerProposalsFor(current.trackerGraph, tracker),
+        lowerContributions.ticketDelivery,
+        lowerContributions.deliverySettlement,
+        reflection
+      ],
+      lowerContributions.issues
     )
-  }
+  )
+  const evaluations = mapCurrentSignal(
+    zipCurrentSignals(zipCurrentSignals(snapshot, proposedActions), input.facts),
+    ([[current, frontier], facts]): DeliveryRuntimeEvaluation => ({
+      _tag: "DeliveryRuntimeEvaluation",
+      acceptedAt: facts.acceptedAt,
+      current,
+      finality: deliveryFinalityOf(current, frontier),
+      proposedActions: frontier,
+      quiescence: facts.quiescence,
+      revision: facts.revision,
+      taskWork: facts.taskWork
+    })
+  )
+  return { current: snapshot, evaluations, invalidate: input.invalidate, proposedActions }
 }
 
 export interface BoundedParallelTicketsProjectionService {
-  readonly of: <E>(frontier: CurrentSignal<DeliveryFrontier, E>) => CurrentSignal<BoundedParallelTickets, E>
+  readonly of: <E>(
+    frontier: CurrentSignal<DeliveryFrontier, E>
+  ) => CurrentSignal<BoundedParallelTickets, E | DeliveryRelationSourceError>
 }
 
 export class BoundedParallelTicketsProjection extends Context.Service<
@@ -441,7 +549,9 @@ export class BoundedParallelTicketsProjection extends Context.Service<
 >()("@dalph/BoundedParallelTicketsProjection") {}
 
 export interface TicketDeliveryProjectionService {
-  readonly of: <E>(tickets: CurrentSignal<BoundedParallelTickets, E>) => TicketDeliveryRelation<E | TicketDeliveryError>
+  readonly of: <E>(
+    tickets: CurrentSignal<BoundedParallelTickets, E>
+  ) => TicketDeliveryRelation<E | TicketDeliveryError | DeliveryRelationSourceError>
 }
 
 export class TicketDeliveryProjection extends Context.Service<
@@ -450,7 +560,9 @@ export class TicketDeliveryProjection extends Context.Service<
 >()("@dalph/TicketDeliveryProjection") {}
 
 export interface DeliverySettlementProjectionService {
-  readonly of: <E>(deliveries: TicketDeliveryRelation<E>) => DeliverySettlementRelation<E | DeliverySettlementError>
+  readonly of: <E>(
+    deliveries: TicketDeliveryRelation<E>
+  ) => DeliverySettlementRelation<E | DeliverySettlementError | DeliveryRelationSourceError>
 }
 
 export class DeliverySettlementProjection extends Context.Service<
@@ -461,7 +573,7 @@ export class DeliverySettlementProjection extends Context.Service<
 export interface DeliveryReflectionProjectionService {
   readonly of: <E>(
     settlements: DeliverySettlementRelation<E>
-  ) => DeliveryReflectionRelation<E | DeliveryReflectionError>
+  ) => DeliveryReflectionRelation<E | DeliveryReflectionError | DeliveryRelationSourceError>
 }
 
 export class DeliveryReflectionProjection extends Context.Service<
@@ -473,7 +585,7 @@ export interface DeliveryRuntimeAssemblyService {
   readonly of: <E>(input: {
     readonly reflection: DeliveryReflectionRelation<E>
     readonly trackerGraph: TrackerGraphRelationService
-  }) => DeliveryRuntimeRelation<E | TrackerGraphRelationError>
+  }) => DeliveryRuntimeRelation<E | DeliveryRelationSourceError>
 }
 
 export class DeliveryRuntimeAssembly extends Context.Service<DeliveryRuntimeAssembly, DeliveryRuntimeAssemblyService>()(

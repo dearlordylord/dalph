@@ -38,7 +38,7 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { acceptedOperationIdOf } from "../../workflow/registry/event-descriptor.js"
 import { delivery } from "./delivery.js"
-import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { recordDeliveryShadowComparison } from "./delivery-shadow-diagnostics.js"
 import { ticketDeliveryEvidenceOf } from "./delivery-shadow-evidence.js"
 
@@ -360,6 +360,7 @@ export const evaluateDeliveryRelation = (input: {
 }) =>
   Effect.gen(function* () {
     const layerInput = {
+      ...deterministicDeliveryRuntimeSupport(input.policy),
       exactEvidence: currentSignalOf(input.exactEvidence),
       graph: currentSignalOf(input.graph),
       policy: currentSignalOf(input.policy),

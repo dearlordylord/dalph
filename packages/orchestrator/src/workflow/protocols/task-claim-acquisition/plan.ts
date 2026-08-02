@@ -4,7 +4,7 @@ import { type OperationId } from "../../identity.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../../authorities/task-tracker/claim-mutation.js"
 
-interface TaskClaimAcquisitionPlannerService {
+export interface TaskClaimAcquisitionPlannerService {
   readonly plan: (
     operationId: OperationId,
     taskId: TaskId

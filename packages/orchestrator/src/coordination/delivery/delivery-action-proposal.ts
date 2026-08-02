@@ -1,10 +1,17 @@
-import type { IntegrationTarget, PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
+import type {
+  IntegrationTarget,
+  PlannedAttemptExecutorCorrelation,
+  PlannedTaskAttempt,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
 import { Schema } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { IntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -55,7 +62,19 @@ export type DeliveryProposalOrderEvidence =
 /** The task-work position the runtime must prove before it may perform this action. */
 export type TaskWorkPositionRequirement =
   | { readonly _tag: "NoTaskWorkPosition" }
-  | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "Existing" | "ReserveOrReuse"; readonly taskId: TaskId }
+  | {
+      readonly _tag: "TaskWorkPositionRequired"
+      readonly correlation: PlannedAttemptExecutorCorrelation
+      readonly mode: "Existing"
+      readonly taskId: TaskId
+    }
+  | {
+      readonly _tag: "TaskWorkPositionRequired"
+      readonly mode: "ReserveOrReuse"
+      /** The exact attempt identity this position retains once it is already known. */
+      readonly retainAs?: PlannedAttemptExecutorCorrelation
+      readonly taskId: TaskId
+    }
 
 /** Exact repository/ref resource use required by an integration action. */
 export type IntegrationTargetResourceRequirement =
@@ -132,8 +151,11 @@ type FreshExecutorStep = Extract<
 >
 export type FreshOperationStep = Exclude<FreshWorkflowStep, FreshExecutorStep>
 
-export type FreshOperationRoute =
-  | { readonly _tag: "FreshWorkflowRoute"; readonly step: FreshOperationStep }
+type FreshAttemptPlanningStep = Extract<FreshOperationStep, { readonly _tag: "RecordTaskAttemptPlan" }>
+type FreshWorkflowOperationStep = Exclude<FreshOperationStep, FreshAttemptPlanningStep>
+
+export type FreshOperationOnlyRoute =
+  | { readonly _tag: "FreshWorkflowRoute"; readonly step: FreshWorkflowOperationStep }
   | { readonly _tag: "RecoveredNewActionRoute"; readonly action: NewRecoveredWorkflowAction }
   | {
       readonly _tag: "TrackerGraphReadRoute"
@@ -142,30 +164,81 @@ export type FreshOperationRoute =
       readonly target: TrackerTarget
     }
 
+export interface FreshAttemptPlanningRoute {
+  readonly _tag: "FreshWorkflowRoute"
+  readonly step: FreshAttemptPlanningStep
+}
+
+export type FreshOperationRoute = FreshAttemptPlanningRoute | FreshOperationOnlyRoute
+
+export type AcceptedWorkflowTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "CheckTaskClaim"
+      | "ReconcileTaskClaim"
+      | "ReconcileTaskClaimRelease"
+      | "ReconcileTaskWorktree"
+      | "ObservePlannedAttemptContinuationClaim"
+      | "ObservePlannedAttemptContinuationGraph"
+      | "ObservePlannedAttemptContinuationSpecification"
+      | "ObservePlannedAttemptContinuationTargetLineage"
+      | "ObservePlannedAttemptContinuationWorktree"
+      | "ObserveResponsibleTaskClaim"
+  }
+>
+
 export interface AcceptedWorkflowRoute {
   readonly _tag: "AcceptedWorkflowRoute"
-  readonly transition: RunnableFrontierTransition
+  readonly transition: AcceptedWorkflowTransition
 }
+
+export type IdentityFreeWorkflowTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "AcquireStartedIntegrationTarget"
+      | "ContinuePlannedAttemptExecutorWork"
+      | "ContinueStartedIntegrationCandidate"
+      | "QueueAcceptedResultIntegrationResponsibility"
+      | "ReleaseStartedIntegrationTarget"
+      | "StartQueuedIntegration"
+      | "SuspendPlannedAttemptExecutorWork"
+  }
+>
 
 export type IdentityFreeWorkflowRoute =
   | { readonly _tag: "FreshExecutorWorkflowRoute"; readonly step: FreshExecutorStep }
-  | { readonly _tag: "IdentityFreeWorkflowRoute"; readonly transition: RunnableFrontierTransition }
+  | { readonly _tag: "IdentityFreeWorkflowRoute"; readonly transition: IdentityFreeWorkflowTransition }
 
-interface DeliveryProposalBase {
+export interface DeliveryProposalBase {
   readonly _tag: "DeliveryActionProposal"
   readonly admission: DeliveryAdmissionRequirements
   readonly id: DeliveryProposalId
   readonly order: DeliveryProposalOrderEvidence
   readonly owner: DeliveryProposalOwner
+  /** A still-live owner of this exact operation must acknowledge completion before this proposal may start. */
+  readonly waitsForLiveOperationId: OperationId | null
+}
+
+type FreshOperationIdentity = {
+  readonly _tag: "FreshOperationIdRequired"
+  readonly source:
+    | { readonly _tag: "Allocate" }
+    | { readonly _tag: "ExternalSuccessReleaseClaim"; readonly claimOperationId: OperationId }
+    | { readonly _tag: "TaskClaimReacquisitionRequest"; readonly requestId: TaskClaimReacquisitionRequestId }
 }
 
 /** New identity allocation is declared, but projection never allocates either identity. */
-export interface FreshIdentityDeliveryProposal extends DeliveryProposalBase {
-  readonly actionIdentity:
-    | { readonly _tag: "FreshOperationIdRequired" }
-    | { readonly _tag: "FreshOperationAndAttemptIdsRequired" }
-  readonly route: FreshOperationRoute
-}
+export type FreshIdentityDeliveryProposal =
+  | (DeliveryProposalBase & {
+      readonly actionIdentity: { readonly _tag: "FreshOperationAndAttemptIdsRequired" }
+      readonly route: FreshAttemptPlanningRoute
+    })
+  | (DeliveryProposalBase & {
+      readonly actionIdentity: FreshOperationIdentity
+      readonly route: FreshOperationOnlyRoute
+    })
 
 /** Reconciliation reuses the exact OperationId established by accepted intent. */
 export interface AcceptedIdentityDeliveryProposal extends DeliveryProposalBase {
@@ -213,6 +286,11 @@ export type DeliveryProposalDerivationIssue =
         | "CommitFreshTaskClaimIntent"
         | "ContinueFreshWorkflowOperation"
         | "StartPlannedAttemptExecutorWork"
+    }
+  | {
+      readonly _tag: "TypedRoutePolicyContradiction"
+      readonly taskId: TaskId
+      readonly transition: RunnableFrontierTransition["_tag"]
     }
 
 export interface FreshDecision {
@@ -262,7 +340,7 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
   }
   return {
     _tag: "DeliveryActionProposal",
-    actionIdentity: { _tag: "FreshOperationIdRequired" },
+    actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },
     admission: {
       integrationTarget: { _tag: "NoIntegrationTargetResource" },
       taskWorkPosition: { _tag: "NoTaskWorkPosition" }
@@ -270,6 +348,7 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
     id: deliveryProposalIdOf(input.runId, route),
     order: { _tag: "TrackerGraphOrder", acceptedAt: input.acceptedAt },
     owner: "TrackerGraph",
-    route
+    route,
+    waitsForLiveOperationId: null
   }
 }

@@ -299,55 +299,57 @@ const planningFailureDetail = (failure: unknown): string =>
     : "TaskClaimAcquisitionPlanner.plan failed"
 /* v8 ignore stop -- @preserve */
 
-const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimReacquisition")(function* (input: {
-  readonly execution: OwnedTransitionExecution
-  readonly interpreter: WorkflowInterpreterService
-  readonly journal: InRunJournal["Service"]
-  readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
-  readonly runId: RunId
-  readonly trace: Option.Option<WorkflowTrace["Service"]>
-  readonly transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>
-}) {
-  const planner = yield* Option.match(input.planner, {
-    onNone: () => Effect.fail(new TaskClaimReacquisitionPlannerUnavailable({ taskId: input.transition.taskId })),
-    onSome: Effect.succeed
-  })
-  const records = yield* input.journal.read(input.runId)
-  const priorClaim = records.findLast(
-    ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === input.transition.taskId
-  )?.event
-  const observation = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "FocusedTaskClaimFacts" ||
-        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      event.observation.coverage.taskId === input.transition.taskId
-  )?.event
-  const operationId = taskClaimReacquisitionOperationId(input.transition.requestId)
-  const operation = makeTaskClaimAcquisitionOperation({
-    acquisition: yield* planner.plan(operationId, input.transition.taskId).pipe(
-      Effect.mapError(
-        /* v8 ignore next -- @preserve The unavailable-planner path is tested; provider-specific planner failures are wrapped here. */
-        (failure) =>
-          new TaskClaimReacquisitionPlanningFailed({
-            detail: planningFailureDetail(failure),
-            taskId: input.transition.taskId
-          })
-      )
-    ),
-    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: input.transition.requestId },
-    predecessorOperationIds: [
-      /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
-      ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
-      /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
-      ...(observation?._tag === "TaskTrackerFactsObserved" ? [observation.operationId] : [])
-    ]
-  })
-  if (Option.isSome(input.trace)) {
-    yield* input.trace.value.emit(OperationSelected.make({ operation }))
+export const runTaskClaimReacquisition = Effect.fn("RunRecoveryActivation.runTaskClaimReacquisition")(
+  function* (input: {
+    readonly execution: Pick<OwnedTransitionExecution, "recordIntent">
+    readonly interpreter: WorkflowInterpreterService
+    readonly journal: InRunJournal["Service"]
+    readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
+    readonly runId: RunId
+    readonly trace: Option.Option<WorkflowTrace["Service"]>
+    readonly transition: Extract<RunnableFrontierTransition, { readonly _tag: "CommitTaskClaimReacquisitionIntent" }>
+  }) {
+    const planner = yield* Option.match(input.planner, {
+      onNone: () => Effect.fail(new TaskClaimReacquisitionPlannerUnavailable({ taskId: input.transition.taskId })),
+      onSome: Effect.succeed
+    })
+    const records = yield* input.journal.read(input.runId)
+    const priorClaim = records.findLast(
+      ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === input.transition.taskId
+    )?.event
+    const observation = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "FocusedTaskClaimFacts" ||
+          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+        event.observation.coverage.taskId === input.transition.taskId
+    )?.event
+    const operationId = taskClaimReacquisitionOperationId(input.transition.requestId)
+    const operation = makeTaskClaimAcquisitionOperation({
+      acquisition: yield* planner.plan(operationId, input.transition.taskId).pipe(
+        Effect.mapError(
+          /* v8 ignore next -- @preserve The unavailable-planner path is tested; provider-specific planner failures are wrapped here. */
+          (failure) =>
+            new TaskClaimReacquisitionPlanningFailed({
+              detail: planningFailureDetail(failure),
+              taskId: input.transition.taskId
+            })
+        )
+      ),
+      authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: input.transition.requestId },
+      predecessorOperationIds: [
+        /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
+        ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
+        /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
+        ...(observation?._tag === "TaskTrackerFactsObserved" ? [observation.operationId] : [])
+      ]
+    })
+    if (Option.isSome(input.trace)) {
+      yield* input.trace.value.emit(OperationSelected.make({ operation }))
+    }
+    yield* input.interpreter.acquireTaskClaim(operation, input.execution.recordIntent(operationId))
   }
-  yield* input.interpreter.acquireTaskClaim(operation, input.execution.recordIntent(operationId))
-})
+)
 
 /** Derives which journaled responsibilities are still unfinished. */
 const deriveJournalResponsibilityFacts = (
@@ -1623,7 +1625,8 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
     integrationTarget: Option.Option<IntegrationTarget>,
     candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
     candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
-    workflowTraceOverride: Option.Option<WorkflowTrace["Service"]> | undefined
+    workflowTraceOverride: Option.Option<WorkflowTrace["Service"]> | undefined,
+    integrationResourcesOverride: IntegrationTargetResourceController | undefined
   ) {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* InRunJournal
@@ -1633,7 +1636,7 @@ const makeJournaledFreshRunRecoveryActivationEffect = Effect.fn("RunRecoveryActi
     // Fresh work has no recovered-history freshness boundary. This must remain
     // explicit now that runtime construction correctly follows WorkflowRunBegan.
     const activationBaselinePosition = Option.none<JournalPosition>()
-    const integrationResources = yield* makeIntegrationTargetResourceController()
+    const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
     const provideJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal>): Effect.Effect<A, E> =>
       Effect.provideService(effect, InRunJournal, journal)
     const continueAttempt = (plannedAttempt: PlannedTaskAttempt) =>
@@ -1791,14 +1794,18 @@ export const makeJournaledFreshRunRecoveryActivation = (
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
-  options?: { readonly workflowTrace?: Option.Option<WorkflowTrace["Service"]> }
+  options?: {
+    readonly integrationResources?: IntegrationTargetResourceController
+    readonly workflowTrace?: Option.Option<WorkflowTrace["Service"]>
+  }
 ) =>
   makeJournaledFreshRunRecoveryActivationEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
     Option.fromUndefinedOr(candidateContinuationLimit),
-    options?.workflowTrace
+    options?.workflowTrace,
+    options?.integrationResources
   )
 
 export const journaledFreshRunRecoveryActivationLayer = (
@@ -1821,10 +1828,11 @@ const makeRunRecoveryActivationEffect = Effect.fn("RunRecoveryActivation.makeRec
   runId: RunId,
   integrationTarget: Option.Option<IntegrationTarget>,
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
+  integrationResourcesOverride: IntegrationTargetResourceController | undefined
 ) {
   const dependencies = yield* Effect.context<InRunJournal | WorkflowInterpreter | WorkflowTrace>()
-  const integrationResources = yield* makeIntegrationTargetResourceController()
+  const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
   const plannedAttemptExecutor = yield* PlannedAttemptExecutor
   const workflowInterpreter = yield* WorkflowInterpreter
   const workflowTrace = yield* WorkflowTrace
@@ -2019,13 +2027,15 @@ export const makeRunRecoveryActivation = (
   runId: RunId,
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit
+  candidateContinuationLimit?: CandidateContinuationLimit,
+  integrationResources?: IntegrationTargetResourceController
 ) =>
   makeRunRecoveryActivationEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
-    Option.fromUndefinedOr(candidateContinuationLimit)
+    Option.fromUndefinedOr(candidateContinuationLimit),
+    integrationResources
   )
 
 /**

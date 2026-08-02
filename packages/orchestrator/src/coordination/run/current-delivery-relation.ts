@@ -129,6 +129,12 @@ export const makeJournaledCurrentDeliveryRelation = (
 ): JournaledCurrentDeliveryRelation<AcceptedFactPublicationError | CurrentDeliveryControlPolicyUnavailable> =>
   makeJournaledRelationFromAcceptedState(gateway.readCurrent, Effect.succeed)
 
+/** Projects one already-coherent accepted snapshot without rereading its publication gateway. */
+export const journaledCurrentDeliveryFrameOf = (
+  accepted: AcceptedFactPublicationState
+): Effect.Effect<CurrentDeliveryFrame, CurrentDeliveryControlPolicyUnavailable | CurrentDeliveryGraphUnavailable> =>
+  makeJournaledRelationFromAcceptedState(Effect.succeed(accepted), Effect.succeed).read
+
 /**
  * Temporary view for the scheduler deleted by #184. The gateway remains live;
  * fresh planning sees accepted state sampled at the old scheduler's successful

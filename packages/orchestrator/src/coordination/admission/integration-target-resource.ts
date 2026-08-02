@@ -29,6 +29,8 @@ export interface IntegrationTargetResourceController {
     responsibility: IntegrationTargetResourceResponsibility
   ) => Effect.Effect<void, IntegrationTargetResourceUnavailable>
   readonly release: (responsibility: IntegrationTargetResourceResponsibility) => Effect.Effect<void>
+  /** Releases every process-local lease when its sole owning runtime closes. */
+  readonly releaseAll: Effect.Effect<void>
   readonly snapshot: Effect.Effect<IntegrationTargetResourceSnapshot>
   readonly withPermit: <A, E, R>(
     responsibility: IntegrationTargetResourceResponsibility,
@@ -81,6 +83,7 @@ export const makeIntegrationTargetResourceController = Effect.fn("IntegrationTar
     return {
       acquire,
       release,
+      releaseAll: Ref.set(leases, new Map()).pipe(Effect.andThen(Ref.set(active, new Set()))),
       snapshot: Ref.get(leases).pipe(
         Effect.flatMap((current) =>
           Ref.get(active).pipe(

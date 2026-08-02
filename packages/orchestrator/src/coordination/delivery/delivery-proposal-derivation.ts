@@ -1,3 +1,4 @@
+import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
@@ -5,13 +6,18 @@ import type {
   StartedIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../activation/selected-transition.js"
-import { runnableTransitionTaskId, type RunnableFrontierTransition } from "../frontier/frontier.js"
+import {
+  runnableTransitionOperationId,
+  runnableTransitionTaskId,
+  type RunnableFrontierTransition
+} from "../frontier/frontier.js"
 import { transitionTaskWorkPosition } from "../frontier/transition-task-work.js"
 import { workflowResponsibilityOperationId, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import {
   DeliveryProposalOrdinal,
   deliveryProposalIdOf,
   type AcceptedWorkflowRoute,
+  type AcceptedWorkflowTransition,
   type DeliveryActionProposal,
   type DeliveryAdmissionRequirements,
   type DeliveryProposalContributions,
@@ -19,14 +25,13 @@ import {
   type DeliveryProposalOwner,
   type DeliveryProposalsInput,
   type FreshDecision,
-  type FreshIdentityDeliveryProposal,
   type FreshOperationRoute,
-  type FreshOperationStep,
   type IdentityFreeWorkflowRoute,
   type IntegrationTargetResourceRequirement,
   type NewRecoveredWorkflowAction,
   type TaskWorkPositionRequirement
 } from "./delivery-action-proposal.js"
+import { freshOperationIdentity, recoveredIdentityFor } from "./delivery-proposal-identity.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import {
   isFreshProvenanceTransition,
@@ -34,11 +39,6 @@ import {
   operationIdOf,
   transitionRoutePolicy
 } from "./delivery-proposal-route.js"
-
-const freshIdentityFor = (step: FreshOperationStep): FreshIdentityDeliveryProposal["actionIdentity"] =>
-  step._tag === "RecordTaskAttemptPlan"
-    ? { _tag: "FreshOperationAndAttemptIdsRequired" }
-    : { _tag: "FreshOperationIdRequired" }
 
 const freshDecisionKey = (runId: DeliveryProposalsInput["runId"], decision: FreshDecision): string =>
   selectedTransitionKey(makeSelectedTransitionIdentity(runId, decision.transition))
@@ -48,9 +48,28 @@ const transitionKey = (runId: DeliveryProposalsInput["runId"], transition: Runna
 
 const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPositionRequirement => {
   const mode = transitionTaskWorkPosition(transition)
-  return mode === null
-    ? { _tag: "NoTaskWorkPosition" }
-    : { _tag: "TaskWorkPositionRequired", mode, taskId: runnableTransitionTaskId(transition) }
+  if (mode === null) return { _tag: "NoTaskWorkPosition" }
+  const taskId = runnableTransitionTaskId(transition)
+  if (mode === "Existing") {
+    if (transition._tag !== "SuspendPlannedAttemptExecutorWork") {
+      return { _tag: "NoTaskWorkPosition" }
+    }
+    return {
+      _tag: "TaskWorkPositionRequired",
+      correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt),
+      mode,
+      taskId
+    }
+  }
+  return {
+    _tag: "TaskWorkPositionRequired",
+    mode,
+    ...(transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+    transition._tag === "StartPlannedAttemptExecutorWork"
+      ? { retainAs: plannedAttemptExecutorCorrelation(transition.plannedAttempt) }
+      : {}),
+    taskId
+  }
 }
 
 const integrationResponsibilityFor = (
@@ -179,6 +198,7 @@ interface ProposalContext {
   readonly order: DeliveryProposalOrderEvidence
   readonly owner: DeliveryProposalOwner
   readonly runId: DeliveryProposalsInput["runId"]
+  readonly waitsForLiveOperationId: OperationId | null
 }
 
 type DerivedProposal =
@@ -193,7 +213,8 @@ const proposalBase = (
   admission: context.admission,
   id: deliveryProposalIdOf(context.runId, route),
   order: context.order,
-  owner: context.owner
+  owner: context.owner,
+  waitsForLiveOperationId: context.waitsForLiveOperationId
 })
 
 const freshProposalOf = (
@@ -210,10 +231,21 @@ const freshProposalOf = (
       proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "NoWorkflowOperationIdentity" }, route }
     }
   }
+  if (fresh.step._tag === "RecordTaskAttemptPlan") {
+    const route: FreshOperationRoute = { _tag: "FreshWorkflowRoute", step: fresh.step }
+    return {
+      _tag: "ProposalDerived",
+      proposal: {
+        ...proposalBase(context, route),
+        actionIdentity: { _tag: "FreshOperationAndAttemptIdsRequired" },
+        route
+      }
+    }
+  }
   const route: FreshOperationRoute = { _tag: "FreshWorkflowRoute", step: fresh.step }
   return {
     _tag: "ProposalDerived",
-    proposal: { ...proposalBase(context, route), actionIdentity: freshIdentityFor(fresh.step), route }
+    proposal: { ...proposalBase(context, route), actionIdentity: freshOperationIdentity(), route }
   }
 }
 
@@ -246,34 +278,72 @@ const missingAcceptedOperation = (
   }
 })
 
+const routePolicyContradiction = (
+  transition: RunnableFrontierTransition
+): Extract<DerivedProposal, { readonly _tag: "ProposalIssue" }> => ({
+  _tag: "ProposalIssue",
+  issue: {
+    _tag: "TypedRoutePolicyContradiction",
+    taskId: runnableTransitionTaskId(transition),
+    transition: transition._tag
+  }
+})
+
 type AcceptedOperationTransition = Extract<
   RunnableFrontierTransition,
   { readonly _tag: "CheckTaskClaim" | "ReconcileTaskClaim" | "ReconcileTaskClaimRelease" | "ReconcileTaskWorktree" }
+>
+
+type IdentityFreeTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "AcquireStartedIntegrationTarget"
+      | "ContinuePlannedAttemptExecutorWork"
+      | "ContinueStartedIntegrationCandidate"
+      | "QueueAcceptedResultIntegrationResponsibility"
+      | "ReleaseStartedIntegrationTarget"
+      | "StartQueuedIntegration"
+      | "SuspendPlannedAttemptExecutorWork"
+  }
 >
 
 const isAcceptedOperationTransition = (
   transition: RunnableFrontierTransition
 ): transition is AcceptedOperationTransition => transitionRoutePolicy[transition._tag] === "AcceptedOperation"
 
+const isIdentityFreeTransition = (transition: RunnableFrontierTransition): transition is IdentityFreeTransition =>
+  transitionRoutePolicy[transition._tag] === "IdentityFree"
+
+const isAcceptedRouteTransition = (transition: RunnableFrontierTransition): transition is AcceptedWorkflowTransition =>
+  transitionRoutePolicy[transition._tag] === "AcceptedOperation" ||
+  transitionRoutePolicy[transition._tag] === "Observation"
+
 const recoveredRouteProposalOf = (
   context: ProposalContext,
   newAction: NewRecoveredWorkflowAction | undefined,
   operationId: OperationId | undefined,
   transition: RunnableFrontierTransition
-): Extract<DerivedProposal, { readonly _tag: "ProposalDerived" }> => {
+): DerivedProposal => {
   if (newAction !== undefined) {
     const route: FreshOperationRoute = { _tag: "RecoveredNewActionRoute", action: newAction }
     return {
       _tag: "ProposalDerived",
-      proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "FreshOperationIdRequired" }, route }
+      proposal: { ...proposalBase(context, route), actionIdentity: recoveredIdentityFor(newAction), route }
     }
   }
   if (operationId !== undefined) {
+    if (!isAcceptedRouteTransition(transition)) {
+      return routePolicyContradiction(transition)
+    }
     const route: AcceptedWorkflowRoute = { _tag: "AcceptedWorkflowRoute", transition }
     return {
       _tag: "ProposalDerived",
       proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "ExistingOperationId", operationId }, route }
     }
+  }
+  if (!isIdentityFreeTransition(transition)) {
+    return routePolicyContradiction(transition)
   }
   const route: IdentityFreeWorkflowRoute = { _tag: "IdentityFreeWorkflowRoute", transition }
   return {
@@ -347,7 +417,13 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
       responsibilityBeganAtFor(transition, workflowResponsibilities),
       integrationResponsibilityFor(transition, integrationResponsibilities)
     )
-    const context: ProposalContext = { admission, order, owner, runId: input.runId }
+    const context: ProposalContext = {
+      admission,
+      order,
+      owner,
+      runId: input.runId,
+      waitsForLiveOperationId: runnableTransitionOperationId(transition) ?? null
+    }
     const derived =
       fresh === undefined
         ? recoveredProposalOf(input.acceptedOperationIds, context, transition)

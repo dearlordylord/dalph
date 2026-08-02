@@ -206,7 +206,7 @@ export const TraceItem = Schema.Union([
 ])
 export type TraceItem = typeof TraceItem.Type
 
-interface WorkflowTraceService {
+export interface WorkflowTraceService {
   readonly emit: (item: TraceItem) => Effect.Effect<void, TraceOutputError>
 }
 

@@ -10,6 +10,7 @@ import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.j
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { AcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
 import { TrackerGraphRelation } from "../delivery/relations.js"
+import { deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
@@ -44,6 +45,7 @@ const runtimeLayer = Layer.mergeAll(
   Layer.mock(RunRecoveryActivation, { _tag: "SyntheticFreshOnlyActivation", reconstructedPlannedAttemptPositions: [] }),
   taskWorkCapacityControlLayer,
   taskClaimReacquisitionControlLayer,
+  deliveryRuntimeResourcesLayer,
   Layer.mock(WorkflowInterpreter, {}),
   Layer.mock(WorkflowTrace, { emit: () => Effect.void })
 )

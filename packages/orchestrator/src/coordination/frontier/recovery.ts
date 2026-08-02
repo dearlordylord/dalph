@@ -5,7 +5,10 @@ import type { RunnableFrontierTransition } from "./frontier.js"
 import { WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
 import { startQueuedIntegration } from "../../workflow/protocols/integration-admission/protocol.js"
 
-const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId: RunId, operationId: string) {
+export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTaskClaimOperation")(function* (
+  runId: RunId,
+  operationId: string
+) {
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const intent = (yield* journal.read(runId)).find(
@@ -17,7 +20,10 @@ const recoverClaim = Effect.fn("WorkflowRecovery.recoverClaim")(function* (runId
   }
 })
 
-const recoverWorktree = Effect.fn("WorkflowRecovery.recoverWorktree")(function* (runId: RunId, operationId: string) {
+export const recoverTaskWorktreeOperation = Effect.fn("WorkflowRecovery.recoverTaskWorktreeOperation")(function* (
+  runId: RunId,
+  operationId: string
+) {
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const intent = (yield* journal.read(runId)).find(
@@ -28,19 +34,18 @@ const recoverWorktree = Effect.fn("WorkflowRecovery.recoverWorktree")(function* 
   }
 })
 
-const recoverClaimRelease = Effect.fn("WorkflowRecovery.recoverClaimRelease")(function* (
-  runId: RunId,
-  operationId: string
-) {
-  const journal = yield* InRunJournal
-  const interpreter = yield* WorkflowInterpreter
-  const intent = (yield* journal.read(runId)).find(
-    ({ event }) => event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === operationId
-  )?.event
-  if (intent?._tag === "TaskClaimReleaseIntended") {
-    yield* interpreter.releaseTaskClaim(intent.operation)
+export const recoverTaskClaimReleaseOperation = Effect.fn("WorkflowRecovery.recoverTaskClaimReleaseOperation")(
+  function* (runId: RunId, operationId: string) {
+    const journal = yield* InRunJournal
+    const interpreter = yield* WorkflowInterpreter
+    const intent = (yield* journal.read(runId)).find(
+      ({ event }) => event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === operationId
+    )?.event
+    if (intent?._tag === "TaskClaimReleaseIntended") {
+      yield* interpreter.releaseTaskClaim(intent.operation)
+    }
   }
-})
+)
 
 /** Executes the one generic already-intended operation selected after reconstruction. */
 export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunnableTransition")(function* (
@@ -50,13 +55,13 @@ export const recoverRunnableTransition = Effect.fn("WorkflowRecovery.recoverRunn
   switch (transition._tag) {
     case "CheckTaskClaim":
     case "ReconcileTaskClaim":
-      yield* recoverClaim(runId, transition.operationId)
+      yield* recoverTaskClaimOperation(runId, transition.operationId)
       return
     case "ReconcileTaskClaimRelease":
-      yield* recoverClaimRelease(runId, transition.operationId)
+      yield* recoverTaskClaimReleaseOperation(runId, transition.operationId)
       return
     case "ReconcileTaskWorktree":
-      yield* recoverWorktree(runId, transition.operationId)
+      yield* recoverTaskWorktreeOperation(runId, transition.operationId)
       return
     case "StartQueuedIntegration":
       yield* startQueuedIntegration(transition.responsibility)

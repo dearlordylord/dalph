@@ -14,6 +14,15 @@ import {
   deterministicTaskClaimAcquisitionPlannerLayer,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
+  AcceptedFactPublicationGateway,
+  type AllocatedFreshWorkflowRunId,
+  delivery,
+  DeliveryActionExecutor,
+  JournaledRunBootstrap,
+  makeLiveDeliveryActionExecutor,
+  makeReactiveDeliveryRelationsLayer,
+  runDeliveryRuntime,
+  RunRecoveryActivation,
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
@@ -75,8 +84,44 @@ const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
 const authoredSettlementYieldTurns = 10
 
-/** Decodes and drives one story through the production coordinator activation program. */
-export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(function* (input: unknown) {
+type AuthoredRuntimeSelection = "CandidateDeliveryRuntime" | "ProductionScheduler"
+
+const runCandidateDeliveryProgram = (runId: RunId, target: Parameters<typeof runWorkflow>[0]) =>
+  Effect.gen(function* () {
+    const gateway = yield* AcceptedFactPublicationGateway
+    const control = yield* TaskWorkCapacityControl
+    const recovery = yield* RunRecoveryActivation
+    const executor = yield* makeLiveDeliveryActionExecutor(runId, target)
+    const candidateGateway = AcceptedFactPublicationGateway.of({
+      ...gateway,
+      readCurrent: control.read(runId).pipe(Effect.orDie, Effect.andThen(gateway.readCurrent))
+    })
+    const relations = yield* makeReactiveDeliveryRelationsLayer(runId, target, candidateGateway, recovery)
+    const relation = yield* delivery.pipe(Effect.provide(relations))
+    return yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, executor))
+  })
+
+const runCandidateFreshWorkflow = (
+  target: Parameters<typeof runWorkflow>[0],
+  initialPolicy: Parameters<typeof runWorkflow>[1],
+  runId: AllocatedFreshWorkflowRunId
+) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.fresh(target, initialPolicy, runId, runCandidateDeliveryProgram(runId, target))
+  })
+
+const runCandidateRecoveredWorkflow = (runId: RunId, target: Parameters<typeof runRecoveredWorkflow>[0]) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.recovered(target, runCandidateDeliveryProgram(runId, target))
+  })
+
+/** Decodes and drives one story through the selected production-shaped activation program. */
+const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (
+  input: unknown,
+  runtimeSelection: AuthoredRuntimeSelection
+) {
   return yield* Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
     Effect.gen(function* () {
@@ -371,9 +416,16 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
 
       const execution = yield* Effect.scoped(
         Effect.gen(function* () {
-          const freshRun = runWorkflow(command.target, initial.policy, runId).pipe(
-            Effect.provide(planningLayer("fresh"))
-          )
+          const freshRun = Effect.gen(function* () {
+            if (runtimeSelection === "CandidateDeliveryRuntime") {
+              return yield* runCandidateFreshWorkflow(command.target, initial.policy, runId).pipe(
+                Effect.provide(planningLayer("fresh"))
+              )
+            }
+            return yield* runWorkflow(command.target, initial.policy, runId).pipe(
+              Effect.provide(planningLayer("fresh"))
+            )
+          })
           if (coordinatorDies) {
             const coordinator = yield* Effect.forkScoped(freshRun)
             yield* Effect.raceFirst(
@@ -383,10 +435,15 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
               )
             )
             yield* Fiber.interrupt(coordinator)
-            const recovered = yield* runRecoveredWorkflow(command.target).pipe(
-              Effect.provide(planningLayer("recovery")),
-              Effect.forkScoped({ startImmediately: true })
-            )
+            const recoveredRun = Effect.gen(function* () {
+              if (runtimeSelection === "CandidateDeliveryRuntime") {
+                return yield* runCandidateRecoveredWorkflow(runId, command.target).pipe(
+                  Effect.provide(planningLayer("recovery"))
+                )
+              }
+              return yield* runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
+            })
+            const recovered = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
             yield* Effect.raceFirst(
               cursor.awaitTerminalAssertions,
               Fiber.join(recovered).pipe(
@@ -424,3 +481,13 @@ export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")(fun
     })
   )
 })
+
+/** Decodes and drives one story through the production coordinator activation program. */
+export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")((input: unknown) =>
+  runAuthoredScenarioCassetteWith(input, "ProductionScheduler")
+)
+
+/** Package-private #183 seam; no public barrel exports this candidate scheduler. */
+export const runAuthoredScenarioCassetteWithCandidateRuntime = Effect.fn("AuthoredCassette.runCandidate")(
+  (input: unknown) => runAuthoredScenarioCassetteWith(input, "CandidateDeliveryRuntime")
+)

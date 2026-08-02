@@ -80,7 +80,7 @@ import { observeBoundaryDeliveryShadow } from "./boundary-delivery-shadow.js"
 import { observeQuiescenceDeliveryShadow } from "./quiescence-delivery-shadow.js"
 import { currentSignalOf, makeDeliveryReflection, makeDeliverySettlements, TrackerGraphState } from "./relations.js"
 import { delivery } from "./delivery.js"
-import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { observeDeliveryShadowWithinTurn } from "./delivery-shadow-budget.js"
 
@@ -496,6 +496,7 @@ it.effect("retains Terminal Accepted through queue, start, active candidate, non
       const relation = yield* delivery.pipe(
         Effect.provide(
           makeDeliveryRelationsLayer({
+            ...deterministicDeliveryRuntimeSupport(candidateFrame.runControlPolicy),
             exactEvidence: currentSignalOf(reconstructedEvidence),
             graph: currentSignalOf(
               TrackerGraphState.cases.GraphEstablished.make({ snapshot: candidateFrame.currentGraph })

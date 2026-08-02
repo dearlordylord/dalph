@@ -1,4 +1,4 @@
-import { Layer } from "effect"
+import { Effect, Layer, Option, Stream } from "effect"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
   BoundedParallelTicketsProjection,
@@ -14,22 +14,50 @@ import {
   TrackerGraphRelation,
   type CurrentSignal,
   type DeliveryActionProposal,
+  deliveryFinalityOf,
+  DeliveryRelationRevision,
+  type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeFacts,
+  type DeliveryReflectionRelation,
+  type DeliveryRelationSourceError,
   type TrackerGraphActionProposal,
   type TicketDeliveryEvidence,
   type TrackerGraphState,
+  type TrackerGraphRelationService,
   zipCurrentSignals
 } from "./relations.js"
 import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
-  readonly exactEvidence: CurrentSignal<ReadonlyArray<TicketDeliveryEvidence>>
-  readonly graph: CurrentSignal<TrackerGraphState>
-  readonly policy: CurrentSignal<RunControlPolicy>
-  readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions>
-  readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>>
-  readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>>
+  readonly evaluationConsistency: {
+    readonly currentRevision: Effect.Effect<DeliveryRelationRevision>
+    readonly withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  }
+  readonly exactEvidence: CurrentSignal<ReadonlyArray<TicketDeliveryEvidence>, DeliveryRelationSourceError>
+  readonly graph: CurrentSignal<TrackerGraphState, DeliveryRelationSourceError>
+  readonly invalidate: Parameters<typeof makeDeliveryRuntimeRelation>[0]["invalidate"]
+  readonly runtimeFacts: CurrentSignal<DeliveryRuntimeFacts, DeliveryRelationSourceError>
+  readonly policy: CurrentSignal<RunControlPolicy, DeliveryRelationSourceError>
+  readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
+  readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
+  readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
 }
+
+/** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
+export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) => ({
+  evaluationConsistency: {
+    currentRevision: Effect.succeed(DeliveryRelationRevision.make(0)),
+    withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
+  },
+  invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
+  runtimeFacts: currentSignalOf<DeliveryRuntimeFacts>({
+    acceptedAt: null,
+    quiescence: { _tag: "QuiescencePassive" },
+    revision: DeliveryRelationRevision.make(0),
+    taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+  })
+})
 
 /** Deterministic, action-free Layers used to evaluate the complete relation spine. */
 export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) => {
@@ -97,7 +125,57 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   )
   const runtime = Layer.succeed(
     DeliveryRuntimeAssembly,
-    DeliveryRuntimeAssembly.of({ of: makeDeliveryRuntimeRelation })
+    DeliveryRuntimeAssembly.of({
+      of: <E>({
+        reflection,
+        trackerGraph
+      }: {
+        readonly reflection: DeliveryReflectionRelation<E>
+        readonly trackerGraph: TrackerGraphRelationService
+      }) => {
+        const relation = makeDeliveryRuntimeRelation<E | DeliveryRelationSourceError>({
+          facts: input.runtimeFacts,
+          invalidate: input.invalidate,
+          reflection,
+          trackerGraph
+        })
+        const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
+          Effect.all({
+            current: relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
+            proposedActions: relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+          }).pipe(
+            Effect.map(
+              ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
+                _tag: "DeliveryRuntimeEvaluation",
+                acceptedAt: facts.acceptedAt,
+                current,
+                finality: deliveryFinalityOf(current, proposedActions),
+                proposedActions,
+                quiescence: facts.quiescence,
+                revision: facts.revision,
+                taskWork: facts.taskWork
+              })
+            )
+          )
+        const evaluations = {
+          changes: input.runtimeFacts.changes.pipe(
+            Stream.mapEffect((facts) =>
+              input.evaluationConsistency.withStableRevision(
+                input.evaluationConsistency.currentRevision.pipe(
+                  Effect.flatMap((revision) =>
+                    revision === facts.revision
+                      ? sampleEvaluation(facts).pipe(Effect.map((evaluation) => [evaluation]))
+                      : Effect.succeed([])
+                  )
+                )
+              )
+            ),
+            Stream.flatMap(Stream.fromIterable)
+          )
+        }
+        return { ...relation, evaluations }
+      }
+    })
   )
 
   return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection, runtime)
