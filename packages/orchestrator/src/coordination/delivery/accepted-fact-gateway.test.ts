@@ -56,15 +56,61 @@ const graph = (revision: string, taskIds: ReadonlyArray<string>) => {
 
 type AcceptedGateway = Effect.Success<ReturnType<typeof makeAcceptedFactPublicationGateway>>
 
-/** Test-only projection of gateway.current to graph values accepted at this position. */
+/** Test-only projection of gateway.acceptedFacts to graph values accepted at this position. */
 const acceptedGraphChanges = (gateway: AcceptedGateway) =>
-  gateway.current.changes.pipe(
+  gateway.acceptedFacts.changes.pipe(
     Stream.filter(
       ({ appliedPosition, graph }: AcceptedFactPublicationState) =>
         graph._tag === "GraphNotEstablished" || graph.observation.acceptedAt === appliedPosition
     ),
     Stream.map(({ graph }) => graph)
   )
+
+it.effect("acceptedFacts.get equals the current-first acceptedFacts.changes value", () =>
+  Effect.gen(function* () {
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+
+    const observed = Option.getOrThrow(yield* gateway.acceptedFacts.changes.pipe(Stream.runHead))
+    expect(yield* gateway.acceptedFacts.get).toEqual(observed)
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("acceptedFacts.get equals the latest publication observed after an accepted append", () =>
+  Effect.gen(function* () {
+    const storage = yield* JournalStore
+    yield* storage.beginRun(runId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+    const operation = makeTrackerGraphObservationOperation(OperationId.make("current-value-law"), target)
+    const attached = yield* Deferred.make<void>()
+    const observed = yield* gateway.acceptedFacts.changes.pipe(
+      Stream.tap(() => Deferred.succeed(attached, undefined)),
+      Stream.take(3),
+      Stream.runCollect,
+      Effect.forkChild
+    )
+
+    yield* Deferred.await(attached)
+    yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    yield* gateway.journal.append(
+      runId,
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, graph("current-value-law", ["A"]))
+      )
+    )
+
+    const values = Array.from(yield* Fiber.join(observed))
+    expect(yield* gateway.acceptedFacts.get).toEqual(values.at(-1))
+    expect(values.at(-1)?.appliedPosition).toBe(JournalPosition.make(3))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
 
 it.effect("publishes GraphNotEstablished first and an accepted complete graph at its journal position", () =>
   Effect.gen(function* () {
@@ -95,7 +141,7 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
 
     const values = Array.from(yield* Fiber.join(observed))
     expect(values.map(({ _tag }) => _tag)).toEqual(["GraphNotEstablished", "GraphNotEstablished", "GraphEstablished"])
-    const currentGraph = (yield* gateway.readCurrent).graph
+    const currentGraph = (yield* gateway.acceptedFacts.get).graph
     expect(currentGraph._tag).toBe("GraphEstablished")
     if (currentGraph._tag === "GraphEstablished") {
       expect(currentGraph.observation.snapshot.toWire()).toMatchObject({ revision: "g1", tasks: [{ id: "A" }] })
@@ -103,7 +149,7 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
       expect(currentGraph.observation.acceptedAt).toBe(JournalPosition.make(3))
       expect(currentGraph.observation.contentIdentity).toBe(currentGraph.observation.snapshot.revision)
     }
-    expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
+    expect((yield* gateway.acceptedFacts.get).appliedPosition).toBe(3)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
@@ -130,7 +176,7 @@ it.effect("does not publish complete graph facts for another tracker target", ()
         makeCompleteTaskTrackerFactsObserved(localOperation, graph("local-target", ["A"]))
       )
     )
-    const beforeForeign = yield* gateway.readCurrent
+    const beforeForeign = yield* gateway.acceptedFacts.get
 
     const foreignTarget = FixtureTarget.make("accepted-fact-foreign-target-source")
     const foreignOperation = makeTrackerGraphObservationOperation(
@@ -151,7 +197,7 @@ it.effect("does not publish complete graph facts for another tracker target", ()
       )
     )
 
-    const afterForeign = yield* gateway.readCurrent
+    const afterForeign = yield* gateway.acceptedFacts.get
     expect(afterForeign.appliedPosition).toBe(JournalPosition.make(5))
     expect(afterForeign.graph).toEqual(beforeForeign.graph)
     expect(afterForeign.graph._tag).toBe("GraphEstablished")
@@ -274,7 +320,7 @@ it.effect("skips accepted focused facts while retaining the latest graph observa
       )
     )
 
-    const current = yield* gateway.readCurrent
+    const current = yield* gateway.acceptedFacts.get
     expect(current.graph._tag).toBe("GraphEstablished")
     expect(current.graph._tag === "GraphEstablished" ? current.graph.observation.operationId : undefined).toBe(
       graphOperation.operationId
@@ -348,7 +394,7 @@ it.effect("serializes concurrent accepted appends and publishes every position i
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const gateway = yield* makeAcceptedFactPublicationGateway(concurrentRunId, target, initial, storage)
     const attached = yield* Deferred.make<void>()
-    const positions = yield* gateway.current.changes.pipe(
+    const positions = yield* gateway.acceptedFacts.changes.pipe(
       Stream.tap(() => Deferred.succeed(attached, undefined)),
       Stream.map(({ appliedPosition }) => appliedPosition),
       Stream.take(3),
@@ -411,9 +457,11 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
 
     expect([secondRecord.position, firstRecord.position]).toEqual([4, 5])
     expect(
-      (yield* gateway.readCurrent).reconstructed.graphKnowledge.taskTrackerFacts.map(({ operationId }) => operationId)
+      (yield* gateway.acceptedFacts.get).reconstructed.graphKnowledge.taskTrackerFacts.map(
+        ({ operationId }) => operationId
+      )
     ).toEqual(["outcome-finished-first", "outcome-started-first"])
-    const currentGraph = (yield* gateway.readCurrent).graph
+    const currentGraph = (yield* gateway.acceptedFacts.get).graph
     expect(currentGraph._tag).toBe("GraphEstablished")
     if (currentGraph._tag === "GraphEstablished") {
       expect(currentGraph.observation.snapshot.toWire()).toMatchObject({
@@ -499,7 +547,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
               )
         })
         const subscriberAttached = yield* Deferred.make<void>()
-        const discardedSubscriber = yield* crashingGateway.current.changes.pipe(
+        const discardedSubscriber = yield* crashingGateway.acceptedFacts.changes.pipe(
           Stream.tap(() => Deferred.succeed(subscriberAttached, undefined)),
           Stream.runDrain,
           Effect.forkScoped
@@ -521,7 +569,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
             )
           )
           .pipe(Effect.exit)
-        const appliedPosition = (yield* crashingGateway.readCurrent).appliedPosition
+        const appliedPosition = (yield* crashingGateway.acceptedFacts.get).appliedPosition
         return { appliedPosition, discardedSubscriber, interruptedPublication }
       })
     )
@@ -533,9 +581,9 @@ it.effect("reconstructs an append accepted before the process could publish it",
     const recoveredHistory = reduceWorkflowJournalHistory(crashRunId, yield* storage.read(crashRunId))
     if (recoveredHistory._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(recoveredHistory)
     const restarted = yield* makeAcceptedFactPublicationGateway(crashRunId, target, recoveredHistory, storage)
-    expect((yield* restarted.readCurrent).records).toHaveLength(3)
-    expect((yield* restarted.readCurrent).reconstructed.graphKnowledge.taskTrackerFacts).toHaveLength(1)
-    expect((yield* restarted.readCurrent).graph._tag).toBe("GraphNotEstablished")
+    expect((yield* restarted.acceptedFacts.get).records).toHaveLength(3)
+    expect((yield* restarted.acceptedFacts.get).reconstructed.graphKnowledge.taskTrackerFacts).toHaveLength(1)
+    expect((yield* restarted.acceptedFacts.get).graph._tag).toBe("GraphNotEstablished")
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
@@ -602,7 +650,7 @@ it.effect("does not republish an idempotent append and rejects a different Run",
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const gateway = yield* makeAcceptedFactPublicationGateway(fixedRunId, target, initial, storage)
     const publications = yield* Ref.make(0)
-    const subscriber = yield* gateway.current.changes.pipe(
+    const subscriber = yield* gateway.acceptedFacts.changes.pipe(
       Stream.runForEach(() => Ref.update(publications, (count) => count + 1)),
       Effect.forkChild
     )
@@ -640,7 +688,7 @@ it.effect("does not replay queued open values to a subscriber after publication 
     const firstConsumed = yield* Deferred.make<void>()
     const releaseSlowConsumer = yield* Deferred.make<void>()
     const consumed = yield* Ref.make<ReadonlyArray<string>>([])
-    const subscriber = yield* gateway.current.changes.pipe(
+    const subscriber = yield* gateway.acceptedFacts.changes.pipe(
       Stream.tap((value) =>
         Ref.modify(consumed, (values) => {
           const next = [...values, value.graph._tag]
@@ -724,7 +772,7 @@ it.effect("fails closed when storage returns different content for an already pu
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("fails every current reader and subscriber after an accepted event makes the prefix invalid", () =>
+it.effect("acceptedFacts.get and changes fail with the same typed error after the prefix becomes invalid", () =>
   Effect.gen(function* () {
     const invalidRunId = RunId.make("accepted-fact-invalid-prefix")
     const storage = yield* JournalStore
@@ -733,7 +781,7 @@ it.effect("fails every current reader and subscriber after an accepted event mak
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const gateway = yield* makeAcceptedFactPublicationGateway(invalidRunId, target, initial, storage)
     const subscriberAttached = yield* Deferred.make<void>()
-    const existingSubscriber = yield* gateway.current.changes.pipe(
+    const existingSubscriber = yield* gateway.acceptedFacts.changes.pipe(
       Stream.tap(() => Deferred.succeed(subscriberAttached, undefined)),
       Stream.runDrain,
       Effect.forkChild
@@ -752,7 +800,7 @@ it.effect("fails every current reader and subscriber after an accepted event mak
       .pipe(Effect.flip)
     expect(failure).toBeInstanceOf(AcceptedJournalHistoryInvalid)
     expect(yield* Fiber.join(existingSubscriber).pipe(Effect.flip)).toEqual(failure)
-    expect(yield* gateway.readCurrent.pipe(Effect.flip)).toEqual(failure)
+    expect(yield* gateway.acceptedFacts.get.pipe(Effect.flip)).toEqual(failure)
     expect(yield* gateway.journal.read(invalidRunId).pipe(Effect.flip)).toEqual(failure)
     const later = makeTrackerGraphObservationOperation(OperationId.make("after-invalid"), target)
     const repeated = yield* gateway.journal

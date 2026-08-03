@@ -44,23 +44,35 @@ export type {
 
 /** A descriptive latest-value source. Observing it never performs a Dalph action. */
 export interface CurrentSignal<A, E = never> {
+  readonly get: Effect.Effect<A, E>
   readonly changes: Stream.Stream<A, E>
 }
 
 /** Creates a deterministic current-first signal for controlled compositions. */
-export const currentSignalOf = <A>(value: A): CurrentSignal<A> => ({ changes: Stream.make(value) })
+export const currentSignalOf = <A>(value: A): CurrentSignal<A> => ({
+  get: Effect.succeed(value),
+  changes: Stream.make(value)
+})
 
 /** Projects every current value without changing the signal's descriptive colour. */
 export const mapCurrentSignal = <A, E, B>(
   signal: CurrentSignal<A, E>,
   project: (value: A) => B
-): CurrentSignal<B, E> => ({ changes: signal.changes.pipe(Stream.map(project)) })
+): CurrentSignal<B, E> => ({
+  get: signal.get.pipe(Effect.map(project)),
+  changes: signal.changes.pipe(Stream.map(project))
+})
 
 /** Relates two current sources so a revision of either recomputes their shared projection. */
 export const zipCurrentSignals = <A, EA, B, EB>(
   left: CurrentSignal<A, EA>,
   right: CurrentSignal<B, EB>
-): CurrentSignal<readonly [A, B], EA | EB> => ({ changes: Stream.zipLatest(left.changes, right.changes) })
+): CurrentSignal<readonly [A, B], EA | EB> => ({
+  get: Effect.all([left.get, right.get]).pipe(
+    Effect.map(([leftValue, rightValue]) => [leftValue, rightValue] as const)
+  ),
+  changes: Stream.zipLatest(left.changes, right.changes)
+})
 
 const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
 
@@ -705,5 +717,8 @@ export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySet
 > {
   const projection = yield* DeliveryReflectionProjection
   const reflection = projection.of(settlements)
-  return { changes: reflection.current.changes.pipe(Stream.map(makeDeliveryConsequences)) }
+  return {
+    get: reflection.current.get.pipe(Effect.map(makeDeliveryConsequences)),
+    changes: reflection.current.changes.pipe(Stream.map(makeDeliveryConsequences))
+  }
 })

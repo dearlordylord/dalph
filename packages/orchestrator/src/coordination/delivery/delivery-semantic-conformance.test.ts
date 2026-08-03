@@ -76,7 +76,7 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
   })
   const gate = yield* Semaphore.make(1)
   const revision = yield* Ref.make(initialRevision)
-  const signal = { changes: SubscriptionRef.changes(state) }
+  const signal = { get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) }
   const coherent = mapCurrentSignal(
     signal,
     ({ revision: currentRevision }): DeliveryRelationInputBundle => ({
@@ -142,9 +142,9 @@ const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.make
       makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
     )
   )
-  const accepted = yield* gateway.readCurrent
+  const accepted = yield* gateway.acceptedFacts.get
   const recovery = {
-    readDeliveryProjection: gateway.readCurrent.pipe(
+    readDeliveryProjection: gateway.acceptedFacts.get.pipe(
       Effect.map((current) => ({
         evidence: {
           _tag: "AvailableDeliveryProjectionEvidence" as const,

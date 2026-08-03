@@ -72,7 +72,7 @@ export const makeTestAcceptedTrackerGraphObservation = (input: {
             makeCompleteTaskTrackerFactsObserved(operation, input.snapshot)
           )
         )
-        const current = yield* gateway.readCurrent
+        const current = yield* gateway.acceptedFacts.get
         if (current.graph._tag !== "GraphEstablished") return yield* Effect.die("fixture graph was not established")
         return current.graph.observation
       }).pipe(Effect.provide(memoryJournalStoreLayer))

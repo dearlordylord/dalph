@@ -30,6 +30,8 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
         Effect.provideService(AcceptedFactPublicationGateway, gateway)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const current = yield* relation.current.get
+      expect(current.trackerGraph._tag).toBe("GraphNotEstablished")
       const proposalId = DeliveryProposalId.make("synthetic-invalidation-proposal")
 
       const revisions = [
@@ -69,7 +71,7 @@ it.effect("publishes a typed failure when accepted facts cannot be reread after 
       const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
       if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
       const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
-      const accepted = yield* gateway.readCurrent
+      const accepted = yield* gateway.acceptedFacts.get
       const failRead = yield* Ref.make(false)
       const gatewayFailure = new AcceptedJournalHistoryInvalid({
         acceptedPosition: accepted.appliedPosition,
@@ -78,9 +80,12 @@ it.effect("publishes a typed failure when accepted facts cannot be reread after 
       })
       const failingGateway = {
         ...gateway,
-        readCurrent: Ref.get(failRead).pipe(
-          Effect.flatMap((failed) => (failed ? Effect.fail(gatewayFailure) : gateway.readCurrent))
-        )
+        acceptedFacts: {
+          ...gateway.acceptedFacts,
+          get: Ref.get(failRead).pipe(
+            Effect.flatMap((failed) => (failed ? Effect.fail(gatewayFailure) : gateway.acceptedFacts.get))
+          )
+        }
       }
       const layer = yield* makeSyntheticDeliveryRelationsLayer(runId, target, initialPolicy).pipe(
         Effect.provideService(AcceptedFactPublicationGateway, failingGateway)
@@ -94,8 +99,10 @@ it.effect("publishes a typed failure when accepted facts cannot be reread after 
         result: null
       })
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
+      const currentFailure = yield* relation.current.get.pipe(Effect.flip)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
+      expect(currentFailure).toEqual(failure)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
       expect(Cause.hasDies(failure.cause)).toBe(false)
       expect(Cause.squash(failure.cause)).toEqual(gatewayFailure)

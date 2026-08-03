@@ -35,7 +35,7 @@ interface SyntheticDeliveryState {
 }
 
 type SyntheticDeliveryBundle = DeliveryRelationInputBundle
-type SyntheticDeliveryFailure = Effect.Error<AcceptedFactPublicationGatewayService["readCurrent"]>
+type SyntheticDeliveryFailure = Effect.Error<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
 
 type SyntheticDeliveryStatus =
   | { readonly _tag: "SyntheticDeliveryOpen"; readonly bundle: SyntheticDeliveryBundle }
@@ -107,7 +107,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
     taskExecutionCapacity: initialControlPolicy.taskExecutionCapacity
   })
   const gateway = yield* AcceptedFactPublicationGateway
-  const initialAccepted = yield* gateway.readCurrent
+  const initialAccepted = yield* gateway.acceptedFacts.get
   const source = yield* Ref.make<SyntheticDeliveryState>({ facts: [], graph: initialAccepted.graph, probe: null })
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
 
@@ -194,7 +194,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       )
     }
     if (cause._tag === "ProposalCompleted") {
-      const accepted = yield* gateway.readCurrent.pipe(
+      const accepted = yield* gateway.acceptedFacts.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) => publishFailure(failure).pipe(Effect.as(null)),
           onSuccess: (current) => Effect.succeed(current)
@@ -213,6 +213,13 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
   const signal = <A>(
     project: (bundle: SyntheticDeliveryBundle) => A
   ): CurrentSignal<A, DeliveryRelationSourceError> => ({
+    get: SubscriptionRef.get(state).pipe(
+      Effect.flatMap((status) =>
+        status._tag === "SyntheticDeliveryOpen"
+          ? Effect.succeed(project(status.bundle))
+          : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+      )
+    ),
     changes: SubscriptionRef.changes(state).pipe(
       Stream.mapEffect((status) =>
         status._tag === "SyntheticDeliveryOpen"

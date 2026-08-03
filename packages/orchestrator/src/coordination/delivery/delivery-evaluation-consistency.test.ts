@@ -67,7 +67,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
     const firstSamplingEntered = yield* Deferred.make<void>()
     const permitSampling = yield* Deferred.make<void>()
     const sampleCount = yield* Ref.make(0)
-    const signal = { changes: SubscriptionRef.changes(input) }
+    const signal = { get: SubscriptionRef.get(input), changes: SubscriptionRef.changes(input) }
     const coherent = mapCurrentSignal(
       signal,
       ({ facts, graph, policy }): DeliveryRelationInputBundle => ({

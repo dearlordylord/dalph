@@ -156,9 +156,12 @@ const dynamicRelation = Effect.fn("Test.dynamicDeliveryRuntimeRelation")(functio
   ) => DeliveryRuntimeEvaluation
 ) {
   const state = yield* SubscriptionRef.make(initial)
-  const evaluations = { changes: SubscriptionRef.changes(state) }
+  const evaluations = { get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) }
   return {
-    current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+    current: {
+      get: evaluations.get.pipe(Effect.map(({ current }) => current)),
+      changes: evaluations.changes.pipe(Stream.map(({ current }) => current))
+    },
     evaluations,
     invalidate: (cause) =>
       SubscriptionRef.modify(state, (current) => {
@@ -167,7 +170,10 @@ const dynamicRelation = Effect.fn("Test.dynamicDeliveryRuntimeRelation")(functio
         return [revision, { ...next, revision }] as const
       }),
     publish: (evaluation: DeliveryRuntimeEvaluation) => SubscriptionRef.set(state, evaluation),
-    proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+    proposedActions: {
+      get: evaluations.get.pipe(Effect.map(({ proposedActions }) => proposedActions)),
+      changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions))
+    }
   } satisfies DeliveryRuntimeRelation<never> & {
     readonly publish: (evaluation: DeliveryRuntimeEvaluation) => Effect.Effect<void>
   }
@@ -465,8 +471,11 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
           yield* SubscriptionRef.update(runtimeFacts, (current) => ({ ...current, revision: next }))
           return next
         }),
-      proposalContributions: { changes: SubscriptionRef.changes(proposalContributions) },
-      runtimeFacts: { changes: SubscriptionRef.changes(runtimeFacts) }
+      proposalContributions: {
+        get: SubscriptionRef.get(proposalContributions),
+        changes: SubscriptionRef.changes(proposalContributions)
+      },
+      runtimeFacts: { get: SubscriptionRef.get(runtimeFacts), changes: SubscriptionRef.changes(runtimeFacts) }
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
     const initial = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
@@ -738,16 +747,23 @@ it.effect("releases acquired integration ownership and its relation subscriber o
     const evaluation = withProposals(yield* baseEvaluation, [acquired])
     const subscribers = yield* Ref.make(0)
     const evaluations = {
+      get: Effect.succeed(evaluation),
       changes: Stream.fromEffect(Ref.update(subscribers, (count) => count + 1).pipe(Effect.as(evaluation))).pipe(
         Stream.concat(Stream.never),
         Stream.ensuring(Ref.update(subscribers, (count) => count - 1))
       )
     }
     const relation = {
-      current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+      current: {
+        get: evaluations.get.pipe(Effect.map(({ current }) => current)),
+        changes: evaluations.changes.pipe(Stream.map(({ current }) => current))
+      },
       evaluations,
       invalidate: () => Effect.succeed(DeliveryRelationRevision.make(1)),
-      proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+      proposedActions: {
+        get: evaluations.get.pipe(Effect.map(({ proposedActions }) => proposedActions)),
+        changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions))
+      }
     } satisfies DeliveryRuntimeRelation
     const actionStarted = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({
@@ -823,7 +839,7 @@ it.effect("fails with the exact relation cause before admitting any proposal", (
     const relationFailure = { _tag: "TestRelationFailure" as const }
     const relation = {
       current: currentSignalOf(initial.current),
-      evaluations: { changes: Stream.fail(relationFailure) },
+      evaluations: { get: Effect.fail(relationFailure), changes: Stream.fail(relationFailure) },
       invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
       proposedActions: currentSignalOf(initial.proposedActions)
     } satisfies DeliveryRuntimeRelation<typeof relationFailure>
@@ -1006,6 +1022,7 @@ it.effect("returns a relation failure published after actions have started", () 
     const fail = yield* Deferred.make<void>()
     const relationFailure = { _tag: "LaterRelationFailure" as const }
     const evaluations = {
+      get: Effect.succeed(initial),
       changes: Stream.succeed(initial).pipe(
         Stream.concat(Stream.fromEffect(Deferred.await(fail).pipe(Effect.andThen(Effect.fail(relationFailure)))))
       )
@@ -1123,9 +1140,12 @@ it.effect("keeps one outstanding quiescence probe request while its relation rev
     const state = yield* SubscriptionRef.make(initial)
     const requests = yield* Ref.make(0)
     const requested = yield* Deferred.make<void>()
-    const evaluations = { changes: SubscriptionRef.changes(state) }
+    const evaluations = { get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) }
     const relation = {
-      current: { changes: evaluations.changes.pipe(Stream.map(({ current }) => current)) },
+      current: {
+        get: evaluations.get.pipe(Effect.map(({ current }) => current)),
+        changes: evaluations.changes.pipe(Stream.map(({ current }) => current))
+      },
       evaluations,
       invalidate: (cause) =>
         SubscriptionRef.modify(state, (current) => {
@@ -1138,7 +1158,10 @@ it.effect("keeps one outstanding quiescence probe request while its relation rev
               : Effect.void
           )
         ),
-      proposedActions: { changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions)) }
+      proposedActions: {
+        get: evaluations.get.pipe(Effect.map(({ proposedActions }) => proposedActions)),
+        changes: evaluations.changes.pipe(Stream.map(({ proposedActions }) => proposedActions))
+      }
     } satisfies DeliveryRuntimeRelation
     const executor = DeliveryActionExecutor.of({ execute: () => Effect.die("no proposal may execute") })
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(

@@ -95,7 +95,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
           yield* Ref.set(
             observed,
             Option.some({
-              graph: (yield* gateway.readCurrent).graph._tag,
+              graph: (yield* gateway.acceptedFacts.get).graph._tag,
               hasGatewayJournal: Option.isSome(Context.getOption(context, InRunJournal)),
               hasRawJournal: Option.isSome(Context.getOption(context, JournalStore)),
               hasLifecycleJournal: Option.isSome(Context.getOption(context, RunLifecycleJournal))
@@ -226,7 +226,7 @@ it.effect("publishes an Operator Pause through the active gateway without exposi
             const gateway = yield* AcceptedFactPublicationGateway
             yield* Deferred.succeed(runtimeActive, undefined)
             yield* Deferred.await(inspectPause)
-            yield* Deferred.succeed(observedPause, (yield* gateway.readCurrent).reconstructed.pause.run._tag)
+            yield* Deferred.succeed(observedPause, (yield* gateway.acceptedFacts.get).reconstructed.pause.run._tag)
             yield* Deferred.await(finish)
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
           })

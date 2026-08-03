@@ -364,6 +364,7 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
         makeDeliveryRelationsLayer({
           exactEvidence: currentSignalOf([]),
           graph: {
+            get: Effect.succeed(TrackerGraphState.cases.GraphNotEstablished.make({})),
             changes: Stream.make(
               TrackerGraphState.cases.GraphNotEstablished.make({}),
               acceptedGraphState(acceptedGraph("causal-established"))
@@ -551,7 +552,7 @@ it.effect("preserves each causal graph revision through final reflection", () =>
     const graphOne = acceptedGraphState(acceptedGraph("graph-1"))
     const graphTwo = acceptedGraphState(acceptedGraph("graph-2"))
     const layer = makeDeliveryRelationsLayer({
-      graph: { changes: Stream.fromIterable([graphOne, graphTwo]) },
+      graph: { get: Effect.succeed(graphOne), changes: Stream.fromIterable([graphOne, graphTwo]) },
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
@@ -574,7 +575,7 @@ it.effect("recomputes the same flat relation when the current policy changes", (
     const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-policy", [taskA, taskB]))),
       exactEvidence: currentSignalOf([]),
-      policy: { changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
+      policy: { get: Effect.succeed(policy), changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
@@ -593,7 +594,10 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
     const taskB = TaskId.make("B")
     const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-evidence", [taskA, taskB]))),
-      exactEvidence: { changes: Stream.make([], [exactAttemptEvidence(taskB)]).pipe(Stream.rechunk(1)) },
+      exactEvidence: {
+        get: Effect.succeed([]),
+        changes: Stream.make([], [exactAttemptEvidence(taskB)]).pipe(Stream.rechunk(1))
+      },
       policy: currentSignalOf(policy)
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))

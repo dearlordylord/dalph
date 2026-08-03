@@ -73,9 +73,8 @@ export interface PublishedRunJournal {
 }
 
 export interface AcceptedFactPublicationGatewayService {
-  readonly current: CurrentSignal<AcceptedFactPublicationState, AcceptedFactPublicationError>
+  readonly acceptedFacts: CurrentSignal<AcceptedFactPublicationState, AcceptedFactPublicationError>
   readonly journal: PublishedRunJournal
-  readonly readCurrent: Effect.Effect<AcceptedFactPublicationState, AcceptedFactPublicationError>
 }
 
 export class AcceptedFactPublicationGateway extends Context.Service<
@@ -263,8 +262,8 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
   })
   yield* Effect.addFinalizer(() => PubSub.shutdown(state.pubsub))
   const publication = yield* Semaphore.make(1)
-  const readCurrent = SubscriptionRef.get(state).pipe(Effect.flatMap(readOpenPublication))
-  const current: CurrentSignal<AcceptedFactPublicationState, AcceptedFactPublicationError> = {
+  const acceptedFacts: CurrentSignal<AcceptedFactPublicationState, AcceptedFactPublicationError> = {
+    get: SubscriptionRef.get(state).pipe(Effect.flatMap(readOpenPublication)),
     changes: SubscriptionRef.changes(state).pipe(
       Stream.mapEffect((published) =>
         SubscriptionRef.get(state).pipe(
@@ -322,10 +321,10 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
     append,
     read: (requestedRunId) =>
       requestedRunId === runId
-        ? readCurrent.pipe(Effect.map(({ records }) => records))
+        ? acceptedFacts.get.pipe(Effect.map(({ records }) => records))
         : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
   }
-  return { current, journal, readCurrent } satisfies AcceptedFactPublicationGatewayService
+  return { acceptedFacts, journal } satisfies AcceptedFactPublicationGatewayService
 })
 
 /** Installs the one gateway and exposes only its in-Run and descriptive capabilities. */

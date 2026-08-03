@@ -74,6 +74,7 @@ const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string
 const deduplicatedPublicationSignal = (
   signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
 ): CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> => ({
+  get: signal.get,
   changes: signal.changes.pipe(
     Stream.mapAccum<string | undefined, DeliveryGraphPublication, DeliveryGraphPublication>(
       () => undefined,
@@ -199,11 +200,12 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           proposalContributions,
           reflectionProposals
         })
-        const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
-          Effect.all({
-            current: relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            proposedActions: relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
-          }).pipe(
+        const makeEvaluation = (
+          facts: DeliveryRuntimeFacts,
+          current: Effect.Effect<DeliveryRuntimeEvaluation["current"], E | DeliveryRelationSourceError>,
+          proposedActions: Effect.Effect<DeliveryRuntimeEvaluation["proposedActions"], E | DeliveryRelationSourceError>
+        ) =>
+          Effect.all({ current, proposedActions }).pipe(
             Effect.map(
               ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
                 _tag: "DeliveryRuntimeEvaluation",
@@ -217,7 +219,16 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               })
             )
           )
+        const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
+          makeEvaluation(
+            facts,
+            relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
+            relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+          )
         const evaluations = {
+          get: facts.get.pipe(
+            Effect.flatMap((facts) => makeEvaluation(facts, relation.current.get, relation.proposedActions.get))
+          ),
           changes: facts.changes.pipe(
             Stream.mapEffect((facts) =>
               input.evaluationConsistency.withStableRevision(

@@ -170,7 +170,7 @@ export const journaledRunBootstrapLayer = (
                 onSuccess: (proof) =>
                   proof.decision._tag === "RunMustRemainActive" || !recheckJournalAfterProof
                     ? Effect.succeed(proof.decision)
-                    : acceptedFacts.readCurrent.pipe(
+                    : acceptedFacts.acceptedFacts.get.pipe(
                         Effect.map(({ records }) =>
                           records.some(
                             ({ event, position }) =>

@@ -36,7 +36,7 @@ export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<Delive
 
 type ReactiveDeliveryBundle = DeliveryRelationInputBundle
 
-type AcceptedDeliveryProjection = Effect.Success<AcceptedFactPublicationGatewayService["readCurrent"]>
+type AcceptedDeliveryProjection = Effect.Success<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
 type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
 
 const eligibleRecoveredTransitions = (
@@ -99,7 +99,7 @@ const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: 
   )?.event
 
 const activeAttemptPositions = (
-  state: Effect.Success<AcceptedFactPublicationGatewayService["readCurrent"]>
+  state: Effect.Success<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
 ): DeliveryRuntimeFacts["taskWork"]["held"] =>
   state.reconstructed.responsibility.entries.flatMap((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
@@ -131,9 +131,9 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
 
   const readCoherentAcceptedProjection = Effect.fn("DeliveryRelations.readCoherentAcceptedProjection")(function* () {
     for (;;) {
-      const acceptedBefore = yield* gateway.readCurrent
+      const acceptedBefore = yield* gateway.acceptedFacts.get
       const projection = yield* recovery.readDeliveryProjection
-      const acceptedAfter = yield* gateway.readCurrent
+      const acceptedAfter = yield* gateway.acceptedFacts.get
       const projectionAcceptedAt =
         projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
           ? projection.evidence.acceptedAt
@@ -210,6 +210,13 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   const statusSignal = <A>(
     project: (bundle: ReactiveDeliveryBundle) => A
   ): CurrentSignal<A, DeliveryRelationSourceError> => ({
+    get: SubscriptionRef.get(state).pipe(
+      Effect.flatMap((status) =>
+        status._tag === "ReactiveDeliveryOpen"
+          ? Effect.succeed(project(status.bundle))
+          : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+      )
+    ),
     changes: SubscriptionRef.changes(state).pipe(
       Stream.mapEffect((status) =>
         status._tag === "ReactiveDeliveryOpen"
@@ -237,7 +244,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   )
   const invalidate = Effect.fn("DeliveryRelations.invalidate")(function* (cause: DeliveryInvalidation) {
     if (cause._tag === "QuiescenceProbeRequested" && Option.isNone(yield* Ref.get(probe))) {
-      const accepted = yield* gateway.readCurrent.pipe(
+      const accepted = yield* gateway.acceptedFacts.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) =>
             SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause: Cause.fail(failure) }).pipe(
@@ -268,7 +275,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     return yield* refresh
   })
 
-  yield* gateway.current.changes.pipe(
+  yield* gateway.acceptedFacts.changes.pipe(
     Stream.runForEach(() => refresh),
     Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
     Effect.forkScoped

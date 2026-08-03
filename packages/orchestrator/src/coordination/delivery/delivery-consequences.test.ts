@@ -184,6 +184,7 @@ it.effect("emits one consequence per accepted publication without mixed graph po
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
     const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+      get: Effect.succeed(coherentBundle(graphOne, policyOne, [])),
       changes: Stream.fromIterable([
         coherentBundle(graphOne, policyOne, []),
         coherentBundle(graphTwo, policyTwo, [syntheticEvidence(TaskId.make("B"))])
@@ -231,6 +232,7 @@ it.effect("publishes policy and exact evidence changes for one accepted graph", 
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
     const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+      get: Effect.succeed(coherentBundle(graph, policyOne, [])),
       changes: Stream.fromIterable([
         coherentBundle(graph, policyOne, []),
         coherentBundle(graph, policyTwo, []),
@@ -265,6 +267,7 @@ it.effect("evaluates every coherent projection owner from the shared publication
   Effect.gen(function* () {
     const graph = acceptedGraph("coherent-projection", [{ id: "A" }], "coherent-projection-read", 9)
     const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+      get: Effect.succeed(coherentBundle(graph, policy, [])),
       changes: Stream.fromIterable([coherentBundle(graph, policy, [])])
     }
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policy), coherent })
@@ -356,6 +359,7 @@ it.effect("reacts to G2 while the composition remains running", () =>
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
       coherent: {
+        get: Effect.succeed(coherentBundle(graphOne, policy, [])),
         changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
       }
     })
@@ -385,6 +389,7 @@ it.effect("emits G1 and equal-content G2 with distinct accepted observation iden
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
       coherent: {
+        get: Effect.succeed(coherentBundle(graphOne, policy, [])),
         changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
       }
     })
