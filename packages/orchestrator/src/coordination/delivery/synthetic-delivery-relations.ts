@@ -1,5 +1,6 @@
 import { plannedAttemptExecutorCorrelation, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
+import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { initialRunPolicyRevision, RunControlPolicy, type InitialControlPolicy } from "../../control/policy.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
@@ -14,12 +15,14 @@ import {
 import { ticketDeliveryEvidenceOf } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { AcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { AcceptedFactPublicationGateway, type AcceptedFactPublicationGatewayService } from "./accepted-fact-gateway.js"
 import {
   DeliveryRelationRevision,
   type DeliveryRelationInputBundle,
   type CurrentSignal,
   type DeliveryInvalidation,
+  DeliveryRelationReconciliationError,
+  type DeliveryRelationSourceError,
   type DeliveryRuntimeFacts,
   type TrackerGraphActionProposal,
   type TrackerGraphState as TrackerGraphStateType
@@ -32,6 +35,11 @@ interface SyntheticDeliveryState {
 }
 
 type SyntheticDeliveryBundle = DeliveryRelationInputBundle
+type SyntheticDeliveryFailure = Effect.Error<AcceptedFactPublicationGatewayService["readCurrent"]>
+
+type SyntheticDeliveryStatus =
+  | { readonly _tag: "SyntheticDeliveryOpen"; readonly bundle: SyntheticDeliveryBundle }
+  | { readonly _tag: "SyntheticDeliveryFailed"; readonly cause: Cause.Cause<SyntheticDeliveryFailure> }
 
 const emptyPause = ReconstructedPauseState.make({
   run: ReconstructedRunPauseState.cases.RunUnpaused.make({}),
@@ -148,15 +156,32 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
     } satisfies SyntheticDeliveryBundle
   }
 
-  const state = yield* SubscriptionRef.make(deriveBundle(yield* Ref.get(source), yield* Ref.get(revision)))
+  const state = yield* SubscriptionRef.make<SyntheticDeliveryStatus>({
+    _tag: "SyntheticDeliveryOpen",
+    bundle: deriveBundle(yield* Ref.get(source), yield* Ref.get(revision))
+  })
   const gate = yield* Semaphore.make(1)
-  const publish = gate.withPermit(
-    Effect.gen(function* () {
-      const nextRevision = yield* Ref.updateAndGet(revision, (value) => DeliveryRelationRevision.make(value + 1))
-      yield* SubscriptionRef.set(state, deriveBundle(yield* Ref.get(source), nextRevision))
-      return nextRevision
-    })
-  )
+  const publish = (recoverFromFailure: boolean) =>
+    gate.withPermit(
+      Effect.gen(function* () {
+        const nextRevision = yield* Ref.updateAndGet(revision, (value) => DeliveryRelationRevision.make(value + 1))
+        const currentStatus = yield* SubscriptionRef.get(state)
+        if (currentStatus._tag === "SyntheticDeliveryFailed" && !recoverFromFailure) return nextRevision
+        yield* SubscriptionRef.set(state, {
+          _tag: "SyntheticDeliveryOpen",
+          bundle: deriveBundle(yield* Ref.get(source), nextRevision)
+        })
+        return nextRevision
+      })
+    )
+  const publishFailure = (failure: SyntheticDeliveryFailure) =>
+    gate.withPermit(
+      Effect.gen(function* () {
+        const nextRevision = yield* Ref.updateAndGet(revision, (value) => DeliveryRelationRevision.make(value + 1))
+        yield* SubscriptionRef.set(state, { _tag: "SyntheticDeliveryFailed", cause: Cause.fail(failure) })
+        return nextRevision
+      })
+    )
   const invalidate = Effect.fn("DeliveryRelations.invalidateSynthetic")(function* (cause: DeliveryInvalidation) {
     if (cause._tag === "QuiescenceProbeRequested") {
       yield* Ref.update(source, (current) =>
@@ -169,18 +194,32 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       )
     }
     if (cause._tag === "ProposalCompleted") {
-      const accepted = yield* gateway.readCurrent.pipe(Effect.orDie)
+      const accepted = yield* gateway.readCurrent.pipe(
+        Effect.matchEffect({
+          onFailure: (failure) => publishFailure(failure).pipe(Effect.as(null)),
+          onSuccess: (current) => Effect.succeed(current)
+        })
+      )
+      if (accepted === null) return yield* Ref.get(revision)
       yield* Ref.update(source, (current) => {
         const next = applySyntheticProposalResult(current, cause.result)
         const withGraph = { ...next, graph: accepted.graph }
         return withGraph.probe?.id === cause.proposalId ? { ...withGraph, probe: null } : withGraph
       })
     }
-    return yield* publish
+    return yield* publish(cause._tag === "ProposalCompleted")
   })
 
-  const signal = <A>(project: (bundle: SyntheticDeliveryBundle) => A): CurrentSignal<A> => ({
-    changes: SubscriptionRef.changes(state).pipe(Stream.map(project))
+  const signal = <A>(
+    project: (bundle: SyntheticDeliveryBundle) => A
+  ): CurrentSignal<A, DeliveryRelationSourceError> => ({
+    changes: SubscriptionRef.changes(state).pipe(
+      Stream.mapEffect((status) =>
+        status._tag === "SyntheticDeliveryOpen"
+          ? Effect.succeed(project(status.bundle))
+          : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+      )
+    )
   })
   return makeDeliveryRelationsLayer({
     evaluationConsistency: {
