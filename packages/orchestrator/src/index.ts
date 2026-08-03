@@ -131,11 +131,12 @@ export * from "./workflow/kernel/event.js"
 export * from "./workflow-journal/record-key.js"
 export * from "./workflow-journal/recovery-model.js"
 export {
-  AcceptedJournalHistoryInvalid,
-  AcceptedJournalPositionGap,
-  AcceptedJournalRecordMismatch,
+  JournalHistoryInvalid,
+  JournalPositionGap,
+  JournalRecordMismatch,
   JournalDataCorruption,
   type JournalAppendError,
+  type JournalError,
   JournalSchemaIncompatible,
   JournalStorageAccessDenied,
   JournalStorageCapacityExhausted,
@@ -334,9 +335,12 @@ export {
   validatedStartupRecoveryLayer
 } from "./coordination/run/startup-recovery.js"
 export {
-  AcceptedFactGatewayInitialHistoryInvalid,
-  AcceptedFactPublicationGateway
-} from "./coordination/delivery/accepted-fact-gateway.js"
+  JournalInitialHistoryInvalid,
+  Journal,
+  type JournalService,
+  type JournalState,
+  type JournalStorageAppend
+} from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
@@ -352,7 +356,7 @@ export {
   DeliverySettlementError,
   TicketDeliveryError,
   TrackerGraphRelationError,
-  type AcceptedTrackerGraphObservation,
+  type JournaledTrackerGraphObservation,
   type DeliveryConsequences,
   type DeliveryGraphPublication,
   type DeliveryLegacyInputs,

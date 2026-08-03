@@ -6,7 +6,7 @@ import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.j
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import type {
-  AcceptedFactPublicationError,
+  JournalError,
   InRunJournal,
   InRunJournalRunMismatch,
   JournalStoreError,
@@ -17,10 +17,7 @@ import type {
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import {
-  AcceptedFactPublicationGateway,
-  type AcceptedFactGatewayInitialHistoryInvalid
-} from "../delivery/accepted-fact-gateway.js"
+import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
 import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
@@ -37,7 +34,7 @@ import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
 export type JournaledRunServices =
-  | AcceptedFactPublicationGateway
+  | Journal
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal
@@ -49,8 +46,8 @@ export type JournaledRunServices =
   | WorkflowTrace
 
 export type JournaledRunBootstrapError =
-  | AcceptedFactGatewayInitialHistoryInvalid
-  | AcceptedFactPublicationError
+  | JournalInitialHistoryInvalid
+  | JournalError
   | InRunJournalRunMismatch
   | InvalidWorkflowJournalHistory
   | JournalStoreError
@@ -126,7 +123,7 @@ export interface JournaledRunBootstrapService {
   }
 }
 
-/** Owns fresh/recovered sequencing and constructs every in-Run service only after gateway installation. */
+/** Owns fresh/recovered sequencing and constructs every in-Run service only after journal installation. */
 export class JournaledRunBootstrap extends Context.Service<JournaledRunBootstrap, JournaledRunBootstrapService>()(
   "@dalph/JournaledRunBootstrap"
 ) {}
@@ -141,9 +138,9 @@ const makeJournaledDeliveryRelations = Effect.fn("Delivery.makeJournaledRelation
   runId: RunId,
   target: TrackerTarget
 ) {
-  const gateway = yield* AcceptedFactPublicationGateway
+  const journal = yield* Journal
   const recovery = yield* RunRecoveryProjection
-  return yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+  return yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
 })
 
 const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <ERelations, RRelations, EExecutor, RExecutor>(

@@ -73,7 +73,7 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { makeRunRecoveryProjection } from "../run/recovery-activation.js"
-import { makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { makeJournal } from "./journal.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 
@@ -158,7 +158,7 @@ const seedTerminalAccepted = Effect.gen(function* () {
 })
 
 const installFreshTrackerFacts = Effect.fn("RecoveredSettlementTest.installFreshTrackerFacts")(function* (
-  gateway: Effect.Success<ReturnType<typeof makeAcceptedFactPublicationGateway>>
+  journalService: Effect.Success<ReturnType<typeof makeJournal>>
 ) {
   const graphRead = makeTrackerGraphObservationOperation(OperationId.make("recovered-settlement-graph"), trackerTarget)
   const projected = projectTrackerSnapshot({
@@ -166,8 +166,8 @@ const installFreshTrackerFacts = Effect.fn("RecoveredSettlementTest.installFresh
     tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
   })
   if (projected._tag === "Invalid") return yield* Effect.die("expected a valid current graph")
-  yield* gateway.journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
-  yield* gateway.journal.append(
+  yield* journalService.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+  yield* journalService.append(
     runId,
     outcomeRecordKey(graphRead.operationId),
     taskTrackerFactsObservedEvent(
@@ -180,8 +180,8 @@ const installFreshTrackerFacts = Effect.fn("RecoveredSettlementTest.installFresh
     trackerTarget,
     taskId
   )
-  yield* gateway.journal.append(runId, intentRecordKey(claimRead.operationId), taskTrackerReadIntent(claimRead))
-  yield* gateway.journal.append(
+  yield* journalService.append(runId, intentRecordKey(claimRead.operationId), taskTrackerReadIntent(claimRead))
+  yield* journalService.append(
     runId,
     outcomeRecordKey(claimRead.operationId),
     taskTrackerFactsObservedEvent(claimRead.operationId, makeFocusedTaskClaimFactsObserved(claimRead, claim))
@@ -192,7 +192,7 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
   const journal = yield* JournalStore
   const initial = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-  const gateway = yield* makeAcceptedFactPublicationGateway(runId, trackerTarget, initial, journal)
+  const journalService = yield* makeJournal(runId, trackerTarget, initial, journal)
   const integrationResources = yield* makeIntegrationTargetResourceController()
   const recovery = yield* makeRunRecoveryProjection(
     runId,
@@ -201,8 +201,8 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
     CandidateContinuationLimit.make(2),
     integrationResources
   )
-  yield* installFreshTrackerFacts(gateway)
-  const relations = yield* makeReactiveDeliveryRelationsLayer(runId, trackerTarget, gateway, recovery)
+  yield* installFreshTrackerFacts(journalService)
+  const relations = yield* makeReactiveDeliveryRelationsLayer(runId, trackerTarget, journalService, recovery)
   const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
   return Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 })

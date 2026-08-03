@@ -61,7 +61,7 @@ const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string
           graph.observation.snapshot.canonicalJson(),
           graph.observation.operationId,
           graph.observation.contentIdentity,
-          graph.observation.acceptedAt,
+          graph.observation.recordedAt,
           graph.observation.freshness.operationId
         ]
   return JSON.stringify({

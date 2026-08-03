@@ -38,7 +38,7 @@ import {
   mapCurrentSignal,
   type TrackerGraphState
 } from "./relations.js"
-import { makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { makeJournal } from "./journal.js"
 import { reactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 import { runDeliveryRuntime } from "./run-delivery-runtime.js"
 
@@ -129,12 +129,12 @@ const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.make
   yield* storage.beginRun(runId, target, initialPolicy)
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-  const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+  const journal = yield* makeJournal(runId, target, initial, storage)
   const projected = projectTrackerSnapshot({ revision: "semantic-conformance", tasks: [] })
   if (projected._tag === "Invalid") return yield* Effect.die(new Error("conformance graph must be valid"))
   const operation = makeTrackerGraphObservationOperation(OperationId.make("semantic-conformance-read"), target)
-  yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-  yield* gateway.journal.append(
+  yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+  yield* journal.append(
     runId,
     outcomeRecordKey(operation.operationId),
     taskTrackerFactsObservedEvent(
@@ -142,13 +142,13 @@ const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.make
       makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
     )
   )
-  const accepted = yield* gateway.acceptedFacts.get
+  const journalState = yield* journal.state.get
   const recovery = {
-    readDeliveryProjection: gateway.acceptedFacts.get.pipe(
+    readDeliveryProjection: journal.state.get.pipe(
       Effect.map((current) => ({
         evidence: {
           _tag: "AvailableDeliveryProjectionEvidence" as const,
-          acceptedAt: current.appliedPosition,
+          acceptedAt: current.position,
           facts: [],
           integrationWaits: []
         },
@@ -158,9 +158,9 @@ const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.make
     reconstructedPlannedAttemptPositions: []
   }
   return {
-    acceptedAt: accepted.appliedPosition,
-    graph: accepted.graph,
-    layer: reactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+    acceptedAt: journalState.position,
+    graph: journalState.graph,
+    layer: reactiveDeliveryRelationsLayer(runId, target, journal, recovery)
   }
 })
 

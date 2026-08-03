@@ -11,7 +11,7 @@ export type RunFinalityDecision = Data.TaggedEnum<{
 
 export const RunFinalityDecision = Data.taggedEnum<RunFinalityDecision>()
 
-/** The accepted journal prefix used by the exact relation evaluation that proved finality. */
+/** The journal prefix used by the exact relation evaluation that proved finality. */
 export interface RunFinalityProof {
   readonly acceptedAt: JournalPosition | null
   readonly decision: RunFinalityDecision

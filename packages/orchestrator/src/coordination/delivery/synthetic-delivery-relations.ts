@@ -15,7 +15,7 @@ import {
 import { ticketDeliveryEvidenceOf } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { AcceptedFactPublicationGateway, type AcceptedFactPublicationGatewayService } from "./accepted-fact-gateway.js"
+import { Journal, type JournalService } from "./journal.js"
 import {
   DeliveryRelationRevision,
   type DeliveryRelationInputBundle,
@@ -35,7 +35,7 @@ interface SyntheticDeliveryState {
 }
 
 type SyntheticDeliveryBundle = DeliveryRelationInputBundle
-type SyntheticDeliveryFailure = Effect.Error<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
+type SyntheticDeliveryFailure = Effect.Error<JournalService["state"]["get"]>
 
 type SyntheticDeliveryStatus =
   | { readonly _tag: "SyntheticDeliveryOpen"; readonly bundle: SyntheticDeliveryBundle }
@@ -93,9 +93,9 @@ const applySyntheticProposalResult = (
 }
 
 /**
- * Supplies the same flat delivery algebra with process-local accepted facts.
+ * Supplies the same flat delivery algebra with process-local journal state.
  * Synthetic executor facts remain process-local; graph observations cross the
- * ordinary accepted journal boundary before they enter the public delivery.
+ * ordinary journal boundary before they enter the public delivery.
  */
 export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeSyntheticLayer")(function* (
   runId: RunId,
@@ -106,9 +106,9 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
     revision: initialRunPolicyRevision,
     taskExecutionCapacity: initialControlPolicy.taskExecutionCapacity
   })
-  const gateway = yield* AcceptedFactPublicationGateway
-  const initialAccepted = yield* gateway.acceptedFacts.get
-  const source = yield* Ref.make<SyntheticDeliveryState>({ facts: [], graph: initialAccepted.graph, probe: null })
+  const journal = yield* Journal
+  const initialJournal = yield* journal.state.get
+  const source = yield* Ref.make<SyntheticDeliveryState>({ facts: [], graph: initialJournal.graph, probe: null })
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
 
   const deriveBundle = (current: SyntheticDeliveryState, currentRevision: DeliveryRelationRevision) => {
@@ -136,7 +136,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
         }),
         reflectionProposals: [],
         runtimeFacts: {
-          acceptedAt: current.graph._tag === "GraphEstablished" ? current.graph.observation.acceptedAt : null,
+          acceptedAt: current.graph._tag === "GraphEstablished" ? current.graph.observation.recordedAt : null,
           quiescence: { _tag: "QuiescenceProbeAllowed" },
           revision: currentRevision,
           taskWork: { capacity: policy.taskExecutionCapacity, held: activeSyntheticAttempts(current.facts) }
@@ -194,16 +194,16 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       )
     }
     if (cause._tag === "ProposalCompleted") {
-      const accepted = yield* gateway.acceptedFacts.get.pipe(
+      const journalState = yield* journal.state.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) => publishFailure(failure).pipe(Effect.as(null)),
           onSuccess: (current) => Effect.succeed(current)
         })
       )
-      if (accepted === null) return yield* Ref.get(revision)
+      if (journalState === null) return yield* Ref.get(revision)
       yield* Ref.update(source, (current) => {
         const next = applySyntheticProposalResult(current, cause.result)
-        const withGraph = { ...next, graph: accepted.graph }
+        const withGraph = { ...next, graph: journalState.graph }
         return withGraph.probe?.id === cause.proposalId ? { ...withGraph, probe: null } : withGraph
       })
     }

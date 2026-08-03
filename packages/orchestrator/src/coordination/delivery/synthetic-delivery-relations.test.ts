@@ -10,10 +10,10 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
 import { DeliveryRelationReconciliationError, DeliveryRelationRevision } from "./relations.js"
 import { makeSyntheticDeliveryRelationsLayer } from "./synthetic-delivery-relations.js"
-import { AcceptedFactPublicationGateway, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { Journal, makeJournal } from "./journal.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { AcceptedJournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
+import { JournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
 
 it.effect("keeps synthetic quiescence and non-fact action outcomes process-local", () =>
   Effect.scoped(
@@ -25,9 +25,9 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
       yield* storage.beginRun(runId, target, initialPolicy)
       const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
       if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-      const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+      const journal = yield* makeJournal(runId, target, initial, storage)
       const layer = yield* makeSyntheticDeliveryRelationsLayer(runId, target, initialPolicy).pipe(
-        Effect.provideService(AcceptedFactPublicationGateway, gateway)
+        Effect.provideService(Journal, journal)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const current = yield* relation.current.get
@@ -60,7 +60,7 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
   ).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("publishes a typed failure when accepted facts cannot be reread after a proposal completes", () =>
+it.effect("publishes a typed failure when journal state cannot be reread after a proposal completes", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const runId = RunId.make("synthetic-publication-failure-run")
@@ -70,25 +70,25 @@ it.effect("publishes a typed failure when accepted facts cannot be reread after 
       yield* storage.beginRun(runId, target, initialPolicy)
       const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
       if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-      const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
-      const accepted = yield* gateway.acceptedFacts.get
+      const journal = yield* makeJournal(runId, target, initial, storage)
+      const journalState = yield* journal.state.get
       const failRead = yield* Ref.make(false)
-      const gatewayFailure = new AcceptedJournalHistoryInvalid({
-        acceptedPosition: accepted.appliedPosition,
+      const journalFailure = new JournalHistoryInvalid({
+        position: journalState.position,
         detail: "synthetic proposal completion read failed",
         runId
       })
-      const failingGateway = {
-        ...gateway,
-        acceptedFacts: {
-          ...gateway.acceptedFacts,
+      const failingJournal = {
+        ...journal,
+        state: {
+          ...journal.state,
           get: Ref.get(failRead).pipe(
-            Effect.flatMap((failed) => (failed ? Effect.fail(gatewayFailure) : gateway.acceptedFacts.get))
+            Effect.flatMap((failed) => (failed ? Effect.fail(journalFailure) : journal.state.get))
           )
         }
       }
       const layer = yield* makeSyntheticDeliveryRelationsLayer(runId, target, initialPolicy).pipe(
-        Effect.provideService(AcceptedFactPublicationGateway, failingGateway)
+        Effect.provideService(Journal, failingJournal)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
@@ -105,7 +105,7 @@ it.effect("publishes a typed failure when accepted facts cannot be reread after 
       expect(currentFailure).toEqual(failure)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
       expect(Cause.hasDies(failure.cause)).toBe(false)
-      expect(Cause.squash(failure.cause)).toEqual(gatewayFailure)
+      expect(Cause.squash(failure.cause)).toEqual(journalFailure)
 
       yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
       const stickyFailure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)

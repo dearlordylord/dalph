@@ -3,8 +3,8 @@ import { Effect } from "effect"
 import { FixtureTarget } from "../src/authorities/task-tracker/fixture/target.js"
 import type { TaskDagSnapshot } from "../src/authorities/task-tracker/graph.js"
 import { TaskWorkCapacity } from "../src/coordination/admission/capacity.js"
-import { makeAcceptedFactPublicationGateway } from "../src/coordination/delivery/accepted-fact-gateway.js"
-import type { AcceptedTrackerGraphObservation } from "../src/coordination/delivery/accepted-fact-gateway.js"
+import { makeJournal } from "../src/coordination/delivery/journal.js"
+import type { JournaledTrackerGraphObservation } from "../src/coordination/delivery/journal.js"
 import { InitialControlPolicy, RunPolicyRevision, initialRunPolicyRevision } from "../src/control/policy.js"
 import { reduceWorkflowJournalHistory } from "../src/coordination/reconstruction/history.js"
 import { makeTrackerGraphObservationOperation } from "../src/workflow/registry/operation.js"
@@ -24,19 +24,19 @@ import {
 import { JournalStore } from "../src/workflow-journal/store.js"
 import type { OperationId } from "../src/workflow/identity.js"
 
-const minimumAcceptedGraphPosition = 3
+const minimumJournaledGraphPosition = 3
 const policyRevisionIncrement = 1
 
-/** Builds a valid graph observation through the accepted journal gateway. */
-export const makeTestAcceptedTrackerGraphObservation = (input: {
+/** Builds a valid graph observation through the journal state service. */
+export const makeTestJournaledTrackerGraphObservation = (input: {
   readonly snapshot: TaskDagSnapshot
   readonly operationId: OperationId
-  readonly acceptedAt: JournalPosition
-}): AcceptedTrackerGraphObservation => {
+  readonly recordedAt: JournalPosition
+}): JournaledTrackerGraphObservation => {
   const target = FixtureTarget.make("test-graph-target")
-  const runId = RunId.make(`accepted-graph-fixture:${input.operationId}`)
+  const runId = RunId.make(`journaled-graph-fixture:${input.operationId}`)
   const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  const requestedPosition = Math.max(input.acceptedAt, minimumAcceptedGraphPosition)
+  const requestedPosition = Math.max(input.recordedAt, minimumJournaledGraphPosition)
   return Effect.runSync(
     Effect.scoped(
       Effect.gen(function* () {
@@ -44,11 +44,11 @@ export const makeTestAcceptedTrackerGraphObservation = (input: {
         yield* storage.beginRun(runId, target, policy)
         const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
         if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-        const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+        const journal = yield* makeJournal(runId, target, initial, storage)
         let revision = initialRunPolicyRevision
-        for (const _unused of Array.from({ length: requestedPosition - minimumAcceptedGraphPosition })) {
+        for (const _unused of Array.from({ length: requestedPosition - minimumJournaledGraphPosition })) {
           const nextRevision = RunPolicyRevision.make(revision + policyRevisionIncrement)
-          yield* gateway.journal.append(
+          yield* journal.append(
             runId,
             taskWorkCapacityPolicyRecordKey(nextRevision),
             TaskWorkCapacityChangedEvent.make({
@@ -63,8 +63,8 @@ export const makeTestAcceptedTrackerGraphObservation = (input: {
           revision = nextRevision
         }
         const operation = makeTrackerGraphObservationOperation(input.operationId, target)
-        yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-        yield* gateway.journal.append(
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        yield* journal.append(
           runId,
           outcomeRecordKey(operation.operationId),
           taskTrackerFactsObservedEvent(
@@ -72,7 +72,7 @@ export const makeTestAcceptedTrackerGraphObservation = (input: {
             makeCompleteTaskTrackerFactsObserved(operation, input.snapshot)
           )
         )
-        const current = yield* gateway.acceptedFacts.get
+        const current = yield* journal.state.get
         if (current.graph._tag !== "GraphEstablished") return yield* Effect.die("fixture graph was not established")
         return current.graph.observation
       }).pipe(Effect.provide(memoryJournalStoreLayer))

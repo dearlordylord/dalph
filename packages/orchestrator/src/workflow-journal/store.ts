@@ -91,29 +91,29 @@ export class InRunJournalRunMismatch extends Schema.TaggedErrorClass<InRunJourna
   { expectedRunId: RunId, requestedRunId: RunId }
 ) {}
 
-/** Storage accepted a non-successor position while the coordinator held exclusive ownership. */
-export class AcceptedJournalPositionGap extends Schema.TaggedErrorClass<AcceptedJournalPositionGap>()(
-  "AcceptedJournalPositionGap",
-  { acceptedPosition: JournalPosition, expectedPosition: JournalPosition, runId: RunId }
-) {}
+/** Journal storage returned a non-successor position while the coordinator held exclusive ownership. */
+export class JournalPositionGap extends Schema.TaggedErrorClass<JournalPositionGap>()("JournalPositionGap", {
+  position: JournalPosition,
+  expectedPosition: JournalPosition,
+  runId: RunId
+}) {}
 
-/** Idempotent append returned a record unequal to the already-published record at that position. */
-export class AcceptedJournalRecordMismatch extends Schema.TaggedErrorClass<AcceptedJournalRecordMismatch>()(
-  "AcceptedJournalRecordMismatch",
-  { acceptedPosition: JournalPosition, key: JournalRecordKey, runId: RunId }
-) {}
+/** Idempotent append returned a record unequal to the journal record at that position. */
+export class JournalRecordMismatch extends Schema.TaggedErrorClass<JournalRecordMismatch>()("JournalRecordMismatch", {
+  position: JournalPosition,
+  key: JournalRecordKey,
+  runId: RunId
+}) {}
 
-/** A newly accepted record made the in-process journal prefix invalid and publication stopped. */
-export class AcceptedJournalHistoryInvalid extends Schema.TaggedErrorClass<AcceptedJournalHistoryInvalid>()(
-  "AcceptedJournalHistoryInvalid",
-  { acceptedPosition: JournalPosition, detail: Schema.String, runId: RunId }
-) {}
+/** A newly appended record made the in-process journal prefix invalid and publication stopped. */
+export class JournalHistoryInvalid extends Schema.TaggedErrorClass<JournalHistoryInvalid>()("JournalHistoryInvalid", {
+  position: JournalPosition,
+  detail: Schema.String,
+  runId: RunId
+}) {}
 
-/** A durable append could not be reconciled with the process-local accepted prefix. */
-export type AcceptedFactPublicationError =
-  | AcceptedJournalHistoryInvalid
-  | AcceptedJournalPositionGap
-  | AcceptedJournalRecordMismatch
+/** A durable append could not be reconciled with the process-local journal prefix. */
+export type JournalError = JournalHistoryInvalid | JournalPositionGap | JournalRecordMismatch
 
 /** The fresh-start boundary submitted an identity whose Run already began. */
 export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(
@@ -144,14 +144,14 @@ export class WorkflowRunAlreadyTerminated extends Schema.TaggedErrorClass<Workfl
   { runId: RunId, terminatedAt: JournalPosition }
 ) {}
 
-/** Failures owned by raw persistence before accepted-fact publication exists. */
+/** Failures owned by raw persistence before journal state publication exists. */
 export type JournalStorageAppendError = JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated
 
-/** Failures from raw persistence or the installed accepted-fact publication gateway. */
-export type JournalAppendError = AcceptedFactPublicationError | InRunJournalRunMismatch | JournalStorageAppendError
+/** Failures from raw persistence or the installed journal state service. */
+export type JournalAppendError = JournalError | InRunJournalRunMismatch | JournalStorageAppendError
 
-/** Failures that prevent a caller from reading one coherent in-Run accepted prefix. */
-export type JournalReadError = AcceptedFactPublicationError | InRunJournalRunMismatch | JournalStoreError
+/** Failures that prevent a caller from reading one coherent in-Run journal prefix. */
+export type JournalReadError = JournalError | InRunJournalRunMismatch | JournalStoreError
 
 export interface JournalStoreService {
   readonly beginRun: (
@@ -205,7 +205,7 @@ export class RunLifecycleJournal extends Context.Service<RunLifecycleJournal, Ru
   "@dalph/RunLifecycleJournal"
 ) {}
 
-/** Exposes raw storage and lifecycle operations without fabricating accepted-fact publication. */
+/** Exposes raw storage and lifecycle operations without fabricating journal state. */
 export const journalStoreCapabilities = <E, R>(
   storage: Layer.Layer<JournalStore, E, R>
 ): Layer.Layer<JournalStore | RunLifecycleJournal, E, R> =>

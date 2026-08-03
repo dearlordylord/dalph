@@ -12,7 +12,7 @@ import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
 
-/** Every operation identity whose accepted journal fact is available to delivery proposal derivation. */
+/** Every operation identity whose journal fact is available to delivery proposal derivation. */
 export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
   new Set(records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))))
 
@@ -59,7 +59,7 @@ export const journaledIntegrationEvidenceOf = (
   return evidence
 }
 
-/** Derives exact delivery evidence from accepted facts, never from the legacy runnable frontier. */
+/** Derives exact delivery evidence from journal facts, never from the legacy runnable frontier. */
 export const ticketDeliveryEvidenceOf = (
   frame: CurrentDeliveryFrame,
   responsibilityFacts: ReadonlyArray<ResponsibilityFreshFacts>

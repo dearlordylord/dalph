@@ -45,7 +45,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 describe("deliveryProposalsOf", () => {
   it("derives one stable fresh claim proposal without allocating its operation identity", () => {
     const step = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("accepted-graph-read"),
+      predecessorOperationId: OperationId.make("journaled-graph-read"),
       task
     })
     const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
@@ -222,7 +222,7 @@ describe("deliveryProposalsOf", () => {
     })
     const taskB = TaskId.make("B")
     const stepB = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("accepted-graph-read"),
+      predecessorOperationId: OperationId.make("journaled-graph-read"),
       task: { id: taskB, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
     })
     const readyB = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
@@ -256,7 +256,7 @@ describe("deliveryProposalsOf", () => {
       taskRevision: TaskRevision.make("revision-C")
     })
     const claimStepC = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("accepted-graph-read"),
+      predecessorOperationId: OperationId.make("journaled-graph-read"),
       task: { id: taskC, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
     })
     const contributions = deliveryProposalsOf({

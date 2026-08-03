@@ -9,7 +9,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema, Stream } from "effect"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
-import type { AcceptedTrackerGraphObservation } from "./accepted-fact-gateway.js"
+import type { JournaledTrackerGraphObservation } from "./journal.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
@@ -82,17 +82,17 @@ const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
  * remain part of the observation even when a later read has equal graph
  * contents.
  */
-export type { AcceptedTrackerGraphObservation } from "./accepted-fact-gateway.js"
+export type { JournaledTrackerGraphObservation } from "./journal.js"
 
 /** The current usable graph is either absent or already normalized and structurally validated. */
 export type TrackerGraphState =
-  | { readonly _tag: "GraphEstablished"; readonly observation: AcceptedTrackerGraphObservation }
+  | { readonly _tag: "GraphEstablished"; readonly observation: JournaledTrackerGraphObservation }
   | { readonly _tag: "GraphNotEstablished" }
 
 export const TrackerGraphState = {
   cases: {
     GraphEstablished: {
-      make: (fields: { readonly observation: AcceptedTrackerGraphObservation }): TrackerGraphState => ({
+      make: (fields: { readonly observation: JournaledTrackerGraphObservation }): TrackerGraphState => ({
         _tag: "GraphEstablished",
         observation: fields.observation
       })
@@ -121,7 +121,7 @@ export type DeliveryFrontierStanding =
 /** Graph-only delivery evidence; workflow responsibility and runtime ownership are excluded. */
 export interface DeliveryFrontier {
   readonly _tag: "DeliveryFrontier"
-  /** The accepted graph, policy, and exact evidence published for this revision. */
+  /** The journaled graph, policy, and exact evidence published for this revision. */
   readonly publication: DeliveryGraphPublication
   readonly source: TrackerGraphState
   readonly standings: ReadonlyArray<DeliveryFrontierStanding>
@@ -474,7 +474,7 @@ export interface DeliveryRuntimeEvaluation {
 
 /** Process-local reason for the runtime to request a fresh evaluation of descriptive relations. */
 export type DeliveryInvalidation =
-  | { readonly _tag: "AcceptedFactsChanged" }
+  | { readonly _tag: "JournalStateChanged" }
   | {
       readonly _tag: "ProposalCompleted"
       readonly proposalId: DeliveryProposalId

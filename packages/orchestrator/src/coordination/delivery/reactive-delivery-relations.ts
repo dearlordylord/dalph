@@ -26,9 +26,9 @@ import {
   type TicketDeliveryEvidence,
   type TrackerGraphActionProposal
 } from "./relations.js"
-import type { AcceptedFactPublicationGatewayService } from "./accepted-fact-gateway.js"
+import type { JournalService } from "./journal.js"
 
-/** Accepted Run history cannot drive delivery until its initial control policy exists. */
+/** Journal history cannot drive delivery until its initial control policy exists. */
 export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<DeliveryControlPolicyMissing>()(
   "DeliveryControlPolicyMissing",
   {}
@@ -36,18 +36,18 @@ export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<Delive
 
 type ReactiveDeliveryBundle = DeliveryRelationInputBundle
 
-type AcceptedDeliveryProjection = Effect.Success<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
+type JournalProjection = Effect.Success<JournalService["state"]["get"]>
 type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
 
 const eligibleRecoveredTransitions = (
-  accepted: AcceptedDeliveryProjection,
+  journal: JournalProjection,
   projection: RecoveredDeliveryProjection,
   freshTaskIds: ReadonlySet<TaskId>
 ) =>
   projection.frontier.transitions.filter(
     (transition) =>
       !freshTaskIds.has(runnableTransitionTaskId(transition)) &&
-      (accepted.graph._tag === "GraphEstablished" ||
+      (journal.graph._tag === "GraphEstablished" ||
         transitionTrackerGraphRequirement(transition) === "AcceptedHistorySufficient")
   )
 
@@ -71,7 +71,7 @@ const exactDeliveryEvidenceOf = (
 }
 
 const trackerGraphProposalsOf = (
-  accepted: AcceptedDeliveryProjection,
+  journal: JournalProjection,
   recoveredTransitionCount: number,
   activeProbe: ReadonlyArray<TrackerGraphActionProposal>,
   runIsPaused: boolean,
@@ -79,17 +79,12 @@ const trackerGraphProposalsOf = (
   target: TrackerTarget
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
-  if (accepted.graph._tag === "GraphNotEstablished" && recoveredTransitionCount === 0) {
+  if (journal.graph._tag === "GraphNotEstablished" && recoveredTransitionCount === 0) {
     return [
-      trackerGraphReadProposalOf({
-        acceptedAt: accepted.appliedPosition,
-        purpose: "EstablishCurrentGraph",
-        runId,
-        target
-      })
+      trackerGraphReadProposalOf({ acceptedAt: journal.position, purpose: "EstablishCurrentGraph", runId, target })
     ]
   }
-  return accepted.graph._tag === "GraphEstablished" ? activeProbe : []
+  return journal.graph._tag === "GraphEstablished" ? activeProbe : []
 }
 
 const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: AttemptId) =>
@@ -99,7 +94,7 @@ const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: 
   )?.event
 
 const activeAttemptPositions = (
-  state: Effect.Success<AcceptedFactPublicationGatewayService["acceptedFacts"]["get"]>
+  state: Effect.Success<JournalService["state"]["get"]>
 ): DeliveryRuntimeFacts["taskWork"]["held"] =>
   state.reconstructed.responsibility.entries.flatMap((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
@@ -122,27 +117,24 @@ const activeAttemptPositions = (
 export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeReactiveLayer")(function* (
   runId: RunId,
   target: TrackerTarget,
-  gateway: AcceptedFactPublicationGatewayService,
+  journal: JournalService,
   recovery: RunRecoveryProjectionSource
 ) {
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
   const probe = yield* Ref.make<Option.Option<TrackerGraphActionProposal>>(Option.none())
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
 
-  const readCoherentAcceptedProjection = Effect.fn("DeliveryRelations.readCoherentAcceptedProjection")(function* () {
+  const readCoherentJournalProjection = Effect.fn("DeliveryRelations.readCoherentJournalProjection")(function* () {
     for (;;) {
-      const acceptedBefore = yield* gateway.acceptedFacts.get
+      const journalBefore = yield* journal.state.get
       const projection = yield* recovery.readDeliveryProjection
-      const acceptedAfter = yield* gateway.acceptedFacts.get
+      const journalAfter = yield* journal.state.get
       const projectionAcceptedAt =
         projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
           ? projection.evidence.acceptedAt
-          : acceptedAfter.appliedPosition
-      if (
-        acceptedBefore.appliedPosition === acceptedAfter.appliedPosition &&
-        projectionAcceptedAt === acceptedAfter.appliedPosition
-      ) {
-        return { accepted: acceptedAfter, projection }
+          : journalAfter.position
+      if (journalBefore.position === journalAfter.position && projectionAcceptedAt === journalAfter.position) {
+        return { journal: journalAfter, projection }
       }
     }
   })
@@ -150,34 +142,34 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   const deriveBundle = Effect.fn("DeliveryRelations.deriveBundle")(function* (
     currentRevision: DeliveryRelationRevision
   ) {
-    const { accepted, projection } = yield* readCoherentAcceptedProjection()
-    const policy = yield* Option.match(accepted.reconstructed.controlPolicy, {
+    const { journal, projection } = yield* readCoherentJournalProjection()
+    const policy = yield* Option.match(journal.reconstructed.controlPolicy, {
       onNone: () => Effect.fail(new DeliveryControlPolicyMissing()),
       onSome: Effect.succeed
     })
     const frame =
-      accepted.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(accepted) : undefined
+      journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
     const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
-    const recovered = eligibleRecoveredTransitions(accepted, projection, freshTaskIds)
+    const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
-    const records = accepted.records
+    const records = journal.records
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
-      acceptedAt: accepted.appliedPosition,
+      acceptedAt: journal.position,
       acceptedOperationIds: acceptedOperationIdsOf(records),
       fresh,
       integrationResponsibilities,
-      responsibilities: accepted.reconstructed.responsibility.entries,
+      responsibilities: journal.reconstructed.responsibility.entries,
       runId,
       transitions
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
-    const runIsPaused = accepted.reconstructed.pause.run._tag === "RunPaused"
+    const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
     if (runIsPaused) yield* Ref.set(probe, Option.none())
     const activeProbe = runIsPaused ? [] : Option.toArray(yield* Ref.get(probe))
     const trackerGraphProposals = trackerGraphProposalsOf(
-      accepted,
+      journal,
       recovered.length,
       activeProbe,
       runIsPaused,
@@ -189,16 +181,16 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         proposalContributions,
         reflectionProposals: [],
         runtimeFacts: {
-          acceptedAt: accepted.appliedPosition,
+          acceptedAt: journal.position,
           quiescence: runIsPaused
             ? { _tag: "QuiescencePassive", reason: "RunPaused" }
             : { _tag: "QuiescenceProbeAllowed" },
           revision: currentRevision,
-          taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(accepted) }
+          taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(journal) }
         },
         trackerGraphProposals
       },
-      publication: { exactEvidence, graph: accepted.graph, policy }
+      publication: { exactEvidence, graph: journal.graph, policy }
     } satisfies ReactiveDeliveryBundle
   })
 
@@ -244,7 +236,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   )
   const invalidate = Effect.fn("DeliveryRelations.invalidate")(function* (cause: DeliveryInvalidation) {
     if (cause._tag === "QuiescenceProbeRequested" && Option.isNone(yield* Ref.get(probe))) {
-      const accepted = yield* gateway.acceptedFacts.get.pipe(
+      const currentJournal = yield* journal.state.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) =>
             SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause: Cause.fail(failure) }).pipe(
@@ -253,12 +245,12 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           onSuccess: (current) => Effect.succeed(Option.some(current))
         })
       )
-      if (Option.isNone(accepted)) return yield* Ref.get(revision)
+      if (Option.isNone(currentJournal)) return yield* Ref.get(revision)
       yield* Ref.set(
         probe,
         Option.some(
           trackerGraphReadProposalOf({
-            acceptedAt: accepted.value.appliedPosition,
+            acceptedAt: currentJournal.value.position,
             purpose: "QuiescenceProbe",
             runId,
             target
@@ -275,7 +267,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     return yield* refresh
   })
 
-  yield* gateway.acceptedFacts.changes.pipe(
+  yield* journal.state.changes.pipe(
     Stream.runForEach(() => refresh),
     Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
     Effect.forkScoped
@@ -295,10 +287,10 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   })
 })
 
-/** Scoped Layer form for application compositions that already own the gateway. */
+/** Scoped Layer form for application compositions that already own the journal service. */
 export const reactiveDeliveryRelationsLayer = (
   runId: RunId,
   target: TrackerTarget,
-  gateway: AcceptedFactPublicationGatewayService,
+  journal: JournalService,
   recovery: RunRecoveryProjectionSource
-) => Layer.unwrap(makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery))
+) => Layer.unwrap(makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery))

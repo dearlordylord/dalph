@@ -32,12 +32,12 @@ import {
   reflectDeliverySettlements,
   TrackerGraphState,
   TrackerGraphRelation,
-  type AcceptedTrackerGraphObservation,
+  type JournaledTrackerGraphObservation,
   type CurrentSignal,
   type DeliveryRelationInputBundle,
   type TicketDeliveryEvidence
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { delivery } from "./delivery.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
@@ -70,23 +70,23 @@ const graphSnapshot = (
   return projected.snapshot
 }
 
-const fixtureObservation = (snapshot: TaskDagSnapshot, operation: string, acceptedAt: number) => {
+const fixtureObservation = (snapshot: TaskDagSnapshot, operation: string, recordedAt: number) => {
   const operationId = OperationId.make(operation)
-  return makeTestAcceptedTrackerGraphObservation({
+  return makeTestJournaledTrackerGraphObservation({
     snapshot,
     operationId,
-    acceptedAt: JournalPosition.make(acceptedAt)
+    recordedAt: JournalPosition.make(recordedAt)
   })
 }
 
-const acceptedGraph = (
+const journaledGraph = (
   revision: string,
   tasks: ReadonlyArray<Parameters<typeof graphSnapshot>[1][number]>,
   operation: string,
-  acceptedAt: number
+  recordedAt: number
 ) => {
   const snapshot = graphSnapshot(revision, tasks)
-  const observation: AcceptedTrackerGraphObservation = fixtureObservation(snapshot, operation, acceptedAt)
+  const observation: JournaledTrackerGraphObservation = fixtureObservation(snapshot, operation, recordedAt)
   return TrackerGraphState.cases.GraphEstablished.make({ observation })
 }
 
@@ -139,17 +139,17 @@ const layerFor = (
     coherent: currentSignalOf(coherentBundle(graph, currentPolicy, exactEvidence))
   })
 
-it.effect("emits one coherent delivery value from accepted graph observation G1", () =>
+it.effect("emits one coherent delivery value from journaled graph observation G1", () =>
   Effect.gen(function* () {
     const taskA = TaskId.make("A")
-    const graph = acceptedGraph("G1", [{ id: "A" }], "read-G1", 7)
+    const graph = journaledGraph("G1", [{ id: "A" }], "read-G1", 7)
     const signal = yield* delivery.pipe(Effect.provide(layerFor(graph)))
     const value = Option.getOrThrow(yield* signal.changes.pipe(Stream.runHead))
 
     expect(value.graph._tag === "GraphEstablished" ? value.graph.observation.operationId : undefined).toBe(
       OperationId.make("read-G1")
     )
-    expect(value.graph._tag === "GraphEstablished" ? value.graph.observation.acceptedAt : undefined).toBe(
+    expect(value.graph._tag === "GraphEstablished" ? value.graph.observation.recordedAt : undefined).toBe(
       JournalPosition.make(7)
     )
     expect(value.frontier.standings).toMatchObject([{ _tag: "Eligible", taskId: taskA }])
@@ -161,7 +161,7 @@ it.effect("emits one coherent delivery value from accepted graph observation G1"
   })
 )
 
-it.effect("keeps graph observation absent until an accepted graph exists", () =>
+it.effect("keeps graph observation absent until a journaled graph exists", () =>
   Effect.gen(function* () {
     const signal = yield* delivery.pipe(Effect.provide(layerFor(TrackerGraphState.cases.GraphNotEstablished.make({}))))
     const value = Option.getOrThrow(yield* signal.changes.pipe(Stream.runHead))
@@ -173,8 +173,8 @@ it.effect("keeps graph observation absent until an accepted graph exists", () =>
 
 it.effect("emits one consequence per accepted publication without mixed graph policy or evidence", () =>
   Effect.gen(function* () {
-    const graphOne = acceptedGraph("coherent-G1", [{ id: "A" }], "coherent-read-G1", 7)
-    const graphTwo = acceptedGraph("coherent-G2", [{ id: "B" }], "coherent-read-G2", 8)
+    const graphOne = journaledGraph("coherent-G1", [{ id: "A" }], "coherent-read-G1", 7)
+    const graphTwo = journaledGraph("coherent-G2", [{ id: "B" }], "coherent-read-G2", 8)
     const policyOne = RunControlPolicy.make({
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(1)
@@ -220,9 +220,9 @@ it.effect("emits one consequence per accepted publication without mixed graph po
   })
 )
 
-it.effect("publishes policy and exact evidence changes for one accepted graph", () =>
+it.effect("publishes policy and exact evidence changes for one journaled graph", () =>
   Effect.gen(function* () {
-    const graph = acceptedGraph("same-graph-publication", [{ id: "A" }], "same-graph-read", 9)
+    const graph = journaledGraph("same-graph-publication", [{ id: "A" }], "same-graph-read", 9)
     const policyOne = RunControlPolicy.make({
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(1)
@@ -265,7 +265,7 @@ it.effect("publishes policy and exact evidence changes for one accepted graph", 
 
 it.effect("evaluates every coherent projection owner from the shared publication", () =>
   Effect.gen(function* () {
-    const graph = acceptedGraph("coherent-projection", [{ id: "A" }], "coherent-projection-read", 9)
+    const graph = journaledGraph("coherent-projection", [{ id: "A" }], "coherent-projection-read", 9)
     const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
       get: Effect.succeed(coherentBundle(graph, policy, [])),
       changes: Stream.fromIterable([coherentBundle(graph, policy, [])])
@@ -314,7 +314,7 @@ it.effect("evaluates every coherent projection owner from the shared publication
 it.effect("retains an exact responsibility with its changed graph placement", () =>
   Effect.gen(function* () {
     const taskB = TaskId.make("B")
-    const graph = acceptedGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
+    const graph = journaledGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
     const evidence: TicketDeliveryEvidence = {
       _tag: "ResponsibilityFacts" as const,
       facts: {
@@ -354,8 +354,8 @@ it.effect("retains an exact responsibility with its changed graph placement", ()
 
 it.effect("reacts to G2 while the composition remains running", () =>
   Effect.gen(function* () {
-    const graphOne = acceptedGraph("G1", [{ id: "A" }], "read-G1", 7)
-    const graphTwo = acceptedGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
+    const graphOne = journaledGraph("G1", [{ id: "A" }], "read-G1", 7)
+    const graphTwo = journaledGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
       coherent: {
@@ -384,8 +384,8 @@ it.effect("reacts to G2 while the composition remains running", () =>
 
 it.effect("emits G1 and equal-content G2 with distinct accepted observation identities", () =>
   Effect.gen(function* () {
-    const graphOne = acceptedGraph("equal-content", [{ id: "A" }], "logical-read-G1", 10)
-    const graphTwo = acceptedGraph("equal-content", [{ id: "A" }], "logical-read-G2", 11)
+    const graphOne = journaledGraph("equal-content", [{ id: "A" }], "logical-read-G1", 10)
+    const graphTwo = journaledGraph("equal-content", [{ id: "A" }], "logical-read-G2", 11)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
       coherent: {
@@ -406,8 +406,8 @@ it.effect("emits G1 and equal-content G2 with distinct accepted observation iden
         ? first.observation.contentIdentity
         : undefined
     ).toBe(second?._tag === "GraphEstablished" ? second.observation.contentIdentity : undefined)
-    expect(first?._tag === "GraphEstablished" ? first.observation.acceptedAt : undefined).toBe(JournalPosition.make(10))
-    expect(second?._tag === "GraphEstablished" ? second.observation.acceptedAt : undefined).toBe(
+    expect(first?._tag === "GraphEstablished" ? first.observation.recordedAt : undefined).toBe(JournalPosition.make(10))
+    expect(second?._tag === "GraphEstablished" ? second.observation.recordedAt : undefined).toBe(
       JournalPosition.make(11)
     )
   })

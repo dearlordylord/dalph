@@ -8,7 +8,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { AcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
+import { Journal } from "../delivery/journal.js"
 import { deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -75,7 +75,7 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
 })
 
-it.effect("begins a fresh Run before exposing only its gateway-backed runtime capabilities", () =>
+it.effect("begins a fresh Run before exposing only its journal-backed runtime capabilities", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-fresh")
@@ -91,12 +91,12 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
         runId,
         Effect.gen(function* () {
           const context = yield* Effect.context<never>()
-          const gateway = yield* AcceptedFactPublicationGateway
+          const journal = yield* Journal
           yield* Ref.set(
             observed,
             Option.some({
-              graph: (yield* gateway.acceptedFacts.get).graph._tag,
-              hasGatewayJournal: Option.isSome(Context.getOption(context, InRunJournal)),
+              graph: (yield* journal.state.get).graph._tag,
+              hasInRunJournal: Option.isSome(Context.getOption(context, InRunJournal)),
               hasRawJournal: Option.isSome(Context.getOption(context, JournalStore)),
               hasLifecycleJournal: Option.isSome(Context.getOption(context, RunLifecycleJournal))
             })
@@ -107,7 +107,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
 
       expect(Option.getOrThrow(yield* Ref.get(observed))).toEqual({
         graph: "GraphNotEstablished",
-        hasGatewayJournal: true,
+        hasInRunJournal: true,
         hasLifecycleJournal: false,
         hasRawJournal: false
       })
@@ -205,7 +205,7 @@ it.effect("uses the configured Run identity when recovery finds no unfinished Ru
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("publishes an Operator Pause through the active gateway without exposing runtime services", () =>
+it.effect("publishes an Operator Pause through the active journal without exposing runtime services", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-pause")
@@ -223,10 +223,10 @@ it.effect("publishes an Operator Pause through the active gateway without exposi
           initialPolicy,
           runId,
           Effect.gen(function* () {
-            const gateway = yield* AcceptedFactPublicationGateway
+            const journal = yield* Journal
             yield* Deferred.succeed(runtimeActive, undefined)
             yield* Deferred.await(inspectPause)
-            yield* Deferred.succeed(observedPause, (yield* gateway.acceptedFacts.get).reconstructed.pause.run._tag)
+            yield* Deferred.succeed(observedPause, (yield* journal.state.get).reconstructed.pause.run._tag)
             yield* Deferred.await(finish)
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
           })

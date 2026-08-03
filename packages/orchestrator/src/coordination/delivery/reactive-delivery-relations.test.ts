@@ -37,7 +37,7 @@ import {
   intentRecordKey,
   outcomeRecordKey
 } from "../../workflow-journal/record-key.js"
-import { AcceptedJournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
+import { JournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
 import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent
@@ -46,7 +46,7 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
-import { type AcceptedFactPublicationState, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryControlPolicyMissing, makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
@@ -66,20 +66,20 @@ const recoveredAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/reactive-delivery-recovered")
 })
 
-const makeGateway = Effect.gen(function* () {
+const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
   yield* storage.beginRun(runId, target, policy)
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-  return yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+  return yield* makeJournal(runId, target, initial, storage)
 })
 
-const currentProjection = (acceptedFactsGet: Effect.Effect<AcceptedFactPublicationState>) => ({
-  readDeliveryProjection: acceptedFactsGet.pipe(
-    Effect.map((accepted) => ({
+const currentProjection = (stateGet: Effect.Effect<JournalState>) => ({
+  readDeliveryProjection: stateGet.pipe(
+    Effect.map((journalState) => ({
       evidence: {
         _tag: "AvailableDeliveryProjectionEvidence" as const,
-        acceptedAt: accepted.appliedPosition,
+        acceptedAt: journalState.position,
         facts: [],
         integrationWaits: []
       },
@@ -97,15 +97,15 @@ const unavailableProjection = {
   reconstructedPlannedAttemptPositions: []
 }
 
-it.effect("publishes accepted G1 and equal-content G2 through one reactive delivery", () =>
+it.effect("publishes journaled G1 and equal-content G2 through one reactive delivery", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
+      const journal = yield* makeJournalService
       const layer = yield* makeReactiveDeliveryRelationsLayer(
         runId,
         target,
-        gateway,
-        currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie))
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const signal = yield* delivery.pipe(Effect.provide(layer))
       const current = yield* signal.get
@@ -130,8 +130,8 @@ it.effect("publishes accepted G1 and equal-content G2 through one reactive deliv
       })
       if (projected._tag === "Invalid") return yield* Effect.die(projected)
 
-      yield* gateway.journal.append(runId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
-      yield* gateway.journal.append(
+      yield* journal.append(runId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
+      yield* journal.append(
         runId,
         outcomeRecordKey(first.operationId),
         taskTrackerFactsObservedEvent(
@@ -140,9 +140,9 @@ it.effect("publishes accepted G1 and equal-content G2 through one reactive deliv
         )
       )
       yield* Deferred.await(firstDeliverySeen)
-      yield* gateway.journal.append(runId, intentRecordKey(second.operationId), taskTrackerReadIntent(second))
-      const records = yield* gateway.journal.read(runId)
-      yield* gateway.journal.append(
+      yield* journal.append(runId, intentRecordKey(second.operationId), taskTrackerReadIntent(second))
+      const records = yield* journal.read(runId)
+      yield* journal.append(
         runId,
         outcomeRecordKey(second.operationId),
         makeTaskTrackerFactsObservedFromRead(
@@ -158,7 +158,7 @@ it.effect("publishes accepted G1 and equal-content G2 through one reactive deliv
         values.map((value) => (value.graph._tag === "GraphEstablished" ? value.graph.observation.operationId : null))
       ).toEqual([first.operationId, second.operationId])
       expect(
-        values.map((value) => (value.graph._tag === "GraphEstablished" ? value.graph.observation.acceptedAt : null))
+        values.map((value) => (value.graph._tag === "GraphEstablished" ? value.graph.observation.recordedAt : null))
       ).toEqual([JournalPosition.make(3), JournalPosition.make(5)])
       expect(
         values.map((value) =>
@@ -172,9 +172,9 @@ it.effect("publishes accepted G1 and equal-content G2 through one reactive deliv
 it.effect("keeps a recovered paused Run passive before its first current graph", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
+      const journal = yield* makeJournalService
       const ordinal = ControlDirectionApplicationOrdinal.make(1)
-      yield* gateway.journal.append(
+      yield* journal.append(
         runId,
         controlDirectionAppliedRecordKey(ordinal),
         ControlDirectionAppliedEvent.make({
@@ -189,8 +189,8 @@ it.effect("keeps a recovered paused Run passive before its first current graph",
       const layer = yield* makeReactiveDeliveryRelationsLayer(
         runId,
         target,
-        gateway,
-        currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie))
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
@@ -206,26 +206,26 @@ it.effect("keeps a recovered paused Run passive before its first current graph",
   )
 )
 
-it.effect("retries reconstruction when an accepted append lands during recovery projection", () =>
+it.effect("retries reconstruction when a journal append lands during recovery projection", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
-      const acceptedReads = yield* Ref.make(0)
-      const countedGateway = {
-        ...gateway,
-        acceptedFacts: {
-          ...gateway.acceptedFacts,
-          get: Ref.update(acceptedReads, (count) => count + 1).pipe(Effect.andThen(gateway.acceptedFacts.get))
+      const journal = yield* makeJournalService
+      const journalReads = yield* Ref.make(0)
+      const countedJournal = {
+        ...journal,
+        state: {
+          ...journal.state,
+          get: Ref.update(journalReads, (count) => count + 1).pipe(Effect.andThen(journal.state.get))
         }
       }
-      const acceptedBefore = yield* gateway.acceptedFacts.get
+      const journalBefore = yield* journal.state.get
       const firstProjectionRead = yield* Deferred.make<void>()
       const permitFirstProjection = yield* Deferred.make<void>()
       const projectionReads = yield* Ref.make(0)
       const recovery = {
         readDeliveryProjection: Effect.gen(function* () {
           const readNumber = yield* Ref.updateAndGet(projectionReads, (count) => count + 1)
-          const accepted = yield* gateway.acceptedFacts.get
+          const journalState = yield* journal.state.get
           if (readNumber === 1) {
             yield* Deferred.succeed(firstProjectionRead, undefined)
             yield* Deferred.await(permitFirstProjection)
@@ -233,7 +233,7 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
           return {
             evidence: {
               _tag: "AvailableDeliveryProjectionEvidence" as const,
-              acceptedAt: accepted.appliedPosition,
+              acceptedAt: journalState.position,
               facts: [],
               integrationWaits: []
             },
@@ -242,16 +242,16 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
         }),
         reconstructedPlannedAttemptPositions: []
       }
-      const layerFiber = yield* makeReactiveDeliveryRelationsLayer(runId, target, countedGateway, recovery).pipe(
+      const layerFiber = yield* makeReactiveDeliveryRelationsLayer(runId, target, countedJournal, recovery).pipe(
         Effect.forkChild
       )
 
       yield* Deferred.await(firstProjectionRead)
       const operation = makeTrackerGraphObservationOperation(OperationId.make("coherent-race-read"), target)
-      yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "coherent-race", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die(new Error("race graph must be valid"))
-      const acceptedOutcome = yield* gateway.journal.append(
+      const journalOutcome = yield* journal.append(
         runId,
         outcomeRecordKey(operation.operationId),
         taskTrackerFactsObservedEvent(
@@ -265,10 +265,10 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
-      expect(acceptedOutcome.position).toBeGreaterThan(acceptedBefore.appliedPosition)
-      expect(evaluation.acceptedAt).toBe(acceptedOutcome.position)
+      expect(journalOutcome.position).toBeGreaterThan(journalBefore.position)
+      expect(evaluation.acceptedAt).toBe(journalOutcome.position)
       expect(evaluation.current.trackerGraph._tag).toBe("GraphEstablished")
-      expect(yield* Ref.get(acceptedReads)).toBe(4)
+      expect(yield* Ref.get(journalReads)).toBe(4)
       expect(yield* Ref.get(projectionReads)).toBe(2)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
@@ -277,19 +277,19 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
 it.effect("does not propose the initial graph read until recovered boundary work disappears", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
+      const journal = yield* makeJournalService
       const recoveredTransitions = yield* Ref.make<ReadonlyArray<RunnableFrontierTransition>>([
         RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: recoveredAttempt })
       ])
       const recovery = {
         readDeliveryProjection: Effect.all({
-          accepted: gateway.acceptedFacts.get,
+          journalState: journal.state.get,
           transitions: Ref.get(recoveredTransitions)
         }).pipe(
-          Effect.map(({ accepted, transitions }) => ({
+          Effect.map(({ journalState, transitions }) => ({
             evidence: {
               _tag: "AvailableDeliveryProjectionEvidence" as const,
-              acceptedAt: accepted.appliedPosition,
+              acceptedAt: journalState.position,
               facts: [],
               integrationWaits: []
             },
@@ -300,7 +300,7 @@ it.effect("does not propose the initial graph read until recovered boundary work
           { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
         ]
       }
-      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
       expect(initial.proposedActions).toMatchObject({
@@ -327,7 +327,7 @@ it.effect("does not propose the initial graph read until recovered boundary work
 it.effect("establishes the current graph before proposing an external-success claim release", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
+      const journal = yield* makeJournalService
       const claimOperationId = OperationId.make("stale-external-success-claim")
       const claim = ActiveTaskClaim.make({
         operationId: claimOperationId,
@@ -340,11 +340,11 @@ it.effect("establishes the current graph before proposing an external-success cl
         release: { claim, operationId: OperationId.make("stale-external-success-release-placeholder") }
       })
       const recovery = {
-        readDeliveryProjection: gateway.acceptedFacts.get.pipe(
-          Effect.map((accepted) => ({
+        readDeliveryProjection: journal.state.get.pipe(
+          Effect.map((journalState) => ({
             evidence: {
               _tag: "AvailableDeliveryProjectionEvidence" as const,
-              acceptedAt: accepted.appliedPosition,
+              acceptedAt: journalState.position,
               facts: [],
               integrationWaits: []
             },
@@ -363,7 +363,7 @@ it.effect("establishes the current graph before proposing an external-success cl
           { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
         ]
       }
-      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
@@ -379,18 +379,18 @@ it.effect("establishes the current graph before proposing an external-success cl
 it.effect("fails initial reconciliation with the exact missing-policy error", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
-      const accepted = yield* gateway.acceptedFacts.get
-      const missingPolicy = { ...accepted, reconstructed: { ...accepted.reconstructed, controlPolicy: Option.none() } }
-      const missingPolicyGateway = {
-        ...gateway,
-        acceptedFacts: { ...gateway.acceptedFacts, get: Effect.succeed(missingPolicy) }
+      const journal = yield* makeJournalService
+      const journalState = yield* journal.state.get
+      const missingPolicy = {
+        ...journalState,
+        reconstructed: { ...journalState.reconstructed, controlPolicy: Option.none() }
       }
+      const missingPolicyJournal = { ...journal, state: { ...journal.state, get: Effect.succeed(missingPolicy) } }
 
       const failure = yield* makeReactiveDeliveryRelationsLayer(
         runId,
         target,
-        missingPolicyGateway,
+        missingPolicyJournal,
         currentProjection(Effect.succeed(missingPolicy))
       ).pipe(Effect.flip)
 
@@ -402,7 +402,7 @@ it.effect("fails initial reconciliation with the exact missing-policy error", ()
 it.effect("publishes a typed relation failure when a later recovery projection fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
+      const journal = yield* makeJournalService
       const failProjection = yield* Ref.make(false)
       const recoveryFailure: InvalidWorkflowJournalHistory = {
         _tag: "InvalidWorkflowJournalHistory",
@@ -411,20 +411,20 @@ it.effect("publishes a typed relation failure when a later recovery projection f
         runId
       }
       const recovery = {
-        ...currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie)),
+        ...currentProjection(journal.state.get.pipe(Effect.orDie)),
         readDeliveryProjection: Ref.get(failProjection).pipe(
           Effect.flatMap((failed) =>
             failed
               ? Effect.fail(recoveryFailure)
-              : currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie)).readDeliveryProjection
+              : currentProjection(journal.state.get.pipe(Effect.orDie)).readDeliveryProjection
           )
         )
       }
-      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
       yield* Ref.set(failProjection, true)
-      yield* relation.invalidate({ _tag: "AcceptedFactsChanged" })
+      yield* relation.invalidate({ _tag: "JournalStateChanged" })
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
       const currentFailure = yield* relation.current.get.pipe(Effect.flip)
 
@@ -439,17 +439,17 @@ it.effect("publishes a typed relation failure when a later recovery projection f
 it.effect("derives safely when recovery evidence is unavailable before and after graph establishment", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
-      const initialLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, unavailableProjection)
+      const journal = yield* makeJournalService
+      const initialLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, unavailableProjection)
       const initialRelation = yield* deliveryRuntime.pipe(Effect.provide(initialLayer))
       const initial = Option.getOrThrow(yield* initialRelation.evaluations.changes.pipe(Stream.runHead))
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
 
       const operation = makeTrackerGraphObservationOperation(OperationId.make("unavailable-evidence-graph"), target)
-      yield* gateway.journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "unavailable-evidence", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die("unavailable-evidence graph must be valid")
-      yield* gateway.journal.append(
+      yield* journal.append(
         runId,
         outcomeRecordKey(operation.operationId),
         taskTrackerFactsObservedEvent(
@@ -458,7 +458,7 @@ it.effect("derives safely when recovery evidence is unavailable before and after
         )
       )
 
-      const establishedLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, unavailableProjection)
+      const establishedLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, unavailableProjection)
       const establishedRelation = yield* deliveryRuntime.pipe(Effect.provide(establishedLayer))
       const established = Option.getOrThrow(yield* establishedRelation.evaluations.changes.pipe(Stream.runHead))
       expect(established.current.trackerGraph._tag).toBe("GraphEstablished")
@@ -466,31 +466,31 @@ it.effect("derives safely when recovery evidence is unavailable before and after
   )
 )
 
-it.effect("publishes a typed failure when a quiescence probe cannot read accepted facts", () =>
+it.effect("publishes a typed failure when a quiescence probe cannot read journal state", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
-      const accepted = yield* gateway.acceptedFacts.get
+      const journal = yield* makeJournalService
+      const journalState = yield* journal.state.get
       const failRead = yield* Ref.make(false)
-      const gatewayFailure = new AcceptedJournalHistoryInvalid({
-        acceptedPosition: accepted.appliedPosition,
+      const journalFailure = new JournalHistoryInvalid({
+        position: journalState.position,
         detail: "probe read failed",
         runId
       })
-      const failingGateway = {
-        ...gateway,
-        acceptedFacts: {
-          ...gateway.acceptedFacts,
+      const failingJournal = {
+        ...journal,
+        state: {
+          ...journal.state,
           get: Ref.get(failRead).pipe(
-            Effect.flatMap((failed) => (failed ? Effect.fail(gatewayFailure) : gateway.acceptedFacts.get))
+            Effect.flatMap((failed) => (failed ? Effect.fail(journalFailure) : journal.state.get))
           )
         }
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(
         runId,
         target,
-        failingGateway,
-        currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie))
+        failingJournal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       yield* Ref.set(failRead, true)
@@ -499,33 +499,33 @@ it.effect("publishes a typed failure when a quiescence probe cannot read accepte
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
-      expect(Cause.squash(failure.cause)).toEqual(gatewayFailure)
+      expect(Cause.squash(failure.cause)).toEqual(journalFailure)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
 
-it.effect("publishes a typed failure when the accepted-fact signal closes with failure", () =>
+it.effect("publishes a typed failure when the journal signal closes with failure", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const gateway = yield* makeGateway
-      const accepted = yield* gateway.acceptedFacts.get
-      const gatewayFailure = new AcceptedJournalHistoryInvalid({
-        acceptedPosition: accepted.appliedPosition,
-        detail: "accepted signal failed",
+      const journal = yield* makeJournalService
+      const journalState = yield* journal.state.get
+      const journalFailure = new JournalHistoryInvalid({
+        position: journalState.position,
+        detail: "journal signal failed",
         runId
       })
-      const failingGateway = {
-        ...gateway,
-        acceptedFacts: {
-          ...gateway.acceptedFacts,
-          changes: Stream.succeed(accepted).pipe(Stream.concat(Stream.fail(gatewayFailure)))
+      const failingJournal = {
+        ...journal,
+        state: {
+          ...journal.state,
+          changes: Stream.succeed(journalState).pipe(Stream.concat(Stream.fail(journalFailure)))
         }
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(
         runId,
         target,
-        failingGateway,
-        currentProjection(gateway.acceptedFacts.get.pipe(Effect.orDie))
+        failingJournal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const failure = yield* relation.current.changes.pipe(
@@ -536,7 +536,7 @@ it.effect("publishes a typed failure when the accepted-fact signal closes with f
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
-      expect(Cause.squash(failure.cause)).toEqual(gatewayFailure)
+      expect(Cause.squash(failure.cause)).toEqual(journalFailure)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )

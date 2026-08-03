@@ -21,10 +21,10 @@ import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   TrackerGraphState,
   type ExactTicketDeliveryEvidence,
-  type AcceptedTrackerGraphObservation,
+  type JournaledTrackerGraphObservation,
   type DeliveryGraphPublication
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -32,9 +32,9 @@ import {
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
 
-const fixtureObservation = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObservation => {
+const fixtureObservation = (snapshot: TaskDagSnapshot): JournaledTrackerGraphObservation => {
   const operationId = OperationId.make(`fixture:${snapshot.revision}`)
-  return makeTestAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(1) })
+  return makeTestJournaledTrackerGraphObservation({ snapshot, operationId, recordedAt: JournalPosition.make(1) })
 }
 
 const publication = (graph: TrackerGraphState, policy: RunControlPolicy): DeliveryGraphPublication => ({

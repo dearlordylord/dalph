@@ -4,10 +4,7 @@ import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ow
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
-import {
-  AcceptedFactPublicationGateway,
-  acceptedFactPublicationGatewayLayer
-} from "../delivery/accepted-fact-gateway.js"
+import { Journal, journalLayer } from "../delivery/journal.js"
 import {
   RunFinalityDecision,
   type RunFinalityDecision as RunFinalityDecisionType,
@@ -36,7 +33,7 @@ export interface JournaledRuntimeLayerInput {
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
-  Exclude<JournaledRunServices, AcceptedFactPublicationGateway>,
+  Exclude<JournaledRunServices, Journal>,
   InvalidWorkflowJournalHistory | JournalReadError | StartupRecoveryBlocked,
   CoordinatorOwnership | InRunJournal
 >
@@ -127,7 +124,7 @@ export const journaledRunBootstrapLayer = (
 
       const closeControlAdmission = Effect.fn("JournaledRunBootstrap.closeControlAdmission")(function* () {
         const wait = yield* Ref.modify(runtimeState, (current) => {
-          /* v8 ignore start -- runWithGateway opens admission exactly once before closing it exactly once. */
+          /* v8 ignore start -- runWithJournal opens admission exactly once before closing it exactly once. */
           if (current._tag !== "RuntimeAcceptingControl") return [Effect.void, current]
           /* v8 ignore stop */
           const closing = { ...current, _tag: "RuntimeClosing" as const }
@@ -137,7 +134,7 @@ export const journaledRunBootstrapLayer = (
         yield* Ref.set(runtimeState, { _tag: "RuntimeInactive" })
       })
 
-      const runWithGateway = <E, R>(
+      const runWithJournal = <E, R>(
         runId: RunId,
         target: Parameters<JournaledRunBootstrapService["fresh"]>[0],
         initial: ValidWorkflowJournalHistory,
@@ -151,11 +148,9 @@ export const journaledRunBootstrapLayer = (
               const downstream = runtimeLayer({ runId, startup }).pipe(
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
-              const gateway = downstream.pipe(
-                Layer.provideMerge(acceptedFactPublicationGatewayLayer(runId, target, initial, storage))
-              )
-              const context = yield* Layer.build(gateway)
-              const acceptedFacts = Context.get(context, AcceptedFactPublicationGateway)
+              const runtime = downstream.pipe(Layer.provideMerge(journalLayer(runId, target, initial, storage)))
+              const context = yield* Layer.build(runtime)
+              const journal = Context.get(context, Journal)
               const controls: RuntimeControls = {
                 controlDirection: Context.get(context, ControlDirectionApplication),
                 taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
@@ -170,7 +165,7 @@ export const journaledRunBootstrapLayer = (
                 onSuccess: (proof) =>
                   proof.decision._tag === "RunMustRemainActive" || !recheckJournalAfterProof
                     ? Effect.succeed(proof.decision)
-                    : acceptedFacts.acceptedFacts.get.pipe(
+                    : journal.state.get.pipe(
                         Effect.map(({ records }) =>
                           records.some(
                             ({ event, position }) =>
@@ -212,7 +207,7 @@ export const journaledRunBootstrapLayer = (
               const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
               return yield* finish(
                 runId,
-                yield* runWithGateway(runId, target, initial, "Fresh", recheckJournalAfterProof, program)
+                yield* runWithJournal(runId, target, initial, "Fresh", recheckJournalAfterProof, program)
               )
             })
           )
@@ -227,7 +222,7 @@ export const journaledRunBootstrapLayer = (
             const runId = current?.runId ?? expectedRunId
             yield* lifecycle.readRunForRecovery(runId, target)
             const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithGateway(runId, target, initial, "Recovered", true, program))
+            return yield* finish(runId, yield* runWithJournal(runId, target, initial, "Recovered", true, program))
           })
         )
 

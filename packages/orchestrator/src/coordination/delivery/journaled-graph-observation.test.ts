@@ -17,24 +17,24 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { acceptedGraphObservationFieldsFromReceipt } from "./accepted-graph-observation.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { journaledGraphObservationFieldsFromReceipt } from "./journaled-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 
-it("mints fixtures through a test accepted-journal gateway", () => {
+it("mints fixtures through a test journal service", () => {
   const projected = TaskDagSnapshot.project(
     TrackerSnapshot.make({ revision: TrackerRevision.make("fixture-observation"), tasks: [] })
   )
   if (projected._tag === "Invalid") return expect.fail("fixture graph must be valid")
 
-  const observation = makeTestAcceptedTrackerGraphObservation({
-    acceptedAt: JournalPosition.make(1),
+  const observation = makeTestJournaledTrackerGraphObservation({
+    recordedAt: JournalPosition.make(1),
     operationId: OperationId.make("fixture-observation-operation"),
     snapshot: projected.snapshot
   })
 
   expect(observation.operationId).toBe(OperationId.make("fixture-observation-operation"))
   expect(observation.contentIdentity).toBe(TrackerRevision.make("fixture-observation"))
-  expect(observation.acceptedAt).toBe(JournalPosition.make(3))
+  expect(observation.recordedAt).toBe(JournalPosition.make(3))
 })
 
 it("rejects a complete graph receipt paired with a different reduced snapshot", () => {
@@ -56,7 +56,7 @@ it("rejects a complete graph receipt paired with a different reduced snapshot", 
 
   expect(
     Option.isNone(
-      acceptedGraphObservationFieldsFromReceipt(
+      journaledGraphObservationFieldsFromReceipt(
         { event, position: JournalPosition.make(1), snapshot: second.snapshot },
         ({ event, position, snapshot }) => ({ event, position, snapshot })
       )
@@ -85,7 +85,7 @@ it("rejects a focused non-graph event at the observation boundary", () => {
 
   expect(
     Option.isNone(
-      acceptedGraphObservationFieldsFromReceipt(
+      journaledGraphObservationFieldsFromReceipt(
         { event, position: JournalPosition.make(1), snapshot: projected.snapshot },
         ({ event, position, snapshot }) => ({ event, position, snapshot })
       )

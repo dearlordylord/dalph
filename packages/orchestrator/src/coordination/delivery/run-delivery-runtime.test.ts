@@ -48,7 +48,7 @@ import {
   type DeliveryRuntimeRelation,
   TrackerGraphState
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { DeliveryRuntimeProposalOwnershipConflict, runDeliveryRuntime } from "./run-delivery-runtime.js"
 import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 
@@ -455,10 +455,10 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
             }
           ],
           graph: TrackerGraphState.cases.GraphEstablished.make({
-            observation: makeTestAcceptedTrackerGraphObservation({
+            observation: makeTestJournaledTrackerGraphObservation({
               snapshot: projected.snapshot,
               operationId: OperationId.make("fixture:unreadable-A-independent-B"),
-              acceptedAt: JournalPosition.make(1)
+              recordedAt: JournalPosition.make(1)
             })
           }),
           policy

@@ -34,7 +34,7 @@ import {
   type ExactTicketDeliveryEvidence,
   type TicketDeliveryEvidence
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -53,10 +53,10 @@ const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeTestAcceptedTrackerGraphObservation({
+    observation: makeTestJournaledTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
-      acceptedAt: JournalPosition.make(1)
+      recordedAt: JournalPosition.make(1)
     })
   })
 }

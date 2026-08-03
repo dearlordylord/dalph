@@ -49,7 +49,7 @@ const exclusionsFor = (
     : [...lifecycle, { _tag: "PrerequisitesIncomplete", prerequisiteTaskIds }]
 }
 
-/** Exhaustively classifies the accepted graph inside one coherent descriptive publication. */
+/** Exhaustively classifies the journaled graph inside one coherent descriptive publication. */
 export const frontierOf = (publication: DeliveryGraphPublication): DeliveryFrontier => {
   const graph = publication.graph
   if (graph._tag === "GraphNotEstablished") {

@@ -3,18 +3,18 @@ import type { RunControlPolicy } from "../../control/policy.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { Effect, Option, Schema } from "effect"
-import type { AcceptedFactPublicationState } from "../delivery/accepted-fact-gateway.js"
+import type { JournalState } from "../delivery/journal.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { FreshWorkflowActionFact } from "./fresh-workflow-fact.js"
 
-/** Accepted journal history does not yet contain a graph usable by delivery. */
+/** Journal history does not yet contain a graph usable by delivery. */
 export class CurrentDeliveryGraphUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryGraphUnavailable>()(
   "CurrentDeliveryGraphUnavailable",
   {}
 ) {}
 
-/** Validated accepted history unexpectedly lacks its initial control policy. */
+/** Validated journal history unexpectedly lacks its initial control policy. */
 export class CurrentDeliveryControlPolicyUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryControlPolicyUnavailable>()(
   "CurrentDeliveryControlPolicyUnavailable",
   {}
@@ -39,35 +39,35 @@ export type CurrentDeliveryFrame = CurrentDeliveryFrameBase &
     | { readonly _tag: "SyntheticCurrentDeliveryFrame"; readonly workflowFacts: ReadonlyArray<FreshWorkflowActionFact> }
   )
 
-/** Projects one already-coherent accepted snapshot without another read. */
+/** Projects one already-coherent journal snapshot without another read. */
 export const journaledCurrentDeliveryFrameOf = (
-  accepted: AcceptedFactPublicationState
+  journal: JournalState
 ): Effect.Effect<CurrentDeliveryFrame, CurrentDeliveryControlPolicyUnavailable | CurrentDeliveryGraphUnavailable> =>
   Effect.gen(function* () {
-    if (accepted.graph._tag === "GraphNotEstablished") return yield* new CurrentDeliveryGraphUnavailable()
-    const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(accepted.reconstructed.graphKnowledge))
+    if (journal.graph._tag === "GraphNotEstablished") return yield* new CurrentDeliveryGraphUnavailable()
+    const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(journal.reconstructed.graphKnowledge))
     /* v8 ignore start -- GraphEstablished is published from this exact reconstructed graph. */
     if (currentGraph === undefined) return yield* new CurrentDeliveryGraphUnavailable()
     /* v8 ignore stop */
-    const currentGraphOperationId = accepted.reconstructed.graphKnowledge.taskTrackerFacts.findLast(
+    const currentGraphOperationId = journal.reconstructed.graphKnowledge.taskTrackerFacts.findLast(
       (observation) =>
         observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
     )?.operationId
-    /* v8 ignore start -- A reconstructed complete graph retains its accepted observation identity. */
+    /* v8 ignore start -- A reconstructed complete graph retains its journaled observation identity. */
     if (currentGraphOperationId === undefined) return yield* new CurrentDeliveryGraphUnavailable()
     /* v8 ignore stop */
-    const runControlPolicy = Option.getOrUndefined(accepted.reconstructed.controlPolicy)
+    const runControlPolicy = Option.getOrUndefined(journal.reconstructed.controlPolicy)
     /* v8 ignore start -- Bootstrap validates that Run beginning established this policy. */
     if (runControlPolicy === undefined) return yield* new CurrentDeliveryControlPolicyUnavailable()
     /* v8 ignore stop */
     return {
       _tag: "JournaledCurrentDeliveryFrame",
-      acceptedAt: accepted.appliedPosition,
+      acceptedAt: journal.position,
       currentGraph,
       currentGraphOperationId,
-      pause: accepted.reconstructed.pause,
-      responsibility: accepted.reconstructed.responsibility,
+      pause: journal.reconstructed.pause,
+      responsibility: journal.reconstructed.responsibility,
       runControlPolicy,
-      workflowHistory: accepted.reconstructed.workflowHistory
+      workflowHistory: journal.reconstructed.workflowHistory
     }
   })

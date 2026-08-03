@@ -9,20 +9,20 @@ import type {
   UnchangedTaskTrackerFactsReconfirmed
 } from "../../workflow/task-tracker-facts/observation.js"
 
-/** Validated descriptive graph fields before the gateway applies its private authority brand. */
-export interface AcceptedGraphObservationFields {
-  readonly _tag: "AcceptedTrackerGraphObservation"
+/** Validated descriptive graph fields before the journal applies its private authority brand. */
+export interface JournaledGraphObservationFields {
+  readonly _tag: "JournaledTrackerGraphObservation"
   readonly snapshot: TaskDagSnapshot
   readonly operationId: OperationId
   readonly contentIdentity: TrackerRevision
-  readonly acceptedAt: JournalPosition
+  readonly recordedAt: JournalPosition
   readonly freshness: { readonly _tag: "ObservedDuringLogicalRead"; readonly operationId: OperationId }
 }
 
-type AcceptedGraphFacts = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
-type AcceptedGraphEvent = TaskTrackerFactsObservedEvent & { readonly observation: AcceptedGraphFacts }
+type JournaledGraphFacts = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
+type JournaledGraphEvent = TaskTrackerFactsObservedEvent & { readonly observation: JournaledGraphFacts }
 
-const isAcceptedGraphEvent = (event: TaskTrackerFactsObservedEvent): event is AcceptedGraphEvent =>
+const isJournaledGraphEvent = (event: TaskTrackerFactsObservedEvent): event is JournaledGraphEvent =>
   event.observation._tag === "CompleteTaskTrackerFacts" ||
   event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
 
@@ -45,17 +45,17 @@ const completeSnapshotMatchesFacts = (
   return JSON.stringify(expectedTasks) === JSON.stringify(observedTasks)
 }
 
-/** Validates a receipt projection without claiming accepted-journal authority. */
-export const acceptedGraphObservationFieldsFromReceipt = <Receipt>(
+/** Validates a receipt projection without claiming journal authority. */
+export const journaledGraphObservationFieldsFromReceipt = <Receipt>(
   receipt: Receipt,
   read: (receipt: Receipt) => {
     readonly event: TaskTrackerFactsObservedEvent
     readonly position: JournalPosition
     readonly snapshot: TaskDagSnapshot
   }
-): Option.Option<AcceptedGraphObservationFields> => {
+): Option.Option<JournaledGraphObservationFields> => {
   const { event, position, snapshot } = read(receipt)
-  if (!isAcceptedGraphEvent(event)) return Option.none()
+  if (!isJournaledGraphEvent(event)) return Option.none()
   const { observation } = event
   const firstFamily = observation.factFamilies[0]
   const contentIdentity = firstFamily.contentIdentity
@@ -71,11 +71,11 @@ export const acceptedGraphObservationFieldsFromReceipt = <Receipt>(
     position >= 1 &&
     snapshotMatches
     ? Option.some({
-        _tag: "AcceptedTrackerGraphObservation",
+        _tag: "JournaledTrackerGraphObservation",
         snapshot,
         operationId,
         contentIdentity,
-        acceptedAt: position,
+        recordedAt: position,
         freshness: { _tag: "ObservedDuringLogicalRead", operationId }
       })
     : Option.none()

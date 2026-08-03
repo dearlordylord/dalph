@@ -44,7 +44,7 @@ import {
   type CurrentSignal,
   type TicketDeliveryEvidence
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
@@ -103,7 +103,7 @@ const makeDeliveryRelationsLayer = (
   return makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input, coherent })
 }
 
-const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) => {
+const journaledGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) => {
   const projected = TaskDagSnapshot.project(
     TrackerSnapshot.make({
       revision: TrackerRevision.make(revision),
@@ -119,12 +119,12 @@ const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) =>
   return projected.snapshot
 }
 
-const acceptedGraphState = (snapshot: ReturnType<typeof acceptedGraph>) =>
+const journaledGraphState = (snapshot: ReturnType<typeof journaledGraph>) =>
   TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeTestAcceptedTrackerGraphObservation({
+    observation: makeTestJournaledTrackerGraphObservation({
       snapshot,
       operationId: OperationId.make(`fixture:${snapshot.revision}`),
-      acceptedAt: JournalPosition.make(1)
+      recordedAt: JournalPosition.make(1)
     })
   })
 
@@ -292,11 +292,11 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
   })
 )
 
-it.effect("keeps a settled accepted graph active while the Run is paused", () =>
+it.effect("keeps a settled journaled graph active while the Run is paused", () =>
   Effect.gen(function* () {
     const layer = makeDeliveryRelationsLayer({
       exactEvidence: currentSignalOf([]),
-      graph: currentSignalOf(acceptedGraphState(acceptedGraph("paused-settled"))),
+      graph: currentSignalOf(journaledGraphState(journaledGraph("paused-settled"))),
       policy: currentSignalOf(policy)
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
@@ -323,7 +323,7 @@ it.effect("keeps every descriptive subscription action-free", () =>
 
     const first = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
     const second = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
-    yield* relation.invalidate({ _tag: "AcceptedFactsChanged" })
+    yield* relation.invalidate({ _tag: "JournalStateChanged" })
 
     expect(first).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
     expect(second).toEqual(first)
@@ -367,7 +367,7 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
             get: Effect.succeed(TrackerGraphState.cases.GraphNotEstablished.make({})),
             changes: Stream.make(
               TrackerGraphState.cases.GraphNotEstablished.make({}),
-              acceptedGraphState(acceptedGraph("causal-established"))
+              journaledGraphState(journaledGraph("causal-established"))
             )
           },
           policy: currentSignalOf(policy),
@@ -417,7 +417,7 @@ it.effect("keeps legacy action chronology while current comes from the coherent 
       Effect.provide(
         makeDeliveryRelationsLayer({
           exactEvidence: currentSignalOf([]),
-          graph: currentSignalOf(acceptedGraphState(acceptedGraph("canonical-delivery-current"))),
+          graph: currentSignalOf(journaledGraphState(journaledGraph("canonical-delivery-current"))),
           policy: currentSignalOf(policy),
           proposalContributions: currentSignalOf({
             deliverySettlement: [],
@@ -549,8 +549,8 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
 
 it.effect("preserves each causal graph revision through final reflection", () =>
   Effect.gen(function* () {
-    const graphOne = acceptedGraphState(acceptedGraph("graph-1"))
-    const graphTwo = acceptedGraphState(acceptedGraph("graph-2"))
+    const graphOne = journaledGraphState(journaledGraph("graph-1"))
+    const graphTwo = journaledGraphState(journaledGraph("graph-2"))
     const layer = makeDeliveryRelationsLayer({
       graph: { get: Effect.succeed(graphOne), changes: Stream.fromIterable([graphOne, graphTwo]) },
       exactEvidence: currentSignalOf([]),
@@ -573,7 +573,7 @@ it.effect("recomputes the same flat relation when the current policy changes", (
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
     const layer = makeDeliveryRelationsLayer({
-      graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-policy", [taskA, taskB]))),
+      graph: currentSignalOf(journaledGraphState(journaledGraph("graph-policy", [taskA, taskB]))),
       exactEvidence: currentSignalOf([]),
       policy: { get: Effect.succeed(policy), changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
     })
@@ -593,7 +593,7 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
     const taskA = TaskId.make("A")
     const taskB = TaskId.make("B")
     const layer = makeDeliveryRelationsLayer({
-      graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-evidence", [taskA, taskB]))),
+      graph: currentSignalOf(journaledGraphState(journaledGraph("graph-evidence", [taskA, taskB]))),
       exactEvidence: {
         get: Effect.succeed([]),
         changes: Stream.make([], [exactAttemptEvidence(taskB)]).pipe(Stream.rechunk(1))

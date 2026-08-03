@@ -18,7 +18,7 @@ import {
   type DeliveryRuntimeFacts,
   TrackerGraphState
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 
 const graph = (revision: string, taskId: TaskId) => {
   const projected = TaskDagSnapshot.project(
@@ -30,10 +30,10 @@ const graph = (revision: string, taskId: TaskId) => {
   if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeTestAcceptedTrackerGraphObservation({
+    observation: makeTestJournaledTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
-      acceptedAt: JournalPosition.make(1)
+      recordedAt: JournalPosition.make(1)
     })
   })
 }

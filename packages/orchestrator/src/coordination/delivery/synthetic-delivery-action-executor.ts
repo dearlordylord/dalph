@@ -20,7 +20,7 @@ const correlationsMatch = (
   observed: ReturnType<typeof plannedAttemptExecutorCorrelation>
 ): boolean => expected.attemptId === observed.attemptId && expected.runId === observed.runId
 
-/** Synthetic graph reads use the ordinary accepted journal boundary before publishing their result. */
+/** Synthetic graph reads use the ordinary journal boundary before publishing their result. */
 const executeSyntheticTrackerGraphRead = Effect.fn("DeliveryAction.executeSyntheticTrackerGraphRead")(function* (
   runId: RunId,
   action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>,
@@ -45,7 +45,7 @@ const executeSyntheticTrackerGraphRead = Effect.fn("DeliveryAction.executeSynthe
 
 /**
  * Interprets the synthetic executor boundary: graph reads journal ordinary intent and outcome facts before
- * publishing an accepted snapshot, while other actions use the same leaf adapters as live delivery.
+ * publishing a journaled snapshot, while other actions use the same leaf adapters as live delivery.
  */
 export const makeSyntheticDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.makeSynthetic")(function* (
   runId: RunId,
