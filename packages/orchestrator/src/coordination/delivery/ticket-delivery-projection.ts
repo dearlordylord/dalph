@@ -23,8 +23,7 @@ import {
   type TicketDeliveries,
   type TicketDelivery,
   type TicketDeliveryPlacement,
-  type TicketDeliveryStanding,
-  type TrackerGraphState
+  type TicketDeliveryStanding
 } from "./relations.js"
 
 const compareTaskIds = (left: { readonly taskId: TaskId }, right: { readonly taskId: TaskId }): number =>
@@ -50,8 +49,9 @@ const exclusionsFor = (
     : [...lifecycle, { _tag: "PrerequisitesIncomplete", prerequisiteTaskIds }]
 }
 
-/** Exhaustively classifies an accepted complete graph without consulting workflow responsibility. */
-export const frontierOf = (graph: TrackerGraphState, publication: DeliveryGraphPublication): DeliveryFrontier => {
+/** Exhaustively classifies the accepted graph inside one coherent descriptive publication. */
+export const frontierOf = (publication: DeliveryGraphPublication): DeliveryFrontier => {
+  const graph = publication.graph
   if (graph._tag === "GraphNotEstablished") {
     return { _tag: "DeliveryFrontier", publication, source: graph, standings: [] }
   }

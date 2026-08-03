@@ -19,7 +19,8 @@ import type {
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import {
   AcceptedFactPublicationGateway,
-  type AcceptedFactGatewayInitialHistoryInvalid
+  type AcceptedFactGatewayInitialHistoryInvalid,
+  type AcceptedTrackerGraphRelation
 } from "../delivery/accepted-fact-gateway.js"
 import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
@@ -27,7 +28,6 @@ import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../d
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import type { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
-import type { TrackerGraphRelation } from "../delivery/relations.js"
 import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
 import { makeSyntheticDeliveryRelationsLayer } from "../delivery/synthetic-delivery-relations.js"
 import { makeSyntheticDeliveryActionExecutor } from "../delivery/synthetic-delivery-action-executor.js"
@@ -39,6 +39,7 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
 export type JournaledRunServices =
   | AcceptedFactPublicationGateway
+  | AcceptedTrackerGraphRelation
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal
@@ -46,7 +47,6 @@ export type JournaledRunServices =
   | RunRecoveryProjection
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl
-  | TrackerGraphRelation
   | WorkflowInterpreter
   | WorkflowTrace
 

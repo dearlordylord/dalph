@@ -17,6 +17,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
@@ -28,7 +29,9 @@ import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   controlDirectionAppliedRecordKey,
   intentRecordKey,
@@ -44,6 +47,7 @@ import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { type AcceptedFactPublicationState, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { delivery } from "./delivery.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryControlPolicyMissing, makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 import { DeliveryRelationReconciliationError } from "./relations.js"
@@ -92,6 +96,76 @@ const unavailableProjection = {
   }),
   reconstructedPlannedAttemptPositions: []
 }
+
+it.effect("publishes accepted G1 and equal-content G2 through one reactive delivery", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gateway = yield* makeGateway
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        gateway,
+        currentProjection(gateway.readCurrent.pipe(Effect.orDie))
+      )
+      const signal = yield* delivery.pipe(Effect.provide(layer))
+      const firstDeliverySeen = yield* Deferred.make<void>()
+      const first = makeTrackerGraphObservationOperation(OperationId.make("integrated-G1"), target)
+      const second = makeTrackerGraphObservationOperation(OperationId.make("integrated-G2"), target)
+      const observed = yield* signal.changes.pipe(
+        Stream.tap((value) =>
+          value.graph._tag === "GraphEstablished" && value.graph.observation.operationId === first.operationId
+            ? Deferred.succeed(firstDeliverySeen, undefined)
+            : Effect.void
+        ),
+        Stream.filter(({ graph }) => graph._tag === "GraphEstablished"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      const projected = projectTrackerSnapshot({
+        revision: "integrated-equal-content",
+        tasks: [{ id: TaskId.make("A"), lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected)
+
+      yield* gateway.journal.append(runId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
+      yield* gateway.journal.append(
+        runId,
+        outcomeRecordKey(first.operationId),
+        taskTrackerFactsObservedEvent(
+          first.operationId,
+          makeCompleteTaskTrackerFactsObserved(first, projected.snapshot)
+        )
+      )
+      yield* Deferred.await(firstDeliverySeen)
+      yield* gateway.journal.append(runId, intentRecordKey(second.operationId), taskTrackerReadIntent(second))
+      const records = yield* gateway.journal.read(runId)
+      yield* gateway.journal.append(
+        runId,
+        outcomeRecordKey(second.operationId),
+        makeTaskTrackerFactsObservedFromRead(
+          records.map(({ event }) => ({ event })),
+          second,
+          projected.snapshot
+        )
+      )
+
+      const values = Array.from(yield* Fiber.join(observed))
+      expect(values).toHaveLength(2)
+      expect(
+        values.map((value) => (value.graph._tag === "GraphEstablished" ? value.graph.observation.operationId : null))
+      ).toEqual([first.operationId, second.operationId])
+      expect(
+        values.map((value) => (value.graph._tag === "GraphEstablished" ? value.graph.observation.acceptedAt : null))
+      ).toEqual([JournalPosition.make(3), JournalPosition.make(5)])
+      expect(
+        values.map((value) =>
+          value.graph._tag === "GraphEstablished" ? value.graph.observation.contentIdentity : null
+        )
+      ).toEqual([TrackerRevision.make("integrated-equal-content"), TrackerRevision.make("integrated-equal-content")])
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
 
 it.effect("keeps a recovered paused Run passive before its first current graph", () =>
   Effect.scoped(

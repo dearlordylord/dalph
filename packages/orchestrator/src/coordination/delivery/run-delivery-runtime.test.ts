@@ -41,7 +41,6 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   currentSignalOf,
-  makeAcceptedTrackerGraphObservation,
   type DeliveryActionProposal,
   DeliveryRelationRevision,
   type DeliveryRelationInputBundle,
@@ -49,6 +48,7 @@ import {
   type DeliveryRuntimeRelation,
   TrackerGraphState
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 import { DeliveryRuntimeProposalOwnershipConflict, runDeliveryRuntime } from "./run-delivery-runtime.js"
 import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 
@@ -449,7 +449,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
             }
           ],
           graph: TrackerGraphState.cases.GraphEstablished.make({
-            observation: makeAcceptedTrackerGraphObservation({
+            observation: makeTestAcceptedTrackerGraphObservation({
               snapshot: projected.snapshot,
               operationId: OperationId.make("fixture:unreadable-A-independent-B"),
               acceptedAt: JournalPosition.make(1)

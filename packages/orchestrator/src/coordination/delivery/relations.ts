@@ -8,11 +8,10 @@ import {
   type TaskRevision
 } from "@dalph/contracts"
 import { Context, Effect, Schema, Stream } from "effect"
-import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import type { AcceptedTrackerGraphObservation } from "./accepted-graph-observation.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import type { OperationId } from "../../workflow/identity.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
@@ -69,32 +68,7 @@ export const zipCurrentSignals = <A, EA, B, EB>(
  * remain part of the observation even when a later read has equal graph
  * contents.
  */
-const AcceptedTrackerGraphObservationTypeId: unique symbol = Symbol("AcceptedTrackerGraphObservation")
-
-export interface AcceptedTrackerGraphObservation {
-  readonly [AcceptedTrackerGraphObservationTypeId]: typeof AcceptedTrackerGraphObservationTypeId
-  readonly _tag: "AcceptedTrackerGraphObservation"
-  readonly snapshot: TaskDagSnapshot
-  readonly operationId: OperationId
-  readonly contentIdentity: TrackerRevision
-  readonly acceptedAt: JournalPosition
-  readonly freshness: { readonly _tag: "ObservedDuringLogicalRead"; readonly operationId: OperationId }
-}
-
-/** Constructs accepted graph authority with content identity and freshness derived from one operation. */
-export const makeAcceptedTrackerGraphObservation = (input: {
-  readonly snapshot: TaskDagSnapshot
-  readonly operationId: OperationId
-  readonly acceptedAt: JournalPosition
-}): AcceptedTrackerGraphObservation => ({
-  [AcceptedTrackerGraphObservationTypeId]: AcceptedTrackerGraphObservationTypeId,
-  _tag: "AcceptedTrackerGraphObservation",
-  snapshot: input.snapshot,
-  operationId: input.operationId,
-  contentIdentity: input.snapshot.revision,
-  acceptedAt: input.acceptedAt,
-  freshness: { _tag: "ObservedDuringLogicalRead", operationId: input.operationId }
-})
+export type { AcceptedTrackerGraphObservation } from "./accepted-graph-observation.js"
 
 /** The current usable graph is either absent or already normalized and structurally validated. */
 export type TrackerGraphState =
@@ -355,21 +329,13 @@ export class DeliveryReflectionError extends Schema.TaggedErrorClass<DeliveryRef
 
 export interface TrackerGraphRelationService {
   readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
-  readonly signal: CurrentSignal<TrackerGraphState, DeliveryRelationSourceError>
+  /** One coherent graph-centered publication consumed by the literal delivery composition. */
+  readonly signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
 }
 
 /** Current accepted tracker-graph relation supplied to the flat delivery composition. */
 export class TrackerGraphRelation extends Context.Service<TrackerGraphRelation, TrackerGraphRelationService>()(
   "@dalph/TrackerGraphRelation"
-) {}
-
-/** Accepted graph, policy, and exact evidence published as one descriptive delivery revision. */
-export interface DeliveryPublicationService {
-  readonly signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
-}
-
-export class DeliveryPublication extends Context.Service<DeliveryPublication, DeliveryPublicationService>()(
-  "@dalph/DeliveryPublication"
 ) {}
 
 export interface TicketDeliveryRelation<E = TicketDeliveryError> {

@@ -30,11 +30,11 @@ import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
 import {
   TrackerGraphState,
-  makeAcceptedTrackerGraphObservation,
   type DeliveryGraphPublication,
   type ExactTicketDeliveryEvidence,
   type TicketDeliveryEvidence
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -53,7 +53,7 @@ const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeAcceptedTrackerGraphObservation({
+    observation: makeTestAcceptedTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
       acceptedAt: JournalPosition.make(1)
@@ -71,7 +71,7 @@ const publication = (currentGraph: TrackerGraphState, currentPolicy: RunControlP
 })
 
 const boundedTickets = (currentGraph: TrackerGraphState, currentPolicy: RunControlPolicy) =>
-  boundedParallelTicketsOf(frontierOf(currentGraph, publication(currentGraph, currentPolicy)))
+  boundedParallelTicketsOf(frontierOf(publication(currentGraph, currentPolicy)))
 
 const project = (
   tasks: ReadonlyArray<TrackerTask>,
@@ -145,17 +145,18 @@ const exactWorktreeEvidence = (taskId: TaskId): ExactTicketDeliveryEvidence => (
 })
 
 describe("#181 graph and bounded projections", () => {
-  it("uses the graph stage value while carrying publication policy context", () => {
-    const graphStage = graph([task("A")], "stage-graph")
-    const publicationGraph = graph([task("B")], "publication-graph")
+  it("keeps graph and policy in one publication value", () => {
+    const currentGraph = graph([task("A")], "stage-graph")
     const currentPolicy = policy(1)
-    const frontier = frontierOf(graphStage, { exactEvidence: [], graph: publicationGraph, policy: currentPolicy })
+    const currentPublication = publication(currentGraph, currentPolicy)
+    const frontier = frontierOf(currentPublication)
     const tickets = boundedParallelTicketsOf(frontier)
 
-    expect(frontier.source).toBe(graphStage)
+    expect(frontier.source).toBe(currentGraph)
     expect(frontier.standings).toMatchObject([{ _tag: "Eligible", taskId: "A" }])
     expect(selectedTicketIds(tickets)).toEqual([TaskId.make("A")])
     expect(tickets.policy).toBe(currentPolicy)
+    expect(frontier.publication).toBe(currentPublication)
   })
 
   it("partitions every established graph task with exact exclusion evidence", () => {
@@ -167,7 +168,7 @@ describe("#181 graph and bounded projections", () => {
       task("D", TaskLifecycle.cases.TerminalWithoutSuccess.make({})),
       task("P", TaskLifecycle.cases.TerminalWithoutSuccess.make({}))
     ])
-    const frontier = frontierOf(currentGraph, publication(currentGraph, policy(1)))
+    const frontier = frontierOf(publication(currentGraph, policy(1)))
 
     expect(frontier.standings).toMatchObject([
       { _tag: "Eligible", taskId: "A" },
@@ -186,7 +187,7 @@ describe("#181 graph and bounded projections", () => {
       task("B"),
       task("C")
     ])
-    const frontier = frontierOf(currentGraph, publication(currentGraph, policy(1)))
+    const frontier = frontierOf(publication(currentGraph, policy(1)))
 
     expect(frontier.standings.find(({ taskId }) => taskId === TaskId.make("A"))).toMatchObject({
       _tag: "Excluded",
@@ -224,7 +225,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
   it("retains exact evidence while the current graph is not established", () => {
     const taskA = TaskId.make("A")
     const currentGraph = TrackerGraphState.cases.GraphNotEstablished.make({})
-    const tickets = boundedParallelTicketsOf(frontierOf(currentGraph, publication(currentGraph, policy(1))))
+    const tickets = boundedParallelTicketsOf(frontierOf(publication(currentGraph, policy(1))))
     const result = ticketDeliveriesOf(tickets, [exactExecutorEvidence(taskA)])
 
     expect(result.deliveries).toMatchObject([

@@ -3,7 +3,6 @@ import type { RunControlPolicy } from "../../control/policy.js"
 import {
   BoundedParallelTicketsProjection,
   currentSignalOf,
-  DeliveryPublication,
   DeliveryReflectionProjection,
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
@@ -44,6 +43,47 @@ export interface DeliveryRelationsLayerInput {
   /** One current-first input bundle carrying the descriptive publication and compatibility inputs together. */
   readonly coherent: CurrentSignal<DeliveryRelationInputBundle, DeliveryRelationSourceError>
 }
+
+/**
+ * Identifies the descriptive values that make one graph-stage publication
+ * observable. Accepted appends can rebuild policy and evidence objects even
+ * when the graph itself did not change; those equivalent values must not
+ * replay the previous graph publication, while a new graph observation,
+ * policy, or exact evidence still publishes.
+ */
+const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string => {
+  const graph = publication.graph
+  const graphKey =
+    graph._tag === "GraphNotEstablished"
+      ? [graph._tag]
+      : [
+          graph._tag,
+          graph.observation.snapshot.canonicalJson(),
+          graph.observation.operationId,
+          graph.observation.contentIdentity,
+          graph.observation.acceptedAt,
+          graph.observation.freshness.operationId
+        ]
+  return JSON.stringify({
+    exactEvidence: publication.exactEvidence,
+    graph: graphKey,
+    policy: [publication.policy.revision, publication.policy.taskExecutionCapacity]
+  })
+}
+
+const deduplicatedPublicationSignal = (
+  signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
+): CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> => ({
+  changes: signal.changes.pipe(
+    Stream.mapAccum<string | undefined, DeliveryGraphPublication, DeliveryGraphPublication>(
+      () => undefined,
+      (previousKey, publication) => {
+        const nextKey = deliveryPublicationKeyOf(publication)
+        return previousKey === nextKey ? [nextKey, []] : [nextKey, [publication]]
+      }
+    )
+  )
+})
 
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
 export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) => ({
@@ -95,16 +135,12 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         : trackerProposals
     }
   )
-  const publication: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> = mapCurrentSignal(
-    input.coherent,
-    ({ publication }) => publication
-  )
+  const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ publication }) => publication))
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: actionPlanTrackerGraphProposals,
-    signal: mapCurrentSignal(publication, ({ graph }) => graph)
+    signal: publication
   })
   const trackerGraph = Layer.succeed(TrackerGraphRelation, trackerGraphService)
-  const descriptivePublication = Layer.succeed(DeliveryPublication, DeliveryPublication.of({ signal: publication }))
   const bounded = Layer.succeed(
     BoundedParallelTicketsProjection,
     BoundedParallelTicketsProjection.of({ of: (frontier) => mapCurrentSignal(frontier, boundedParallelTicketsOf) })
@@ -202,5 +238,5 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     })
   )
 
-  return Layer.mergeAll(descriptivePublication, trackerGraph, bounded, deliveries, settlements, reflection, runtime)
+  return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection, runtime)
 }

@@ -12,12 +12,12 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   DeliveryRelationRevision,
-  makeAcceptedTrackerGraphObservation,
   mapCurrentSignal,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeFacts,
   TrackerGraphState
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 
 const graph = (revision: string, taskId: TaskId) => {
   const projected = TaskDagSnapshot.project(
@@ -29,7 +29,7 @@ const graph = (revision: string, taskId: TaskId) => {
   if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeAcceptedTrackerGraphObservation({
+    observation: makeTestAcceptedTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
       acceptedAt: JournalPosition.make(1)

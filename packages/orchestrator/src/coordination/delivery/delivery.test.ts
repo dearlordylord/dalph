@@ -28,7 +28,6 @@ import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   TrackerGraphRelation,
-  DeliveryPublication,
   boundedParallelTickets,
   currentSignalOf,
   deliveryFinalityOf,
@@ -36,7 +35,6 @@ import {
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
-  makeAcceptedTrackerGraphObservation,
   PlannedAttemptExecutorTerminalEvidence,
   TrackerGraphState,
   zipCurrentSignals,
@@ -44,6 +42,7 @@ import {
   type CurrentSignal,
   type TicketDeliveryEvidence
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
@@ -106,7 +105,7 @@ const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) =>
 
 const acceptedGraphState = (snapshot: ReturnType<typeof acceptedGraph>) =>
   TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeAcceptedTrackerGraphObservation({
+    observation: makeTestAcceptedTrackerGraphObservation({
       snapshot,
       operationId: OperationId.make(`fixture:${snapshot.revision}`),
       acceptedAt: JournalPosition.make(1)
@@ -278,11 +277,7 @@ it.effect("exposes each lower proposal stream without performing an action", () 
     })
     const lower = yield* Effect.gen(function* () {
       const tracker = yield* TrackerGraphRelation
-      const publication = yield* DeliveryPublication
-      const frontier = mapCurrentSignal(
-        zipCurrentSignals(tracker.signal, publication.signal),
-        ([graph, currentPublication]) => frontierOf(graph, currentPublication)
-      )
+      const frontier = mapCurrentSignal(tracker.signal, frontierOf)
       const tickets = yield* boundedParallelTickets(frontier)
       const responsibilities = yield* executorResponsibilities(tickets)
       const settlements = yield* deliverySettlements(responsibilities)
@@ -578,13 +573,9 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   const outerEffect = deliverySource.slice(deliverySource.indexOf("export const delivery"))
   expect(outerEffect).toBe(`export const delivery = Effect.gen(function* () {
   const trackerGraph = yield* TrackerGraphRelation
-  const publication = yield* DeliveryPublication
 
   const graph = trackerGraph.signal
-  const frontier = mapCurrentSignal(
-    { changes: Stream.zip(graph.changes, publication.signal.changes) },
-    ([currentGraph, currentPublication]) => frontierOf(currentGraph, currentPublication)
-  )
+  const frontier = mapCurrentSignal(graph, frontierOf)
   const tickets = yield* boundedParallelTickets(frontier)
   const responsibilities = yield* executorResponsibilities(tickets)
   const settlements = yield* deliverySettlements(responsibilities)

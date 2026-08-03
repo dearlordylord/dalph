@@ -20,11 +20,11 @@ import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   TrackerGraphState,
-  makeAcceptedTrackerGraphObservation,
   type ExactTicketDeliveryEvidence,
   type AcceptedTrackerGraphObservation,
   type DeliveryGraphPublication
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -34,7 +34,7 @@ import {
 
 const fixtureObservation = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObservation => {
   const operationId = OperationId.make(`fixture:${snapshot.revision}`)
-  return makeAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(1) })
+  return makeTestAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(1) })
 }
 
 const publication = (graph: TrackerGraphState, policy: RunControlPolicy): DeliveryGraphPublication => ({
@@ -74,7 +74,7 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
         })
 
-        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(graph, publication(graph, policy))))).toEqual(
+        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(publication(graph, policy))))).toEqual(
           ids.toSorted().slice(0, capacity)
         )
       }
@@ -172,10 +172,9 @@ it("retains an exact planned-attempt obligation across every graph placement and
           revision: initialRunPolicyRevision,
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
         })
-        const projected = ticketDeliveriesOf(
-          boundedParallelTicketsOf(frontierOf(graph, publication(graph, currentPolicy))),
-          [evidence]
-        )
+        const projected = ticketDeliveriesOf(boundedParallelTicketsOf(frontierOf(publication(graph, currentPolicy))), [
+          evidence
+        ])
 
         const retainedDelivery = projected.deliveries.find(({ taskId }) => taskId === retainedTaskId)
         expect(retainedDelivery).toBeDefined()

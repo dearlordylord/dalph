@@ -8,8 +8,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { AcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
-import { TrackerGraphRelation } from "../delivery/relations.js"
+import { AcceptedFactPublicationGateway, AcceptedTrackerGraphRelation } from "../delivery/accepted-fact-gateway.js"
 import { deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -100,7 +99,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
               hasGatewayJournal: Option.isSome(Context.getOption(context, InRunJournal)),
               hasRawJournal: Option.isSome(Context.getOption(context, JournalStore)),
               hasLifecycleJournal: Option.isSome(Context.getOption(context, RunLifecycleJournal)),
-              hasTrackerGraph: Option.isSome(Context.getOption(context, TrackerGraphRelation))
+              hasTrackerGraph: Option.isSome(Context.getOption(context, AcceptedTrackerGraphRelation))
             })
           )
           return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))

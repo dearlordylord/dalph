@@ -24,22 +24,20 @@ import {
   currentSignalOf,
   boundedParallelTickets,
   DeliveryReflectionProjection,
-  DeliveryPublication,
   DeliveryRelationRevision,
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
-  makeAcceptedTrackerGraphObservation,
   makeDeliveryRuntimeRelation,
   reflectDeliverySettlements,
   TrackerGraphState,
   TrackerGraphRelation,
-  zipCurrentSignals,
   type AcceptedTrackerGraphObservation,
   type CurrentSignal,
   type DeliveryRelationInputBundle,
   type TicketDeliveryEvidence
 } from "./relations.js"
+import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
 import { delivery } from "./delivery.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
@@ -74,7 +72,11 @@ const graphSnapshot = (
 
 const fixtureObservation = (snapshot: TaskDagSnapshot, operation: string, acceptedAt: number) => {
   const operationId = OperationId.make(operation)
-  return makeAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(acceptedAt) })
+  return makeTestAcceptedTrackerGraphObservation({
+    snapshot,
+    operationId,
+    acceptedAt: JournalPosition.make(acceptedAt)
+  })
 }
 
 const acceptedGraph = (
@@ -217,6 +219,48 @@ it.effect("emits one consequence per accepted publication without mixed graph po
   })
 )
 
+it.effect("publishes policy and exact evidence changes for one accepted graph", () =>
+  Effect.gen(function* () {
+    const graph = acceptedGraph("same-graph-publication", [{ id: "A" }], "same-graph-read", 9)
+    const policyOne = RunControlPolicy.make({
+      revision: initialRunPolicyRevision,
+      taskExecutionCapacity: TaskWorkCapacity.make(1)
+    })
+    const policyTwo = RunControlPolicy.make({
+      revision: initialRunPolicyRevision,
+      taskExecutionCapacity: TaskWorkCapacity.make(2)
+    })
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+      changes: Stream.fromIterable([
+        coherentBundle(graph, policyOne, []),
+        coherentBundle(graph, policyTwo, []),
+        coherentBundle(graph, policyTwo, [syntheticEvidence(TaskId.make("A"))])
+      ])
+    }
+    const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })
+
+    const signal = yield* delivery.pipe(Effect.provide(layer))
+    const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))
+
+    expect(values).toHaveLength(3)
+    expect(
+      values.map(({ graph: currentGraph }) =>
+        currentGraph._tag === "GraphEstablished" ? currentGraph.observation.operationId : undefined
+      )
+    ).toEqual([
+      OperationId.make("same-graph-read"),
+      OperationId.make("same-graph-read"),
+      OperationId.make("same-graph-read")
+    ])
+    expect(values.map(({ tickets }) => tickets.policy.taskExecutionCapacity)).toEqual([
+      TaskWorkCapacity.make(1),
+      TaskWorkCapacity.make(2),
+      TaskWorkCapacity.make(2)
+    ])
+    expect(values.map(({ ticketDeliveries }) => ticketDeliveries.deliveries[0]?.evidence.length)).toEqual([0, 0, 1])
+  })
+)
+
 it.effect("evaluates every coherent projection owner from the shared publication", () =>
   Effect.gen(function* () {
     const graph = acceptedGraph("coherent-projection", [{ id: "A" }], "coherent-projection-read", 9)
@@ -228,12 +272,8 @@ it.effect("evaluates every coherent projection owner from the shared publication
     yield* Effect.gen(function* () {
       const consequences = yield* delivery
       const trackerGraph = yield* TrackerGraphRelation
-      const publication = yield* DeliveryPublication
       yield* trackerGraph.signal.changes.pipe(Stream.runCollect)
-      const frontier = mapCurrentSignal(
-        zipCurrentSignals(trackerGraph.signal, publication.signal),
-        ([currentGraph, currentPublication]) => frontierOf(currentGraph, currentPublication)
-      )
+      const frontier = mapCurrentSignal(trackerGraph.signal, frontierOf)
       const tickets = yield* boundedParallelTickets(frontier)
       yield* tickets.changes.pipe(Stream.runCollect)
       const deliveries = yield* executorResponsibilities(tickets)
