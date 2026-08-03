@@ -225,10 +225,23 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
             relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
           )
+        const readStableEvaluation = Effect.fn("DeliveryRelations.readStableEvaluation")(function* () {
+          for (;;) {
+            const evaluation = yield* input.evaluationConsistency.withStableRevision(
+              Effect.gen(function* () {
+                const currentFacts = yield* facts.get
+                const revision = yield* input.evaluationConsistency.currentRevision
+                if (revision !== currentFacts.revision) return Option.none<DeliveryRuntimeEvaluation>()
+                const sampled = yield* makeEvaluation(currentFacts, relation.current.get, relation.proposedActions.get)
+                return Option.some(sampled)
+              })
+            )
+            if (Option.isSome(evaluation)) return evaluation.value
+            yield* Effect.yieldNow
+          }
+        })
         const evaluations = {
-          get: facts.get.pipe(
-            Effect.flatMap((facts) => makeEvaluation(facts, relation.current.get, relation.proposedActions.get))
-          ),
+          get: readStableEvaluation(),
           changes: facts.changes.pipe(
             Stream.mapEffect((facts) =>
               input.evaluationConsistency.withStableRevision(
