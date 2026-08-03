@@ -16,14 +16,31 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
-import { acceptedTrackerGraphObservationOf, TrackerGraphState, type ExactTicketDeliveryEvidence } from "./relations.js"
+import {
+  TrackerGraphState,
+  type ExactTicketDeliveryEvidence,
+  type AcceptedTrackerGraphObservation
+} from "./relations.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
   selectedTicketIds,
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
+
+const fixtureObservation = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObservation => {
+  const operationId = OperationId.make(`fixture:${snapshot.revision}`)
+  return {
+    _tag: "AcceptedTrackerGraphObservation",
+    snapshot,
+    operationId,
+    contentIdentity: snapshot.revision,
+    acceptedAt: JournalPosition.make(1),
+    freshness: { _tag: "ObservedDuringLogicalRead", operationId }
+  }
+}
 
 it("keeps bounded selection invariant under tracker task permutation", () => {
   fc.assert(
@@ -49,7 +66,7 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
         )
         if (projected._tag === "Invalid") return expect.fail("generated graph must be valid")
         const graph = TrackerGraphState.cases.GraphEstablished.make({
-          observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+          observation: fixtureObservation(projected.snapshot)
         })
         const policy = RunControlPolicy.make({
           revision: initialRunPolicyRevision,
@@ -126,7 +143,7 @@ it("retains an exact planned-attempt obligation under every graph placement and 
         )
         if (graphResult._tag === "Invalid") return expect.fail("generated graph must be valid")
         const graph = TrackerGraphState.cases.GraphEstablished.make({
-          observation: acceptedTrackerGraphObservationOf(graphResult.snapshot)
+          observation: fixtureObservation(graphResult.snapshot)
         })
         const projected = ticketDeliveriesOf(
           boundedParallelTicketsOf(

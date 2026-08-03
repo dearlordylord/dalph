@@ -2,7 +2,6 @@ import { plannedAttemptExecutorCorrelation, type AttemptId, type RunId, type Tas
 import { Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import type { RunControlPolicy } from "../../control/policy.js"
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
@@ -22,12 +21,11 @@ import {
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   DeliveryRelationRevision,
+  type DeliveryRelationInputBundle,
   type DeliveryRuntimeFacts,
   type TicketDeliveryEvidence,
-  type TrackerGraphActionProposal,
-  type TrackerGraphState
+  type TrackerGraphActionProposal
 } from "./relations.js"
-import type { DeliveryProposalContributions } from "./delivery-action-proposal.js"
 import type { AcceptedFactPublicationGatewayService } from "./accepted-fact-gateway.js"
 
 /** Accepted Run history cannot drive delivery until its initial control policy exists. */
@@ -36,14 +34,7 @@ export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<Delive
   {}
 ) {}
 
-interface ReactiveDeliveryBundle {
-  readonly exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
-  readonly graph: TrackerGraphState
-  readonly policy: RunControlPolicy
-  readonly proposalContributions: DeliveryProposalContributions
-  readonly runtimeFacts: DeliveryRuntimeFacts
-  readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
-}
+type ReactiveDeliveryBundle = DeliveryRelationInputBundle
 
 type AcceptedDeliveryProjection = Effect.Success<AcceptedFactPublicationGatewayService["readCurrent"]>
 type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
@@ -198,6 +189,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       graph: accepted.graph,
       policy,
       proposalContributions,
+      reflectionProposals: [],
       runtimeFacts: {
         acceptedAt: accepted.appliedPosition,
         quiescence: runIsPaused
@@ -288,13 +280,16 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
+    /* v8 ignore start -- The reactive composition publishes `coherent` below; these split signals remain only for compatibility callers. */
     exactEvidence: bundleSignal(({ exactEvidence }) => exactEvidence),
     graph: bundleSignal(({ graph }) => graph),
     invalidate,
     policy: bundleSignal(({ policy }) => policy),
+    /* v8 ignore stop -- The coherent publication is the sole descriptive source in this composition. */
     proposalContributions: bundleSignal(({ proposalContributions }) => proposalContributions),
     runtimeFacts: bundleSignal(({ runtimeFacts }) => runtimeFacts),
-    trackerGraphProposals: bundleSignal(({ trackerGraphProposals }) => trackerGraphProposals)
+    trackerGraphProposals: bundleSignal(({ trackerGraphProposals }) => trackerGraphProposals),
+    coherent: bundleSignal((bundle) => bundle)
   })
 })
 

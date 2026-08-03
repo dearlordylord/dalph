@@ -53,7 +53,7 @@ const exclusionsFor = (
 /** Exhaustively classifies an accepted complete graph without consulting workflow responsibility. */
 export const frontierOf = (graph: TrackerGraphState): DeliveryFrontier => {
   if (graph._tag === "GraphNotEstablished") return { _tag: "DeliveryFrontier", source: graph, standings: [] }
-  const tasks = new Map(graph.snapshot.toWire().tasks.map((task) => [task.id, task] as const))
+  const tasks = new Map(graph.observation.snapshot.toWire().tasks.map((task) => [task.id, task] as const))
   const standings = [...tasks.values()]
     .map((task): DeliveryFrontierStanding => {
       const reasons = exclusionsFor(task, tasks)
@@ -233,7 +233,7 @@ const placementFor = (tickets: BoundedParallelTickets, taskId: TaskId): TicketDe
   if (current !== undefined) return current
   return tickets.source.source._tag === "GraphNotEstablished"
     ? { _tag: "GraphNotEstablished" }
-    : { _tag: "AbsentFromCurrentGraph", graphRevision: tickets.source.source.snapshot.revision }
+    : { _tag: "AbsentFromCurrentGraph", graphRevision: tickets.source.source.observation.snapshot.revision }
 }
 
 /**

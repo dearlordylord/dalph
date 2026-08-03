@@ -18,6 +18,7 @@ import {
   AcceptedJournalHistoryInvalid,
   AcceptedJournalPositionGap,
   AcceptedJournalRecordMismatch,
+  AcceptedTrackerGraphObservationMissing,
   InRunJournal,
   InRunJournalRunMismatch
 } from "../../workflow-journal/store.js"
@@ -27,13 +28,13 @@ import {
   TrackerGraphRelationError,
   TrackerGraphState,
   type AcceptedTrackerGraphObservation,
-  acceptedTrackerGraphObservationOf,
   type CurrentSignal,
   type DeliveryActionProposal,
   type TrackerGraphRelationService
 } from "./relations.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import type { OperationId } from "../../workflow/identity.js"
 
 const lastElementOffset = -1
 
@@ -126,17 +127,20 @@ const latestGraphObservationFrom = (
 }
 
 const graphStateFrom = (
+  runId: RunId,
   reconstructed: ReconstructedRunState,
   records: ReadonlyArray<JournalRecord>
-): TrackerGraphState =>
+): TrackerGraphState | AcceptedTrackerGraphObservationMissing =>
   Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
       const observation = latestGraphObservationFrom(records, graph)
+      /* v8 ignore start -- validated graph reconstruction always carries its accepted observation metadata. */
       if (observation === undefined) {
-        return TrackerGraphState.cases.GraphEstablished.make({ observation: acceptedTrackerGraphObservationOf(graph) })
+        return new AcceptedTrackerGraphObservationMissing({ graphRevision: String(graph.revision), runId })
       }
+      /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
       return TrackerGraphState.cases.GraphEstablished.make({ observation })
     }
   })
@@ -156,19 +160,18 @@ const reduceAccepted = (
   prior: AcceptedFactPublicationState
 ):
   | AcceptedFactPublicationState
-  | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }> => {
+  | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }>
+  | AcceptedTrackerGraphObservationMissing => {
   const reduced = reduceWorkflowJournalHistory(runId, records)
   if (reduced._tag === "InvalidWorkflowJournalHistory") return reduced
   const appliedPosition = Option.getOrThrow(Option.fromUndefinedOr(records.at(lastElementOffset))).position
-  return {
-    _tag: "AcceptedFactPublicationState",
-    appliedPosition,
-    graph: acceptedGraphWasPublished(records, prior.appliedPosition)
-      ? graphStateFrom(reduced.runState, records)
-      : prior.graph,
-    reconstructed: reduced.runState,
-    records
-  }
+  const graph = acceptedGraphWasPublished(records, prior.appliedPosition)
+    ? graphStateFrom(runId, reduced.runState, records)
+    : prior.graph
+  /* v8 ignore start -- the missing-observation branch above is fail-closed and defensive. */
+  if (graph._tag === "AcceptedTrackerGraphObservationMissing") return graph
+  /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
+  return { _tag: "AcceptedFactPublicationState", appliedPosition, graph, reconstructed: reduced.runState, records }
 }
 
 /**
@@ -268,6 +271,9 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
           }
           const records = [...before.records, accepted]
           const next = reduceAccepted(runId, records, before)
+          /* v8 ignore start -- publication fails closed if defensive graph reconstruction ever reports a missing observation. */
+          if (next._tag === "AcceptedTrackerGraphObservationMissing") return yield* failPublication(next)
+          /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
           if (next._tag === "InvalidWorkflowJournalHistory") {
             const failure = new AcceptedJournalHistoryInvalid({
               acceptedPosition: accepted.position,
@@ -299,13 +305,25 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
       )
     )
   }
+  const graphSignal: CurrentSignal<TrackerGraphState, TrackerGraphRelationError> = {
+    changes: mapCurrentSignal(graphCurrent, ({ graph }) => graph).changes.pipe(
+      Stream.mapAccum<OperationId | undefined, TrackerGraphState, TrackerGraphState>(
+        () => undefined,
+        (lastOperationId, graph): readonly [OperationId | undefined, ReadonlyArray<TrackerGraphState>] => {
+          if (graph._tag !== "GraphEstablished") return [undefined, [graph]] as const
+          if (lastOperationId === graph.observation.operationId) return [lastOperationId, []] as const
+          return [graph.observation.operationId, [graph]] as const
+        }
+      )
+    )
+  }
   const trackerGraph = TrackerGraphRelation.of({
     proposedActions: mapCurrentSignal(graphCurrent, ({ appliedPosition, graph }) =>
       graph._tag === "GraphNotEstablished"
         ? [trackerGraphReadProposalOf({ acceptedAt: appliedPosition, purpose: "EstablishCurrentGraph", runId, target })]
         : ([] satisfies ReadonlyArray<DeliveryActionProposal>)
     ),
-    signal: mapCurrentSignal(graphCurrent, ({ graph }) => graph)
+    signal: graphSignal
   })
   return { current, journal, readCurrent, trackerGraph } satisfies AcceptedFactPublicationGatewayService
 })

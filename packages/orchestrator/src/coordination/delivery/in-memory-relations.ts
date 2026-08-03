@@ -6,6 +6,7 @@ import {
   DeliveryReflectionProjection,
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
+  makeDeliveryConsequences,
   makeDeliveryReflection,
   makeDeliveryRuntimeRelation,
   makeDeliverySettlements,
@@ -18,7 +19,11 @@ import {
   DeliveryRelationRevision,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
+  type DeliveryRelationInputBundle,
+  type DeliveryConsequences,
   type DeliveryReflectionRelation,
+  type DeliverySettlementRelation,
+  type TicketDeliveryRelation,
   type DeliveryRelationSourceError,
   type TrackerGraphActionProposal,
   type TicketDeliveryEvidence,
@@ -26,7 +31,7 @@ import {
   type TrackerGraphRelationService,
   zipCurrentSignals
 } from "./relations.js"
-import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
+import { boundedParallelTicketsOf, frontierOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
@@ -42,6 +47,8 @@ export interface DeliveryRelationsLayerInput {
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
   readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
   readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
+  /** One current-first publication carrying every descriptive input together. */
+  readonly coherent?: CurrentSignal<DeliveryRelationInputBundle, DeliveryRelationSourceError>
 }
 
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
@@ -59,6 +66,36 @@ export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) =>
   })
 })
 
+/** Builds the lower runtime relation owners while preserving one delivery consequence source. */
+export const makeDeliveryRuntimeReflection = <E>(input: {
+  readonly delivery: CurrentSignal<DeliveryConsequences, E>
+  readonly proposalContributions: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
+  readonly reflectionProposals: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
+}): {
+  readonly ticketRelation: TicketDeliveryRelation<E | DeliveryRelationSourceError>
+  readonly settlementRelation: DeliverySettlementRelation<E | DeliveryRelationSourceError>
+  readonly reflection: DeliveryReflectionRelation<E | DeliveryRelationSourceError>
+} => {
+  const ticketRelation: TicketDeliveryRelation<E | DeliveryRelationSourceError> = {
+    current: mapCurrentSignal(input.delivery, ({ ticketDeliveries }) => ticketDeliveries),
+    proposedActions: mapCurrentSignal(input.proposalContributions, ({ ticketDelivery }) => ticketDelivery),
+    proposalContributions: input.proposalContributions,
+    source: mapCurrentSignal(input.delivery, ({ tickets }) => tickets)
+  }
+  const settlementRelation: DeliverySettlementRelation<E | DeliveryRelationSourceError> = {
+    current: mapCurrentSignal(input.delivery, ({ settlements }) => settlements),
+    proposedActions: mapCurrentSignal(input.proposalContributions, ({ deliverySettlement }) => deliverySettlement),
+    proposalContributions: input.proposalContributions,
+    source: ticketRelation
+  }
+  const reflection: DeliveryReflectionRelation<E | DeliveryRelationSourceError> = {
+    current: mapCurrentSignal(input.delivery, ({ trackerConsequences }) => trackerConsequences),
+    proposedActions: input.reflectionProposals,
+    source: settlementRelation
+  }
+  return { ticketRelation, settlementRelation, reflection }
+}
+
 /** Deterministic, action-free Layers used to evaluate the complete relation spine. */
 export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) => {
   const noActions = currentSignalOf<ReadonlyArray<DeliveryActionProposal>>([])
@@ -68,30 +105,51 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     issues: [],
     ticketDelivery: []
   })
+  const coherentConsequences: CurrentSignal<DeliveryConsequences, DeliveryRelationSourceError> | undefined =
+    input.coherent === undefined
+      ? undefined
+      : mapCurrentSignal(input.coherent, ({ exactEvidence, graph, policy }) => {
+          const frontier = frontierOf(graph)
+          const tickets = boundedParallelTicketsOf(frontier, policy)
+          const ticketDeliveries = ticketDeliveriesOf(tickets, exactEvidence)
+          const settlements = makeDeliverySettlements(ticketDeliveries, [])
+          return makeDeliveryConsequences(makeDeliveryReflection(settlements))
+        })
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: input.trackerGraphProposals ?? noTrackerActions,
-    signal: input.graph
+    signal:
+      coherentConsequences === undefined ? input.graph : mapCurrentSignal(coherentConsequences, ({ graph }) => graph)
   })
   const trackerGraph = Layer.succeed(TrackerGraphRelation, trackerGraphService)
   const bounded = Layer.succeed(
     BoundedParallelTicketsProjection,
     BoundedParallelTicketsProjection.of({
       of: (frontier) =>
-        mapCurrentSignal(zipCurrentSignals(frontier, input.policy), ([source, policy]) =>
-          boundedParallelTicketsOf(source, policy)
-        )
+        coherentConsequences === undefined
+          ? mapCurrentSignal(zipCurrentSignals(frontier, input.policy), ([source, policy]) =>
+              boundedParallelTicketsOf(source, policy)
+            )
+          : mapCurrentSignal(coherentConsequences, ({ tickets }) => tickets)
     })
   )
   const deliveries = Layer.succeed(
     TicketDeliveryProjection,
     TicketDeliveryProjection.of({
       of: (tickets) => ({
-        current: mapCurrentSignal(zipCurrentSignals(tickets, input.exactEvidence), ([source, evidence]) =>
-          ticketDeliveriesOf(source, evidence)
-        ),
-        proposalContributions: input.proposalContributions ?? noProposalContributions,
+        current:
+          coherentConsequences === undefined
+            ? mapCurrentSignal(zipCurrentSignals(tickets, input.exactEvidence), ([source, evidence]) =>
+                ticketDeliveriesOf(source, evidence)
+              )
+            : mapCurrentSignal(coherentConsequences, ({ ticketDeliveries }) => ticketDeliveries),
+        proposalContributions:
+          input.coherent === undefined
+            ? (input.proposalContributions ?? noProposalContributions)
+            : mapCurrentSignal(input.coherent, ({ proposalContributions }) => proposalContributions),
         proposedActions: mapCurrentSignal(
-          input.proposalContributions ?? noProposalContributions,
+          input.coherent === undefined
+            ? (input.proposalContributions ?? noProposalContributions)
+            : mapCurrentSignal(input.coherent, ({ proposalContributions }) => proposalContributions),
           ({ ticketDelivery }) => ticketDelivery
         ),
         source: tickets
@@ -102,7 +160,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliverySettlementProjection,
     DeliverySettlementProjection.of({
       of: (relation) => ({
-        current: mapCurrentSignal(relation.current, (source) => makeDeliverySettlements(source, [])),
+        current:
+          coherentConsequences === undefined
+            ? mapCurrentSignal(relation.current, (source) => makeDeliverySettlements(source, []))
+            : mapCurrentSignal(coherentConsequences, ({ settlements }) => settlements),
         proposalContributions: relation.proposalContributions,
         proposedActions: mapCurrentSignal(
           relation.proposalContributions,
@@ -116,8 +177,14 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliveryReflectionProjection,
     DeliveryReflectionProjection.of({
       of: (relation) => ({
-        current: mapCurrentSignal(relation.current, makeDeliveryReflection),
-        proposedActions: input.reflectionProposals ?? noActions,
+        current:
+          coherentConsequences === undefined
+            ? mapCurrentSignal(relation.current, makeDeliveryReflection)
+            : mapCurrentSignal(coherentConsequences, ({ trackerConsequences }) => trackerConsequences),
+        proposedActions:
+          input.coherent === undefined
+            ? (input.reflectionProposals ?? noActions)
+            : mapCurrentSignal(input.coherent, ({ reflectionProposals }) => reflectionProposals),
         source: relation
       })
     })
@@ -126,17 +193,22 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliveryRuntimeAssembly,
     DeliveryRuntimeAssembly.of({
       of: <E>({
-        reflection,
+        delivery,
         trackerGraph
       }: {
-        readonly reflection: DeliveryReflectionRelation<E>
+        readonly delivery: CurrentSignal<DeliveryConsequences, E>
         readonly trackerGraph: TrackerGraphRelationService
       }) => {
+        const proposalContributions = input.proposalContributions ?? noProposalContributions
+        const reflectionProposals = input.reflectionProposals ?? noActions
+        const { reflection } = makeDeliveryRuntimeReflection({ delivery, proposalContributions, reflectionProposals })
+        const facts = input.runtimeFacts
         const relation = makeDeliveryRuntimeRelation<E | DeliveryRelationSourceError>({
-          facts: input.runtimeFacts,
+          facts,
           invalidate: input.invalidate,
           reflection,
-          trackerGraph
+          trackerGraph,
+          suppressQuiescenceProbeWithWork: input.coherent !== undefined
         })
         const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
           Effect.all({
@@ -157,7 +229,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             )
           )
         const evaluations = {
-          changes: input.runtimeFacts.changes.pipe(
+          changes: facts.changes.pipe(
             Stream.mapEffect((facts) =>
               input.evaluationConsistency.withStableRevision(
                 input.evaluationConsistency.currentRevision.pipe(

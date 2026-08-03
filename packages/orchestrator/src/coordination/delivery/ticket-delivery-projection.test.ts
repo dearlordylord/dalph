@@ -29,8 +29,8 @@ import { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "../fro
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
 import {
-  acceptedTrackerGraphObservationOf,
   TrackerGraphState,
+  type AcceptedTrackerGraphObservation,
   type ExactTicketDeliveryEvidence,
   type TicketDeliveryEvidence
 } from "./relations.js"
@@ -50,8 +50,16 @@ const task = (
 const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
   const projected = TaskDagSnapshot.project(TrackerSnapshot.make({ revision: TrackerRevision.make(revision), tasks }))
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
+  const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+    observation: {
+      _tag: "AcceptedTrackerGraphObservation",
+      snapshot: projected.snapshot,
+      operationId,
+      contentIdentity: projected.snapshot.revision,
+      acceptedAt: JournalPosition.make(1),
+      freshness: { _tag: "ObservedDuringLogicalRead", operationId }
+    } satisfies AcceptedTrackerGraphObservation
   })
 }
 
@@ -162,6 +170,20 @@ describe("#181 graph and bounded projections", () => {
       _tag: "Excluded",
       reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [prerequisiteB, prerequisiteC] }]
     })
+  })
+
+  it("retains an exact responsibility when an unfinished prerequisite blocks its graph placement", () => {
+    const blockedTask = TaskId.make("B")
+    const result = project([task("A"), task("B", TaskLifecycle.cases.Open.make({}), [TaskId.make("A")])], 2, [
+      exactExecutorEvidence(blockedTask)
+    ])
+    const retained = result.deliveries.find(({ taskId }) => taskId === blockedTask)
+
+    expect(retained?.placement).toEqual({
+      _tag: "GraphExcluded",
+      reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [TaskId.make("A")] }]
+    })
+    expect(retained?.obligations).toMatchObject([{ _tag: "WorkflowResponsibility" }])
   })
 
   it("selects deterministic lexical candidates and retains the complete outside-bound explanation", () => {

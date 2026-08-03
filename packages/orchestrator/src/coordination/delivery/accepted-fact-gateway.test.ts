@@ -4,15 +4,20 @@ import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Stream } from "effec
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -91,10 +96,10 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
     const currentGraph = (yield* gateway.readCurrent).graph
     expect(currentGraph._tag).toBe("GraphEstablished")
     if (currentGraph._tag === "GraphEstablished") {
-      expect(currentGraph.snapshot.toWire()).toMatchObject({ revision: "g1", tasks: [{ id: "A" }] })
+      expect(currentGraph.observation.snapshot.toWire()).toMatchObject({ revision: "g1", tasks: [{ id: "A" }] })
       expect(currentGraph.observation.operationId).toBe(operation.operationId)
       expect(currentGraph.observation.acceptedAt).toBe(JournalPosition.make(3))
-      expect(currentGraph.observation.contentIdentity).toBe(currentGraph.snapshot.revision)
+      expect(currentGraph.observation.contentIdentity).toBe(currentGraph.observation.snapshot.revision)
     }
     expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
     expect(Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))).toEqual([])
@@ -110,7 +115,23 @@ it.effect("publishes an equal-content reconfirmation as a later accepted graph o
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const gateway = yield* makeAcceptedFactPublicationGateway(fixedRunId, target, initial, storage)
     const firstOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G1"), target)
+    const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G2"), target)
     const snapshot = graph("equal-content", ["A"])
+    const attached = yield* Deferred.make<void>()
+    const firstSeen = yield* Deferred.make<void>()
+    const observed = yield* gateway.trackerGraph.signal.changes.pipe(
+      Stream.tap(() => Deferred.succeed(attached, undefined)),
+      Stream.tap((state) =>
+        state._tag === "GraphEstablished" && state.observation.operationId === firstOperation.operationId
+          ? Deferred.succeed(firstSeen, undefined)
+          : Effect.void
+      ),
+      Stream.filter((state) => state._tag === "GraphEstablished"),
+      Stream.take(2),
+      Stream.runCollect,
+      Effect.forkChild
+    )
+    yield* Deferred.await(attached)
     yield* gateway.journal.append(
       fixedRunId,
       intentRecordKey(firstOperation.operationId),
@@ -124,10 +145,8 @@ it.effect("publishes an equal-content reconfirmation as a later accepted graph o
         makeCompleteTaskTrackerFactsObserved(firstOperation, snapshot)
       )
     )
-    const first = yield* gateway.readCurrent
-    if (first.graph._tag !== "GraphEstablished") return yield* Effect.die("expected G1 graph")
+    yield* Deferred.await(firstSeen)
 
-    const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G2"), target)
     yield* gateway.journal.append(
       fixedRunId,
       intentRecordKey(secondOperation.operationId),
@@ -143,14 +162,66 @@ it.effect("publishes an equal-content reconfirmation as a later accepted graph o
         snapshot
       )
     )
-    const second = yield* gateway.readCurrent
-    if (second.graph._tag !== "GraphEstablished") return yield* Effect.die("expected G2 graph")
+    const values = Array.from(yield* Fiber.join(observed))
+    const first = values[0]
+    const second = values[values.length - 1]
+    if (first?._tag !== "GraphEstablished" || second?._tag !== "GraphEstablished") {
+      return yield* Effect.die("expected G1 and G2 graph observations")
+    }
 
-    expect(first.graph.observation.operationId).toBe(firstOperation.operationId)
-    expect(second.graph.observation.operationId).toBe(secondOperation.operationId)
-    expect(first.graph.observation.contentIdentity).toBe(second.graph.observation.contentIdentity)
-    expect(first.graph.observation.acceptedAt).toBe(JournalPosition.make(3))
-    expect(second.graph.observation.acceptedAt).toBe(JournalPosition.make(5))
+    expect(first.observation.operationId).toBe(firstOperation.operationId)
+    expect(second.observation.operationId).toBe(secondOperation.operationId)
+    expect(first.observation.contentIdentity).toBe(second.observation.contentIdentity)
+    expect(first.observation.acceptedAt).toBe(JournalPosition.make(3))
+    expect(second.observation.acceptedAt).toBe(JournalPosition.make(5))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("skips accepted focused facts while retaining the latest graph observation metadata", () =>
+  Effect.gen(function* () {
+    const focusedRunId = RunId.make("accepted-fact-focused-before-graph")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(focusedRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(focusedRunId, yield* storage.read(focusedRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const gateway = yield* makeAcceptedFactPublicationGateway(focusedRunId, target, initial, storage)
+    const focused = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("focused-before-graph"),
+      target,
+      TaskId.make("A")
+    )
+    yield* gateway.journal.append(focusedRunId, intentRecordKey(focused.operationId), taskTrackerReadIntent(focused))
+    yield* gateway.journal.append(
+      focusedRunId,
+      outcomeRecordKey(focused.operationId),
+      taskTrackerFactsObservedEvent(
+        focused.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(
+          focused,
+          makeTaskWorkSpecification({ body: "focused body", taskId: TaskId.make("A"), title: "Focused task" })
+        )
+      )
+    )
+    const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("graph-after-focused"), target)
+    yield* gateway.journal.append(
+      focusedRunId,
+      intentRecordKey(graphOperation.operationId),
+      taskTrackerReadIntent(graphOperation)
+    )
+    yield* gateway.journal.append(
+      focusedRunId,
+      outcomeRecordKey(graphOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        graphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphOperation, graph("focused-then-graph", ["A"]))
+      )
+    )
+
+    const current = yield* gateway.readCurrent
+    expect(current.graph._tag).toBe("GraphEstablished")
+    expect(current.graph._tag === "GraphEstablished" ? current.graph.observation.operationId : undefined).toBe(
+      graphOperation.operationId
+    )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
@@ -288,7 +359,10 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
     const currentGraph = (yield* gateway.readCurrent).graph
     expect(currentGraph._tag).toBe("GraphEstablished")
     if (currentGraph._tag === "GraphEstablished") {
-      expect(currentGraph.snapshot.toWire()).toMatchObject({ revision: "first-completed-later", tasks: [{ id: "A" }] })
+      expect(currentGraph.observation.snapshot.toWire()).toMatchObject({
+        revision: "first-completed-later",
+        tasks: [{ id: "A" }]
+      })
     }
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
@@ -309,7 +383,9 @@ it.effect("never loses the latest accepted graph when subscription and publicati
       const observed = Deferred.await(start).pipe(
         Effect.andThen(
           gateway.trackerGraph.signal.changes.pipe(
-            Stream.filter((state) => state._tag === "GraphEstablished" && state.snapshot.revision === revision),
+            Stream.filter(
+              (state) => state._tag === "GraphEstablished" && state.observation.snapshot.revision === revision
+            ),
             Stream.runHead
           )
         )
@@ -332,7 +408,10 @@ it.effect("never loses the latest accepted graph when subscription and publicati
       const raced = yield* Effect.all([observed, accepted], { concurrency: "unbounded" }).pipe(Effect.forkChild)
       yield* Deferred.succeed(start, undefined)
       const [current] = yield* Fiber.join(raced)
-      expect(Option.getOrThrow(current)).toMatchObject({ _tag: "GraphEstablished", snapshot: { revision } })
+      expect(Option.getOrThrow(current)).toMatchObject({
+        _tag: "GraphEstablished",
+        observation: { snapshot: { revision } }
+      })
     }
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )

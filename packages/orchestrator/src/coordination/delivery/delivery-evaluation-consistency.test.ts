@@ -6,15 +6,16 @@ import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
-  acceptedTrackerGraphObservationOf,
   DeliveryRelationRevision,
   mapCurrentSignal,
   type DeliveryRuntimeFacts,
-  TrackerGraphState
+  TrackerGraphState,
+  type AcceptedTrackerGraphObservation
 } from "./relations.js"
 
 const graph = (revision: string, taskId: TaskId) => {
@@ -25,8 +26,16 @@ const graph = (revision: string, taskId: TaskId) => {
     })
   )
   if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
+  const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+    observation: {
+      _tag: "AcceptedTrackerGraphObservation",
+      snapshot: projected.snapshot,
+      operationId,
+      contentIdentity: projected.snapshot.revision,
+      acceptedAt: JournalPosition.make(1),
+      freshness: { _tag: "ObservedDuringLogicalRead", operationId }
+    } satisfies AcceptedTrackerGraphObservation
   })
 }
 
@@ -118,7 +127,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
         capacity: evaluation.taskWork.capacity,
         graphRevision:
           evaluation.current.trackerGraph._tag === "GraphEstablished"
-            ? evaluation.current.trackerGraph.snapshot.toWire().revision
+            ? evaluation.current.trackerGraph.observation.snapshot.toWire().revision
             : "missing",
         revision: evaluation.revision
       }))

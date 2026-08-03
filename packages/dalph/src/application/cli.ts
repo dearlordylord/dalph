@@ -1,18 +1,35 @@
 import { Effect, Schema } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { RunId } from "@dalph/contracts"
-import { defaultTaskWorkCapacity, FixtureTarget, InitialControlPolicy, runSyntheticWorkflow } from "@dalph/orchestrator"
+import {
+  defaultTaskWorkCapacity,
+  FixtureTarget,
+  InitialControlPolicy,
+  JournalPosition,
+  runSyntheticWorkflow
+} from "@dalph/orchestrator"
+import type { OperationId, TaskDagSnapshot } from "@dalph/orchestrator"
 
 export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()("Cli.CliUsageError", {
   usage: Schema.String,
   detail: Schema.String
 }) {}
 
+const dryRunObservationOf = (operationId: OperationId, snapshot: TaskDagSnapshot) => ({
+  _tag: "AcceptedTrackerGraphObservation" as const,
+  snapshot,
+  operationId,
+  contentIdentity: snapshot.revision,
+  acceptedAt: JournalPosition.make(1),
+  freshness: { _tag: "ObservedDuringLogicalRead" as const, operationId }
+})
+
 const executeDryRun = Effect.fn("Cli.executeDryRun")(function* (target: FixtureTarget) {
   yield* runSyntheticWorkflow(
     target,
     InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
-    RunId.make("dry-run")
+    RunId.make("dry-run"),
+    dryRunObservationOf
   )
 })
 

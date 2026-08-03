@@ -134,6 +134,7 @@ export {
   AcceptedJournalHistoryInvalid,
   AcceptedJournalPositionGap,
   AcceptedJournalRecordMismatch,
+  AcceptedTrackerGraphObservationMissing,
   JournalDataCorruption,
   type JournalAppendError,
   JournalSchemaIncompatible,

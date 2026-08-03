@@ -10,6 +10,7 @@ import { controlDirectionApplicationLayer } from "../../workflow/protocols/contr
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
 import { runSyntheticWorkflowWithBootstrap } from "./run.js"
+import type { SyntheticTrackerGraphObservationFactory } from "../delivery/synthetic-delivery-relations.js"
 import { validatedStartupRecoveryLayer } from "./startup-recovery.js"
 
 const syntheticOwnershipLayer = Layer.succeed(
@@ -45,7 +46,12 @@ const syntheticJournaledRunLayer = (runId: RunId) =>
   )
 
 /** Explicit non-durable interpretation of the same public delivery program. */
-export const runSyntheticWorkflow = (target: TrackerTarget, initialControlPolicy: InitialControlPolicy, runId: RunId) =>
-  runSyntheticWorkflowWithBootstrap(target, initialControlPolicy, runId).pipe(
+export const runSyntheticWorkflow = (
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  runId: RunId,
+  observationOf: SyntheticTrackerGraphObservationFactory
+) =>
+  runSyntheticWorkflowWithBootstrap(target, initialControlPolicy, runId, observationOf).pipe(
     Effect.provide(syntheticJournaledRunLayer(runId))
   )

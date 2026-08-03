@@ -23,10 +23,10 @@ import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authoriti
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
-  acceptedTrackerGraphObservationOf,
   TrackerGraphRelation,
   boundedParallelTickets,
   currentSignalOf,
@@ -37,6 +37,7 @@ import {
   PlannedAttemptExecutorTerminalEvidence,
   TrackerGraphState
 } from "./relations.js"
+import type { AcceptedTrackerGraphObservation } from "./relations.js"
 import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
@@ -73,7 +74,16 @@ const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) =>
 }
 
 const acceptedGraphState = (snapshot: ReturnType<typeof acceptedGraph>) =>
-  TrackerGraphState.cases.GraphEstablished.make({ observation: acceptedTrackerGraphObservationOf(snapshot) })
+  TrackerGraphState.cases.GraphEstablished.make({
+    observation: {
+      _tag: "AcceptedTrackerGraphObservation",
+      snapshot,
+      operationId: OperationId.make(`fixture:${snapshot.revision}`),
+      contentIdentity: snapshot.revision,
+      acceptedAt: JournalPosition.make(1),
+      freshness: { _tag: "ObservedDuringLogicalRead", operationId: OperationId.make(`fixture:${snapshot.revision}`) }
+    } satisfies AcceptedTrackerGraphObservation
+  })
 
 const exactAttemptEvidence = (taskId: TaskId) => ({
   _tag: "ResponsibilityFacts" as const,
@@ -506,7 +516,7 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   expect(`${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`).not.toMatch(
     /(?:\.\.\/admission\/controller|\.\.\/run\/|\b(?:Effect|Queue|Ref|Semaphore|WorkflowInterpreter)\b)/
   )
-  expect(runSource.match(/\bdeliveryRuntime\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
 })
 

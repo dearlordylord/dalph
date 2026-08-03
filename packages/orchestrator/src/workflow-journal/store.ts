@@ -109,11 +109,18 @@ export class AcceptedJournalHistoryInvalid extends Schema.TaggedErrorClass<Accep
   { acceptedPosition: JournalPosition, detail: Schema.String, runId: RunId }
 ) {}
 
+/** An accepted graph publication had no complete observation metadata to carry forward. */
+export class AcceptedTrackerGraphObservationMissing extends Schema.TaggedErrorClass<AcceptedTrackerGraphObservationMissing>()(
+  "AcceptedTrackerGraphObservationMissing",
+  { graphRevision: Schema.String, runId: RunId }
+) {}
+
 /** A durable append could not be reconciled with the process-local accepted prefix. */
 export type AcceptedFactPublicationError =
   | AcceptedJournalHistoryInvalid
   | AcceptedJournalPositionGap
   | AcceptedJournalRecordMismatch
+  | AcceptedTrackerGraphObservationMissing
 
 /** The fresh-start boundary submitted an identity whose Run already began. */
 export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(

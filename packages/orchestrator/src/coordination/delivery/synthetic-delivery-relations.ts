@@ -1,6 +1,7 @@
 import { plannedAttemptExecutorCorrelation, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { initialRunPolicyRevision, RunControlPolicy, type InitialControlPolicy } from "../../control/policy.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
@@ -16,9 +17,10 @@ import { ticketDeliveryEvidenceOf } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
+  currentSignalOf,
   DeliveryRelationRevision,
-  acceptedTrackerGraphObservationOf,
   TrackerGraphState,
+  type AcceptedTrackerGraphObservation,
   type CurrentSignal,
   type DeliveryInvalidation,
   type DeliveryRuntimeFacts,
@@ -30,7 +32,6 @@ import {
 interface SyntheticDeliveryState {
   readonly facts: ReadonlyArray<FreshWorkflowActionFact>
   readonly graph: TrackerGraphStateType
-  readonly graphOperationId: OperationId | null
   readonly probe: TrackerGraphActionProposal | null
 }
 
@@ -39,6 +40,7 @@ interface SyntheticDeliveryBundle {
   readonly graph: TrackerGraphStateType
   readonly policy: RunControlPolicy
   readonly proposalContributions: ReturnType<typeof deliveryProposalsOf>
+  readonly reflectionProposals: ReadonlyArray<never>
   readonly runtimeFacts: DeliveryRuntimeFacts
   readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
 }
@@ -67,16 +69,16 @@ const activeSyntheticAttempts = (
 
 const applySyntheticProposalResult = (
   current: SyntheticDeliveryState,
-  result: Extract<DeliveryInvalidation, { readonly _tag: "ProposalCompleted" }>["result"]
+  result: Extract<DeliveryInvalidation, { readonly _tag: "ProposalCompleted" }>["result"],
+  observationOf: SyntheticTrackerGraphObservationFactory
 ): SyntheticDeliveryState => {
   switch (result?._tag) {
     case "TrackerGraphObservationPublished":
       return {
         ...current,
         graph: TrackerGraphState.cases.GraphEstablished.make({
-          observation: acceptedTrackerGraphObservationOf(result.snapshot)
-        }),
-        graphOperationId: result.operationId
+          observation: observationOf(result.operationId, result.snapshot)
+        })
       }
     case "FreshWorkflowActionFactProduced":
       return { ...current, facts: [...current.facts, result.fact] }
@@ -100,6 +102,12 @@ const applySyntheticProposalResult = (
   }
 }
 
+/** Supplies explicit domain-shaped graph observations to the controlled synthetic boundary. */
+export type SyntheticTrackerGraphObservationFactory = (
+  operationId: OperationId,
+  snapshot: TaskDagSnapshot
+) => AcceptedTrackerGraphObservation
+
 /**
  * Supplies the same flat delivery algebra with process-local accepted facts.
  * Synthetic facts advance dry/test projections but never enter the journal or
@@ -108,7 +116,8 @@ const applySyntheticProposalResult = (
 export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeSyntheticLayer")(function* (
   runId: RunId,
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy
+  initialControlPolicy: InitialControlPolicy,
+  observationOf: SyntheticTrackerGraphObservationFactory
 ) {
   const policy = RunControlPolicy.make({
     revision: initialRunPolicyRevision,
@@ -117,18 +126,17 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
   const source = yield* Ref.make<SyntheticDeliveryState>({
     facts: [],
     graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-    graphOperationId: null,
     probe: null
   })
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
 
   const deriveBundle = (current: SyntheticDeliveryState, currentRevision: DeliveryRelationRevision) => {
     const frame: CurrentDeliveryFrame | undefined =
-      current.graph._tag === "GraphEstablished" && current.graphOperationId !== null
+      current.graph._tag === "GraphEstablished"
         ? {
             _tag: "SyntheticCurrentDeliveryFrame",
-            currentGraph: current.graph.snapshot,
-            currentGraphOperationId: current.graphOperationId,
+            currentGraph: current.graph.observation.snapshot,
+            currentGraphOperationId: current.graph.observation.operationId,
             pause: emptyPause,
             responsibility: emptyResponsibilities,
             runControlPolicy: policy,
@@ -147,6 +155,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
         runId,
         transitions: fresh.map(({ transition }) => transition)
       }),
+      reflectionProposals: [],
       runtimeFacts: {
         acceptedAt: null,
         quiescence: { _tag: "QuiescenceProbeAllowed" },
@@ -184,7 +193,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
     }
     if (cause._tag === "ProposalCompleted") {
       yield* Ref.update(source, (current) => {
-        const next = applySyntheticProposalResult(current, cause.result)
+        const next = applySyntheticProposalResult(current, cause.result, observationOf)
         return next.probe?.id === cause.proposalId ? { ...next, probe: null } : next
       })
     }
@@ -199,12 +208,13 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    exactEvidence: signal(({ exactEvidence }) => exactEvidence),
-    graph: signal(({ graph }) => graph),
+    exactEvidence: currentSignalOf([]),
+    graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
     invalidate,
-    policy: signal(({ policy }) => policy),
+    policy: currentSignalOf(policy),
     proposalContributions: signal(({ proposalContributions }) => proposalContributions),
     runtimeFacts: signal(({ runtimeFacts }) => runtimeFacts),
-    trackerGraphProposals: signal(({ trackerGraphProposals }) => trackerGraphProposals)
+    trackerGraphProposals: signal(({ trackerGraphProposals }) => trackerGraphProposals),
+    coherent: signal((bundle) => bundle)
   })
 })
