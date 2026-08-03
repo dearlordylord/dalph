@@ -69,7 +69,10 @@ export const zipCurrentSignals = <A, EA, B, EB>(
  * remain part of the observation even when a later read has equal graph
  * contents.
  */
+const AcceptedTrackerGraphObservationTypeId: unique symbol = Symbol("AcceptedTrackerGraphObservation")
+
 export interface AcceptedTrackerGraphObservation {
+  readonly [AcceptedTrackerGraphObservationTypeId]: typeof AcceptedTrackerGraphObservationTypeId
   readonly _tag: "AcceptedTrackerGraphObservation"
   readonly snapshot: TaskDagSnapshot
   readonly operationId: OperationId
@@ -77,6 +80,21 @@ export interface AcceptedTrackerGraphObservation {
   readonly acceptedAt: JournalPosition
   readonly freshness: { readonly _tag: "ObservedDuringLogicalRead"; readonly operationId: OperationId }
 }
+
+/** Constructs accepted graph authority with content identity and freshness derived from one operation. */
+export const makeAcceptedTrackerGraphObservation = (input: {
+  readonly snapshot: TaskDagSnapshot
+  readonly operationId: OperationId
+  readonly acceptedAt: JournalPosition
+}): AcceptedTrackerGraphObservation => ({
+  [AcceptedTrackerGraphObservationTypeId]: AcceptedTrackerGraphObservationTypeId,
+  _tag: "AcceptedTrackerGraphObservation",
+  snapshot: input.snapshot,
+  operationId: input.operationId,
+  contentIdentity: input.snapshot.revision,
+  acceptedAt: input.acceptedAt,
+  freshness: { _tag: "ObservedDuringLogicalRead", operationId: input.operationId }
+})
 
 /** The current usable graph is either absent or already normalized and structurally validated. */
 export type TrackerGraphState =
@@ -562,43 +580,33 @@ export const deliveryProposalFrontierOf = (
 
 /** Assembles the final descriptive value and pure proposal frontier returned by the flat Effect. */
 export const makeDeliveryRuntimeRelation = <E>(input: {
+  /** Canonical descriptive current; runtime snapshots never reconstruct it from action-plan inputs. */
+  readonly delivery: CurrentSignal<DeliveryConsequences, E>
   readonly facts: CurrentSignal<DeliveryRuntimeFacts, E>
-  readonly reflection: DeliveryReflectionRelation<E>
   readonly trackerGraph: TrackerGraphRelationService
+  /** Legacy action-plan contributions retained outside the descriptive delivery relation. */
+  readonly proposalContributions: CurrentSignal<DeliveryProposalContributions, E>
+  readonly reflectionProposals: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, E>
   readonly invalidate: DeliveryRuntimeRelation<E>["invalidate"]
-  /** Compatibility scheduling suppresses an idle probe while a real action is available. */
-  readonly suppressQuiescenceProbeWithWork?: boolean
 }): DeliveryRuntimeRelation<E | DeliveryRelationSourceError> => {
-  const snapshot = mapCurrentSignal(input.reflection.current, (reflection) => ({
+  const snapshot = mapCurrentSignal(input.delivery, (delivery) => ({
     _tag: "DeliveryRuntimeSnapshot" as const,
-    reflection,
-    settlements: reflection.source,
-    ticketDeliveries: reflection.source.source,
-    trackerGraph: reflection.source.source.source.source.source
+    reflection: delivery.trackerConsequences,
+    settlements: delivery.settlements,
+    ticketDeliveries: delivery.ticketDeliveries,
+    trackerGraph: delivery.graph
   }))
-  const lower = input.reflection.source.source
   const contributions = zipCurrentSignals(
     snapshot,
     zipCurrentSignals(
       input.trackerGraph.proposedActions,
-      zipCurrentSignals(lower.proposalContributions, input.reflection.proposedActions)
+      zipCurrentSignals(input.proposalContributions, input.reflectionProposals)
     )
   )
   const proposedActions = mapCurrentSignal(contributions, ([current, [tracker, [lowerContributions, reflection]]]) => {
     const lower = [lowerContributions.ticketDelivery, lowerContributions.deliverySettlement, reflection]
     const trackerProposals = trackerProposalsFor(current.trackerGraph, tracker)
-    const hasNonProbeWork = lower.some((proposals) =>
-      proposals.some(({ route }) => route._tag !== "TrackerGraphReadRoute" || route.purpose !== "QuiescenceProbe")
-    )
-    return deliveryProposalFrontierOf(
-      [
-        input.suppressQuiescenceProbeWithWork && hasNonProbeWork
-          ? trackerProposals.filter(({ route }) => route.purpose !== "QuiescenceProbe")
-          : trackerProposals,
-        ...lower
-      ],
-      lowerContributions.issues
-    )
+    return deliveryProposalFrontierOf([trackerProposals, ...lower], lowerContributions.issues)
   })
   const evaluations = mapCurrentSignal(
     zipCurrentSignals(zipCurrentSignals(snapshot, proposedActions), input.facts),

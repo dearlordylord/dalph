@@ -134,7 +134,6 @@ export {
   AcceptedJournalHistoryInvalid,
   AcceptedJournalPositionGap,
   AcceptedJournalRecordMismatch,
-  AcceptedTrackerGraphObservationMissing,
   JournalDataCorruption,
   type JournalAppendError,
   JournalSchemaIncompatible,
@@ -353,6 +352,7 @@ export {
   DeliverySettlementError,
   TicketDeliveryError,
   TrackerGraphRelationError,
+  makeAcceptedTrackerGraphObservation,
   type AcceptedTrackerGraphObservation,
   type DeliveryConsequences
 } from "./coordination/delivery/relations.js"

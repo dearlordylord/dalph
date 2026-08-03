@@ -18,12 +18,12 @@ import {
   AcceptedJournalHistoryInvalid,
   AcceptedJournalPositionGap,
   AcceptedJournalRecordMismatch,
-  AcceptedTrackerGraphObservationMissing,
   InRunJournal,
   InRunJournalRunMismatch
 } from "../../workflow-journal/store.js"
 import {
   mapCurrentSignal,
+  makeAcceptedTrackerGraphObservation,
   TrackerGraphRelation,
   TrackerGraphRelationError,
   TrackerGraphState,
@@ -102,7 +102,7 @@ const readOpenPublication = (
 const latestGraphObservationFrom = (
   records: ReadonlyArray<JournalRecord>,
   snapshot: TaskDagSnapshot
-): AcceptedTrackerGraphObservation | undefined => {
+): AcceptedTrackerGraphObservation => {
   let latest: AcceptedTrackerGraphObservation | undefined
   for (const record of records) {
     if (record.event._tag !== "TaskTrackerFactsObserved") continue
@@ -113,34 +113,24 @@ const latestGraphObservationFrom = (
     ) {
       continue
     }
-    const firstFamily = observation.factFamilies[0]
-    latest = {
-      _tag: "AcceptedTrackerGraphObservation",
+    latest = makeAcceptedTrackerGraphObservation({
       snapshot,
       operationId: observation.operationId,
-      contentIdentity: firstFamily.contentIdentity,
-      acceptedAt: record.position,
-      freshness: firstFamily.freshness
-    }
+      acceptedAt: record.position
+    })
   }
-  return latest
+  return Option.getOrThrow(Option.fromUndefinedOr(latest))
 }
 
 const graphStateFrom = (
-  runId: RunId,
   reconstructed: ReconstructedRunState,
   records: ReadonlyArray<JournalRecord>
-): TrackerGraphState | AcceptedTrackerGraphObservationMissing =>
+): TrackerGraphState =>
   Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
       const observation = latestGraphObservationFrom(records, graph)
-      /* v8 ignore start -- validated graph reconstruction always carries its accepted observation metadata. */
-      if (observation === undefined) {
-        return new AcceptedTrackerGraphObservationMissing({ graphRevision: String(graph.revision), runId })
-      }
-      /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
       return TrackerGraphState.cases.GraphEstablished.make({ observation })
     }
   })
@@ -160,17 +150,13 @@ const reduceAccepted = (
   prior: AcceptedFactPublicationState
 ):
   | AcceptedFactPublicationState
-  | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }>
-  | AcceptedTrackerGraphObservationMissing => {
+  | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }> => {
   const reduced = reduceWorkflowJournalHistory(runId, records)
   if (reduced._tag === "InvalidWorkflowJournalHistory") return reduced
   const appliedPosition = Option.getOrThrow(Option.fromUndefinedOr(records.at(lastElementOffset))).position
   const graph = acceptedGraphWasPublished(records, prior.appliedPosition)
-    ? graphStateFrom(runId, reduced.runState, records)
+    ? graphStateFrom(reduced.runState, records)
     : prior.graph
-  /* v8 ignore start -- the missing-observation branch above is fail-closed and defensive. */
-  if (graph._tag === "AcceptedTrackerGraphObservationMissing") return graph
-  /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
   return { _tag: "AcceptedFactPublicationState", appliedPosition, graph, reconstructed: reduced.runState, records }
 }
 
@@ -271,9 +257,6 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
           }
           const records = [...before.records, accepted]
           const next = reduceAccepted(runId, records, before)
-          /* v8 ignore start -- publication fails closed if defensive graph reconstruction ever reports a missing observation. */
-          if (next._tag === "AcceptedTrackerGraphObservationMissing") return yield* failPublication(next)
-          /* v8 ignore stop -- defensive missing-observation failure remains fail-closed. */
           if (next._tag === "InvalidWorkflowJournalHistory") {
             const failure = new AcceptedJournalHistoryInvalid({
               acceptedPosition: accepted.position,

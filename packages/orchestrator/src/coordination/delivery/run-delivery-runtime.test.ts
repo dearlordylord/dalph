@@ -41,8 +41,10 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   currentSignalOf,
+  makeAcceptedTrackerGraphObservation,
   type DeliveryActionProposal,
   DeliveryRelationRevision,
+  type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeRelation,
   TrackerGraphState
@@ -126,9 +128,20 @@ const baseEvaluation = Effect.gen(function* () {
     Effect.provide(
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
-        exactEvidence: currentSignalOf([]),
-        graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
-        policy: currentSignalOf(policy)
+        coherent: currentSignalOf({
+          exactEvidence: [],
+          graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
+          policy,
+          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+          reflectionProposals: [],
+          runtimeFacts: {
+            acceptedAt: null,
+            quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
+            revision: DeliveryRelationRevision.make(0),
+            taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+          },
+          trackerGraphProposals: []
+        } satisfies DeliveryRelationInputBundle)
       })
     )
   )
@@ -408,35 +421,39 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         currentRevision: Ref.get(revision),
         withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
       },
-      exactEvidence: currentSignalOf([
-        {
-          _tag: "ResponsibilityFacts" as const,
-          facts: {
-            _tag: "PlannedAttemptExecutorFreshFacts" as const,
-            disposition: ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" }),
-            responsibility: {
-              _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
-              beganAt: JournalPosition.make(1),
-              plannedAttempt
+      coherent: currentSignalOf({
+        exactEvidence: [
+          {
+            _tag: "ResponsibilityFacts" as const,
+            facts: {
+              _tag: "PlannedAttemptExecutorFreshFacts" as const,
+              disposition: ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" }),
+              responsibility: {
+                _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+                beganAt: JournalPosition.make(1),
+                plannedAttempt
+              }
             }
           }
-        }
-      ]),
-      graph: currentSignalOf(
-        TrackerGraphState.cases.GraphEstablished.make({
-          observation: {
-            _tag: "AcceptedTrackerGraphObservation",
+        ],
+        graph: TrackerGraphState.cases.GraphEstablished.make({
+          observation: makeAcceptedTrackerGraphObservation({
             snapshot: projected.snapshot,
             operationId: OperationId.make("fixture:unreadable-A-independent-B"),
-            contentIdentity: projected.snapshot.revision,
-            acceptedAt: JournalPosition.make(1),
-            freshness: {
-              _tag: "ObservedDuringLogicalRead",
-              operationId: OperationId.make("fixture:unreadable-A-independent-B")
-            }
-          }
-        })
-      ),
+            acceptedAt: JournalPosition.make(1)
+          })
+        }),
+        policy,
+        proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+        reflectionProposals: [],
+        runtimeFacts: {
+          acceptedAt: null,
+          quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
+          revision: DeliveryRelationRevision.make(0),
+          taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+        },
+        trackerGraphProposals: []
+      } satisfies DeliveryRelationInputBundle),
       invalidate: () =>
         Effect.gen(function* () {
           yield* SubscriptionRef.update(proposalContributions, (current) => ({ ...current, ticketDelivery: [] }))
@@ -444,7 +461,6 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
           yield* SubscriptionRef.update(runtimeFacts, (current) => ({ ...current, revision: next }))
           return next
         }),
-      policy: currentSignalOf(policy),
       proposalContributions: { changes: SubscriptionRef.changes(proposalContributions) },
       runtimeFacts: { changes: SubscriptionRef.changes(runtimeFacts) }
     })

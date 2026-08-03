@@ -33,6 +33,7 @@ import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   DeliveryRelationRevision,
+  type DeliveryRelationInputBundle,
   type DeliveryRuntimeRelation,
   mapCurrentSignal,
   type TrackerGraphState
@@ -76,13 +77,29 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
   const gate = yield* Semaphore.make(1)
   const revision = yield* Ref.make(initialRevision)
   const signal = { changes: SubscriptionRef.changes(state) }
+  const coherent = mapCurrentSignal(
+    signal,
+    ({ revision: currentRevision }): DeliveryRelationInputBundle => ({
+      exactEvidence: [],
+      graph,
+      policy,
+      proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+      reflectionProposals: [],
+      runtimeFacts: {
+        acceptedAt,
+        quiescence: { _tag: "QuiescenceProbeAllowed" },
+        revision: currentRevision,
+        taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+      },
+      trackerGraphProposals: []
+    })
+  )
   return makeDeliveryRelationsLayer({
     evaluationConsistency: {
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    exactEvidence: mapCurrentSignal(signal, () => []),
-    graph: mapCurrentSignal(signal, () => graph),
+    coherent,
     invalidate: (cause) =>
       gate.withPermit(
         Ref.updateAndGet(revision, (current) => DeliveryRelationRevision.make(current + 1)).pipe(
@@ -97,7 +114,6 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
           )
         )
       ),
-    policy: mapCurrentSignal(signal, () => policy),
     runtimeFacts: mapCurrentSignal(signal, ({ revision }) => ({
       acceptedAt,
       quiescence: { _tag: "QuiescenceProbeAllowed" },

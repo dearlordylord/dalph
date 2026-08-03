@@ -1,9 +1,7 @@
 import { plannedAttemptExecutorCorrelation, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { initialRunPolicyRevision, RunControlPolicy, type InitialControlPolicy } from "../../control/policy.js"
-import type { OperationId } from "../../workflow/identity.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import type { FreshWorkflowActionFact } from "../run/fresh-workflow-fact.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
@@ -16,11 +14,9 @@ import {
 import { ticketDeliveryEvidenceOf } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { AcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
 import {
-  currentSignalOf,
   DeliveryRelationRevision,
-  TrackerGraphState,
-  type AcceptedTrackerGraphObservation,
   type CurrentSignal,
   type DeliveryInvalidation,
   type DeliveryRuntimeFacts,
@@ -69,17 +65,11 @@ const activeSyntheticAttempts = (
 
 const applySyntheticProposalResult = (
   current: SyntheticDeliveryState,
-  result: Extract<DeliveryInvalidation, { readonly _tag: "ProposalCompleted" }>["result"],
-  observationOf: SyntheticTrackerGraphObservationFactory
+  result: Extract<DeliveryInvalidation, { readonly _tag: "ProposalCompleted" }>["result"]
 ): SyntheticDeliveryState => {
   switch (result?._tag) {
     case "TrackerGraphObservationPublished":
-      return {
-        ...current,
-        graph: TrackerGraphState.cases.GraphEstablished.make({
-          observation: observationOf(result.operationId, result.snapshot)
-        })
-      }
+      return current
     case "FreshWorkflowActionFactProduced":
       return { ...current, facts: [...current.facts, result.fact] }
     case "ExecutorReportPublished":
@@ -102,32 +92,23 @@ const applySyntheticProposalResult = (
   }
 }
 
-/** Supplies explicit domain-shaped graph observations to the controlled synthetic boundary. */
-export type SyntheticTrackerGraphObservationFactory = (
-  operationId: OperationId,
-  snapshot: TaskDagSnapshot
-) => AcceptedTrackerGraphObservation
-
 /**
  * Supplies the same flat delivery algebra with process-local accepted facts.
- * Synthetic facts advance dry/test projections but never enter the journal or
- * claim authority beyond this scoped runtime.
+ * Synthetic executor facts remain process-local; graph observations cross the
+ * ordinary accepted journal boundary before they enter the public delivery.
  */
 export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeSyntheticLayer")(function* (
   runId: RunId,
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy,
-  observationOf: SyntheticTrackerGraphObservationFactory
+  initialControlPolicy: InitialControlPolicy
 ) {
   const policy = RunControlPolicy.make({
     revision: initialRunPolicyRevision,
     taskExecutionCapacity: initialControlPolicy.taskExecutionCapacity
   })
-  const source = yield* Ref.make<SyntheticDeliveryState>({
-    facts: [],
-    graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-    probe: null
-  })
+  const gateway = yield* AcceptedFactPublicationGateway
+  const initialAccepted = yield* gateway.readCurrent
+  const source = yield* Ref.make<SyntheticDeliveryState>({ facts: [], graph: initialAccepted.graph, probe: null })
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
 
   const deriveBundle = (current: SyntheticDeliveryState, currentRevision: DeliveryRelationRevision) => {
@@ -157,7 +138,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       }),
       reflectionProposals: [],
       runtimeFacts: {
-        acceptedAt: null,
+        acceptedAt: current.graph._tag === "GraphEstablished" ? current.graph.observation.acceptedAt : null,
         quiescence: { _tag: "QuiescenceProbeAllowed" },
         revision: currentRevision,
         taskWork: { capacity: policy.taskExecutionCapacity, held: activeSyntheticAttempts(current.facts) }
@@ -192,9 +173,11 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       )
     }
     if (cause._tag === "ProposalCompleted") {
+      const accepted = yield* gateway.readCurrent.pipe(Effect.orDie)
       yield* Ref.update(source, (current) => {
-        const next = applySyntheticProposalResult(current, cause.result, observationOf)
-        return next.probe?.id === cause.proposalId ? { ...next, probe: null } : next
+        const next = applySyntheticProposalResult(current, cause.result)
+        const withGraph = { ...next, graph: accepted.graph }
+        return withGraph.probe?.id === cause.proposalId ? { ...withGraph, probe: null } : withGraph
       })
     }
     return yield* publish
@@ -208,10 +191,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    exactEvidence: currentSignalOf([]),
-    graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
     invalidate,
-    policy: currentSignalOf(policy),
     proposalContributions: signal(({ proposalContributions }) => proposalContributions),
     runtimeFacts: signal(({ runtimeFacts }) => runtimeFacts),
     trackerGraphProposals: signal(({ trackerGraphProposals }) => trackerGraphProposals),

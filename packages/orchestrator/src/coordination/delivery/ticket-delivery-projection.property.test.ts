@@ -20,6 +20,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   TrackerGraphState,
+  makeAcceptedTrackerGraphObservation,
   type ExactTicketDeliveryEvidence,
   type AcceptedTrackerGraphObservation
 } from "./relations.js"
@@ -32,14 +33,7 @@ import {
 
 const fixtureObservation = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObservation => {
   const operationId = OperationId.make(`fixture:${snapshot.revision}`)
-  return {
-    _tag: "AcceptedTrackerGraphObservation",
-    snapshot,
-    operationId,
-    contentIdentity: snapshot.revision,
-    acceptedAt: JournalPosition.make(1),
-    freshness: { _tag: "ObservedDuringLogicalRead", operationId }
-  }
+  return makeAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(1) })
 }
 
 it("keeps bounded selection invariant under tracker task permutation", () => {
@@ -81,7 +75,7 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
   )
 })
 
-it("retains an exact planned-attempt obligation under every graph placement and policy ceiling", () => {
+it("retains an exact planned-attempt obligation across every graph placement and exclusion reason", () => {
   const retainedTaskId = TaskId.make("Z")
   const plannedAttempt = PlannedTaskAttempt.make({
     attemptId: AttemptId.make("attempt:Z"),
@@ -108,9 +102,29 @@ it("retains an exact planned-attempt obligation under every graph placement and 
   fc.assert(
     fc.property(
       fc.integer({ min: 1, max: 8 }),
-      fc.constantFrom("eligible", "completed", "failed", "absent"),
+      fc.constantFrom(
+        "selected",
+        "eligibleOutsideBound",
+        "prerequisitesIncomplete",
+        "successfulCompletion",
+        "terminalWithoutSuccess",
+        "absent"
+      ),
       fc.array(fc.stringMatching(/^[A-Y]$/), { maxLength: 8 }),
-      (capacity, placement, neighbours) => {
+      (capacity, placement, generatedNeighbours) => {
+        const neighbours =
+          placement === "eligibleOutsideBound"
+            ? [
+                ...new Set([
+                  ...generatedNeighbours,
+                  ...Array.from({ length: capacity }, (_, index) => String.fromCharCode(65 + index))
+                ])
+              ]
+            : placement === "prerequisitesIncomplete"
+              ? ["P"]
+              : placement === "absent"
+                ? generatedNeighbours
+                : []
         const retained =
           placement === "absent"
             ? []
@@ -118,13 +132,15 @@ it("retains an exact planned-attempt obligation under every graph placement and 
                 {
                   id: retainedTaskId,
                   lifecycle:
-                    placement === "eligible"
+                    placement === "selected" ||
+                    placement === "eligibleOutsideBound" ||
+                    placement === "prerequisitesIncomplete"
                       ? TaskLifecycle.cases.Open.make({})
-                      : placement === "completed"
+                      : placement === "successfulCompletion"
                         ? TaskLifecycle.cases.CompletedSuccessfully.make({})
                         : TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
                   parentTaskId: null,
-                  prerequisiteIds: []
+                  prerequisiteIds: placement === "prerequisitesIncomplete" ? [TaskId.make("P")] : []
                 }
               ]
         const graphResult = TaskDagSnapshot.project(
@@ -156,7 +172,26 @@ it("retains an exact planned-attempt obligation under every graph placement and 
           [evidence]
         )
 
-        expect(projected.deliveries.some(({ taskId }) => taskId === retainedTaskId)).toBe(true)
+        const retainedDelivery = projected.deliveries.find(({ taskId }) => taskId === retainedTaskId)
+        expect(retainedDelivery).toBeDefined()
+        expect(retainedDelivery?.obligations).toHaveLength(1)
+        expect(retainedDelivery?.standings[0]?._tag).toBe("ResponsibilitySituation")
+
+        const expectedPlacement =
+          placement === "selected"
+            ? "Selected"
+            : placement === "eligibleOutsideBound"
+              ? "EligibleOutsideBound"
+              : placement === "absent"
+                ? "AbsentFromCurrentGraph"
+                : "GraphExcluded"
+        expect(retainedDelivery?.placement._tag).toBe(expectedPlacement)
+        if (placement === "prerequisitesIncomplete") {
+          expect(retainedDelivery?.placement).toMatchObject({
+            _tag: "GraphExcluded",
+            reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [TaskId.make("P")] }]
+          })
+        }
       }
     )
   )

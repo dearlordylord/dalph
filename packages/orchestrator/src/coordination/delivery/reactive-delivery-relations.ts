@@ -280,12 +280,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    /* v8 ignore start -- The reactive composition publishes `coherent` below; these split signals remain only for compatibility callers. */
-    exactEvidence: bundleSignal(({ exactEvidence }) => exactEvidence),
-    graph: bundleSignal(({ graph }) => graph),
     invalidate,
-    policy: bundleSignal(({ policy }) => policy),
-    /* v8 ignore stop -- The coherent publication is the sole descriptive source in this composition. */
     proposalContributions: bundleSignal(({ proposalContributions }) => proposalContributions),
     runtimeFacts: bundleSignal(({ runtimeFacts }) => runtimeFacts),
     trackerGraphProposals: bundleSignal(({ trackerGraphProposals }) => trackerGraphProposals),

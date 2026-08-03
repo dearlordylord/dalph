@@ -19,7 +19,7 @@ import { Effect, Exit, Option, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
+import { TaskLifecycle, TrackerRevision, TrackerSnapshot, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -31,18 +31,25 @@ import {
   boundedParallelTickets,
   currentSignalOf,
   deliveryFinalityOf,
+  DeliveryRelationRevision,
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
+  makeAcceptedTrackerGraphObservation,
   PlannedAttemptExecutorTerminalEvidence,
-  TrackerGraphState
+  TrackerGraphState,
+  zipCurrentSignals,
+  type DeliveryRelationInputBundle,
+  type CurrentSignal,
+  type TicketDeliveryEvidence
 } from "./relations.js"
-import type { AcceptedTrackerGraphObservation } from "./relations.js"
 import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
 } from "./in-memory-relations.js"
-import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { FreshWorkflowStep } from "./fresh-workflow-step.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 
 const policy = RunControlPolicy.make({
@@ -53,9 +60,32 @@ const policy = RunControlPolicy.make({
 const makeDeliveryRelationsLayer = (
   input: Omit<
     Parameters<typeof makeDeliveryRelationsLayerWithRuntime>[0],
-    "evaluationConsistency" | "invalidate" | "runtimeFacts"
-  >
-) => makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input })
+    "evaluationConsistency" | "invalidate" | "runtimeFacts" | "coherent"
+  > & {
+    readonly graph: CurrentSignal<TrackerGraphState>
+    readonly exactEvidence: CurrentSignal<ReadonlyArray<TicketDeliveryEvidence>>
+    readonly policy: CurrentSignal<RunControlPolicy>
+  }
+) => {
+  const coherent = mapCurrentSignal(
+    zipCurrentSignals(zipCurrentSignals(input.graph, input.exactEvidence), input.policy),
+    ([[graph, exactEvidence], currentPolicy]): DeliveryRelationInputBundle => ({
+      exactEvidence,
+      graph,
+      policy: currentPolicy,
+      proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+      reflectionProposals: [],
+      runtimeFacts: {
+        acceptedAt: null,
+        quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
+        revision: DeliveryRelationRevision.make(0),
+        taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
+      },
+      trackerGraphProposals: []
+    })
+  )
+  return makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input, coherent })
+}
 
 const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) => {
   const projected = TaskDagSnapshot.project(
@@ -75,14 +105,11 @@ const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) =>
 
 const acceptedGraphState = (snapshot: ReturnType<typeof acceptedGraph>) =>
   TrackerGraphState.cases.GraphEstablished.make({
-    observation: {
-      _tag: "AcceptedTrackerGraphObservation",
+    observation: makeAcceptedTrackerGraphObservation({
       snapshot,
       operationId: OperationId.make(`fixture:${snapshot.revision}`),
-      contentIdentity: snapshot.revision,
-      acceptedAt: JournalPosition.make(1),
-      freshness: { _tag: "ObservedDuringLogicalRead", operationId: OperationId.make(`fixture:${snapshot.revision}`) }
-    } satisfies AcceptedTrackerGraphObservation
+      acceptedAt: JournalPosition.make(1)
+    })
   })
 
 const exactAttemptEvidence = (taskId: TaskId) => ({
@@ -292,6 +319,59 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
       proposals: [{ id: proposal.id, route: { purpose: "EstablishCurrentGraph" } }]
     })
     expect(frontiers.at(-1)).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+  })
+)
+
+it.effect("keeps legacy action chronology while current comes from the coherent delivery", () =>
+  Effect.gen(function* () {
+    const task: Task = {
+      id: TaskId.make("legacy-action-task"),
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+    const predecessorOperationId = OperationId.make("legacy-action-predecessor")
+    const step = FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId, task })
+    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId: task.id,
+      taskRevision: TaskRevision.make("legacy-action-revision")
+    })
+    const lowerProposal = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [{ step, transition }],
+      runId: RunId.make("legacy-action-run"),
+      transitions: [transition]
+    }).ticketDelivery[0]
+    if (lowerProposal === undefined) return yield* Effect.die("fixture must derive a lower proposal")
+    const probe = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(2),
+      purpose: "QuiescenceProbe",
+      runId: RunId.make("legacy-action-run"),
+      target: FixtureTarget.make("legacy-action-target")
+    })
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(acceptedGraphState(acceptedGraph("canonical-delivery-current"))),
+          policy: currentSignalOf(policy),
+          proposalContributions: currentSignalOf({
+            deliverySettlement: [],
+            issues: [],
+            ticketDelivery: [lowerProposal]
+          }),
+          trackerGraphProposals: currentSignalOf([probe])
+        })
+      )
+    )
+
+    const current = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
+    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
+    expect(current.trackerGraph._tag).toBe("GraphEstablished")
+    if (current.trackerGraph._tag === "GraphEstablished") {
+      expect(current.trackerGraph.observation.snapshot.revision).toBe("canonical-delivery-current")
+    }
+    expect(frontier).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
   })
 )
 

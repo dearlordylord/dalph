@@ -7,11 +7,10 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { OperationId } from "../../workflow/identity.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
@@ -21,14 +20,6 @@ import { JournaledRunBootstrap, runRecoveredWorkflow, runSyntheticWorkflowWithBo
 import { runSyntheticWorkflow } from "./synthetic-workflow.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-const syntheticObservationOf = (operationId: OperationId, snapshot: TaskDagSnapshot) => ({
-  _tag: "AcceptedTrackerGraphObservation" as const,
-  snapshot,
-  operationId,
-  contentIdentity: snapshot.revision,
-  acceptedAt: JournalPosition.make(1),
-  freshness: { _tag: "ObservedDuringLogicalRead" as const, operationId }
-})
 const programDependencies = Layer.mergeAll(
   Layer.mock(OperationIdAllocator, {}),
   Layer.mock(PlannedTaskAttemptPlanner, {}),
@@ -123,7 +114,7 @@ it.effect("hands synthetic execution to the flat runtime through the explicit no
     })
 
     expect(
-      yield* runSyntheticWorkflowWithBootstrap(target, policy, runId, syntheticObservationOf).pipe(
+      yield* runSyntheticWorkflowWithBootstrap(target, policy, runId).pipe(
         Effect.provideService(JournaledRunBootstrap, bootstrap),
         Effect.provide(programDependencies)
       )
@@ -137,12 +128,7 @@ it.effect("lets the public synthetic workflow terminate from its settled current
     const projected = projectTrackerSnapshot({ revision: "synthetic-settled", tasks: [] })
     if (projected._tag === "Invalid") return yield* Effect.die("the empty synthetic graph must be valid")
     const target = FixtureTarget.make("synthetic-settled-target")
-    const finality = yield* runSyntheticWorkflow(
-      target,
-      policy,
-      RunId.make("synthetic-settled-run"),
-      syntheticObservationOf
-    ).pipe(
+    const finality = yield* runSyntheticWorkflow(target, policy, RunId.make("synthetic-settled-run")).pipe(
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(

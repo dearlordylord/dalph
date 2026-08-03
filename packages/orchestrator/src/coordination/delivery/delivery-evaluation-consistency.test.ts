@@ -12,10 +12,11 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   DeliveryRelationRevision,
+  makeAcceptedTrackerGraphObservation,
   mapCurrentSignal,
+  type DeliveryRelationInputBundle,
   type DeliveryRuntimeFacts,
-  TrackerGraphState,
-  type AcceptedTrackerGraphObservation
+  TrackerGraphState
 } from "./relations.js"
 
 const graph = (revision: string, taskId: TaskId) => {
@@ -28,14 +29,11 @@ const graph = (revision: string, taskId: TaskId) => {
   if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: {
-      _tag: "AcceptedTrackerGraphObservation",
+    observation: makeAcceptedTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
-      contentIdentity: projected.snapshot.revision,
-      acceptedAt: JournalPosition.make(1),
-      freshness: { _tag: "ObservedDuringLogicalRead", operationId }
-    } satisfies AcceptedTrackerGraphObservation
+      acceptedAt: JournalPosition.make(1)
+    })
   })
 }
 
@@ -70,6 +68,18 @@ it.effect("never combines runtime facts from one accepted revision with another 
     const permitSampling = yield* Deferred.make<void>()
     const sampleCount = yield* Ref.make(0)
     const signal = { changes: SubscriptionRef.changes(input) }
+    const coherent = mapCurrentSignal(
+      signal,
+      ({ facts, graph, policy }): DeliveryRelationInputBundle => ({
+        exactEvidence: [],
+        graph,
+        policy,
+        proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+        reflectionProposals: [],
+        runtimeFacts: facts,
+        trackerGraphProposals: []
+      })
+    )
     const layer = makeDeliveryRelationsLayer({
       evaluationConsistency: {
         currentRevision: Ref.get(revision),
@@ -87,9 +97,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
             )
           )
       },
-      exactEvidence: { changes: Stream.make([]) },
-      graph: mapCurrentSignal(signal, ({ graph }) => graph),
-      policy: mapCurrentSignal(signal, ({ policy }) => policy),
+      coherent,
       invalidate: () => Ref.get(revision),
       runtimeFacts: mapCurrentSignal(signal, ({ facts }) => facts)
     })

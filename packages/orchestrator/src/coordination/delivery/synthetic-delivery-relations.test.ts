@@ -10,25 +10,24 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
 import { DeliveryRelationRevision } from "./relations.js"
 import { makeSyntheticDeliveryRelationsLayer } from "./synthetic-delivery-relations.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
-import type { OperationId } from "../../workflow/identity.js"
-import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { AcceptedFactPublicationGateway, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { JournalStore } from "../../workflow-journal/store.js"
 
 it.effect("keeps synthetic quiescence and non-fact action outcomes process-local", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layer = yield* makeSyntheticDeliveryRelationsLayer(
-        RunId.make("synthetic-invalidation-run"),
-        FixtureTarget.make("synthetic-invalidation-target"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-        (operationId: OperationId, snapshot: TaskDagSnapshot) => ({
-          _tag: "AcceptedTrackerGraphObservation" as const,
-          snapshot,
-          operationId,
-          contentIdentity: snapshot.revision,
-          acceptedAt: JournalPosition.make(1),
-          freshness: { _tag: "ObservedDuringLogicalRead" as const, operationId }
-        })
+      const runId = RunId.make("synthetic-invalidation-run")
+      const target = FixtureTarget.make("synthetic-invalidation-target")
+      const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      const storage = yield* JournalStore
+      yield* storage.beginRun(runId, target, initialPolicy)
+      const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+      if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+      const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
+      const layer = yield* makeSyntheticDeliveryRelationsLayer(runId, target, initialPolicy).pipe(
+        Effect.provideService(AcceptedFactPublicationGateway, gateway)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const proposalId = DeliveryProposalId.make("synthetic-invalidation-proposal")
@@ -56,5 +55,5 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
 
       expect(revisions).toEqual([1, 2, 3, 4, 5].map((revision) => DeliveryRelationRevision.make(revision)))
     })
-  )
+  ).pipe(Effect.provide(memoryJournalStoreLayer))
 )

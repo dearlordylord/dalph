@@ -29,10 +29,7 @@ import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-deliver
 import type { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { TrackerGraphRelation } from "../delivery/relations.js"
 import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
-import {
-  makeSyntheticDeliveryRelationsLayer,
-  type SyntheticTrackerGraphObservationFactory
-} from "../delivery/synthetic-delivery-relations.js"
+import { makeSyntheticDeliveryRelationsLayer } from "../delivery/synthetic-delivery-relations.js"
 import { makeSyntheticDeliveryActionExecutor } from "../delivery/synthetic-delivery-action-executor.js"
 import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -206,8 +203,7 @@ export const runRecoveredWorkflow = (target: TrackerTarget) =>
 export const runSyntheticWorkflowWithBootstrap = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
-  runId: RunId,
-  observationOf: SyntheticTrackerGraphObservationFactory
+  runId: RunId
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
@@ -216,7 +212,7 @@ export const runSyntheticWorkflowWithBootstrap = (
       initialControlPolicy,
       runId,
       runFlatDelivery(
-        makeSyntheticDeliveryRelationsLayer(runId, target, initialControlPolicy, observationOf),
+        makeSyntheticDeliveryRelationsLayer(runId, target, initialControlPolicy),
         makeSyntheticDeliveryActionExecutor(runId, target)
       )
     )

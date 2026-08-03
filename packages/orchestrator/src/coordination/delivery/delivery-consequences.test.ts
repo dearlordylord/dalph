@@ -28,6 +28,7 @@ import {
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
+  makeAcceptedTrackerGraphObservation,
   makeDeliveryRuntimeRelation,
   reflectDeliverySettlements,
   TrackerGraphState,
@@ -39,11 +40,7 @@ import {
 } from "./relations.js"
 import { delivery } from "./delivery.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
-import {
-  deterministicDeliveryRuntimeSupport,
-  makeDeliveryRelationsLayer,
-  makeDeliveryRuntimeReflection
-} from "./in-memory-relations.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 
 const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
@@ -75,14 +72,7 @@ const graphSnapshot = (
 
 const fixtureObservation = (snapshot: TaskDagSnapshot, operation: string, acceptedAt: number) => {
   const operationId = OperationId.make(operation)
-  return {
-    _tag: "AcceptedTrackerGraphObservation" as const,
-    snapshot,
-    operationId,
-    contentIdentity: snapshot.revision,
-    acceptedAt: JournalPosition.make(acceptedAt),
-    freshness: { _tag: "ObservedDuringLogicalRead" as const, operationId }
-  }
+  return makeAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(acceptedAt) })
 }
 
 const acceptedGraph = (
@@ -95,14 +85,6 @@ const acceptedGraph = (
   const observation: AcceptedTrackerGraphObservation = fixtureObservation(snapshot, operation, acceptedAt)
   return TrackerGraphState.cases.GraphEstablished.make({ observation })
 }
-
-const layerFor = (graph: TrackerGraphState) =>
-  makeDeliveryRelationsLayer({
-    ...deterministicDeliveryRuntimeSupport(policy),
-    graph: currentSignalOf(graph),
-    exactEvidence: currentSignalOf([]),
-    policy: currentSignalOf(policy)
-  })
 
 const syntheticEvidence = (taskId: TaskId): TicketDeliveryEvidence => {
   const plannedAttempt = PlannedTaskAttempt.make({
@@ -142,6 +124,16 @@ const coherentBundle = (
   },
   trackerGraphProposals: []
 })
+
+const layerFor = (
+  graph: TrackerGraphState,
+  exactEvidence: ReadonlyArray<TicketDeliveryEvidence> = [],
+  currentPolicy: RunControlPolicy = policy
+) =>
+  makeDeliveryRelationsLayer({
+    ...deterministicDeliveryRuntimeSupport(currentPolicy),
+    coherent: currentSignalOf(coherentBundle(graph, currentPolicy, exactEvidence))
+  })
 
 it.effect("emits one coherent delivery value from accepted graph observation G1", () =>
   Effect.gen(function* () {
@@ -193,13 +185,7 @@ it.effect("emits one consequence per accepted publication without mixed graph po
         coherentBundle(graphTwo, policyTwo, [syntheticEvidence(TaskId.make("B"))])
       ])
     }
-    const layer = makeDeliveryRelationsLayer({
-      ...deterministicDeliveryRuntimeSupport(policyOne),
-      coherent,
-      graph: currentSignalOf(graphOne),
-      exactEvidence: currentSignalOf([]),
-      policy: currentSignalOf(policyOne)
-    })
+    const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })
 
     const signal = yield* delivery.pipe(Effect.provide(layer))
     const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))
@@ -235,13 +221,7 @@ it.effect("evaluates every coherent projection owner from the shared publication
     const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
       changes: Stream.fromIterable([coherentBundle(graph, policy, [])])
     }
-    const layer = makeDeliveryRelationsLayer({
-      ...deterministicDeliveryRuntimeSupport(policy),
-      coherent,
-      graph: currentSignalOf(graph),
-      exactEvidence: currentSignalOf([]),
-      policy: currentSignalOf(policy)
-    })
+    const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policy), coherent })
 
     yield* Effect.gen(function* () {
       const consequences = yield* delivery
@@ -264,25 +244,17 @@ it.effect("evaluates every coherent projection owner from the shared publication
       yield* reflectDeliverySettlements(settlements).pipe(
         Effect.flatMap((signal) => signal.changes.pipe(Stream.runCollect))
       )
-      const runtimeReflection = makeDeliveryRuntimeReflection({
-        delivery: consequences,
-        proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [] }),
-        reflectionProposals: currentSignalOf([])
-      })
-      yield* runtimeReflection.ticketRelation.current.changes.pipe(Stream.runCollect)
-      yield* runtimeReflection.ticketRelation.proposedActions.changes.pipe(Stream.runCollect)
-      yield* runtimeReflection.ticketRelation.source.changes.pipe(Stream.runCollect)
-      yield* runtimeReflection.settlementRelation.current.changes.pipe(Stream.runCollect)
-      yield* runtimeReflection.settlementRelation.proposedActions.changes.pipe(Stream.runCollect)
       const directRuntime = makeDeliveryRuntimeRelation({
+        delivery: consequences,
         facts: currentSignalOf({
           acceptedAt: null,
           quiescence: { _tag: "QuiescenceProbeAllowed" as const },
           revision: DeliveryRelationRevision.make(0),
           taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
         }),
-        reflection: runtimeReflection.reflection,
         trackerGraph,
+        proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [] }),
+        reflectionProposals: currentSignalOf([]),
         invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0))
       })
       yield* directRuntime.evaluations.changes.pipe(Stream.runCollect)
@@ -319,9 +291,7 @@ it.effect("retains an exact responsibility with its changed graph placement", ()
       Effect.provide(
         makeDeliveryRelationsLayer({
           ...deterministicDeliveryRuntimeSupport(policy),
-          graph: currentSignalOf(graph),
-          exactEvidence: currentSignalOf([evidence]),
-          policy: currentSignalOf(policy)
+          coherent: currentSignalOf(coherentBundle(graph, policy, [evidence]))
         })
       )
     )
@@ -339,9 +309,9 @@ it.effect("reacts to G2 while the composition remains running", () =>
     const graphTwo = acceptedGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
-      graph: { changes: Stream.fromIterable([graphOne, graphTwo]) },
-      exactEvidence: currentSignalOf([]),
-      policy: currentSignalOf(policy)
+      coherent: {
+        changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
+      }
     })
     const signal = yield* delivery.pipe(Effect.provide(layer))
     const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))
@@ -368,9 +338,9 @@ it.effect("emits G1 and equal-content G2 with distinct accepted observation iden
     const graphTwo = acceptedGraph("equal-content", [{ id: "A" }], "logical-read-G2", 11)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
-      graph: { changes: Stream.fromIterable([graphOne, graphTwo]) },
-      exactEvidence: currentSignalOf([]),
-      policy: currentSignalOf(policy)
+      coherent: {
+        changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
+      }
     })
     const signal = yield* delivery.pipe(Effect.provide(layer))
     const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))

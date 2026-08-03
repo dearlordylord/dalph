@@ -30,7 +30,7 @@ import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
 import {
   TrackerGraphState,
-  type AcceptedTrackerGraphObservation,
+  makeAcceptedTrackerGraphObservation,
   type ExactTicketDeliveryEvidence,
   type TicketDeliveryEvidence
 } from "./relations.js"
@@ -52,14 +52,11 @@ const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: {
-      _tag: "AcceptedTrackerGraphObservation",
+    observation: makeAcceptedTrackerGraphObservation({
       snapshot: projected.snapshot,
       operationId,
-      contentIdentity: projected.snapshot.revision,
-      acceptedAt: JournalPosition.make(1),
-      freshness: { _tag: "ObservedDuringLogicalRead", operationId }
-    } satisfies AcceptedTrackerGraphObservation
+      acceptedAt: JournalPosition.make(1)
+    })
   })
 }
 
