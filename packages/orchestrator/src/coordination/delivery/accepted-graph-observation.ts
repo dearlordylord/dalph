@@ -9,14 +9,8 @@ import type {
   UnchangedTaskTrackerFactsReconfirmed
 } from "../../workflow/task-tracker-facts/observation.js"
 
-const AcceptedTrackerGraphObservationTypeId: unique symbol = Symbol("AcceptedTrackerGraphObservation")
-
-/**
- * One accepted complete or unchanged graph observation. The private brand means
- * only the accepted journal boundary can place graph authority into delivery.
- */
-export interface AcceptedTrackerGraphObservation {
-  readonly [AcceptedTrackerGraphObservationTypeId]: typeof AcceptedTrackerGraphObservationTypeId
+/** Validated descriptive graph fields before the gateway applies its private authority brand. */
+export interface AcceptedGraphObservationFields {
   readonly _tag: "AcceptedTrackerGraphObservation"
   readonly snapshot: TaskDagSnapshot
   readonly operationId: OperationId
@@ -51,18 +45,15 @@ const completeSnapshotMatchesFacts = (
   return JSON.stringify(expectedTasks) === JSON.stringify(observedTasks)
 }
 
-/**
- * Validates a gateway-owned complete/reconfirmed receipt projection and mints
- * graph authority only when all cross-boundary facts agree.
- */
-export const acceptedTrackerGraphObservationFromAcceptedReceipt = <Receipt>(
+/** Validates a receipt projection without claiming accepted-journal authority. */
+export const acceptedGraphObservationFieldsFromReceipt = <Receipt>(
   receipt: Receipt,
   read: (receipt: Receipt) => {
     readonly event: TaskTrackerFactsObservedEvent
     readonly position: JournalPosition
     readonly snapshot: TaskDagSnapshot
   }
-): Option.Option<AcceptedTrackerGraphObservation> => {
+): Option.Option<AcceptedGraphObservationFields> => {
   const { event, position, snapshot } = read(receipt)
   if (!isAcceptedGraphEvent(event)) return Option.none()
   const { observation } = event
@@ -80,7 +71,6 @@ export const acceptedTrackerGraphObservationFromAcceptedReceipt = <Receipt>(
     position >= 1 &&
     snapshotMatches
     ? Option.some({
-        [AcceptedTrackerGraphObservationTypeId]: AcceptedTrackerGraphObservationTypeId,
         _tag: "AcceptedTrackerGraphObservation",
         snapshot,
         operationId,

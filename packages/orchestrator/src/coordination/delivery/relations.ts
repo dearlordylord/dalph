@@ -9,7 +9,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema, Stream } from "effect"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
-import type { AcceptedTrackerGraphObservation } from "./accepted-graph-observation.js"
+import type { AcceptedTrackerGraphObservation } from "./accepted-fact-gateway.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
@@ -70,7 +70,7 @@ const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
  * remain part of the observation even when a later read has equal graph
  * contents.
  */
-export type { AcceptedTrackerGraphObservation } from "./accepted-graph-observation.js"
+export type { AcceptedTrackerGraphObservation } from "./accepted-fact-gateway.js"
 
 /** The current usable graph is either absent or already normalized and structurally validated. */
 export type TrackerGraphState =

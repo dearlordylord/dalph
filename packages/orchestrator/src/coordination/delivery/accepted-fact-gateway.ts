@@ -22,8 +22,8 @@ import {
 } from "../../workflow-journal/store.js"
 import { TrackerGraphState, type CurrentSignal } from "./relations.js"
 import {
-  acceptedTrackerGraphObservationFromAcceptedReceipt,
-  type AcceptedTrackerGraphObservation
+  acceptedGraphObservationFieldsFromReceipt,
+  type AcceptedGraphObservationFields
 } from "./accepted-graph-observation.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type {
@@ -35,6 +35,12 @@ import type {
 const lastElementOffset = -1
 
 const AcceptedGraphReceiptTypeId: unique symbol = Symbol("AcceptedGraphReceipt")
+const AcceptedTrackerGraphObservationTypeId: unique symbol = Symbol("AcceptedTrackerGraphObservation")
+
+/** Accepted graph authority can only be branded inside this gateway boundary. */
+export interface AcceptedTrackerGraphObservation extends AcceptedGraphObservationFields {
+  readonly [AcceptedTrackerGraphObservationTypeId]: typeof AcceptedTrackerGraphObservationTypeId
+}
 
 /** The accepted journal prefix and its process-local projections at one exact position. */
 export interface AcceptedFactPublicationState {
@@ -124,6 +130,18 @@ const acceptedGraphReceiptFromEvent = (input: {
   snapshot: input.snapshot
 })
 
+const acceptedTrackerGraphObservationFromAcceptedReceipt = (
+  receipt: AcceptedGraphReceipt
+): Option.Option<AcceptedTrackerGraphObservation> =>
+  Option.map(
+    acceptedGraphObservationFieldsFromReceipt(receipt, ({ event, position, snapshot }) => ({
+      event,
+      position,
+      snapshot
+    })),
+    (fields) => ({ [AcceptedTrackerGraphObservationTypeId]: AcceptedTrackerGraphObservationTypeId, ...fields })
+  )
+
 const latestGraphObservationFrom = (
   records: ReadonlyArray<JournalRecord>,
   snapshot: TaskDagSnapshot,
@@ -138,10 +156,7 @@ const latestGraphObservationFrom = (
     latest = { event: record.event, position: record.position }
   }
   return Option.flatMap(Option.fromUndefinedOr(latest), ({ event, position }) =>
-    acceptedTrackerGraphObservationFromAcceptedReceipt(
-      acceptedGraphReceiptFromEvent({ event, position, snapshot }),
-      ({ event, position, snapshot }) => ({ event, position, snapshot })
-    )
+    acceptedTrackerGraphObservationFromAcceptedReceipt(acceptedGraphReceiptFromEvent({ event, position, snapshot }))
   )
 }
 

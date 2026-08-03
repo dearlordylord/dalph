@@ -17,10 +17,10 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { acceptedTrackerGraphObservationFromAcceptedReceipt } from "./accepted-graph-observation.js"
+import { acceptedGraphObservationFieldsFromReceipt } from "./accepted-graph-observation.js"
 import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 
-it("mints fixtures through the accepted journal-record boundary", () => {
+it("mints fixtures through a test accepted-journal gateway", () => {
   const projected = TaskDagSnapshot.project(
     TrackerSnapshot.make({ revision: TrackerRevision.make("fixture-observation"), tasks: [] })
   )
@@ -34,7 +34,7 @@ it("mints fixtures through the accepted journal-record boundary", () => {
 
   expect(observation.operationId).toBe(OperationId.make("fixture-observation-operation"))
   expect(observation.contentIdentity).toBe(TrackerRevision.make("fixture-observation"))
-  expect(observation.acceptedAt).toBe(JournalPosition.make(1))
+  expect(observation.acceptedAt).toBe(JournalPosition.make(3))
 })
 
 it("rejects a complete graph receipt paired with a different reduced snapshot", () => {
@@ -56,7 +56,7 @@ it("rejects a complete graph receipt paired with a different reduced snapshot", 
 
   expect(
     Option.isNone(
-      acceptedTrackerGraphObservationFromAcceptedReceipt(
+      acceptedGraphObservationFieldsFromReceipt(
         { event, position: JournalPosition.make(1), snapshot: second.snapshot },
         ({ event, position, snapshot }) => ({ event, position, snapshot })
       )
@@ -85,7 +85,7 @@ it("rejects a focused non-graph event at the observation boundary", () => {
 
   expect(
     Option.isNone(
-      acceptedTrackerGraphObservationFromAcceptedReceipt(
+      acceptedGraphObservationFieldsFromReceipt(
         { event, position: JournalPosition.make(1), snapshot: projected.snapshot },
         ({ event, position, snapshot }) => ({ event, position, snapshot })
       )
