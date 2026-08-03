@@ -80,18 +80,18 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
   const coherent = mapCurrentSignal(
     signal,
     ({ revision: currentRevision }): DeliveryRelationInputBundle => ({
-      exactEvidence: [],
-      graph,
-      policy,
-      proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-      reflectionProposals: [],
-      runtimeFacts: {
-        acceptedAt,
-        quiescence: { _tag: "QuiescenceProbeAllowed" },
-        revision: currentRevision,
-        taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+      legacy: {
+        proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+        reflectionProposals: [],
+        runtimeFacts: {
+          acceptedAt,
+          quiescence: { _tag: "QuiescenceProbeAllowed" },
+          revision: currentRevision,
+          taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+        },
+        trackerGraphProposals: []
       },
-      trackerGraphProposals: []
+      publication: { exactEvidence: [], graph, policy }
     })
   )
   return makeDeliveryRelationsLayer({

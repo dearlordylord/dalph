@@ -44,8 +44,8 @@ const executeSyntheticTrackerGraphRead = Effect.fn("DeliveryAction.executeSynthe
 })
 
 /**
- * Interprets the synthetic executor boundary without asserting journal facts.
- * Every other action uses the same leaf adapters as journaled delivery.
+ * Interprets the synthetic executor boundary: graph reads journal ordinary intent and outcome facts before
+ * publishing an accepted snapshot, while other actions use the same leaf adapters as live delivery.
  */
 export const makeSyntheticDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.makeSynthetic")(function* (
   runId: RunId,

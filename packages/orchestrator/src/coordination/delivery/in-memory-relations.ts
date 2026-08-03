@@ -3,10 +3,10 @@ import type { RunControlPolicy } from "../../control/policy.js"
 import {
   BoundedParallelTicketsProjection,
   currentSignalOf,
+  DeliveryPublication,
   DeliveryReflectionProjection,
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
-  makeDeliveryConsequences,
   makeDeliveryReflection,
   makeDeliveryRuntimeRelation,
   makeDeliverySettlements,
@@ -20,13 +20,14 @@ import {
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
   type DeliveryRelationInputBundle,
+  type DeliveryGraphPublication,
   type DeliveryConsequences,
   type DeliveryRelationSourceError,
   type TrackerGraphActionProposal,
   type TrackerGraphRelationService,
   zipCurrentSignals
 } from "./relations.js"
-import { boundedParallelTicketsOf, frontierOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
+import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
@@ -40,7 +41,7 @@ export interface DeliveryRelationsLayerInput {
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
   readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
   readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
-  /** One current-first publication carrying every descriptive input together. */
+  /** One current-first input bundle carrying the descriptive publication and compatibility inputs together. */
   readonly coherent: CurrentSignal<DeliveryRelationInputBundle, DeliveryRelationSourceError>
 }
 
@@ -94,33 +95,28 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         : trackerProposals
     }
   )
-  const coherentConsequences: CurrentSignal<DeliveryConsequences, DeliveryRelationSourceError> = mapCurrentSignal(
+  const publication: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> = mapCurrentSignal(
     input.coherent,
-    ({ exactEvidence, graph, policy }) => {
-      const frontier = frontierOf(graph)
-      const tickets = boundedParallelTicketsOf(frontier, policy)
-      const ticketDeliveries = ticketDeliveriesOf(tickets, exactEvidence)
-      const settlements = makeDeliverySettlements(ticketDeliveries, [])
-      return makeDeliveryConsequences(makeDeliveryReflection(settlements))
-    }
+    ({ publication }) => publication
   )
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: actionPlanTrackerGraphProposals,
-    signal: mapCurrentSignal(coherentConsequences, ({ graph }) => graph)
+    signal: mapCurrentSignal(publication, ({ graph }) => graph)
   })
   const trackerGraph = Layer.succeed(TrackerGraphRelation, trackerGraphService)
+  const descriptivePublication = Layer.succeed(DeliveryPublication, DeliveryPublication.of({ signal: publication }))
   const bounded = Layer.succeed(
     BoundedParallelTicketsProjection,
-    BoundedParallelTicketsProjection.of({ of: () => mapCurrentSignal(coherentConsequences, ({ tickets }) => tickets) })
+    BoundedParallelTicketsProjection.of({ of: (frontier) => mapCurrentSignal(frontier, boundedParallelTicketsOf) })
   )
   const deliveries = Layer.succeed(
     TicketDeliveryProjection,
     TicketDeliveryProjection.of({
-      of: () => ({
-        current: mapCurrentSignal(coherentConsequences, ({ ticketDeliveries }) => ticketDeliveries),
+      of: (tickets) => ({
+        current: mapCurrentSignal(tickets, (current) => ticketDeliveriesOf(current, current.publication.exactEvidence)),
         proposalContributions,
         proposedActions: mapCurrentSignal(proposalContributions, ({ ticketDelivery }) => ticketDelivery),
-        source: mapCurrentSignal(coherentConsequences, ({ tickets: canonicalTickets }) => canonicalTickets)
+        source: tickets
       })
     })
   )
@@ -128,7 +124,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliverySettlementProjection,
     DeliverySettlementProjection.of({
       of: (relation) => ({
-        current: mapCurrentSignal(coherentConsequences, ({ settlements }) => settlements),
+        current: mapCurrentSignal(relation.current, (deliveries) => makeDeliverySettlements(deliveries, [])),
         proposalContributions: relation.proposalContributions,
         proposedActions: mapCurrentSignal(
           relation.proposalContributions,
@@ -142,7 +138,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliveryReflectionProjection,
     DeliveryReflectionProjection.of({
       of: (relation) => ({
-        current: mapCurrentSignal(coherentConsequences, ({ trackerConsequences }) => trackerConsequences),
+        current: mapCurrentSignal(relation.current, makeDeliveryReflection),
         proposedActions: reflectionProposals,
         source: relation
       })
@@ -206,5 +202,5 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     })
   )
 
-  return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection, runtime)
+  return Layer.mergeAll(descriptivePublication, trackerGraph, bounded, deliveries, settlements, reflection, runtime)
 }

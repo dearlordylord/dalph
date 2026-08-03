@@ -7,7 +7,6 @@ import {
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { TrackerTask } from "../../authorities/task-tracker/task.js"
 import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
-import type { RunControlPolicy } from "../../control/policy.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
@@ -18,6 +17,7 @@ import {
   type DeliveryFrontier,
   type DeliveryFrontierExclusion,
   type DeliveryFrontierStanding,
+  type DeliveryGraphPublication,
   type ExactWorkflowObligation,
   type TicketDeliveryEvidence,
   type TicketDeliveries,
@@ -51,8 +51,10 @@ const exclusionsFor = (
 }
 
 /** Exhaustively classifies an accepted complete graph without consulting workflow responsibility. */
-export const frontierOf = (graph: TrackerGraphState): DeliveryFrontier => {
-  if (graph._tag === "GraphNotEstablished") return { _tag: "DeliveryFrontier", source: graph, standings: [] }
+export const frontierOf = (graph: TrackerGraphState, publication: DeliveryGraphPublication): DeliveryFrontier => {
+  if (graph._tag === "GraphNotEstablished") {
+    return { _tag: "DeliveryFrontier", publication, source: graph, standings: [] }
+  }
   const tasks = new Map(graph.observation.snapshot.toWire().tasks.map((task) => [task.id, task] as const))
   const standings = [...tasks.values()]
     .map((task): DeliveryFrontierStanding => {
@@ -63,14 +65,12 @@ export const frontierOf = (graph: TrackerGraphState): DeliveryFrontier => {
         : { _tag: "Excluded", reasons: [firstReason, ...reasons.slice(1)], taskId: task.id }
     })
     .toSorted(compareTaskIds)
-  return { _tag: "DeliveryFrontier", source: graph, standings }
+  return { _tag: "DeliveryFrontier", publication, source: graph, standings }
 }
 
 /** Applies only deterministic graph ordering and configured policy; live positions are not an input. */
-export const boundedParallelTicketsOf = (
-  source: DeliveryFrontier,
-  policy: RunControlPolicy
-): BoundedParallelTickets => {
+export const boundedParallelTicketsOf = (source: DeliveryFrontier): BoundedParallelTickets => {
+  const policy = source.publication.policy
   let eligibleRank = 0
   const placements = source.standings.map(({ taskId, ...standing }) => {
     if (standing._tag === "Excluded") {
@@ -81,7 +81,7 @@ export const boundedParallelTicketsOf = (
       rank < policy.taskExecutionCapacity ? { _tag: "Selected", rank } : { _tag: "EligibleOutsideBound", rank }
     return { placement, taskId }
   })
-  return { _tag: "BoundedParallelTickets", placements, policy, source }
+  return { _tag: "BoundedParallelTickets", placements, policy, publication: source.publication, source }
 }
 
 /** Reads only the selected positive space from the exhaustive bounded placements. */

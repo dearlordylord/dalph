@@ -133,6 +133,8 @@ export type DeliveryFrontierStanding =
 /** Graph-only delivery evidence; workflow responsibility and runtime ownership are excluded. */
 export interface DeliveryFrontier {
   readonly _tag: "DeliveryFrontier"
+  /** The accepted graph, policy, and exact evidence published for this revision. */
+  readonly publication: DeliveryGraphPublication
   readonly source: TrackerGraphState
   readonly standings: ReadonlyArray<DeliveryFrontierStanding>
 }
@@ -155,6 +157,8 @@ export type BoundedTicketPlacement =
 /** Desired graph tickets under policy, not admitted work or held runtime positions. */
 export interface BoundedParallelTickets {
   readonly _tag: "BoundedParallelTickets"
+  /** The same accepted descriptive publication carried through bounded admission. */
+  readonly publication: DeliveryGraphPublication
   readonly placements: ReadonlyArray<{ readonly placement: BoundedTicketPlacement; readonly taskId: TaskId }>
   readonly policy: RunControlPolicy
   readonly source: DeliveryFrontier
@@ -359,6 +363,15 @@ export class TrackerGraphRelation extends Context.Service<TrackerGraphRelation, 
   "@dalph/TrackerGraphRelation"
 ) {}
 
+/** Accepted graph, policy, and exact evidence published as one descriptive delivery revision. */
+export interface DeliveryPublicationService {
+  readonly signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
+}
+
+export class DeliveryPublication extends Context.Service<DeliveryPublication, DeliveryPublicationService>()(
+  "@dalph/DeliveryPublication"
+) {}
+
 export interface TicketDeliveryRelation<E = TicketDeliveryError> {
   /** Current broad lifecycle derived from desired tickets and exact lower obligations. */
   readonly current: CurrentSignal<TicketDeliveries, E>
@@ -445,15 +458,28 @@ export interface DeliveryRuntimeFacts {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
 }
 
-/** One accepted publication consumed by every descriptive delivery stage. */
-export interface DeliveryRelationInputBundle {
+/** Current descriptive inputs published together for one delivery revision. */
+export interface DeliveryGraphPublication {
+  /** Exact accepted workflow and executor observations retained by ticket projection. */
   readonly exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
+  /** Accepted tracker graph used to construct the graph frontier. */
   readonly graph: TrackerGraphState
+  /** Run policy used to bound eligible graph tickets. */
   readonly policy: RunControlPolicy
+}
+
+/** Legacy action planning and runtime facts kept outside the descriptive chain. */
+export interface DeliveryLegacyInputs {
   readonly proposalContributions: DeliveryProposalContributions
   readonly reflectionProposals: ReadonlyArray<DeliveryActionProposal>
   readonly runtimeFacts: DeliveryRuntimeFacts
   readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
+}
+
+/** One current-first bundle containing the descriptive publication and compatibility inputs. */
+export interface DeliveryRelationInputBundle {
+  readonly legacy: DeliveryLegacyInputs
+  readonly publication: DeliveryGraphPublication
 }
 
 /** One coherent value consumed by the runtime action owner. */

@@ -129,18 +129,18 @@ const baseEvaluation = Effect.gen(function* () {
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent: currentSignalOf({
-          exactEvidence: [],
-          graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-          policy,
-          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-          reflectionProposals: [],
-          runtimeFacts: {
-            acceptedAt: null,
-            quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-            revision: DeliveryRelationRevision.make(0),
-            taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+          legacy: {
+            proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+            reflectionProposals: [],
+            runtimeFacts: {
+              acceptedAt: null,
+              quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
+              revision: DeliveryRelationRevision.make(0),
+              taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+            },
+            trackerGraphProposals: []
           },
-          trackerGraphProposals: []
+          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )
@@ -422,37 +422,41 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
       },
       coherent: currentSignalOf({
-        exactEvidence: [
-          {
-            _tag: "ResponsibilityFacts" as const,
-            facts: {
-              _tag: "PlannedAttemptExecutorFreshFacts" as const,
-              disposition: ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" }),
-              responsibility: {
-                _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
-                beganAt: JournalPosition.make(1),
-                plannedAttempt
+        legacy: {
+          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+          reflectionProposals: [],
+          runtimeFacts: {
+            acceptedAt: null,
+            quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
+            revision: DeliveryRelationRevision.make(0),
+            taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+          },
+          trackerGraphProposals: []
+        },
+        publication: {
+          exactEvidence: [
+            {
+              _tag: "ResponsibilityFacts" as const,
+              facts: {
+                _tag: "PlannedAttemptExecutorFreshFacts" as const,
+                disposition: ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" }),
+                responsibility: {
+                  _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+                  beganAt: JournalPosition.make(1),
+                  plannedAttempt
+                }
               }
             }
-          }
-        ],
-        graph: TrackerGraphState.cases.GraphEstablished.make({
-          observation: makeAcceptedTrackerGraphObservation({
-            snapshot: projected.snapshot,
-            operationId: OperationId.make("fixture:unreadable-A-independent-B"),
-            acceptedAt: JournalPosition.make(1)
-          })
-        }),
-        policy,
-        proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-        reflectionProposals: [],
-        runtimeFacts: {
-          acceptedAt: null,
-          quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-          revision: DeliveryRelationRevision.make(0),
-          taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
-        },
-        trackerGraphProposals: []
+          ],
+          graph: TrackerGraphState.cases.GraphEstablished.make({
+            observation: makeAcceptedTrackerGraphObservation({
+              snapshot: projected.snapshot,
+              operationId: OperationId.make("fixture:unreadable-A-independent-B"),
+              acceptedAt: JournalPosition.make(1)
+            })
+          }),
+          policy
+        }
       } satisfies DeliveryRelationInputBundle),
       invalidate: () =>
         Effect.gen(function* () {

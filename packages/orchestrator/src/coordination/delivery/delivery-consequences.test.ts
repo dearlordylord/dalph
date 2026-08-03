@@ -24,6 +24,7 @@ import {
   currentSignalOf,
   boundedParallelTickets,
   DeliveryReflectionProjection,
+  DeliveryPublication,
   DeliveryRelationRevision,
   deliverySettlements,
   executorResponsibilities,
@@ -33,6 +34,7 @@ import {
   reflectDeliverySettlements,
   TrackerGraphState,
   TrackerGraphRelation,
+  zipCurrentSignals,
   type AcceptedTrackerGraphObservation,
   type CurrentSignal,
   type DeliveryRelationInputBundle,
@@ -111,18 +113,18 @@ const coherentBundle = (
   currentPolicy: RunControlPolicy,
   exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
 ): DeliveryRelationInputBundle => ({
-  exactEvidence,
-  graph,
-  policy: currentPolicy,
-  proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-  reflectionProposals: [],
-  runtimeFacts: {
-    acceptedAt: null,
-    quiescence: { _tag: "QuiescenceProbeAllowed" },
-    revision: DeliveryRelationRevision.make(0),
-    taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
+  legacy: {
+    proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+    reflectionProposals: [],
+    runtimeFacts: {
+      acceptedAt: null,
+      quiescence: { _tag: "QuiescenceProbeAllowed" },
+      revision: DeliveryRelationRevision.make(0),
+      taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
+    },
+    trackerGraphProposals: []
   },
-  trackerGraphProposals: []
+  publication: { exactEvidence, graph, policy: currentPolicy }
 })
 
 const layerFor = (
@@ -226,8 +228,12 @@ it.effect("evaluates every coherent projection owner from the shared publication
     yield* Effect.gen(function* () {
       const consequences = yield* delivery
       const trackerGraph = yield* TrackerGraphRelation
+      const publication = yield* DeliveryPublication
       yield* trackerGraph.signal.changes.pipe(Stream.runCollect)
-      const frontier = mapCurrentSignal(trackerGraph.signal, frontierOf)
+      const frontier = mapCurrentSignal(
+        zipCurrentSignals(trackerGraph.signal, publication.signal),
+        ([currentGraph, currentPublication]) => frontierOf(currentGraph, currentPublication)
+      )
       const tickets = yield* boundedParallelTickets(frontier)
       yield* tickets.changes.pipe(Stream.runCollect)
       const deliveries = yield* executorResponsibilities(tickets)

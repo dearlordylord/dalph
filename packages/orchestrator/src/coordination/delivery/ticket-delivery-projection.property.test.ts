@@ -22,7 +22,8 @@ import {
   TrackerGraphState,
   makeAcceptedTrackerGraphObservation,
   type ExactTicketDeliveryEvidence,
-  type AcceptedTrackerGraphObservation
+  type AcceptedTrackerGraphObservation,
+  type DeliveryGraphPublication
 } from "./relations.js"
 import {
   boundedParallelTicketsOf,
@@ -35,6 +36,12 @@ const fixtureObservation = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObse
   const operationId = OperationId.make(`fixture:${snapshot.revision}`)
   return makeAcceptedTrackerGraphObservation({ snapshot, operationId, acceptedAt: JournalPosition.make(1) })
 }
+
+const publication = (graph: TrackerGraphState, policy: RunControlPolicy): DeliveryGraphPublication => ({
+  exactEvidence: [],
+  graph,
+  policy
+})
 
 it("keeps bounded selection invariant under tracker task permutation", () => {
   fc.assert(
@@ -67,7 +74,7 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
         })
 
-        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(graph), policy))).toEqual(
+        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(graph, publication(graph, policy))))).toEqual(
           ids.toSorted().slice(0, capacity)
         )
       }
@@ -161,14 +168,12 @@ it("retains an exact planned-attempt obligation across every graph placement and
         const graph = TrackerGraphState.cases.GraphEstablished.make({
           observation: fixtureObservation(graphResult.snapshot)
         })
+        const currentPolicy = RunControlPolicy.make({
+          revision: initialRunPolicyRevision,
+          taskExecutionCapacity: TaskWorkCapacity.make(capacity)
+        })
         const projected = ticketDeliveriesOf(
-          boundedParallelTicketsOf(
-            frontierOf(graph),
-            RunControlPolicy.make({
-              revision: initialRunPolicyRevision,
-              taskExecutionCapacity: TaskWorkCapacity.make(capacity)
-            })
-          ),
+          boundedParallelTicketsOf(frontierOf(graph, publication(graph, currentPolicy))),
           [evidence]
         )
 
@@ -190,6 +195,18 @@ it("retains an exact planned-attempt obligation across every graph placement and
           expect(retainedDelivery?.placement).toMatchObject({
             _tag: "GraphExcluded",
             reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [TaskId.make("P")] }]
+          })
+        }
+        if (placement === "successfulCompletion") {
+          expect(retainedDelivery?.placement).toMatchObject({
+            _tag: "GraphExcluded",
+            reasons: [{ _tag: "SuccessfulCompletion" }]
+          })
+        }
+        if (placement === "terminalWithoutSuccess") {
+          expect(retainedDelivery?.placement).toMatchObject({
+            _tag: "GraphExcluded",
+            reasons: [{ _tag: "TerminalWithoutSuccess" }]
           })
         }
       }

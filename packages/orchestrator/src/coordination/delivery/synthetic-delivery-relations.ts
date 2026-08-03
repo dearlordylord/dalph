@@ -17,10 +17,10 @@ import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { AcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
 import {
   DeliveryRelationRevision,
+  type DeliveryRelationInputBundle,
   type CurrentSignal,
   type DeliveryInvalidation,
   type DeliveryRuntimeFacts,
-  type TicketDeliveryEvidence,
   type TrackerGraphActionProposal,
   type TrackerGraphState as TrackerGraphStateType
 } from "./relations.js"
@@ -31,15 +31,7 @@ interface SyntheticDeliveryState {
   readonly probe: TrackerGraphActionProposal | null
 }
 
-interface SyntheticDeliveryBundle {
-  readonly exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
-  readonly graph: TrackerGraphStateType
-  readonly policy: RunControlPolicy
-  readonly proposalContributions: ReturnType<typeof deliveryProposalsOf>
-  readonly reflectionProposals: ReadonlyArray<never>
-  readonly runtimeFacts: DeliveryRuntimeFacts
-  readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
-}
+type SyntheticDeliveryBundle = DeliveryRelationInputBundle
 
 const emptyPause = ReconstructedPauseState.make({
   run: ReconstructedRunPauseState.cases.RunUnpaused.make({}),
@@ -126,29 +118,33 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
         : undefined
     const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame)
     return {
-      exactEvidence: frame === undefined ? [] : ticketDeliveryEvidenceOf(frame, []),
-      graph: current.graph,
-      policy,
-      proposalContributions: deliveryProposalsOf({
-        acceptedAt: null,
-        acceptedOperationIds: new Set(),
-        fresh,
-        runId,
-        transitions: fresh.map(({ transition }) => transition)
-      }),
-      reflectionProposals: [],
-      runtimeFacts: {
-        acceptedAt: current.graph._tag === "GraphEstablished" ? current.graph.observation.acceptedAt : null,
-        quiescence: { _tag: "QuiescenceProbeAllowed" },
-        revision: currentRevision,
-        taskWork: { capacity: policy.taskExecutionCapacity, held: activeSyntheticAttempts(current.facts) }
+      legacy: {
+        proposalContributions: deliveryProposalsOf({
+          acceptedAt: null,
+          acceptedOperationIds: new Set(),
+          fresh,
+          runId,
+          transitions: fresh.map(({ transition }) => transition)
+        }),
+        reflectionProposals: [],
+        runtimeFacts: {
+          acceptedAt: current.graph._tag === "GraphEstablished" ? current.graph.observation.acceptedAt : null,
+          quiescence: { _tag: "QuiescenceProbeAllowed" },
+          revision: currentRevision,
+          taskWork: { capacity: policy.taskExecutionCapacity, held: activeSyntheticAttempts(current.facts) }
+        },
+        trackerGraphProposals:
+          current.graph._tag === "GraphNotEstablished"
+            ? [trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })]
+            : current.probe === null
+              ? []
+              : [current.probe]
       },
-      trackerGraphProposals:
-        current.graph._tag === "GraphNotEstablished"
-          ? [trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })]
-          : current.probe === null
-            ? []
-            : [current.probe]
+      publication: {
+        exactEvidence: frame === undefined ? [] : ticketDeliveryEvidenceOf(frame, []),
+        graph: current.graph,
+        policy
+      }
     } satisfies SyntheticDeliveryBundle
   }
 
@@ -192,9 +188,9 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       withStableRevision: (effect) => gate.withPermit(effect)
     },
     invalidate,
-    proposalContributions: signal(({ proposalContributions }) => proposalContributions),
-    runtimeFacts: signal(({ runtimeFacts }) => runtimeFacts),
-    trackerGraphProposals: signal(({ trackerGraphProposals }) => trackerGraphProposals),
+    proposalContributions: signal(({ legacy }) => legacy.proposalContributions),
+    runtimeFacts: signal(({ legacy }) => legacy.runtimeFacts),
+    trackerGraphProposals: signal(({ legacy }) => legacy.trackerGraphProposals),
     coherent: signal((bundle) => bundle)
   })
 })

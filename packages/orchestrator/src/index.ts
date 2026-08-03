@@ -350,11 +350,15 @@ export {
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   DeliverySettlementError,
+  DeliveryPublication,
   TicketDeliveryError,
   TrackerGraphRelationError,
   makeAcceptedTrackerGraphObservation,
   type AcceptedTrackerGraphObservation,
-  type DeliveryConsequences
+  type DeliveryConsequences,
+  type DeliveryGraphPublication,
+  type DeliveryLegacyInputs,
+  type DeliveryRelationInputBundle
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryRuntimeProposalOwnershipConflict,

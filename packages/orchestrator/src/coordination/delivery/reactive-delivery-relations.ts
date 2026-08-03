@@ -185,20 +185,20 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       target
     )
     return {
-      exactEvidence,
-      graph: accepted.graph,
-      policy,
-      proposalContributions,
-      reflectionProposals: [],
-      runtimeFacts: {
-        acceptedAt: accepted.appliedPosition,
-        quiescence: runIsPaused
-          ? { _tag: "QuiescencePassive", reason: "RunPaused" }
-          : { _tag: "QuiescenceProbeAllowed" },
-        revision: currentRevision,
-        taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(accepted) }
+      legacy: {
+        proposalContributions,
+        reflectionProposals: [],
+        runtimeFacts: {
+          acceptedAt: accepted.appliedPosition,
+          quiescence: runIsPaused
+            ? { _tag: "QuiescencePassive", reason: "RunPaused" }
+            : { _tag: "QuiescenceProbeAllowed" },
+          revision: currentRevision,
+          taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(accepted) }
+        },
+        trackerGraphProposals
       },
-      trackerGraphProposals
+      publication: { exactEvidence, graph: accepted.graph, policy }
     } satisfies ReactiveDeliveryBundle
   })
 
@@ -281,9 +281,9 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       withStableRevision: (effect) => gate.withPermit(effect)
     },
     invalidate,
-    proposalContributions: bundleSignal(({ proposalContributions }) => proposalContributions),
-    runtimeFacts: bundleSignal(({ runtimeFacts }) => runtimeFacts),
-    trackerGraphProposals: bundleSignal(({ trackerGraphProposals }) => trackerGraphProposals),
+    proposalContributions: bundleSignal(({ legacy }) => legacy.proposalContributions),
+    runtimeFacts: bundleSignal(({ legacy }) => legacy.runtimeFacts),
+    trackerGraphProposals: bundleSignal(({ legacy }) => legacy.trackerGraphProposals),
     coherent: bundleSignal((bundle) => bundle)
   })
 })

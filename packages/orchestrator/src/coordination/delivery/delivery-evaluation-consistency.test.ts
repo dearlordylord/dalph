@@ -71,13 +71,13 @@ it.effect("never combines runtime facts from one accepted revision with another 
     const coherent = mapCurrentSignal(
       signal,
       ({ facts, graph, policy }): DeliveryRelationInputBundle => ({
-        exactEvidence: [],
-        graph,
-        policy,
-        proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-        reflectionProposals: [],
-        runtimeFacts: facts,
-        trackerGraphProposals: []
+        legacy: {
+          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+          reflectionProposals: [],
+          runtimeFacts: facts,
+          trackerGraphProposals: []
+        },
+        publication: { exactEvidence: [], graph, policy }
       })
     )
     const layer = makeDeliveryRelationsLayer({
