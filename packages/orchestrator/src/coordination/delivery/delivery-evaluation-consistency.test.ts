@@ -17,7 +17,7 @@ import {
   type DeliveryRuntimeFacts,
   TrackerGraphState
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 
 const graph = (revision: string, taskId: TaskId) => {
   const projected = TaskDagSnapshot.project(

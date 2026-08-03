@@ -48,7 +48,7 @@ import {
   type DeliveryRuntimeRelation,
   TrackerGraphState
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 import { DeliveryRuntimeProposalOwnershipConflict, runDeliveryRuntime } from "./run-delivery-runtime.js"
 import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 

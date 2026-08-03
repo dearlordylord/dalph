@@ -37,7 +37,7 @@ import {
   type DeliveryRelationInputBundle,
   type TicketDeliveryEvidence
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 import { delivery } from "./delivery.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"

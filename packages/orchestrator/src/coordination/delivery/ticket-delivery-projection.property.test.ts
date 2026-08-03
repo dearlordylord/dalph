@@ -24,7 +24,7 @@ import {
   type AcceptedTrackerGraphObservation,
   type DeliveryGraphPublication
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,

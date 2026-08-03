@@ -10,7 +10,6 @@ import type {
 } from "../../workflow/task-tracker-facts/observation.js"
 
 const AcceptedTrackerGraphObservationTypeId: unique symbol = Symbol("AcceptedTrackerGraphObservation")
-const AcceptedGraphReceiptTypeId: unique symbol = Symbol("AcceptedGraphReceipt")
 
 /**
  * One accepted complete or unchanged graph observation. The private brand means
@@ -33,29 +32,6 @@ const isAcceptedGraphEvent = (event: TaskTrackerFactsObservedEvent): event is Ac
   event.observation._tag === "CompleteTaskTrackerFacts" ||
   event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
 
-/** One complete/reconfirmed event and its already-reduced graph snapshot at one accepted position. */
-interface AcceptedGraphReceipt {
-  readonly [AcceptedGraphReceiptTypeId]: typeof AcceptedGraphReceiptTypeId
-  readonly event: AcceptedGraphEvent
-  readonly position: JournalPosition
-  readonly snapshot: TaskDagSnapshot
-}
-
-/** Narrows an accepted journal event into the opaque receipt consumed below. */
-export const acceptedGraphReceiptFromEvent = (input: {
-  readonly event: TaskTrackerFactsObservedEvent
-  readonly position: JournalPosition
-  readonly snapshot: TaskDagSnapshot
-}): Option.Option<AcceptedGraphReceipt> =>
-  isAcceptedGraphEvent(input.event)
-    ? Option.some({
-        [AcceptedGraphReceiptTypeId]: AcceptedGraphReceiptTypeId,
-        event: input.event,
-        position: input.position,
-        snapshot: input.snapshot
-      })
-    : Option.none()
-
 const completeSnapshotMatchesFacts = (
   observation: CompleteTaskTrackerFactsObserved,
   snapshot: TaskDagSnapshot
@@ -76,13 +52,19 @@ const completeSnapshotMatchesFacts = (
 }
 
 /**
- * Mints graph authority only from the gateway's accepted complete/reconfirmed
- * receipt. Invalid cross-boundary combinations produce no observation.
+ * Validates a gateway-owned complete/reconfirmed receipt projection and mints
+ * graph authority only when all cross-boundary facts agree.
  */
-export const acceptedTrackerGraphObservationFromAcceptedReceipt = (
-  receipt: AcceptedGraphReceipt
+export const acceptedTrackerGraphObservationFromAcceptedReceipt = <Receipt>(
+  receipt: Receipt,
+  read: (receipt: Receipt) => {
+    readonly event: TaskTrackerFactsObservedEvent
+    readonly position: JournalPosition
+    readonly snapshot: TaskDagSnapshot
+  }
 ): Option.Option<AcceptedTrackerGraphObservation> => {
-  const { event, position, snapshot } = receipt
+  const { event, position, snapshot } = read(receipt)
+  if (!isAcceptedGraphEvent(event)) return Option.none()
   const { observation } = event
   const firstFamily = observation.factFamilies[0]
   const contentIdentity = firstFamily.contentIdentity

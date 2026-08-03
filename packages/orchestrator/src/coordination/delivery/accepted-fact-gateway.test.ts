@@ -4,6 +4,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Stream } from "effec
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -103,6 +104,62 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
       expect(currentGraph.observation.contentIdentity).toBe(currentGraph.observation.snapshot.revision)
     }
     expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("does not publish complete graph facts for another tracker target", () =>
+  Effect.gen(function* () {
+    const foreignRunId = RunId.make("accepted-fact-foreign-target")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(foreignRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(foreignRunId, yield* storage.read(foreignRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const gateway = yield* makeAcceptedFactPublicationGateway(foreignRunId, target, initial, storage)
+
+    const localOperation = makeTrackerGraphObservationOperation(OperationId.make("foreign-target-local-read"), target)
+    yield* gateway.journal.append(
+      foreignRunId,
+      intentRecordKey(localOperation.operationId),
+      taskTrackerReadIntent(localOperation)
+    )
+    yield* gateway.journal.append(
+      foreignRunId,
+      outcomeRecordKey(localOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        localOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(localOperation, graph("local-target", ["A"]))
+      )
+    )
+    const beforeForeign = yield* gateway.readCurrent
+
+    const foreignTarget = FixtureTarget.make("accepted-fact-foreign-target-source")
+    const foreignOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("foreign-target-read"),
+      foreignTarget
+    )
+    yield* gateway.journal.append(
+      foreignRunId,
+      intentRecordKey(foreignOperation.operationId),
+      taskTrackerReadIntent(foreignOperation)
+    )
+    yield* gateway.journal.append(
+      foreignRunId,
+      outcomeRecordKey(foreignOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        foreignOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(foreignOperation, graph("foreign-target", ["B"]))
+      )
+    )
+
+    const afterForeign = yield* gateway.readCurrent
+    expect(afterForeign.appliedPosition).toBe(JournalPosition.make(5))
+    expect(afterForeign.graph).toEqual(beforeForeign.graph)
+    expect(afterForeign.graph._tag).toBe("GraphEstablished")
+    if (afterForeign.graph._tag === "GraphEstablished") {
+      expect(afterForeign.graph.observation.snapshot.revision).toBe(TrackerRevision.make("local-target"))
+      expect(afterForeign.graph.observation.operationId).toBe(localOperation.operationId)
+      expect(afterForeign.graph.observation.acceptedAt).toBe(JournalPosition.make(3))
+    }
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 

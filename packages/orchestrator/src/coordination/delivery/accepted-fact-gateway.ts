@@ -22,14 +22,19 @@ import {
 } from "../../workflow-journal/store.js"
 import { TrackerGraphState, type CurrentSignal } from "./relations.js"
 import {
-  acceptedGraphReceiptFromEvent,
   acceptedTrackerGraphObservationFromAcceptedReceipt,
   type AcceptedTrackerGraphObservation
 } from "./accepted-graph-observation.js"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import type { TaskTrackerFactsObservedEvent } from "../../workflow/task-tracker-facts/observation.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import type {
+  CompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsObservedEvent,
+  UnchangedTaskTrackerFactsReconfirmed
+} from "../../workflow/task-tracker-facts/observation.js"
 
 const lastElementOffset = -1
+
+const AcceptedGraphReceiptTypeId: unique symbol = Symbol("AcceptedGraphReceipt")
 
 /** The accepted journal prefix and its process-local projections at one exact position. */
 export interface AcceptedFactPublicationState {
@@ -91,67 +96,99 @@ const readOpenPublication = (
 ): Effect.Effect<AcceptedFactPublicationState, AcceptedFactPublicationError> =>
   status._tag === "PublicationOpen" ? Effect.succeed(status.value) : Effect.fail(status.failure)
 
-type AcceptedGraphJournalRecord = Pick<JournalRecord, "position"> & { readonly event: TaskTrackerFactsObservedEvent }
+type AcceptedGraphFacts = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
+type AcceptedGraphEvent = TaskTrackerFactsObservedEvent & { readonly observation: AcceptedGraphFacts }
+type AcceptedGraphJournalRecord = Pick<JournalRecord, "position"> & { readonly event: AcceptedGraphEvent }
+
+/** One complete/reconfirmed event accepted by this gateway's configured target. */
+interface AcceptedGraphReceipt {
+  readonly [AcceptedGraphReceiptTypeId]: typeof AcceptedGraphReceiptTypeId
+  readonly event: AcceptedGraphEvent
+  readonly position: JournalPosition
+  readonly snapshot: TaskDagSnapshot
+}
+
+const isAcceptedGraphEvent = (event: TaskTrackerFactsObservedEvent): event is AcceptedGraphEvent =>
+  event.observation._tag === "CompleteTaskTrackerFacts" ||
+  event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+
+/** Mints a receipt only after this gateway has selected a complete/reconfirmed event. */
+const acceptedGraphReceiptFromEvent = (input: {
+  readonly event: AcceptedGraphEvent
+  readonly position: JournalPosition
+  readonly snapshot: TaskDagSnapshot
+}): AcceptedGraphReceipt => ({
+  [AcceptedGraphReceiptTypeId]: AcceptedGraphReceiptTypeId,
+  event: input.event,
+  position: input.position,
+  snapshot: input.snapshot
+})
 
 const latestGraphObservationFrom = (
   records: ReadonlyArray<JournalRecord>,
-  snapshot: TaskDagSnapshot
+  snapshot: TaskDagSnapshot,
+  target: TrackerTarget
 ): Option.Option<AcceptedTrackerGraphObservation> => {
   let latest: AcceptedGraphJournalRecord | undefined
+  const targetKey = taskTrackerTargetKey(target)
   for (const record of records) {
     if (record.event._tag !== "TaskTrackerFactsObserved") continue
-    if (
-      record.event.observation._tag !== "CompleteTaskTrackerFacts" &&
-      record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
-    ) {
-      continue
-    }
+    if (!isAcceptedGraphEvent(record.event)) continue
+    if (taskTrackerTargetKey(record.event.observation.target) !== targetKey) continue
     latest = { event: record.event, position: record.position }
   }
   return Option.flatMap(Option.fromUndefinedOr(latest), ({ event, position }) =>
-    Option.flatMap(
+    acceptedTrackerGraphObservationFromAcceptedReceipt(
       acceptedGraphReceiptFromEvent({ event, position, snapshot }),
-      acceptedTrackerGraphObservationFromAcceptedReceipt
+      ({ event, position, snapshot }) => ({ event, position, snapshot })
     )
   )
 }
 
 const graphStateFrom = (
   reconstructed: ReconstructedRunState,
-  records: ReadonlyArray<JournalRecord>
+  records: ReadonlyArray<JournalRecord>,
+  target: TrackerTarget
 ): TrackerGraphState =>
   Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
-      return Option.match(latestGraphObservationFrom(records, graph), {
+      return Option.match(latestGraphObservationFrom(records, graph, target), {
         onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
         onSome: (observation) => TrackerGraphState.cases.GraphEstablished.make({ observation })
       })
     }
   })
 
-const acceptedGraphWasPublished = (records: ReadonlyArray<JournalRecord>, after: JournalPosition): boolean =>
-  records.some(
+const acceptedGraphWasPublished = (
+  records: ReadonlyArray<JournalRecord>,
+  after: JournalPosition,
+  target: TrackerTarget
+): boolean => {
+  const targetKey = taskTrackerTargetKey(target)
+  return records.some(
     ({ event, position }) =>
       position > after &&
       event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+      isAcceptedGraphEvent(event) &&
+      taskTrackerTargetKey(event.observation.target) === targetKey
   )
+}
 
 const reduceAccepted = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
-  prior: AcceptedFactPublicationState
+  prior: AcceptedFactPublicationState,
+  target: TrackerTarget
 ):
   | AcceptedFactPublicationState
   | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }> => {
   const reduced = reduceWorkflowJournalHistory(runId, records)
   if (reduced._tag === "InvalidWorkflowJournalHistory") return reduced
   const appliedPosition = Option.getOrThrow(Option.fromUndefinedOr(records.at(lastElementOffset))).position
-  const graph = acceptedGraphWasPublished(records, prior.appliedPosition)
-    ? graphStateFrom(reduced.runState, records)
+  const graph = acceptedGraphWasPublished(records, prior.appliedPosition, target)
+    ? graphStateFrom(reduced.runState, records, target)
     : prior.graph
   return { _tag: "AcceptedFactPublicationState", appliedPosition, graph, reconstructed: reduced.runState, records }
 }
@@ -163,7 +200,7 @@ const reduceAccepted = (
  */
 export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeGateway")(function* (
   runId: RunId,
-  _target: TrackerTarget,
+  target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
   storage: AcceptedFactJournalStorage
 ) {
@@ -252,7 +289,7 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
             return yield* failPublication(failure)
           }
           const records = [...before.records, accepted]
-          const next = reduceAccepted(runId, records, before)
+          const next = reduceAccepted(runId, records, before, target)
           if (next._tag === "InvalidWorkflowJournalHistory") {
             const failure = new AcceptedJournalHistoryInvalid({
               acceptedPosition: accepted.position,

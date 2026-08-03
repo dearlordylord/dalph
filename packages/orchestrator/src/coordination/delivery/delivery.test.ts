@@ -44,7 +44,7 @@ import {
   type CurrentSignal,
   type TicketDeliveryEvidence
 } from "./relations.js"
-import { makeTestAcceptedTrackerGraphObservation } from "./accepted-graph-observation.test.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime

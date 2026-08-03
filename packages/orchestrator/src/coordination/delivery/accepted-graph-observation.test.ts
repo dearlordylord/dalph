@@ -1,40 +1,24 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Option } from "effect"
+import { TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
+import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  acceptedGraphReceiptFromEvent,
-  acceptedTrackerGraphObservationFromAcceptedReceipt,
-  type AcceptedTrackerGraphObservation
-} from "./accepted-graph-observation.js"
-
-/** Test-only seam for pure projection fixtures; production minting uses accepted journal records. */
-export const makeTestAcceptedTrackerGraphObservation = (input: {
-  readonly snapshot: TaskDagSnapshot
-  readonly operationId: OperationId
-  readonly acceptedAt: JournalPosition
-}): AcceptedTrackerGraphObservation => {
-  const operation = makeTrackerGraphObservationOperation(input.operationId, FixtureTarget.make("test-graph-target"))
-  const event = taskTrackerFactsObservedEvent(
-    input.operationId,
-    makeCompleteTaskTrackerFactsObserved(operation, input.snapshot)
-  )
-  return Option.getOrThrow(
-    Option.flatMap(
-      acceptedGraphReceiptFromEvent({ event, position: input.acceptedAt, snapshot: input.snapshot }),
-      acceptedTrackerGraphObservationFromAcceptedReceipt
-    )
-  )
-}
+import { acceptedTrackerGraphObservationFromAcceptedReceipt } from "./accepted-graph-observation.js"
+import { makeTestAcceptedTrackerGraphObservation } from "../../../test/accepted-graph-observation.js"
 
 it("mints fixtures through the accepted journal-record boundary", () => {
   const projected = TaskDagSnapshot.project(
@@ -72,8 +56,38 @@ it("rejects a complete graph receipt paired with a different reduced snapshot", 
 
   expect(
     Option.isNone(
-      acceptedGraphReceiptFromEvent({ event, position: JournalPosition.make(1), snapshot: second.snapshot }).pipe(
-        Option.flatMap(acceptedTrackerGraphObservationFromAcceptedReceipt)
+      acceptedTrackerGraphObservationFromAcceptedReceipt(
+        { event, position: JournalPosition.make(1), snapshot: second.snapshot },
+        ({ event, position, snapshot }) => ({ event, position, snapshot })
+      )
+    )
+  ).toBe(true)
+})
+
+it("rejects a focused non-graph event at the observation boundary", () => {
+  const taskId = TaskId.make("focused-task")
+  const operation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("focused-operation"),
+    FixtureTarget.make("focused-target"),
+    taskId
+  )
+  const event = taskTrackerFactsObservedEvent(
+    operation.operationId,
+    makeFocusedTaskWorkSpecificationFactsObserved(
+      operation,
+      makeTaskWorkSpecification({ body: "body", taskId, title: "title" })
+    )
+  )
+  const projected = TaskDagSnapshot.project(
+    TrackerSnapshot.make({ revision: TrackerRevision.make("focused"), tasks: [] })
+  )
+  if (projected._tag === "Invalid") return expect.fail("fixture graph must be valid")
+
+  expect(
+    Option.isNone(
+      acceptedTrackerGraphObservationFromAcceptedReceipt(
+        { event, position: JournalPosition.make(1), snapshot: projected.snapshot },
+        ({ event, position, snapshot }) => ({ event, position, snapshot })
       )
     )
   ).toBe(true)
