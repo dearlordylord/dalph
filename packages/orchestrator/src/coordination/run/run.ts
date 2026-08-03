@@ -21,7 +21,7 @@ import {
   AcceptedFactPublicationGateway,
   type AcceptedFactGatewayInitialHistoryInvalid
 } from "../delivery/accepted-fact-gateway.js"
-import { delivery } from "../delivery/delivery.js"
+import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
@@ -155,7 +155,7 @@ const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <ERelations, RRe
     Effect.gen(function* () {
       const relations = yield* relationsEffect
       const executor = yield* executorEffect
-      const relation = yield* delivery.pipe(Effect.provide(relations))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
 
       return yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, executor))
     })

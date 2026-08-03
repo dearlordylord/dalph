@@ -37,10 +37,11 @@ import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { DeliveryProposalId, deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { DeliveryActionExecutor, type DeliveryActionResult } from "./delivery-action-executor.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   currentSignalOf,
+  acceptedTrackerGraphObservationOf,
   type DeliveryActionProposal,
   DeliveryRelationRevision,
   type DeliveryRuntimeEvaluation,
@@ -122,7 +123,7 @@ const recoveredProposalFor = (
 }
 
 const baseEvaluation = Effect.gen(function* () {
-  const relation = yield* delivery.pipe(
+  const relation = yield* deliveryRuntime.pipe(
     Effect.provide(
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
@@ -422,7 +423,11 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
           }
         }
       ]),
-      graph: currentSignalOf(TrackerGraphState.cases.GraphEstablished.make({ snapshot: projected.snapshot })),
+      graph: currentSignalOf(
+        TrackerGraphState.cases.GraphEstablished.make({
+          observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+        })
+      ),
       invalidate: () =>
         Effect.gen(function* () {
           yield* SubscriptionRef.update(proposalContributions, (current) => ({ ...current, ticketDelivery: [] }))
@@ -434,7 +439,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
       proposalContributions: { changes: SubscriptionRef.changes(proposalContributions) },
       runtimeFacts: { changes: SubscriptionRef.changes(runtimeFacts) }
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
     const initial = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
     expect(initial.ticketDeliveries.deliveries.find(({ taskId }) => taskId === taskA)?.standings[0]).toMatchObject({
       _tag: "ResponsibilitySituation",

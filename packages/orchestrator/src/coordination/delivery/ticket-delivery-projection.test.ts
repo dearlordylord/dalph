@@ -28,7 +28,12 @@ import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutat
 import { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
-import { TrackerGraphState, type ExactTicketDeliveryEvidence, type TicketDeliveryEvidence } from "./relations.js"
+import {
+  acceptedTrackerGraphObservationOf,
+  TrackerGraphState,
+  type ExactTicketDeliveryEvidence,
+  type TicketDeliveryEvidence
+} from "./relations.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -45,7 +50,9 @@ const task = (
 const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
   const projected = TaskDagSnapshot.project(TrackerSnapshot.make({ revision: TrackerRevision.make(revision), tasks }))
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
-  return TrackerGraphState.cases.GraphEstablished.make({ snapshot: projected.snapshot })
+  return TrackerGraphState.cases.GraphEstablished.make({
+    observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+  })
 }
 
 const policy = (capacity: number) =>

@@ -2,6 +2,7 @@ import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
@@ -25,6 +26,8 @@ import {
   TrackerGraphRelation,
   TrackerGraphRelationError,
   TrackerGraphState,
+  type AcceptedTrackerGraphObservation,
+  acceptedTrackerGraphObservationOf,
   type CurrentSignal,
   type DeliveryActionProposal,
   type TrackerGraphRelationService
@@ -95,11 +98,47 @@ const readOpenPublication = (
 ): Effect.Effect<AcceptedFactPublicationState, AcceptedFactPublicationError> =>
   status._tag === "PublicationOpen" ? Effect.succeed(status.value) : Effect.fail(status.failure)
 
-const graphStateFrom = (reconstructed: ReconstructedRunState): TrackerGraphState =>
+const latestGraphObservationFrom = (
+  records: ReadonlyArray<JournalRecord>,
+  snapshot: TaskDagSnapshot
+): AcceptedTrackerGraphObservation | undefined => {
+  let latest: AcceptedTrackerGraphObservation | undefined
+  for (const record of records) {
+    if (record.event._tag !== "TaskTrackerFactsObserved") continue
+    const observation = record.event.observation
+    if (
+      observation._tag !== "CompleteTaskTrackerFacts" &&
+      observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+    ) {
+      continue
+    }
+    const firstFamily = observation.factFamilies[0]
+    latest = {
+      _tag: "AcceptedTrackerGraphObservation",
+      snapshot,
+      operationId: observation.operationId,
+      contentIdentity: firstFamily.contentIdentity,
+      acceptedAt: record.position,
+      freshness: firstFamily.freshness
+    }
+  }
+  return latest
+}
+
+const graphStateFrom = (
+  reconstructed: ReconstructedRunState,
+  records: ReadonlyArray<JournalRecord>
+): TrackerGraphState =>
   Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
-    onSome: (graph) => TrackerGraphState.cases.GraphEstablished.make({ snapshot: graph })
+    onSome: (graph) => {
+      const observation = latestGraphObservationFrom(records, graph)
+      if (observation === undefined) {
+        return TrackerGraphState.cases.GraphEstablished.make({ observation: acceptedTrackerGraphObservationOf(graph) })
+      }
+      return TrackerGraphState.cases.GraphEstablished.make({ observation })
+    }
   })
 
 const acceptedGraphWasPublished = (records: ReadonlyArray<JournalRecord>, after: JournalPosition): boolean =>
@@ -124,7 +163,9 @@ const reduceAccepted = (
   return {
     _tag: "AcceptedFactPublicationState",
     appliedPosition,
-    graph: acceptedGraphWasPublished(records, prior.appliedPosition) ? graphStateFrom(reduced.runState) : prior.graph,
+    graph: acceptedGraphWasPublished(records, prior.appliedPosition)
+      ? graphStateFrom(reduced.runState, records)
+      : prior.graph,
     reconstructed: reduced.runState,
     records
   }

@@ -10,6 +10,7 @@ import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
@@ -91,9 +92,65 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
     expect(currentGraph._tag).toBe("GraphEstablished")
     if (currentGraph._tag === "GraphEstablished") {
       expect(currentGraph.snapshot.toWire()).toMatchObject({ revision: "g1", tasks: [{ id: "A" }] })
+      expect(currentGraph.observation.operationId).toBe(operation.operationId)
+      expect(currentGraph.observation.acceptedAt).toBe(JournalPosition.make(3))
+      expect(currentGraph.observation.contentIdentity).toBe(currentGraph.snapshot.revision)
     }
     expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
     expect(Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))).toEqual([])
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("publishes an equal-content reconfirmation as a later accepted graph observation", () =>
+  Effect.gen(function* () {
+    const fixedRunId = RunId.make("accepted-fact-equal-reconfirmation")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(fixedRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(fixedRunId, yield* storage.read(fixedRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const gateway = yield* makeAcceptedFactPublicationGateway(fixedRunId, target, initial, storage)
+    const firstOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G1"), target)
+    const snapshot = graph("equal-content", ["A"])
+    yield* gateway.journal.append(
+      fixedRunId,
+      intentRecordKey(firstOperation.operationId),
+      taskTrackerReadIntent(firstOperation)
+    )
+    yield* gateway.journal.append(
+      fixedRunId,
+      outcomeRecordKey(firstOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        firstOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(firstOperation, snapshot)
+      )
+    )
+    const first = yield* gateway.readCurrent
+    if (first.graph._tag !== "GraphEstablished") return yield* Effect.die("expected G1 graph")
+
+    const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G2"), target)
+    yield* gateway.journal.append(
+      fixedRunId,
+      intentRecordKey(secondOperation.operationId),
+      taskTrackerReadIntent(secondOperation)
+    )
+    const records = yield* gateway.journal.read(fixedRunId)
+    yield* gateway.journal.append(
+      fixedRunId,
+      outcomeRecordKey(secondOperation.operationId),
+      makeTaskTrackerFactsObservedFromRead(
+        records.map(({ event }) => ({ event })),
+        secondOperation,
+        snapshot
+      )
+    )
+    const second = yield* gateway.readCurrent
+    if (second.graph._tag !== "GraphEstablished") return yield* Effect.die("expected G2 graph")
+
+    expect(first.graph.observation.operationId).toBe(firstOperation.operationId)
+    expect(second.graph.observation.operationId).toBe(secondOperation.operationId)
+    expect(first.graph.observation.contentIdentity).toBe(second.graph.observation.contentIdentity)
+    expect(first.graph.observation.acceptedAt).toBe(JournalPosition.make(3))
+    expect(second.graph.observation.acceptedAt).toBe(JournalPosition.make(5))
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 

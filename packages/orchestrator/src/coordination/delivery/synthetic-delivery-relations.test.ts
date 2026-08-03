@@ -6,7 +6,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
 import { DeliveryRelationRevision } from "./relations.js"
 import { makeSyntheticDeliveryRelationsLayer } from "./synthetic-delivery-relations.js"
@@ -19,7 +19,7 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
         FixtureTarget.make("synthetic-invalidation-target"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       )
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const proposalId = DeliveryProposalId.make("synthetic-invalidation-proposal")
 
       const revisions = [

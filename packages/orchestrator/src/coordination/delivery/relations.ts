@@ -12,6 +12,7 @@ import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import { OperationId } from "../../workflow/identity.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
@@ -22,7 +23,7 @@ import type { IntegrationCandidateConstructionState } from "../../workflow/proto
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import type { DeliveryActionResult } from "./delivery-action-executor.js"
 import type {
   DeliveryActionProposal,
@@ -62,17 +63,49 @@ export const zipCurrentSignals = <A, EA, B, EB>(
   right: CurrentSignal<B, EB>
 ): CurrentSignal<readonly [A, B], EA | EB> => ({ changes: Stream.zipLatest(left.changes, right.changes) })
 
+/**
+ * One accepted complete tracker read that is safe to use as the source of a
+ * descriptive delivery value. The logical-read identity and journal position
+ * remain part of the observation even when a later read has equal graph
+ * contents.
+ */
+export interface AcceptedTrackerGraphObservation {
+  readonly _tag: "AcceptedTrackerGraphObservation"
+  readonly snapshot: TaskDagSnapshot
+  readonly operationId: OperationId
+  readonly contentIdentity: TrackerRevision
+  readonly acceptedAt: JournalPosition
+  readonly freshness: { readonly _tag: "ObservedDuringLogicalRead"; readonly operationId: OperationId }
+}
+
+export const acceptedTrackerGraphObservationOf = (snapshot: TaskDagSnapshot): AcceptedTrackerGraphObservation => {
+  const operationId = OperationId.make(`graph-fixture:${snapshot.revision}`)
+  return {
+    _tag: "AcceptedTrackerGraphObservation",
+    snapshot,
+    operationId,
+    contentIdentity: snapshot.revision,
+    acceptedAt: JournalPosition.make(1),
+    freshness: { _tag: "ObservedDuringLogicalRead", operationId }
+  }
+}
+
 /** The current usable graph is either absent or already normalized and structurally validated. */
 export type TrackerGraphState =
-  | { readonly _tag: "GraphEstablished"; readonly snapshot: TaskDagSnapshot }
+  | {
+      readonly _tag: "GraphEstablished"
+      readonly snapshot: TaskDagSnapshot
+      readonly observation: AcceptedTrackerGraphObservation
+    }
   | { readonly _tag: "GraphNotEstablished" }
 
 export const TrackerGraphState = {
   cases: {
     GraphEstablished: {
-      make: (fields: { readonly snapshot: TaskDagSnapshot }): TrackerGraphState => ({
+      make: (fields: { readonly observation: AcceptedTrackerGraphObservation }): TrackerGraphState => ({
         _tag: "GraphEstablished",
-        ...fields
+        snapshot: fields.observation.snapshot,
+        observation: fields.observation
       })
     },
     GraphNotEstablished: {
@@ -251,6 +284,21 @@ export const makeDeliveryReflection = (source: DeliverySettlements): DeliveryRef
   _tag: "DeliveryReflection",
   source
 })
+
+/**
+ * One causally complete descriptive delivery value. Every projection is
+ * derived from the same accepted tracker observation carried by `graph`.
+ */
+export interface DeliveryConsequences {
+  readonly _tag: "DeliveryConsequences"
+  readonly graph: TrackerGraphState
+  readonly graphObservation: AcceptedTrackerGraphObservation | null
+  readonly frontier: DeliveryFrontier
+  readonly tickets: BoundedParallelTickets
+  readonly ticketDeliveries: TicketDeliveries
+  readonly settlements: DeliverySettlements
+  readonly trackerConsequences: DeliveryReflection
+}
 
 export class TrackerGraphRelationError extends Schema.TaggedErrorClass<TrackerGraphRelationError>()(
   "TrackerGraphRelationError",
@@ -625,12 +673,35 @@ export const deliverySettlements = Effect.fn("Delivery.deliverySettlements")(fun
   return projection.of(deliveries)
 })
 
-/** Projects established settlements, then assembles the final descriptive runtime relation. */
+/** Projects established settlements into one coherent current-first value. */
 export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySettlements")(function* <E>(
   settlements: DeliverySettlementRelation<E>
-) {
+): Effect.fn.Return<
+  CurrentSignal<DeliveryConsequences, E | DeliveryReflectionError | DeliveryRelationSourceError>,
+  never,
+  DeliveryReflectionProjection
+> {
   const projection = yield* DeliveryReflectionProjection
-  const assembly = yield* DeliveryRuntimeAssembly
-  const trackerGraph = yield* TrackerGraphRelation
-  return assembly.of({ reflection: projection.of(settlements), trackerGraph })
+  const reflection = projection.of(settlements)
+  return {
+    changes: reflection.current.changes.pipe(
+      Stream.map((trackerConsequences) => {
+        const settlementsValue = trackerConsequences.source
+        const ticketDeliveries = settlementsValue.source
+        const tickets = ticketDeliveries.source
+        const frontier = tickets.source
+        const graph = frontier.source
+        return {
+          _tag: "DeliveryConsequences",
+          graph,
+          graphObservation: graph._tag === "GraphEstablished" ? graph.observation : null,
+          frontier,
+          tickets,
+          ticketDeliveries,
+          settlements: settlementsValue,
+          trackerConsequences
+        }
+      })
+    )
+  }
 })

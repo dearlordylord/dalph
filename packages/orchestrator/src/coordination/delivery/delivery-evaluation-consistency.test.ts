@@ -7,9 +7,10 @@ import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authoriti
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
+  acceptedTrackerGraphObservationOf,
   DeliveryRelationRevision,
   mapCurrentSignal,
   type DeliveryRuntimeFacts,
@@ -24,7 +25,9 @@ const graph = (revision: string, taskId: TaskId) => {
     })
   )
   if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
-  return TrackerGraphState.cases.GraphEstablished.make({ snapshot: projected.snapshot })
+  return TrackerGraphState.cases.GraphEstablished.make({
+    observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+  })
 }
 
 const policy = (capacity: number) =>
@@ -81,7 +84,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
       invalidate: () => Ref.get(revision),
       runtimeFacts: mapCurrentSignal(signal, ({ facts }) => facts)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
     const collected = yield* relation.evaluations.changes.pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
     yield* Deferred.await(firstSamplingEntered)
 

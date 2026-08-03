@@ -151,7 +151,7 @@ it.effect("lets the public synthetic workflow terminate from its settled current
 it("contains one literal flat-delivery runtime connection and no former scheduler", () => {
   const source = readFileSync(fileURLToPath(new URL("./run.ts", import.meta.url)), "utf8")
 
-  expect(source.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(source.match(/\bdeliveryRuntime\.pipe\(/g)).toHaveLength(1)
   expect(source.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
   expect(source).not.toMatch(
     /runDeliveryActivation|readDeliveryActivationTurn|checkedTurn|makeActivationCoordinator|runFreshWorkflowStep|deriveFreshWorkflowDecisions/

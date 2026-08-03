@@ -24,8 +24,9 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
+  acceptedTrackerGraphObservationOf,
   TrackerGraphRelation,
   boundedParallelTickets,
   currentSignalOf,
@@ -71,6 +72,9 @@ const acceptedGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) =>
   return projected.snapshot
 }
 
+const acceptedGraphState = (snapshot: ReturnType<typeof acceptedGraph>) =>
+  TrackerGraphState.cases.GraphEstablished.make({ observation: acceptedTrackerGraphObservationOf(snapshot) })
+
 const exactAttemptEvidence = (taskId: TaskId) => ({
   _tag: "ResponsibilityFacts" as const,
   facts: {
@@ -99,7 +103,7 @@ it.effect("assembles the literal delivery relation with honestly empty settlemen
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const first = Array.from(yield* Stream.runCollect(relation.current.changes))
     const second = Array.from(yield* Stream.runCollect(relation.current.changes))
@@ -135,7 +139,7 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
   Effect.gen(function* () {
     const taskId = TaskId.make("synthetic-finality")
     const current = Option.getOrThrow(
-      yield* delivery.pipe(
+      yield* deliveryRuntime.pipe(
         Effect.provide(
           makeDeliveryRelationsLayer({
             exactEvidence: currentSignalOf([]),
@@ -193,12 +197,10 @@ it.effect("keeps a settled accepted graph active while the Run is paused", () =>
   Effect.gen(function* () {
     const layer = makeDeliveryRelationsLayer({
       exactEvidence: currentSignalOf([]),
-      graph: currentSignalOf(
-        TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("paused-settled") })
-      ),
+      graph: currentSignalOf(acceptedGraphState(acceptedGraph("paused-settled"))),
       policy: currentSignalOf(policy)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
     const current = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
 
     expect(
@@ -218,7 +220,7 @@ it.effect("keeps every descriptive subscription action-free", () =>
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const first = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
     const second = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
@@ -257,14 +259,14 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
       runId: RunId.make("causal-tracker-proposal"),
       target: FixtureTarget.make("causal-tracker-proposal-target")
     })
-    const relation = yield* delivery.pipe(
+    const relation = yield* deliveryRuntime.pipe(
       Effect.provide(
         makeDeliveryRelationsLayer({
           exactEvidence: currentSignalOf([]),
           graph: {
             changes: Stream.make(
               TrackerGraphState.cases.GraphNotEstablished.make({}),
-              TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("causal-established") })
+              acceptedGraphState(acceptedGraph("causal-established"))
             )
           },
           policy: currentSignalOf(policy),
@@ -302,7 +304,7 @@ it.effect("fails closed when two lower relations claim one exact proposal identi
       }),
       trackerGraphProposals: currentSignalOf([proposal])
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
     const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
@@ -339,7 +341,7 @@ it.effect("carries every lower owner's pure proposal through the literal deliver
     const ticket = proposalFor(2, "TicketDelivery")
     const settlement = proposalFor(3, "DeliverySettlement")
     const reflection = proposalFor(4, "DeliveryReflection")
-    const relation = yield* delivery.pipe(
+    const relation = yield* deliveryRuntime.pipe(
       Effect.provide(
         makeDeliveryRelationsLayer({
           exactEvidence: currentSignalOf([]),
@@ -375,7 +377,7 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
       policy: currentSignalOf(policy)
     }
     const evaluate = Effect.gen(function* () {
-      const relation = yield* delivery.pipe(Effect.provide(makeDeliveryRelationsLayer(input)))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(makeDeliveryRelationsLayer(input)))
       return {
         actions: Array.from(yield* Stream.runCollect(relation.proposedActions.changes)),
         current: Array.from(yield* Stream.runCollect(relation.current.changes))
@@ -393,14 +395,14 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
 
 it.effect("preserves each causal graph revision through final reflection", () =>
   Effect.gen(function* () {
-    const graphOne = TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-1") })
-    const graphTwo = TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-2") })
+    const graphOne = acceptedGraphState(acceptedGraph("graph-1"))
+    const graphTwo = acceptedGraphState(acceptedGraph("graph-2"))
     const layer = makeDeliveryRelationsLayer({
       graph: { changes: Stream.fromIterable([graphOne, graphTwo]) },
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
@@ -417,13 +419,11 @@ it.effect("recomputes the same flat relation when the current policy changes", (
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
     const layer = makeDeliveryRelationsLayer({
-      graph: currentSignalOf(
-        TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-policy", [taskA, taskB]) })
-      ),
+      graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-policy", [taskA, taskB]))),
       exactEvidence: currentSignalOf([]),
       policy: { changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
@@ -439,13 +439,11 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
     const taskA = TaskId.make("A")
     const taskB = TaskId.make("B")
     const layer = makeDeliveryRelationsLayer({
-      graph: currentSignalOf(
-        TrackerGraphState.cases.GraphEstablished.make({ snapshot: acceptedGraph("graph-evidence", [taskA, taskB]) })
-      ),
+      graph: currentSignalOf(acceptedGraphState(acceptedGraph("graph-evidence", [taskA, taskB]))),
       exactEvidence: { changes: Stream.make([], [exactAttemptEvidence(taskB)]).pipe(Stream.rechunk(1)) },
       policy: currentSignalOf(policy)
     })
-    const relation = yield* delivery.pipe(Effect.provide(layer))
+    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
     const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
 
@@ -508,7 +506,7 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   expect(`${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`).not.toMatch(
     /(?:\.\.\/admission\/controller|\.\.\/run\/|\b(?:Effect|Queue|Ref|Semaphore|WorkflowInterpreter)\b)/
   )
-  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\bdeliveryRuntime\.pipe\(/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
 })
 

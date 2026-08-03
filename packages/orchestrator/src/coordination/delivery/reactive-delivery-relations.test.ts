@@ -44,7 +44,7 @@ import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { type AcceptedFactPublicationState, makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryControlPolicyMissing, makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 import { DeliveryRelationReconciliationError } from "./relations.js"
 
@@ -116,7 +116,7 @@ it.effect("keeps a recovered paused Run passive before its first current graph",
         gateway,
         currentProjection(gateway.readCurrent.pipe(Effect.orDie))
       )
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
       expect(evaluation.current.trackerGraph._tag).toBe("GraphNotEstablished")
@@ -183,7 +183,7 @@ it.effect("retries reconstruction when an accepted append lands during recovery 
       yield* Deferred.succeed(permitFirstProjection, undefined)
 
       const layer = yield* Fiber.join(layerFiber)
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
       expect(acceptedOutcome.position).toBeGreaterThan(acceptedBefore.appliedPosition)
@@ -222,7 +222,7 @@ it.effect("does not propose the initial graph read until recovered boundary work
         ]
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
       expect(initial.proposedActions).toMatchObject({
         _tag: "DeliveryProposalsAvailable",
@@ -285,7 +285,7 @@ it.effect("establishes the current graph before proposing an external-success cl
         ]
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
@@ -339,7 +339,7 @@ it.effect("publishes a typed relation failure when a later recovery projection f
         )
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, recovery)
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
       yield* Ref.set(failProjection, true)
       yield* relation.invalidate({ _tag: "AcceptedFactsChanged" })
@@ -357,7 +357,7 @@ it.effect("derives safely when recovery evidence is unavailable before and after
     Effect.gen(function* () {
       const gateway = yield* makeGateway
       const initialLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, unavailableProjection)
-      const initialRelation = yield* delivery.pipe(Effect.provide(initialLayer))
+      const initialRelation = yield* deliveryRuntime.pipe(Effect.provide(initialLayer))
       const initial = Option.getOrThrow(yield* initialRelation.evaluations.changes.pipe(Stream.runHead))
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
 
@@ -375,7 +375,7 @@ it.effect("derives safely when recovery evidence is unavailable before and after
       )
 
       const establishedLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, gateway, unavailableProjection)
-      const establishedRelation = yield* delivery.pipe(Effect.provide(establishedLayer))
+      const establishedRelation = yield* deliveryRuntime.pipe(Effect.provide(establishedLayer))
       const established = Option.getOrThrow(yield* establishedRelation.evaluations.changes.pipe(Stream.runHead))
       expect(established.current.trackerGraph._tag).toBe("GraphEstablished")
     }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -405,7 +405,7 @@ it.effect("publishes a typed failure when a quiescence probe cannot read accepte
         failingGateway,
         currentProjection(gateway.readCurrent.pipe(Effect.orDie))
       )
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       yield* Ref.set(failRead, true)
       yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
@@ -437,7 +437,7 @@ it.effect("publishes a typed failure when the accepted-fact signal closes with f
         failingGateway,
         currentProjection(gateway.readCurrent.pipe(Effect.orDie))
       )
-      const relation = yield* delivery.pipe(Effect.provide(layer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const failure = yield* relation.current.changes.pipe(
         Stream.dropWhile((current) => current.trackerGraph._tag === "GraphNotEstablished"),
         Stream.runHead,

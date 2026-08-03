@@ -338,6 +338,7 @@ export {
   AcceptedFactPublicationGateway
 } from "./coordination/delivery/accepted-fact-gateway.js"
 export { delivery } from "./coordination/delivery/delivery.js"
+export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export {
@@ -350,7 +351,9 @@ export {
   type DeliveryRelationSourceError,
   DeliverySettlementError,
   TicketDeliveryError,
-  TrackerGraphRelationError
+  TrackerGraphRelationError,
+  type AcceptedTrackerGraphObservation,
+  type DeliveryConsequences
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryRuntimeProposalOwnershipConflict,

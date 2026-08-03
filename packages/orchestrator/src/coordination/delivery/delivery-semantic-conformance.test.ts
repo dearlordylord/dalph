@@ -22,7 +22,7 @@ import {
   deterministicPlannedTaskAttemptLayer
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryActionExecutor,
   DeliverySemanticTrace,
@@ -176,8 +176,8 @@ it.effect("dry and live-fake Layers emit the same DeliverySemanticTrace after eq
     Effect.gen(function* () {
       const liveSetup = yield* makeLiveFakeConformanceLayer()
       const dryLayer = yield* makeDryConformanceLayer(liveSetup.graph, liveSetup.acceptedAt)
-      const dryRelation = yield* delivery.pipe(Effect.provide(dryLayer))
-      const liveRelation = yield* delivery.pipe(Effect.provide(liveSetup.layer))
+      const dryRelation = yield* deliveryRuntime.pipe(Effect.provide(dryLayer))
+      const liveRelation = yield* deliveryRuntime.pipe(Effect.provide(liveSetup.layer))
       const dry = yield* runMode(dryRelation, "Dry")
       const liveFake = yield* runMode(liveRelation, "LiveFake")
       const graphProposal = trackerGraphReadProposalOf({

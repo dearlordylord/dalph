@@ -37,9 +37,9 @@ it("deletes the former scheduler and candidate application seams", () => {
   }
 })
 
-it("connects all modes through one flat delivery runtime boundary", () => {
+it("connects all modes through the descriptive delivery and its outer runtime adapter", () => {
   const runSource = readFileSync(`${runDirectory}/run.ts`, "utf8")
-  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\bdeliveryRuntime\.pipe\(/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
   expect(runSource).toContain("makeJournaledDeliveryRelations")
   expect(runSource).toContain("makeSyntheticDeliveryRelationsLayer")

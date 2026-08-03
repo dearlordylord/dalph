@@ -17,6 +17,7 @@ import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-prop
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   DeliveryRelationRevision,
+  acceptedTrackerGraphObservationOf,
   TrackerGraphState,
   type CurrentSignal,
   type DeliveryInvalidation,
@@ -72,7 +73,9 @@ const applySyntheticProposalResult = (
     case "TrackerGraphObservationPublished":
       return {
         ...current,
-        graph: TrackerGraphState.cases.GraphEstablished.make({ snapshot: result.snapshot }),
+        graph: TrackerGraphState.cases.GraphEstablished.make({
+          observation: acceptedTrackerGraphObservationOf(result.snapshot)
+        }),
         graphOperationId: result.operationId
       }
     case "FreshWorkflowActionFactProduced":

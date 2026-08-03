@@ -17,7 +17,7 @@ import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authoriti
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
-import { TrackerGraphState, type ExactTicketDeliveryEvidence } from "./relations.js"
+import { acceptedTrackerGraphObservationOf, TrackerGraphState, type ExactTicketDeliveryEvidence } from "./relations.js"
 import {
   boundedParallelTicketsOf,
   frontierOf,
@@ -48,7 +48,9 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
           })
         )
         if (projected._tag === "Invalid") return expect.fail("generated graph must be valid")
-        const graph = TrackerGraphState.cases.GraphEstablished.make({ snapshot: projected.snapshot })
+        const graph = TrackerGraphState.cases.GraphEstablished.make({
+          observation: acceptedTrackerGraphObservationOf(projected.snapshot)
+        })
         const policy = RunControlPolicy.make({
           revision: initialRunPolicyRevision,
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
@@ -123,7 +125,9 @@ it("retains an exact planned-attempt obligation under every graph placement and 
           })
         )
         if (graphResult._tag === "Invalid") return expect.fail("generated graph must be valid")
-        const graph = TrackerGraphState.cases.GraphEstablished.make({ snapshot: graphResult.snapshot })
+        const graph = TrackerGraphState.cases.GraphEstablished.make({
+          observation: acceptedTrackerGraphObservationOf(graphResult.snapshot)
+        })
         const projected = ticketDeliveriesOf(
           boundedParallelTicketsOf(
             frontierOf(graph),

@@ -74,7 +74,7 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { makeRunRecoveryProjection } from "../run/recovery-activation.js"
 import { makeAcceptedFactPublicationGateway } from "./accepted-fact-gateway.js"
-import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 
 const runId = RunId.make("recovered-settlement-relation")
@@ -203,7 +203,7 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
   )
   yield* installFreshTrackerFacts(gateway)
   const relations = yield* makeReactiveDeliveryRelationsLayer(runId, trackerTarget, gateway, recovery)
-  const relation = yield* delivery.pipe(Effect.provide(relations))
+  const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
   return Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 })
 
