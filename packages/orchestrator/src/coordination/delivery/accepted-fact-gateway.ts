@@ -1,6 +1,5 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
-import * as Cause from "effect/Cause"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
@@ -21,33 +20,16 @@ import {
   InRunJournal,
   InRunJournalRunMismatch
 } from "../../workflow-journal/store.js"
+import { TrackerGraphState, type CurrentSignal } from "./relations.js"
 import {
-  mapCurrentSignal,
-  TrackerGraphRelationError,
-  TrackerGraphState,
-  type CurrentSignal,
-  type TrackerGraphActionProposal
-} from "./relations.js"
-import {
-  acceptedTrackerGraphObservationFromRecord,
+  acceptedGraphReceiptFromEvent,
+  acceptedTrackerGraphObservationFromAcceptedReceipt,
   type AcceptedTrackerGraphObservation
 } from "./accepted-graph-observation.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
-import type { OperationId } from "../../workflow/identity.js"
+import type { TaskTrackerFactsObservedEvent } from "../../workflow/task-tracker-facts/observation.js"
 
 const lastElementOffset = -1
-
-/** Accepted gateway graph facts before policy/evidence are assembled into delivery publication. */
-export interface AcceptedTrackerGraphRelationService {
-  readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, TrackerGraphRelationError>
-  readonly signal: CurrentSignal<TrackerGraphState, TrackerGraphRelationError>
-}
-
-export class AcceptedTrackerGraphRelation extends Context.Service<
-  AcceptedTrackerGraphRelation,
-  AcceptedTrackerGraphRelationService
->()("@dalph/AcceptedTrackerGraphRelation") {}
 
 /** The accepted journal prefix and its process-local projections at one exact position. */
 export interface AcceptedFactPublicationState {
@@ -83,7 +65,6 @@ export interface AcceptedFactPublicationGatewayService {
   readonly current: CurrentSignal<AcceptedFactPublicationState, AcceptedFactPublicationError>
   readonly journal: PublishedRunJournal
   readonly readCurrent: Effect.Effect<AcceptedFactPublicationState, AcceptedFactPublicationError>
-  readonly trackerGraph: AcceptedTrackerGraphRelationService
 }
 
 export class AcceptedFactPublicationGateway extends Context.Service<
@@ -110,23 +91,29 @@ const readOpenPublication = (
 ): Effect.Effect<AcceptedFactPublicationState, AcceptedFactPublicationError> =>
   status._tag === "PublicationOpen" ? Effect.succeed(status.value) : Effect.fail(status.failure)
 
+type AcceptedGraphJournalRecord = Pick<JournalRecord, "position"> & { readonly event: TaskTrackerFactsObservedEvent }
+
 const latestGraphObservationFrom = (
   records: ReadonlyArray<JournalRecord>,
   snapshot: TaskDagSnapshot
-): AcceptedTrackerGraphObservation => {
-  let latest: AcceptedTrackerGraphObservation | undefined
+): Option.Option<AcceptedTrackerGraphObservation> => {
+  let latest: AcceptedGraphJournalRecord | undefined
   for (const record of records) {
     if (record.event._tag !== "TaskTrackerFactsObserved") continue
-    const observation = record.event.observation
     if (
-      observation._tag !== "CompleteTaskTrackerFacts" &&
-      observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+      record.event.observation._tag !== "CompleteTaskTrackerFacts" &&
+      record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
     ) {
       continue
     }
-    latest = acceptedTrackerGraphObservationFromRecord({ event: record.event, position: record.position }, snapshot)
+    latest = { event: record.event, position: record.position }
   }
-  return Option.getOrThrow(Option.fromUndefinedOr(latest))
+  return Option.flatMap(Option.fromUndefinedOr(latest), ({ event, position }) =>
+    Option.flatMap(
+      acceptedGraphReceiptFromEvent({ event, position, snapshot }),
+      acceptedTrackerGraphObservationFromAcceptedReceipt
+    )
+  )
 }
 
 const graphStateFrom = (
@@ -137,8 +124,10 @@ const graphStateFrom = (
     /* v8 ignore next -- A newly accepted complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
-      const observation = latestGraphObservationFrom(records, graph)
-      return TrackerGraphState.cases.GraphEstablished.make({ observation })
+      return Option.match(latestGraphObservationFrom(records, graph), {
+        onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
+        onSome: (observation) => TrackerGraphState.cases.GraphEstablished.make({ observation })
+      })
     }
   })
 
@@ -174,7 +163,7 @@ const reduceAccepted = (
  */
 export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeGateway")(function* (
   runId: RunId,
-  target: TrackerTarget,
+  _target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
   storage: AcceptedFactJournalStorage
 ) {
@@ -284,38 +273,7 @@ export const makeAcceptedFactPublicationGateway = Effect.fn("AcceptedFacts.makeG
         ? readCurrent.pipe(Effect.map(({ records }) => records))
         : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
   }
-  const graphCurrent: CurrentSignal<AcceptedFactPublicationState, TrackerGraphRelationError> = {
-    changes: current.changes.pipe(
-      Stream.mapError(
-        (failure) =>
-          new TrackerGraphRelationError({
-            cause: Cause.fail(failure),
-            summary: `${failure._tag} stopped accepted-fact publication`
-          })
-      )
-    )
-  }
-  const graphSignal: CurrentSignal<TrackerGraphState, TrackerGraphRelationError> = {
-    changes: mapCurrentSignal(graphCurrent, ({ graph }) => graph).changes.pipe(
-      Stream.mapAccum<OperationId | undefined, TrackerGraphState, TrackerGraphState>(
-        () => undefined,
-        (lastOperationId, graph): readonly [OperationId | undefined, ReadonlyArray<TrackerGraphState>] => {
-          if (graph._tag !== "GraphEstablished") return [undefined, [graph]] as const
-          if (lastOperationId === graph.observation.operationId) return [lastOperationId, []] as const
-          return [graph.observation.operationId, [graph]] as const
-        }
-      )
-    )
-  }
-  const trackerGraph: AcceptedTrackerGraphRelationService = {
-    proposedActions: mapCurrentSignal(graphCurrent, ({ appliedPosition, graph }) =>
-      graph._tag === "GraphNotEstablished"
-        ? [trackerGraphReadProposalOf({ acceptedAt: appliedPosition, purpose: "EstablishCurrentGraph", runId, target })]
-        : ([] satisfies ReadonlyArray<TrackerGraphActionProposal>)
-    ),
-    signal: graphSignal
-  }
-  return { current, journal, readCurrent, trackerGraph } satisfies AcceptedFactPublicationGatewayService
+  return { current, journal, readCurrent } satisfies AcceptedFactPublicationGatewayService
 })
 
 /** Installs the one gateway and exposes only its in-Run and descriptive capabilities. */
@@ -330,8 +288,7 @@ export const acceptedFactPublicationGatewayLayer = (
       Effect.map((gateway) =>
         Context.empty().pipe(
           Context.add(AcceptedFactPublicationGateway, gateway),
-          Context.add(InRunJournal, InRunJournal.of(gateway.journal)),
-          Context.add(AcceptedTrackerGraphRelation, gateway.trackerGraph)
+          Context.add(InRunJournal, InRunJournal.of(gateway.journal))
         )
       )
     )

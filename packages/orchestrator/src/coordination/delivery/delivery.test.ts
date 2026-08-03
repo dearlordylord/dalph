@@ -25,6 +25,7 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
+import { delivery } from "./delivery.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   TrackerGraphRelation,
@@ -39,6 +40,7 @@ import {
   TrackerGraphState,
   zipCurrentSignals,
   type DeliveryRelationInputBundle,
+  type DeliveryConsequences,
   type CurrentSignal,
   type TicketDeliveryEvidence
 } from "./relations.js"
@@ -56,6 +58,20 @@ const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
   taskExecutionCapacity: TaskWorkCapacity.make(1)
 })
+
+type DeliveryConsequencesPublicKeys =
+  | "_tag"
+  | "graph"
+  | "frontier"
+  | "tickets"
+  | "ticketDeliveries"
+  | "settlements"
+  | "trackerConsequences"
+type ExactKeys<Actual, Expected> = [Actual] extends [Expected] ? ([Expected] extends [Actual] ? true : false) : false
+const deliveryConsequencesKeyContract: ExactKeys<
+  Extract<keyof DeliveryConsequences, string>,
+  DeliveryConsequencesPublicKeys
+> = true
 
 const makeDeliveryRelationsLayer = (
   input: Omit<
@@ -149,6 +165,52 @@ it.effect("assembles the literal delivery relation with honestly empty settlemen
     expect(second).toEqual(first)
     expect(first[0]?.ticketDeliveries.deliveries).toEqual([])
     expect(first[0]?.settlements.settlements).toEqual([])
+  })
+)
+
+it.effect("exposes only descriptive DeliveryConsequences fields", () =>
+  Effect.gen(function* () {
+    const layer = makeDeliveryRelationsLayer({
+      graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+      exactEvidence: currentSignalOf([]),
+      policy: currentSignalOf(policy)
+    })
+    const signal = yield* delivery.pipe(Effect.provide(layer))
+    const value = Option.getOrThrow(yield* signal.changes.pipe(Stream.runHead))
+
+    expect(deliveryConsequencesKeyContract).toBe(true)
+    expect(Object.keys(value).toSorted()).toEqual([
+      "_tag",
+      "frontier",
+      "graph",
+      "settlements",
+      "ticketDeliveries",
+      "tickets",
+      "trackerConsequences"
+    ])
+    expect(Object.getOwnPropertySymbols(value)).toHaveLength(1)
+    for (const forbiddenKey of [
+      "actionExecution",
+      "actionExecutor",
+      "execute",
+      "executor",
+      "proposedActions",
+      "proposalContributions",
+      "proposals",
+      "runtimeFacts",
+      "taskWork",
+      "held",
+      "ownership",
+      "resources",
+      "invalidate",
+      "revision",
+      "quiescence",
+      "finality",
+      "route",
+      "routes"
+    ]) {
+      expect(value).not.toHaveProperty(forbiddenKey)
+    }
   })
 )
 

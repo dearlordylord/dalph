@@ -19,8 +19,7 @@ import type {
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import {
   AcceptedFactPublicationGateway,
-  type AcceptedFactGatewayInitialHistoryInvalid,
-  type AcceptedTrackerGraphRelation
+  type AcceptedFactGatewayInitialHistoryInvalid
 } from "../delivery/accepted-fact-gateway.js"
 import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
@@ -39,7 +38,6 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
 export type JournaledRunServices =
   | AcceptedFactPublicationGateway
-  | AcceptedTrackerGraphRelation
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal

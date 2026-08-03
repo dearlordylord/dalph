@@ -6,7 +6,6 @@ import { ControlDirectionApplication } from "../../workflow/protocols/control-di
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import {
   AcceptedFactPublicationGateway,
-  type AcceptedTrackerGraphRelation,
   acceptedFactPublicationGatewayLayer
 } from "../delivery/accepted-fact-gateway.js"
 import {
@@ -37,7 +36,7 @@ export interface JournaledRuntimeLayerInput {
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
-  Exclude<JournaledRunServices, AcceptedFactPublicationGateway | AcceptedTrackerGraphRelation>,
+  Exclude<JournaledRunServices, AcceptedFactPublicationGateway>,
   InvalidWorkflowJournalHistory | JournalReadError | StartupRecoveryBlocked,
   CoordinatorOwnership | InRunJournal
 >

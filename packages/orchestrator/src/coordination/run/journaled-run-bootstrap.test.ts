@@ -8,7 +8,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { AcceptedFactPublicationGateway, AcceptedTrackerGraphRelation } from "../delivery/accepted-fact-gateway.js"
+import { AcceptedFactPublicationGateway } from "../delivery/accepted-fact-gateway.js"
 import { deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -98,8 +98,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
               graph: (yield* gateway.readCurrent).graph._tag,
               hasGatewayJournal: Option.isSome(Context.getOption(context, InRunJournal)),
               hasRawJournal: Option.isSome(Context.getOption(context, JournalStore)),
-              hasLifecycleJournal: Option.isSome(Context.getOption(context, RunLifecycleJournal)),
-              hasTrackerGraph: Option.isSome(Context.getOption(context, AcceptedTrackerGraphRelation))
+              hasLifecycleJournal: Option.isSome(Context.getOption(context, RunLifecycleJournal))
             })
           )
           return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
@@ -110,8 +109,7 @@ it.effect("begins a fresh Run before exposing only its gateway-backed runtime ca
         graph: "GraphNotEstablished",
         hasGatewayJournal: true,
         hasLifecycleJournal: false,
-        hasRawJournal: false,
-        hasTrackerGraph: true
+        hasRawJournal: false
       })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })

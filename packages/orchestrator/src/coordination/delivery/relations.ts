@@ -62,6 +62,8 @@ export const zipCurrentSignals = <A, EA, B, EB>(
   right: CurrentSignal<B, EB>
 ): CurrentSignal<readonly [A, B], EA | EB> => ({ changes: Stream.zipLatest(left.changes, right.changes) })
 
+const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
+
 /**
  * One accepted complete tracker read that is safe to use as the source of a
  * descriptive delivery value. The logical-read identity and journal position
@@ -263,8 +265,6 @@ export const makeDeliveryReflection = (source: DeliverySettlements): DeliveryRef
   _tag: "DeliveryReflection",
   source
 })
-
-const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
 
 /**
  * One causally complete descriptive delivery value. Every projection is

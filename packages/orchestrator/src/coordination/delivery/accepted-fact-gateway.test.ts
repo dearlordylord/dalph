@@ -34,7 +34,7 @@ import {
   AcceptedFactGatewayInitialHistoryInvalid,
   makeAcceptedFactPublicationGateway
 } from "./accepted-fact-gateway.js"
-import { TrackerGraphRelationError } from "./relations.js"
+import type { AcceptedFactPublicationState } from "./accepted-fact-gateway.js"
 
 const runId = RunId.make("accepted-fact-gateway")
 const target = FixtureTarget.make("accepted-fact-gateway-target")
@@ -53,6 +53,18 @@ const graph = (revision: string, taskIds: ReadonlyArray<string>) => {
   return Option.getOrThrow(Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined))
 }
 
+type AcceptedGateway = Effect.Success<ReturnType<typeof makeAcceptedFactPublicationGateway>>
+
+/** Test-only projection of gateway.current to graph values accepted at this position. */
+const acceptedGraphChanges = (gateway: AcceptedGateway) =>
+  gateway.current.changes.pipe(
+    Stream.filter(
+      ({ appliedPosition, graph }: AcceptedFactPublicationState) =>
+        graph._tag === "GraphNotEstablished" || graph.observation.acceptedAt === appliedPosition
+    ),
+    Stream.map(({ graph }) => graph)
+  )
+
 it.effect("publishes GraphNotEstablished first and an accepted complete graph at its journal position", () =>
   Effect.gen(function* () {
     const storage = yield* JournalStore
@@ -60,20 +72,9 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const gateway = yield* makeAcceptedFactPublicationGateway(runId, target, initial, storage)
-    const initialProposal = Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))
-    const repeatedSubscription = Option.getOrThrow(
-      yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead)
-    )
-    expect(repeatedSubscription).toEqual(initialProposal)
-    expect(initialProposal).toHaveLength(1)
-    expect(initialProposal[0]).toMatchObject({
-      actionIdentity: { _tag: "FreshOperationIdRequired" },
-      owner: "TrackerGraph",
-      route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target }
-    })
     const operation = makeTrackerGraphObservationOperation(OperationId.make("gateway-read"), target)
     const subscriberAttached = yield* Deferred.make<void>()
-    const observed = yield* gateway.trackerGraph.signal.changes.pipe(
+    const observed = yield* acceptedGraphChanges(gateway).pipe(
       Stream.tap(() => Deferred.succeed(subscriberAttached, undefined)),
       Stream.take(3),
       Stream.runCollect,
@@ -102,7 +103,6 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
       expect(currentGraph.observation.contentIdentity).toBe(currentGraph.observation.snapshot.revision)
     }
     expect((yield* gateway.readCurrent).appliedPosition).toBe(3)
-    expect(Option.getOrThrow(yield* gateway.trackerGraph.proposedActions.changes.pipe(Stream.runHead))).toEqual([])
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
@@ -119,7 +119,7 @@ it.effect("publishes an equal-content reconfirmation as a later accepted graph o
     const snapshot = graph("equal-content", ["A"])
     const attached = yield* Deferred.make<void>()
     const firstSeen = yield* Deferred.make<void>()
-    const observed = yield* gateway.trackerGraph.signal.changes.pipe(
+    const observed = yield* acceptedGraphChanges(gateway).pipe(
       Stream.tap(() => Deferred.succeed(attached, undefined)),
       Stream.tap((state) =>
         state._tag === "GraphEstablished" && state.observation.operationId === firstOperation.operationId
@@ -382,7 +382,7 @@ it.effect("never loses the latest accepted graph when subscription and publicati
       const operation = makeTrackerGraphObservationOperation(OperationId.make(revision), target)
       const observed = Deferred.await(start).pipe(
         Effect.andThen(
-          gateway.trackerGraph.signal.changes.pipe(
+          acceptedGraphChanges(gateway).pipe(
             Stream.filter(
               (state) => state._tag === "GraphEstablished" && state.observation.snapshot.revision === revision
             ),
@@ -496,7 +496,7 @@ it.effect("lets multiple graph subscribers observe one accepted read without per
     const firstAttached = yield* Deferred.make<void>()
     const secondAttached = yield* Deferred.make<void>()
     const observe = (attached: Deferred.Deferred<void>) =>
-      gateway.trackerGraph.signal.changes.pipe(
+      acceptedGraphChanges(gateway).pipe(
         Stream.tap(() => Deferred.succeed(attached, undefined)),
         Stream.take(3),
         Stream.runCollect,
@@ -697,10 +697,6 @@ it.effect("fails every current reader and subscriber after an accepted event mak
     expect(yield* Fiber.join(existingSubscriber).pipe(Effect.flip)).toEqual(failure)
     expect(yield* gateway.readCurrent.pipe(Effect.flip)).toEqual(failure)
     expect(yield* gateway.journal.read(invalidRunId).pipe(Effect.flip)).toEqual(failure)
-    expect(yield* gateway.trackerGraph.signal.changes.pipe(Stream.runHead, Effect.flip)).toBeInstanceOf(
-      TrackerGraphRelationError
-    )
-
     const later = makeTrackerGraphObservationOperation(OperationId.make("after-invalid"), target)
     const repeated = yield* gateway.journal
       .append(invalidRunId, intentRecordKey(later.operationId), taskTrackerReadIntent(later))
