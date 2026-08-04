@@ -5,9 +5,9 @@ Status: Accepted
 Task-graph knowledge changes when Dalph receives usable normalized tracker
 facts, not only when it explicitly requests a read. When one successful tracker
 mutation response both completes its workflow operation and satisfies a named
-task-graph read shape's coverage and evidence contract, Dalph records one
-`TaskGraphFactsUpdated` event rather than separate acknowledgement and
-graph-update events.
+task-graph read shape's coverage and evidence contract, Dalph records those
+facts through the canonical `TaskTrackerFactsObserved` occurrence family rather
+than a parallel mutation-only graph event.
 
 ## Consequences
 

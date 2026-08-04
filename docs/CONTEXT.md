@@ -332,16 +332,19 @@ graph fact family and refers to an earlier full observation for the payload.
 _Avoid_: Duplicate full payload, current tracker authority, no-op
 
 **Task-tracker facts observed**:
-The single immutable workflow-journal event family for complete graph reads,
-unchanged graph reconfirmations, and focused task-work specification reads.
-Only a completed logical provider read produces it; mutation acknowledgements
-cannot stand in for an observation.
+The single immutable workflow-journal event family for normalized tracker facts
+that satisfy a named observation contract. Complete graph reads, unchanged
+graph reconfirmations, focused task-work specification reads, and sufficiently
+evidenced mutation results may produce it. A mutation acknowledgement without
+the required coverage, completeness, consistency, freshness, and replacement
+evidence cannot stand in for an observation.
 _Avoid_: Provider response dump, mutation acknowledgement, parallel graph event
 
 **Best available durable graph knowledge**:
 The reducer's reconstruction of usable task and edge facts from
 `TaskTrackerFactsObserved` history. It may lag current tracker facts and changes
-only by folding a later full observation or unchanged reconfirmation.
+only by folding later facts with explicit coverage, completeness, consistency,
+freshness, and replacement evidence.
 _Avoid_: Current task graph, persisted frontier, tracker authority
 
 **Delivery frontier**:
