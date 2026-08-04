@@ -37,7 +37,7 @@ const lastElementOffset = -1
 const JournaledGraphReceiptTypeId: unique symbol = Symbol("JournaledGraphReceipt")
 const JournaledTrackerGraphObservationTypeId: unique symbol = Symbol("JournaledTrackerGraphObservation")
 
-/** Journaled graph authority can only be branded inside this journal boundary. */
+/** Journaled graph observation evidence is privately branded inside this journal boundary. */
 export interface JournaledTrackerGraphObservation extends JournaledGraphObservationFields {
   readonly [JournaledTrackerGraphObservationTypeId]: typeof JournaledTrackerGraphObservationTypeId
 }

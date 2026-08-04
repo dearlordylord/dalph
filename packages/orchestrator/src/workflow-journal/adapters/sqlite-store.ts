@@ -446,7 +446,7 @@ export const sqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) =>
     ).pipe(Layer.provide(Reactivity.layer))
   )
 
-/** Explicit test-only composition whose appends are not gateway-published. */
+/** Explicit test-only composition whose appends are not published through Journal. */
 export const legacySqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) =>
   legacyUnpublishedInRunJournalLayer.pipe(Layer.provideMerge(sqliteJournalStoreLayer(config)))
 

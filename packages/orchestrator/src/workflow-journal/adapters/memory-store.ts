@@ -134,7 +134,7 @@ const memoryRawJournalStoreLayer = Layer.effect(
 
 export const memoryJournalStoreLayer = journalStoreCapabilities(memoryRawJournalStoreLayer)
 
-/** Explicit test-only composition whose appends are not gateway-published. */
+/** Explicit test-only composition whose appends are not published through Journal. */
 export const legacyMemoryJournalStoreLayer = legacyUnpublishedInRunJournalLayer.pipe(
   Layer.provideMerge(memoryJournalStoreLayer)
 )

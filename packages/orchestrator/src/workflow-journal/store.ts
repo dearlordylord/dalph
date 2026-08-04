@@ -229,8 +229,9 @@ export const journalStoreCapabilities = <E, R>(
   ).pipe(Layer.provide(storage))
 
 /**
- * Temporary adapter for pre-gateway test and scheduler compositions. Production
- * bootstrap must receive raw storage and install its own published capability.
+ * Temporary adapter for test and scheduler compositions that do not install the
+ * Journal service. Production bootstrap must receive raw storage and install
+ * its own published Journal capability.
  * #184 deletes the remaining scheduler consumers.
  */
 export const legacyUnpublishedInRunJournalLayer = Layer.effect(
