@@ -1,0 +1,5 @@
+agda/*.agdai
+agda/MAlonzo/
+alloy/Delivery/
+lean/*.olean
+lean/.lake/
