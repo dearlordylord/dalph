@@ -71,7 +71,7 @@ await run("planned-attempt executor exhaustive model", [
 const controlDirectionApplicationInvariants = [
   "appliedDirectionIsOperatorInitiated",
   "applicationClaimsNoLaterEffects",
-  "appliedCountIsNonNegative"
+  "typeOk"
 ]
 
 await run("control-direction application model typecheck", [

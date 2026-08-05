@@ -44,7 +44,10 @@ module controlDirectionApplication {
       and not(state.executorResumed)
       and not(state.finalPausePhaseClaimed)
 
-  val appliedCountIsNonNegative: bool = state.appliedCount >= 0
+  // Constrains which states are representable, not how the model behaves.
+  // Quint has no natural-number type, so the bound is stated here instead.
+  // It is not evidence that any control direction was applied correctly.
+  val typeOk: bool = state.appliedCount >= 0
 
   val runPauseAppliedReached: bool = state.runPaused and state.appliedCount > 0
   val taskPauseAppliedReached: bool = state.taskAPaused and state.appliedCount > 0

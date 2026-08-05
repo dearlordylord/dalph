@@ -268,18 +268,28 @@ module taskFactReconciliation {
     state' = state,
   }
 
-  action planReplacementClaim: bool = all {
-    state.status == SafelySuspended,
-    state.decision == AllocateReplacementClaim,
-    state.reacquisitionDirectionApplied,
-    state' = {
-      ...state,
-      decision: ObserveReplacementClaim,
-      claimState: ReplacementClaim,
-      exactClaimHeld: true,
-      replacementIntentRecorded: true,
-      currentClaimIdentity: state.originalClaimIdentity + 1,
-    },
+  // The replacement identity is allocated, not derived. A token from an
+  // earlier claim cannot authorize a replacement claim, so the freshness
+  // guard is what keeps a reused identity out.
+  action planReplacementClaim: bool = {
+    // The allocator may offer the identity the earlier claim already used.
+    // Drawing here rather than in `step` keeps the branching to this action.
+    nondet allocatedClaimIdentity =
+      Set(state.originalClaimIdentity, state.originalClaimIdentity + 1).oneOf()
+    all {
+      state.status == SafelySuspended,
+      state.decision == AllocateReplacementClaim,
+      state.reacquisitionDirectionApplied,
+      allocatedClaimIdentity != state.originalClaimIdentity,
+      state' = {
+        ...state,
+        decision: ObserveReplacementClaim,
+        claimState: ReplacementClaim,
+        exactClaimHeld: true,
+        replacementIntentRecorded: true,
+        currentClaimIdentity: allocatedClaimIdentity,
+      },
+    }
   }
 
   action observeExactReplacementClaim: bool = all {
@@ -322,9 +332,16 @@ module taskFactReconciliation {
     state' = { ...state, independentTaskSelected: true },
   }
 
+  // The recorded target is the ownership the claim actually has when the
+  // mutation lands, not the ownership Dalph intended. The ownership guard is
+  // what keeps the foreign case out of reach.
   action requestOwnedClaimMutation: bool = all {
     state.claimState == ExactClaim or state.claimState == ReplacementClaim,
-    state' = { ...state, lastClaimMutationTarget: OwnedClaimMutation },
+    state' = {
+      ...state,
+      lastClaimMutationTarget:
+        if (state.claimState == ForeignClaim) ForeignClaimMutation else OwnedClaimMutation,
+    },
   }
 
   action step: bool = any {

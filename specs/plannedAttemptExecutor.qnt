@@ -19,6 +19,16 @@ module plannedAttemptExecutor {
   pure val RUN_ID = 158
   pure val ATTEMPT_ID = 1
 
+  // A correlation an executor report may carry that is not this planned
+  // attempt: another run, or an earlier attempt for the same task. Dalph
+  // accepts a report only for the exact planned attempt, so these identities
+  // are offered to every report action and never accepted.
+  pure val OTHER_RUN_ID = 159
+  pure val OTHER_ATTEMPT_ID = 2
+
+  pure def isExactPlannedAttempt(runId: int, attemptId: int): bool =
+    runId == RUN_ID and attemptId == ATTEMPT_ID
+
   var state: State
 
   val everyStatusUsesExactPlannedAttempt: bool =
@@ -60,18 +70,34 @@ module plannedAttemptExecutor {
     }
   }
 
-  action startOrContinueRunning: bool = all {
-    or {
-      state.status == ResponsibilityBegan,
-      state.status == Running,
-      state.status == SafelySuspended,
-    },
-    state' = {
-      status: Running,
-      correlationRunId: RUN_ID,
-      correlationAttemptId: ATTEMPT_ID,
-      positionHeld: true,
-    },
+  // Running, SafelySuspended, and Terminal are executor reports and therefore
+  // carry the correlation the executor supplied. Dalph records that supplied
+  // correlation, and the exactness guard is what keeps a foreign one out.
+  // The correlations an executor report may carry. Each report action draws
+  // from this set itself, so the branching applies only where a report is
+  // actually enabled.
+  pure val REPORTED_CORRELATIONS: Set[(int, int)] = Set(
+    (RUN_ID, ATTEMPT_ID),
+    (OTHER_RUN_ID, ATTEMPT_ID),
+    (RUN_ID, OTHER_ATTEMPT_ID),
+  )
+
+  action startOrContinueRunning: bool = {
+    nondet reported = REPORTED_CORRELATIONS.oneOf()
+    all {
+      or {
+        state.status == ResponsibilityBegan,
+        state.status == Running,
+        state.status == SafelySuspended,
+      },
+      isExactPlannedAttempt(reported._1, reported._2),
+      state' = {
+        status: Running,
+        correlationRunId: reported._1,
+        correlationAttemptId: reported._2,
+        positionHeld: true,
+      },
+    }
   }
 
   action beginResponsibility: bool = all {
@@ -94,25 +120,33 @@ module plannedAttemptExecutor {
     },
   }
 
-  action reportSafelySuspended: bool = all {
-    state.status == SuspensionRequested,
-    state' = {
-      status: SafelySuspended,
-      correlationRunId: RUN_ID,
-      correlationAttemptId: ATTEMPT_ID,
-      positionHeld: false,
-    },
+  action reportSafelySuspended: bool = {
+    nondet reported = REPORTED_CORRELATIONS.oneOf()
+    all {
+      state.status == SuspensionRequested,
+      isExactPlannedAttempt(reported._1, reported._2),
+      state' = {
+        status: SafelySuspended,
+        correlationRunId: reported._1,
+        correlationAttemptId: reported._2,
+        positionHeld: false,
+      },
+    }
   }
 
-  action finishTerminal: bool = all {
-    state.status != NoReport,
-    state.status != Terminal,
-    state' = {
-      status: Terminal,
-      correlationRunId: RUN_ID,
-      correlationAttemptId: ATTEMPT_ID,
-      positionHeld: false,
-    },
+  action finishTerminal: bool = {
+    nondet reported = REPORTED_CORRELATIONS.oneOf()
+    all {
+      state.status != NoReport,
+      state.status != Terminal,
+      isExactPlannedAttempt(reported._1, reported._2),
+      state' = {
+        status: Terminal,
+        correlationRunId: reported._1,
+        correlationAttemptId: reported._2,
+        positionHeld: false,
+      },
+    }
   }
 
   action step: bool = any {
