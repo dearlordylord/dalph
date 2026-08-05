@@ -84,7 +84,8 @@ Each states the invariant and either discharges it or refuses.
 | Tool | Faithful | Mutants | Time |
 |---|---|---|---|
 | Agda | checks under `--safe` | n/a, defects are unwriteable or unprovable | <1s |
-| Lean 4 | all proofs check | 3 rejected, `unsolved goals` | 2s |
+| Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
+| Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Alloy 6 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
 
@@ -92,6 +93,21 @@ Alloy is the only one of the four that reports a *counterexample* rather than a
 refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
 misordered candidate. Dafny and Lean name the unproved goal instead, which is
 less informative about the input and more informative about the specification.
+
+**L2 in Lean is the sharpest single result in the bake-off.** TLC needs
+`MaxAttempts`, `MaxExternalAdvance`, and a `StateConstraint` to stay finite —
+concessions to enumeration, not domain facts. `L2.lean` has none: `head`,
+`attempts`, and `capacity` are unbounded `Nat` and the proof covers every
+reachable state. It does *not* generalize over the task set; `TaskId := Bool`
+is still two tasks.
+
+The price is one specific thing. `attemptsBounded` is **not inductive** — in
+the `planAttempt` case the hypothesis permits `attempts = 1` and the action
+produces `2` — so the proof is impossible until the invariant is strengthened
+with `phaseBoundsAttempts`. TLC was handed the same invariant and never asked.
+**A model checker discovers the reachable set; a proof assistant makes you
+characterize it.** The 500 lines and the tactic fluency are mechanical next to
+that.
 
 Two invariants exist here that no state-machine encoding could state honestly.
 I11 (claim exclusivity with an exact token) and I12 (two ordered candidate

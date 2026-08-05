@@ -54,3 +54,101 @@ reaching for `native_decide` out of habit.
 `L1Mutants.lean` restates each faithful theorem over a defective definition.
 All three are rejected with `unsolved goals`. Like Dafny, and unlike the model
 checkers, the failure names the goal rather than the input that breaks it.
+
+## L2: the protocol, and what a proof assistant charges for it
+
+`L2.lean` is the delivery protocol of `../MODEL.md` as an inductive `Step`
+relation, with `Inv` proved to hold of every reachable state. Same actions and
+same invariants as `../quint/deliveryCore.qnt` and `../tlaplus/Delivery.tla`.
+
+500 lines, checks in about 2 seconds, no imports.
+
+### What Lean buys
+
+TLC needed artificial bounds to stay finite: `MaxExternalAdvance`,
+`MaxAttempts`, and a `StateConstraint` on `targetHead`. Without them it does not
+terminate. Those bounds are not domain facts, they are concessions to the
+enumeration.
+
+The Lean proof has none. `head`, `attempts`, and `capacity` are unbounded
+`Nat`, and `inv_reachable` covers every reachable state of that unbounded
+system. That is a real gain and it is the honest core of the "bounded checking
+is not verification" argument.
+
+What it does **not** buy here: generality over the task set. `TaskId := Bool`,
+so this is still the two-task model. Proving it for `n` tasks is a different and
+larger development, and nothing about using a proof assistant made it free.
+
+### What it costs: the invariant is not what you wrote
+
+The whole cost is in one place. `attemptsBounded` — at most one planned attempt
+per task — is **not inductive**. In the `planAttempt` case the hypothesis
+`attempts ≤ 1` permits `attempts = 1`, and the action produces `2`. The proof
+is impossible until the invariant is strengthened with:
+
+```lean
+def phaseBoundsAttempts (s : St) : Prop :=
+  ∀ t, ((s.ticket t).phase = noObligation ∨ (s.ticket t).phase = claimed)
+        → (s.ticket t).attempts = 0
+```
+
+No model checker ever asked for this. TLC was handed `OneAttemptPerTask` and
+found the reachable states itself; the strengthening is implicit in its
+enumeration and never has to be stated, named, or maintained.
+
+That is the trade in one sentence: **a model checker discovers the reachable
+set, a proof assistant makes you characterize it.** Everything else — the 500
+lines, the case analysis, the tactic fluency — is mechanical next to that.
+
+### The vacuity discipline transfers, and is easy to skip
+
+`inv_reachable` quantifies over reachable states, so it would hold vacuously if
+nothing interesting were reachable, and `Inv` could in principle hold of every
+state. Both would type-check and prove nothing. `L2.lean` therefore carries:
+
+- `executing_is_reachable` and `stale_head_is_reachable`, explicit traces
+  written out state by state
+- `inv_is_refutable`, a concrete state that violates `Inv`
+
+`stale_head_is_reachable` is the same check that exposed mutant M6: without
+`externalTargetAdvance` in the model, a captured head can never go stale and
+`promote`'s compare-and-set guard is unreachable.
+
+Writing those traces by hand is work a model checker does for free.
+
+### Lean friction worth knowing
+
+`cases hs with | acquireClaim s t h1 h2 => ...` is wrong. `Step s s'` has `s` as
+an index, so unification consumes it and every alternative binds one fewer name
+than the constructor declares. Getting this wrong produces a cascade of
+confusing downstream errors.
+
+Goals are stated about `{ s with ... }` structure literals, so `rw` cannot see
+through `upd s.ticket t v u`. The fix that made the rest routine was to have
+helper lemmas take the field equations as hypotheses discharged by `rfl` at the
+call site — `rfl` checks up to iota, `rw` does not.
+
+Trace states must be `abbrev`, not `def`. As `def` they are only semireducible
+and the unifier will not see that the state a `Step` constructor produces is
+the next named state.
+
+### The LLM workflow, tested
+
+The skeleton, the invariant, and the strengthening were written by hand. A
+subagent was then given the file with three `sorry`s and the constraint that no
+definition or theorem statement could change.
+
+It discharged all three in **two compile-check iterations**, factoring six
+helper lemmas out of the 17-constructor case analysis. Verified independently
+rather than taken on report: `lean L2.lean` exits silently, no banned
+constructs, and `#print axioms` shows only `propext` and `Quot.sound` — no
+`sorryAx`, no `Classical.choice`.
+
+So the loop works exactly as advertised: the model is a proof generator, the
+kernel is the oracle, and a wrong proof is rejected rather than believed.
+
+The part worth noticing is what it was not asked to do. It did not invent the
+invariant, and it did not discover that `attemptsBounded` needs
+`phaseBoundsAttempts` to go through. Those were supplied. That is precisely the
+division every essay in this area predicts: the mechanical proof labour is
+collapsing, and deciding what to prove is not.
