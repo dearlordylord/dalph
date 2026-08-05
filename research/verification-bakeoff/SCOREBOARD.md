@@ -83,7 +83,8 @@ Each states the invariant and either discharges it or refuses.
 
 | Tool | Faithful | Mutants | Time |
 |---|---|---|---|
-| Agda | checks under `--safe` | n/a, defects are unwriteable or unprovable | <1s |
+| Agda, L1 | checks under `--safe` | n/a, defects are unwriteable or unprovable | <1s |
+| Agda, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
@@ -94,9 +95,9 @@ refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
 misordered candidate. Dafny and Lean name the unproved goal instead, which is
 less informative about the input and more informative about the specification.
 
-**L2 in Lean is the sharpest single result in the bake-off.** TLC needs
+**L2 in Lean and Agda is the sharpest single result in the bake-off.** TLC needs
 `MaxAttempts`, `MaxExternalAdvance`, and a `StateConstraint` to stay finite —
-concessions to enumeration, not domain facts. `L2.lean` has none: `head`,
+concessions to enumeration, not domain facts. `L2.lean` and `L2.agda` have none: `head`,
 `attempts`, and `capacity` are unbounded `Nat` and the proof covers every
 reachable state. It does *not* generalize over the task set; `TaskId := Bool`
 is still two tasks.
@@ -124,8 +125,8 @@ over atoms, so the defect is a shape and the solver searches for it.
 | TLA+ / TLC | one 2 MB jar, no install | 300 lines | L1 + L2 |
 | Alloy 6 | one 21 MB jar, no install | 95 lines | L1 + structural I11/I12, no transitions |
 | Dafny | 100 MB release zip | 150 lines | L1 on code-shaped definitions |
-| Lean 4 | elan, no Mathlib needed | 125 lines | L1, incl. half of I2 |
-| Agda | `brew install agda`, no stdlib needed | 145 lines incl. a hand-rolled prelude | L1, without I2 |
+| Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
+| Agda | `brew install agda`, no stdlib needed | 145 lines L1 + 506 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
 
 Agda and Lean hold I3 the same way, and it is the reason both are here. I3
 costs *zero* proof: `excluded` takes a head reason and a tail, so a reason-free

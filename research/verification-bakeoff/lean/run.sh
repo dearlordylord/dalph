@@ -18,10 +18,10 @@ echo "| File | Expected | Lean | s |"
 echo "|---|---|---|---|"
 
 start=$SECONDS
-out=$("$LEAN" L1.lean 2>&1)
+out=$("$LEAN" L1.lean 2>&1; "$LEAN" L2.lean 2>&1)
 secs=$((SECONDS - start))
 verdict=$([[ -z $out ]] && echo "all proofs check" || echo "**unexpected errors**")
-echo "| L1.lean | checks | $verdict | $secs |"
+echo "| L1.lean + L2.lean | check | $verdict | $secs |"
 
 start=$SECONDS
 out=$("$LEAN" L1Mutants.lean 2>&1)

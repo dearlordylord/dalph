@@ -50,5 +50,101 @@ Structural invariants are free in the type system. Quantitative and
 permutation-shaped ones are disproportionately expensive. That trade, not the
 proof/test dichotomy, is what decides where this tool pays.
 
-L2 is not attempted. Encoding a transition system with crash and recovery in
-Agda is possible and is a different order of work.
+## L2: the protocol, without tactics
+
+`L2.agda` is the same development as `../lean/L2.lean` — same model, same
+invariant, same five fields, same theorem names — so reading them side by side
+isolates the language rather than the modelling. 506 lines against Lean's 500.
+
+That near-identical line count is the surprise, and it hides a real difference
+in where the lines go.
+
+### What Agda made easier
+
+`upd` is defined by pattern matching on both task ids rather than with a
+conditional:
+
+```agda
+upd f false v false = v
+upd f false v true  = f true
+upd f true  v false = f false
+upd f true  v true  = v
+```
+
+Every application reduces definitionally once both ids are concrete, so the
+proofs never reason about a decidable-equality test. The Lean encoding uses
+`fun u => if u = t then v else f u`, and its single largest source of friction
+was that `rw` cannot see through the resulting `ite` inside a `{ s with ... }`
+structure literal — the workaround there was a family of helper lemmas taking
+field equations discharged by `rfl`.
+
+Agda also unfolds plain definitions during conversion checking, so the trace
+states `t1`–`t7` work as ordinary definitions. Lean needed `abbrev`, because a
+`def` is only semireducible and the unifier would not see that the state a
+`Step` constructor produces is the next named state.
+
+### What Agda made harder
+
+**`with`-abstraction opacity.** `crashTicket` is defined with `with phase t`,
+and a lemma that also does `with phase t` does not see it reduce. The fix was
+to split the ticket record open so the scrutinee is a constructor, which turns
+two lemmas into ten clauses each — one per `Phase`.
+
+**No discrimination for free.** Lean closes a contradiction between
+`phase = promoted` and `phase = integrating` with `simp` or `exact
+absurd ...`. Agda cannot use an absurd pattern here, because after `trans`/`sym`
+the subject is a neutral projection rather than a constructor. It needs an
+explicit discriminator:
+
+```agda
+IntOnly : Phase -> Set          -- integrating -> Bot, everything else -> Top
+clash : p == integrating -> IntOnly p -> A
+```
+
+That is a genuinely instructive moment: the thing a tactic language hides is
+that propositional equality on an open term gives you nothing until you supply
+a family that distinguishes the constructors.
+
+### The same lesson, in both languages
+
+The `planAttempt` case is where `phaseBoundsAttempts` earns its keep, and the
+two proofs say the same thing in different registers.
+
+Agda, explicit:
+
+```agda
+attA s t _ (subst (\ n -> suc n <= 1) (sym (phaseAttempts i t (inr e))) (s<=s z<=n))
+     (attemptsOk i)
+```
+
+Lean, tactic:
+
+```lean
+(by simp [h.phaseAttempts t (Or.inr h2)])
+```
+
+Both consume `phaseBoundsAttempts` to learn `attempts = 0` before the increment.
+Neither could be written without it, because `attemptsBounded` is not inductive.
+The tactic is shorter; it is not doing anything the `subst` is not.
+
+### The LLM workflow, second data point
+
+Same protocol as the Lean file: the model, the invariant, and the strengthening
+were written by hand, and a subagent was given the file with the three
+obligations stubbed by a `postulate admit`, plus the requirement to delete that
+postulate and restore `{-# OPTIONS --safe #-}` — which rejects postulates, so
+the flag is a real check rather than a promise.
+
+It succeeded in **one typecheck iteration**, against two for Lean.
+
+That ordering is worth not over-reading. It is one trial each, the Agda task
+was second so the design was already settled, and the agent reported working
+the structure out before writing rather than iterating against the compiler.
+The honest claim is narrow: a general-purpose model discharged a 17-constructor
+inductive-invariant proof in a tactic-free dependently typed language with no
+standard library, and the result was verified by the checker rather than
+believed.
+
+Verified independently: `agda L2.agda` clean after `rm -rf _build *.agdai`, no
+`postulate`, no `TERMINATING`/`trustMe` pragmas, no imports, and the
+definitions and type signatures unchanged.

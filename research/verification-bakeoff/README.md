@@ -11,7 +11,10 @@ than on a dining-philosophers example.
 2. `MODEL.md` — the pinned abstraction every encoding shares.
 3. `MUTANTS.md` — the seeded defects and the detection protocol.
 4. `SCOREBOARD.md` — measurements and findings.
-5. `GATED-SPECS-MUTATION.md` — the same protocol applied back to this
+5. `READING-GUIDE.md` — the same proposition side by side across all seven
+   tools. Start here if the goal is to learn the differences rather than the
+   measurements.
+6. `GATED-SPECS-MUTATION.md` — the same protocol applied back to this
    repository's own gated models under `specs/`.
 
 ## Run
@@ -26,7 +29,8 @@ tlaplus/run.sh --m8                   # the seeded specification error
 alloy/run.sh                          # relational structure search, seconds
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
-agda L1.agda                          # from agda/, proofs check or they do not
+agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not
+~/.elan/bin/lean L2.lean               # from lean/, the protocol proof
 ```
 
 Quint and Agda come from Homebrew, Lean from elan. TLC, Alloy, and Dafny are
