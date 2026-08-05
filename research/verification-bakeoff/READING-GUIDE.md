@@ -14,7 +14,7 @@ directory, not a paraphrase.
 | fast-check | `fastcheck/run.mjs` | `fastcheck/run.mjs`, random sequences |
 | Quint + Apalache | `quint/deliveryCore.qnt` | same file |
 | TLA+ / TLC | `tlaplus/Delivery.tla` | same file |
-| Alloy 6 | `alloy/Delivery.als` | structural only, no transitions |
+| Alloy 6 | `alloy/Delivery.als` | `alloy/DeliveryL2.als`, temporal |
 | Dafny | `dafny/Delivery.dfy` | not attempted |
 | Lean 4 | `lean/L1.lean` | `lean/L2.lean` |
 | Agda | `agda/L1.agda` | `agda/L2.agda` |
@@ -148,8 +148,23 @@ attA s t _ (subst (\ n -> suc n <= 1) (sym (phaseAttempts i t (inr e))) (s<=s z<
 
 The tactic is shorter. It is not doing anything the `subst` is not.
 
-**The lesson to take from reading these three side by side:** a model checker
-*discovers* the reachable set; a proof assistant makes you *characterize* it.
+**Alloy** can be asked the induction question directly, which neither of the
+others can:
+```alloy
+check attemptsAloneIsInductive {
+  (attemptsBounded and step) => after attemptsBounded
+} for 2 Task, 5 Int, 2 steps          -- SAT: a counterexample to induction
+check invIsInductive { (Inv and step) => after Inv } for 2 Task, 5 Int, 2 steps
+                                       -- UNSAT: the strengthening works
+```
+The SAT result hands back the missing case in 61 ms: `phase = Claimed`,
+`attempts = 1`, one `planAttempt`, `attempts = 2`. Unreachable from `init`, and
+that is the point — a strengthening excludes states the transition relation
+permits but the reachable set never contains.
+
+**The lesson to take from reading these four side by side:** a model checker
+*discovers* the reachable set; a proof assistant makes you *characterize* it;
+Alloy will tell you mechanically which characterization you are missing.
 The 500-line proofs and the tactic fluency are mechanical next to that one
 requirement. This is what the literature means by the human residue that
 automation has not removed.
@@ -213,9 +228,11 @@ holds vacuously in *every* tool.
    invariant-as-type move.
 2. `tlaplus/Delivery.tla` — the most readable full protocol, and the engine
    that performed best.
-3. `lean/L2.lean` then `agda/L2.agda` — the same proof twice; read the
+3. `alloy/DeliveryL2.als` — read `attemptsAloneIsInductive` before opening
+   either L2 proof; it explains what the proofs are up against.
+4. `lean/L2.lean` then `agda/L2.agda` — the same proof twice; read the
    `planAttempt` case in both.
-4. `tlaplus/DeliveryTranspiled.tla` — what `quint compile` emits. Read against
+5. `tlaplus/DeliveryTranspiled.tla` — what `quint compile` emits. Read against
    the hand-written module to see what Quint's surface syntax is buying.
-5. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
+6. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
    protocol turned back on this repository's own gated models.

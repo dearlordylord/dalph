@@ -21,7 +21,7 @@ fi
 
 start=$SECONDS
 # Alloy writes its command summary to stderr, not stdout.
-out=$(java -jar "$ALLOY_JAR" exec -f Delivery.als 2>&1 1>/dev/null)
+out=$(java -jar "$ALLOY_JAR" exec -f "${1:-Delivery.als}" 2>&1 1>/dev/null)
 secs=$((SECONDS - start))
 
 echo "| Command | Alloy | Reading |"
@@ -42,4 +42,4 @@ while read -r line; do
 done <<<"$out"
 
 echo ""
-echo "Total ${secs}s. Scope: 4 Task, 4 Head, 4 Commit, 1 step."
+echo "Total ${secs}s for ${1:-Delivery.als}."

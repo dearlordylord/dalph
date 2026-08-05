@@ -57,3 +57,80 @@ a theorem.
 95 lines including comments, 2 seconds for all seven commands. Per unit of
 structural insight it is the cheapest tool here; per unit of temporal
 confidence it is the most expensive, because it offers none.
+
+## L2: a real transition system, and the counterexample to induction
+
+`DeliveryL2.als` is the protocol as `var` state with temporal formulas, not the
+state-only encoding of `Delivery.als`. Same actions and invariants as the
+Quint, TLA+, Lean, and Agda files. 280 lines, 501 seconds for all nine
+commands — by far the slowest tool here, and the reason is scope: 14 steps of a
+17-action relation over two tasks is a large SAT problem.
+
+### The result that justifies the file
+
+Alloy is the only tool in the bake-off that can be asked **"is my invariant
+inductive?"** directly.
+
+| Command | Result | Meaning |
+|---|---|---|
+| `invAlwaysHolds` | UNSAT | `Inv` holds along every trace from `init`, to 14 steps |
+| `attemptsAloneIsInductive` | **SAT** | `attemptsBounded` alone is *not* inductive |
+| `invIsInductive` | UNSAT | with `phaseBoundsAttempts`, induction goes through |
+
+That middle row is the whole point. `attemptsBounded` is exactly the invariant
+TLC discharged without comment, and exactly the one that cannot be proved by
+induction in Lean or Agda until it is strengthened. Alloy finds the obstruction
+*mechanically*, as a two-state counterexample, in 61 milliseconds.
+
+`attemptsCounterexampleToInduction` exhibits it concretely: a task with
+`phase = Claimed` and `attempts = 1`, one `planAttempt` step, and a successor
+with `attempts = 2`.
+
+That state is **not reachable from `init`** — `invAlwaysHolds` passes. An
+unreachable counterexample to induction is precisely what a strengthening is
+for: it rules out a state the transition relation alone permits but the
+reachable set never contains.
+
+So the three tool families line up on one axis:
+
+- **TLC** enumerates the reachable set and never mentions induction.
+- **Lean and Agda** demand an inductive invariant and give you nothing but a
+  stuck goal when yours is not.
+- **Alloy** sits between: it answers the induction question as a search, and
+  hands back the missing case as a structure.
+
+If the plan is to write a proof, running the Alloy inductiveness check first is
+strictly cheaper than discovering the same thing from a failed `planAttempt`
+case.
+
+### Encoding notes
+
+Relational override is the distinctive move:
+
+```alloy
+phase' = phase ++ (t -> Claimed)
+```
+
+One equation updates the touched task and frames every other. The Lean and Agda
+encodings needed a hand-written `upd` function plus a family of lemmas about
+it, and that machinery is most of their line count.
+
+The tax is the frame conditions. Alloy has no `UNCHANGED`, so all seventeen
+actions spell out everything they leave alone; the file carries five
+`...Unchanged` predicates purely for that. TLA+'s `UNCHANGED << ... >>` is the
+clear winner on this axis.
+
+`init` is a **predicate, not a fact**, and that is load-bearing. As a `fact` it
+would constrain every instance to begin at `init`, which silently turns the
+inductiveness checks into statements about reachable states — the exact
+question they exist to avoid. Writing `trace => always Inv` for reachability
+and a bare `(Inv and step) => after Inv` for induction keeps the two apart.
+
+Priming a predicate (`Inv'`) is a type error; the temporal operator is `after`.
+
+### What it still does not give
+
+Bounded twice over: 2 tasks, and 14 steps. "Holds in scope" is not "holds", and
+unlike the Lean and Agda proofs there is no claim about unbounded `head`,
+`attempts`, or `capacity`. Liveness (I17–I19) is expressible here with
+`eventually` and is not attempted.

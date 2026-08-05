@@ -1,5 +1,6 @@
 agda/*.agdai
 agda/MAlonzo/
 alloy/Delivery/
-lean/*.olean
+alloy/DeliveryL2/
 lean/.lake/
+lean/*.olean

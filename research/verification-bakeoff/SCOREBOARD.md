@@ -88,7 +88,8 @@ Each states the invariant and either discharges it or refuses.
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
-| Alloy 6 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
+| Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
+| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 61ms | 501s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
 refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
@@ -110,6 +111,15 @@ with `phaseBoundsAttempts`. TLC was handed the same invariant and never asked.
 characterize it.** The 500 lines and the tactic fluency are mechanical next to
 that.
 
+**Alloy sits between the two, and that is the practical takeaway.** It is the
+only tool here that answers *"is my invariant inductive?"* directly.
+`attemptsAloneIsInductive` returns SAT in 61 ms with a two-state counterexample:
+`phase = Claimed`, `attempts = 1`, one `planAttempt`, `attempts = 2`. That state
+is unreachable from `init`, which is exactly what a strengthening is for — it
+excludes a state the transition relation permits but the reachable set never
+contains. TLC never mentions induction; Lean and Agda give you a stuck goal.
+If a proof is the destination, run the Alloy inductiveness check first.
+
 Two invariants exist here that no state-machine encoding could state honestly.
 I11 (claim exclusivity with an exact token) and I12 (two ordered candidate
 parents) are booleans in the Quint, TLA+, and fast-check models — a mutant
@@ -123,7 +133,7 @@ over atoms, so the defect is a shape and the solver searches for it.
 | fast-check | none, already a dependency | 250 lines model + 100 lines harness | L1 + L2 |
 | Quint + Apalache | `brew install quint`, Apalache auto-fetched | 440 lines | L1 + L2 |
 | TLA+ / TLC | one 2 MB jar, no install | 300 lines | L1 + L2 |
-| Alloy 6 | one 21 MB jar, no install | 95 lines | L1 + structural I11/I12, no transitions |
+| Alloy 6 | one 21 MB jar, no install | 95 lines L1 + 280 lines L2 | L1 structural I11/I12, and L2 temporal |
 | Dafny | 100 MB release zip | 150 lines | L1 on code-shaped definitions |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 145 lines L1 + 506 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
