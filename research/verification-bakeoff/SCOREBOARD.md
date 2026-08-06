@@ -87,7 +87,8 @@ Each states the invariant and either discharges it or refuses.
 | Agda, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
-| Dafny | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
+| Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
+| Dafny, L2 | 38 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
 | Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
 | Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 61ms | 501s |
 
@@ -110,6 +111,21 @@ with `phaseBoundsAttempts`. TLC was handed the same invariant and never asked.
 **A model checker discovers the reachable set; a proof assistant makes you
 characterize it.** The 500 lines and the tactic fluency are mechanical next to
 that.
+
+**Four tools, four positions on one axis.** This is the single most useful
+thing the bake-off produced:
+
+| Tool | What you supply | What it does |
+|---|---|---|
+| TLC | an invariant | discovers the reachable set |
+| Alloy | an invariant | tells you whether it is inductive |
+| Lean / Agda | an **inductive** invariant | you prove every case by hand |
+| Dafny | an **inductive** invariant | SMT proves every case |
+
+The same obstruction — `attemptsBounded` is not inductive — shows up as a stuck
+`planAttempt` goal in Lean and Agda, a SAT counterexample in Alloy, and a
+method that cannot re-establish its own class invariant in Dafny. TLC never
+mentions it.
 
 **Alloy sits between the two, and that is the practical takeaway.** It is the
 only tool here that answers *"is my invariant inductive?"* directly.
@@ -134,7 +150,7 @@ over atoms, so the defect is a shape and the solver searches for it.
 | Quint + Apalache | `brew install quint`, Apalache auto-fetched | 440 lines | L1 + L2 |
 | TLA+ / TLC | one 2 MB jar, no install | 300 lines | L1 + L2 |
 | Alloy 6 | one 21 MB jar, no install | 95 lines L1 + 280 lines L2 | L1 structural I11/I12, and L2 temporal |
-| Dafny | 100 MB release zip | 150 lines | L1 on code-shaped definitions |
+| Dafny | 100 MB release zip | 150 lines L1 + 330 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 145 lines L1 + 506 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
 

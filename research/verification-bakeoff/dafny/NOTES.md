@@ -54,10 +54,90 @@ known for — proofs breaking on a solver update or on a logically equivalent
 rewrite of a spec — does not show up at this size and should not be assumed
 absent at a larger one.
 
-## Not attempted
+## L2: the class invariant is the induction
 
-L2. Dafny can express a state machine, but the natural encoding is a class with
-a mutable heap and history invariants, which is a different and much larger
-development than the model checkers needed. That trade is the point: Dafny is
-cheap where the property is a function's contract and expensive where it is a
-protocol's temporal shape.
+`DeliveryL2.dfy` is the protocol as a class whose mutable state is constrained
+by `Valid()`, with each action a method that must re-establish it. 38
+obligations, 2 seconds.
+
+This is a different shape from every other L2 encoding, and it lands at a
+distinct point on the axis they span:
+
+| Tool | What you supply | What it does |
+|---|---|---|
+| TLC | an invariant | discovers the reachable set |
+| Alloy | an invariant | tells you whether it is inductive |
+| Lean / Agda | an **inductive** invariant | you prove every case by hand |
+| **Dafny** | an **inductive** invariant | SMT proves every case |
+
+`requires Valid() ... ensures Valid()` on every method *is* the induction, one
+method at a time. So Dafny asks exactly what a proof assistant asks — the
+invariant must already be inductive — while discharging the cases the way a
+checker does.
+
+`DeliveryL2Mutants.dfy` makes that concrete. `ValidWeak()` keeps `attempts <= 1`
+and drops the phase/attempts clause, and `PlanAttemptM` fails to verify. Same
+obstruction as Lean's stuck goal and Alloy's counterexample to induction, in a
+third presentation: **a method that cannot re-establish its own class
+invariant.**
+
+### The friction that matters, and it is not the solver
+
+`ensures Valid()` alone makes a method useless to its caller.
+
+The first version of this file verified all seventeen methods and then failed
+fifteen times inside the reachability witnesses, because nothing said what
+`AcquireClaim` had actually *done*. The class invariant preserves safety and
+says nothing about progress, so the caller cannot establish the next method's
+precondition.
+
+The fix is a frame condition per method:
+
+```dafny
+ensures tickets[t].phase == Planned
+ensures tickets[t].attempts == old(tickets[t].attempts) + 1
+ensures holds == old(holds) && capacity == old(capacity)
+ensures crashed == old(crashed) && paused == old(paused)
+```
+
+That is the same tax Alloy pays for having no `UNCHANGED`, arriving by a
+completely different route — Alloy needs it to define the transition, Dafny
+needs it to let callers reason across one. TLA+ avoids both with
+`UNCHANGED << ... >>`.
+
+The SMT solver, meanwhile, needed no help at all: no lemmas, no `assert`
+hints, no triggers beyond removing one map comprehension the solver warned was
+brittle. At this size Z3 simply does the work.
+
+### Witnesses, as executable traces
+
+The vacuity check is nicer here than anywhere else in the bake-off, because a
+Dafny witness is just a program:
+
+```dafny
+method StaleHeadIsReachable() {
+  var d := new Delivery();
+  d.ObserveGraph(0, true, true);
+  d.AcquireClaim(0); d.PlanAttempt(0); d.BeginWork(0);
+  d.ReportAccepted(0); d.StartIntegration(0);
+  assert d.tickets[0].expectedHead == d.head;
+  d.ExternalTargetAdvance();
+  assert d.tickets[0].phase == Integrating;
+  assert d.tickets[0].expectedHead != d.head;
+}
+```
+
+It reads as the scenario it is, and it is statically checked rather than run.
+Lean and Agda need the same trace built as a chain of `Step` constructors;
+Alloy gets it from a `run`; TLC gets it by refuting a negation. This is the
+most readable of the four.
+
+`RecoveryPlansNoSecondAttempt` is the one worth reading next to
+`docs/OPERATIONAL-SCENARIOS.md`: crash, recover, and assert the attempt count
+is still 1.
+
+### Still not covered
+
+Liveness. Dafny has no temporal operators, so I17–I19 are not expressible here
+at all — the only tool in the lineup where that is a hard "cannot" rather than
+a "not attempted".

@@ -15,7 +15,7 @@ directory, not a paraphrase.
 | Quint + Apalache | `quint/deliveryCore.qnt` | same file |
 | TLA+ / TLC | `tlaplus/Delivery.tla` | same file |
 | Alloy 6 | `alloy/Delivery.als` | `alloy/DeliveryL2.als`, temporal |
-| Dafny | `dafny/Delivery.dfy` | not attempted |
+| Dafny | `dafny/Delivery.dfy` | `dafny/DeliveryL2.dfy`, class invariant |
 | Lean 4 | `lean/L1.lean` | `lean/L2.lean` |
 | Agda | `agda/L1.agda` | `agda/L2.agda` |
 
@@ -162,7 +162,19 @@ The SAT result hands back the missing case in 61 ms: `phase = Claimed`,
 that is the point — a strengthening excludes states the transition relation
 permits but the reachable set never contains.
 
-**The lesson to take from reading these four side by side:** a model checker
+**Dafny** puts the same inductive invariant in a class invariant, and each
+method's `ensures Valid()` is one case of the induction:
+```dafny
+ghost predicate Valid() reads this {
+  && (forall t :: t in Tasks ==> tickets[t].attempts <= 1)
+  && (forall t :: t in Tasks && (tickets[t].phase == NoObligation || tickets[t].phase == Claimed)
+        ==> tickets[t].attempts == 0)          // the same strengthening
+}
+```
+Drop the second clause and `PlanAttempt` stops verifying. Same obstruction,
+reported as a method failing to re-establish its own invariant.
+
+**The lesson to take from reading these five side by side:** a model checker
 *discovers* the reachable set; a proof assistant makes you *characterize* it;
 Alloy will tell you mechanically which characterization you are missing.
 The 500-line proofs and the tactic fluency are mechanical next to that one

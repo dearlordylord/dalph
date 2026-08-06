@@ -27,6 +27,7 @@ tlaplus/run.sh                        # TLC exhaustive checking, seconds
 tlaplus/run.sh --witness              # the vacuity check
 tlaplus/run.sh --m8                   # the seeded specification error
 alloy/run.sh                          # relational structure search, seconds
+alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not

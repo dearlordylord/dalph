@@ -19,20 +19,28 @@ fi
 echo "| File | Expected | Dafny | s |"
 echo "|---|---|---|---|"
 
-start=$SECONDS
-out=$("$DAFNY" verify Delivery.dfy 2>&1)
-secs=$((SECONDS - start))
-count=$(grep -oE '[0-9]+ verified' <<<"$out" | grep -oE '^[0-9]+')
-errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
-verdict=$([[ ${errors:-1} == 0 ]] && echo "${count:-?} verified" || echo "**unexpected ${errors} errors**")
-echo "| Delivery.dfy | verifies | $verdict | $secs |"
+faithful() { # $1 file
+  local start=$SECONDS out count errors verdict
+  out=$("$DAFNY" verify "$1" 2>&1)
+  count=$(grep -oE '[0-9]+ verified' <<<"$out" | grep -oE '^[0-9]+')
+  errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
+  verdict=$([[ ${errors:-1} == 0 ]] && echo "${count:-?} verified" || echo "**unexpected ${errors} errors**")
+  echo "| $1 | verifies | $verdict | $((SECONDS - start)) |"
+}
 
-start=$SECONDS
-out=$("$DAFNY" verify DeliveryMutants.dfy 2>&1)
-secs=$((SECONDS - start))
-errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
-verdict=$([[ ${errors:-0} -ge 3 ]] && echo "$errors rejected" || echo "**only ${errors:-0} rejected**")
-echo "| DeliveryMutants.dfy | 3 rejections | $verdict | $secs |"
+mutants() { # $1 file, $2 expected count
+  local start=$SECONDS out errors verdict
+  out=$("$DAFNY" verify "$1" 2>&1)
+  errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
+  verdict=$([[ ${errors:-0} -ge $2 ]] && echo "$errors rejected" || echo "**only ${errors:-0} rejected**")
+  echo "| $1 | $2 rejections | $verdict | $((SECONDS - start)) |"
+  LAST_OUT=$out
+}
+
+faithful Delivery.dfy
+mutants DeliveryMutants.dfy 3
+faithful DeliveryL2.dfy
+mutants DeliveryL2Mutants.dfy 3
 
 echo ""
-grep -E 'Error: a (postcondition|precondition)' <<<"$out" | sed 's/^/    /'
+grep -E 'Error: a (postcondition|precondition)' <<<"$LAST_OUT" | sed 's/^/    /'
