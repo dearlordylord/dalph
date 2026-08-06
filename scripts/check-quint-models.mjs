@@ -100,13 +100,17 @@ await run("control-direction application sampled model", [
   "--verbosity",
   "1"
 ])
+// TLC checks the complete state graph: 476 generated / 175 distinct states,
+// depth 10, ~0.7s (Quint 0.32.0, linux-aarch64). The graph is finite because
+// `appliedCount` saturates in the spec; unbounded it diverged past 36M states.
+// No --max-steps: a future regression shows as a diameter change, not truncation.
 await run("control-direction application exhaustive model", [
   "verify",
   "specs/controlDirectionApplication.qnt",
+  "--backend",
+  "tlc",
   "--invariants",
   ...controlDirectionApplicationInvariants,
-  "--max-steps",
-  "8",
   "--verbosity",
   "1"
 ])
@@ -222,15 +226,19 @@ await run("Git reconciliation sampled model", [
   "--verbosity",
   "1"
 ])
+// TLC checks the complete state graph: 101 generated / 44 distinct states,
+// depth 5, ~0.7s (Quint 0.32.0, linux-aarch64) — replacing a 7-step Apalache
+// BMC with exhaustive checking. No --max-steps: TLC reports the diameter, so
+// "is the bound binding" stops being a separate investigation.
 await run("Git reconciliation exhaustive model", [
   "verify",
   "specs/gitReconciliation.qnt",
+  "--backend",
+  "tlc",
   "--step",
   "verificationStep",
   "--invariants",
   ...gitReconciliationInvariants,
-  "--max-steps",
-  "7",
   "--verbosity",
   "1"
 ])
@@ -279,6 +287,11 @@ await run("accepted-result integration sampled model", [
   "--verbosity",
   "1"
 ])
+// TLC checks the complete state graph: 4309 generated / 1890 distinct states,
+// diameter 19, ~0.9s (Quint 0.32.0, linux-aarch64). A previous --max-steps 12
+// truncated the check four levels short of the diameter; with no bound the
+// whole graph is covered against all eight invariants and future growth shows
+// up as a diameter change rather than silent truncation.
 await run("accepted-result integration exhaustive model", [
   "verify",
   "specs/acceptedResultIntegration.qnt",
@@ -286,8 +299,6 @@ await run("accepted-result integration exhaustive model", [
   "tlc",
   "--invariants",
   ...acceptedResultIntegrationInvariants,
-  "--max-steps",
-  "12",
   "--verbosity",
   "1"
 ])

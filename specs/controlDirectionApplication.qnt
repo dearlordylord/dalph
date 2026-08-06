@@ -11,6 +11,10 @@ module controlDirectionApplication {
     runPaused: bool,
     taskAPaused: bool,
     taskBPaused: bool,
+    // Saturating counter: 0 means no direction applied, 1 means at least one.
+    // Every invariant and witness below uses only that == 0 vs > 0 distinction,
+    // and the saturation keeps the state space finite so the gate's exhaustive
+    // TLC run is genuinely exhaustive. Revisit the day anyone needs an actual count.
     appliedCount: int,
     lastApplied: AppliedDirection,
     lastAppliedWasOperatorInitiated: bool,
@@ -30,7 +34,7 @@ module controlDirectionApplication {
     runPaused: if (subject == RunSubject) directionValue(direction) else s.runPaused,
     taskAPaused: if (subject == TaskASubject) directionValue(direction) else s.taskAPaused,
     taskBPaused: if (subject == TaskBSubject) directionValue(direction) else s.taskBPaused,
-    appliedCount: s.appliedCount + 1,
+    appliedCount: if (s.appliedCount == 0) 1 else s.appliedCount,
     lastApplied: Applied({ subject: subject, direction: direction }),
     lastAppliedWasOperatorInitiated: true,
   }
@@ -45,9 +49,10 @@ module controlDirectionApplication {
       and not(state.finalPausePhaseClaimed)
 
   // Constrains which states are representable, not how the model behaves.
-  // Quint has no natural-number type, so the bound is stated here instead.
+  // Quint has no natural-number type, so the bound is stated here instead;
+  // the upper bound holds by construction because the counter saturates.
   // It is not evidence that any control direction was applied correctly.
-  val typeOk: bool = state.appliedCount >= 0
+  val typeOk: bool = state.appliedCount >= 0 and state.appliedCount <= 1
 
   val runPauseAppliedReached: bool = state.runPaused and state.appliedCount > 0
   val taskPauseAppliedReached: bool = state.taskAPaused and state.appliedCount > 0
