@@ -148,3 +148,21 @@ believed.
 Verified independently: `agda L2.agda` clean after `rm -rf _build *.agdai`, no
 `postulate`, no `TERMINATING`/`trustMe` pragmas, no imports, and the
 definitions and type signatures unchanged.
+
+## Liveness: not attempted, and the reason is not Agda
+
+I17–I19 are as statable here as in Lean — a coinductive record or `Nat → St`
+run, fairness as a hypothesis, a phase-ranking argument to extract the
+"eventually". See `../lean/NOTES.md` for the shape; it is the same development.
+
+Two Agda-specific costs on top of it. There is no `Nat`-indexed library to lean
+on, since this directory imports nothing, so ordering, `≥` and the well-founded
+recursion all have to be built first. And the tactic-free style that made the
+safety proof pleasantly explicit is a real burden for a ranking argument, where
+the interesting content is arithmetic rather than case analysis and Lean's
+`omega` would carry most of it.
+
+Nothing here is a limitation of the language. It is the same trade the whole
+bake-off keeps producing: the proof assistants give unbounded results at a cost
+that only pays when the property is small or the model is large, and this
+property is neither.

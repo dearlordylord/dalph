@@ -43,3 +43,54 @@ properties are one line each, and the existing
 `ticket-delivery-projection.property.test.ts` already covers I1, I2, and I4
 against the real implementation rather than against a model. No tool here
 replaces that — the others check a model, this one checks the code.
+
+## Liveness: the sharpest limit in the bake-off
+
+`liveness.mjs` is a **bounded surrogate**, not a liveness check. Liveness
+quantifies over infinite behaviours and a test runs finitely, so `eventually P`
+is not a testable proposition. What is testable:
+
+```
+random prefix -> stop the environment -> run a fair scheduler
+              -> assert the system drains within `drain` steps
+```
+
+Three separate weakenings, each worth naming. `<>[]~crashed` becomes a hard
+cutoff. "Eventually" becomes "within 40 steps". And the round-robin scheduler is
+*one* fairness-satisfying strategy, where `SF_vars` quantifies over all of them
+— which means this file structurally cannot find the
+`Executing → SuspensionRequested → Suspended` cycle that broke the first TLA+
+fairness attempt, because the scheduler never picks `requestSuspension`.
+
+All three properties pass in **0.9 seconds**, against 28s for one TLC property
+and 94s for the whole Alloy file.
+
+### And they pass vacuously
+
+```
+| Witness at end of prefix | share of runs |
+| Executing                | 0.58% |
+| Integrating              | 0.02% |
+| staleIntegrating         | 0.00% |
+| Settled                  | 0.00% |
+```
+
+Zero. Over 40 000 prefixes the model reached `Integrating` once and a *stale*
+`Integrating` never — so I18 and I19 pass without once visiting the state they
+exist to constrain. `--no-abandon` removes the escape hatch that stale state
+needs, and the properties still pass: **a negative control that does not fire.**
+
+Raising the prefix to 150 steps moves `Integrating` to 2.23% and
+`staleIntegrating` to 0.00% still. Choosing among *enabled* actions rather than
+discarding disabled ones — fast-check's own `fc.commands` idiom, and a real
+improvement over the encoding in `run.mjs` — helps the shallow phases and does
+not help this one.
+
+This is the same lesson as M6 (caught 4 times in 10 at 50 000 samples), stated
+more starkly: the deep states of a protocol are not reachable by random walk,
+and a passing property-based test carries no information about them. The
+witness table is not decoration here. It is the only thing that distinguishes
+this result from a real one.
+
+The honest verdict: property testing is the cheapest way to check drain
+behaviour on shallow states and gives **no** liveness coverage on deep ones.

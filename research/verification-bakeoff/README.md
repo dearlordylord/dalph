@@ -26,8 +26,13 @@ quint/run.sh --verify                 # Apalache symbolic checking, minutes
 tlaplus/run.sh                        # TLC exhaustive checking, seconds
 tlaplus/run.sh --witness              # the vacuity check
 tlaplus/run.sh --m8                   # the seeded specification error
+tlaplus/run-liveness.sh --small       # I17-I19, one task
+tlaplus/run-liveness.sh               # I17-I19, two tasks; I18 does not finish
+node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witnesses
+node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
 alloy/run.sh                          # relational structure search, seconds
 alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
+alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~94s
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not
@@ -63,6 +68,12 @@ tools by which level it picked.
 **A pass is not evidence.** Random engines report clean on states they never
 reached. Every clean result here is paired with a witness that the interesting
 state is reachable at all.
+
+**A run stuck forever violates no safety property.** Nine safety invariants,
+three engines and 96 000 states had nothing to say about a ticket parked in
+`Integrating` behind a stale head. One liveness property found it immediately —
+and also found that the property itself had dropped half of I18. Safety and
+liveness fail differently and are not substitutes.
 
 **The specification is the part that stays yours.** M8 seeds no defect, only a
 plausible-looking wrong invariant, and every tool faithfully reports a correct

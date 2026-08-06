@@ -33,7 +33,7 @@ vars == << tickets, capacity, positions, paused, targetResource, targetHead,
 
 Phases == {"NoObligation", "Claimed", "Planned", "Executing",
            "SuspensionRequested", "Suspended", "Accepted", "Integrating",
-           "Promoted", "Settled"}
+           "Promoted", "Settled", "Abandoned"}
 
 HoldsPosition(p) == p \in {"Executing", "SuspensionRequested"}
 
@@ -214,6 +214,25 @@ Promote(t) ==
        (promotedFromExactHead /\ tickets[t].expectedHead = targetHead)
   /\ UNCHANGED << capacity, positions, paused, crashed, admissionRespectedCeiling >>
 
+(***************************************************************************)
+(* The escape from a stale integration head, and the only action in this   *)
+(* module that liveness checking demanded. Safety never needed it: a run    *)
+(* parked in Integrating forever violates nothing.                          *)
+(*                                                                          *)
+(* It corresponds to CorrectionLimitReached in                              *)
+(* specs/acceptedResultIntegration.qnt -- a terminal state that is retained *)
+(* rather than settled, which is why HasObligation stays true here and      *)
+(* Abandoned is not treated like Settled.                                   *)
+(***************************************************************************)
+AbandonIntegration(t) ==
+  /\ ~crashed
+  /\ tickets[t].phase = "Integrating"
+  /\ tickets[t].expectedHead # targetHead
+  /\ tickets' = [tickets EXCEPT ![t].phase = "Abandoned"]
+  /\ targetResource' = {}
+  /\ UNCHANGED << capacity, positions, paused, targetHead, crashed,
+                  admissionRespectedCeiling, promotedFromExactHead >>
+
 Settle(t) ==
   /\ ~crashed
   /\ tickets[t].phase = "Promoted"
@@ -278,6 +297,7 @@ Next ==
        \/ AcquireClaim(t) \/ PlanAttempt(t) \/ BeginWork(t)
        \/ RequestSuspension(t) \/ SafelySuspend(t) \/ ResumeWork(t)
        \/ ReportAccepted(t) \/ StartIntegration(t) \/ Promote(t) \/ Settle(t)
+       \/ AbandonIntegration(t)
   \/ ApplyPause \/ ApplyUnpause
   \/ \E c \in 0..MaxCapacity : ChangeCapacity(c)
   \/ ExternalTargetAdvance

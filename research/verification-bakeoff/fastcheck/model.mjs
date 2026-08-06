@@ -130,6 +130,17 @@ export const actions = {
     next.promotedFromExactHead = s.promotedFromExactHead && exact
     return next
   },
+  // The escape from a stale integration head. Needed only by the bounded
+  // liveness surrogate in ./liveness.mjs -- parking in Integrating forever
+  // breaks no invariant.
+  abandonIntegration: (s, { id }) => {
+    if (s.crashed || s.tickets[id].phase !== "Integrating") return null
+    if (s.tickets[id].expectedHead === s.targetHead) return null
+    const next = clone(s)
+    next.tickets[id].phase = "Abandoned"
+    next.targetResource = []
+    return next
+  },
   settle: (s, { id }) => {
     if (s.crashed || s.tickets[id].phase !== "Promoted") return null
     const next = clone(s)

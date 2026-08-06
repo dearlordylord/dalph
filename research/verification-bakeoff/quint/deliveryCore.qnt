@@ -18,6 +18,11 @@ module deliveryCore {
     | Integrating
     | Promoted
     | Settled
+    // Terminal, but retained rather than settled: the analogue of
+    // CorrectionLimitReached in specs/acceptedResultIntegration.qnt. Only the
+    // temporal properties need it -- parking in Integrating forever violates
+    // no safety property at all.
+    | Abandoned
 
   type Ticket = {
     phase: Phase,
@@ -296,6 +301,22 @@ module deliveryCore {
     admissionRespectedCeiling' = admissionRespectedCeiling,
   }
 
+  /** The escape from a stale integration head; see I18. */
+  action abandonIntegration(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Integrating,
+    tickets.get(id).expectedHead != targetHead,
+    tickets' = tickets.setBy(id, t => t.with("phase", Abandoned)),
+    targetResource' = Set(),
+    positions' = positions,
+    capacity' = capacity,
+    paused' = paused,
+    crashed' = crashed,
+    targetHead' = targetHead,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
   action settle(id: TaskId): bool = all {
     not(crashed),
     tickets.get(id).phase == Promoted,
@@ -420,6 +441,7 @@ module deliveryCore {
       startIntegration(id),
       promote(id),
       settle(id),
+      abandonIntegration(id),
       applyPause,
       applyUnpause,
       changeCapacity(nextCapacity),
@@ -428,6 +450,62 @@ module deliveryCore {
       recover,
     }
   }
+
+  // ------------------------------------------------------------------ temporal
+  //
+  // I17-I19 of ../INVARIANTS.md. Quint has `always`, `eventually`, `weakFair`
+  // and `strongFair` as builtins, so these read closer to the TLA+ originals
+  // than the Alloy ones do -- `strongFair` is literally `SF_e(A)`.
+  //
+  // The catch is at the back end. `quint run` cannot evaluate temporal
+  // operators at all, and only Apalache can, so every property below is
+  // reachable exclusively through `quint verify --temporal`. See ./NOTES.md
+  // for what that actually did.
+
+  val vars = (tickets, capacity, positions, paused, targetResource, targetHead,
+              crashed, admissionRespectedCeiling, promotedFromExactHead)
+
+  /// Strong, not weak, and per action, not on the disjunction: the two
+  /// mistakes ../tlaplus/DeliveryLiveness.tla made and TLC caught.
+  temporal fairness = and {
+    TASKS.forall(id => and {
+      acquireClaim(id).strongFair(vars),
+      planAttempt(id).strongFair(vars),
+      beginWork(id).strongFair(vars),
+      safelySuspend(id).strongFair(vars),
+      resumeWork(id).strongFair(vars),
+      reportAccepted(id).strongFair(vars),
+      startIntegration(id).strongFair(vars),
+      promote(id).strongFair(vars),
+      abandonIntegration(id).strongFair(vars),
+      settle(id).strongFair(vars),
+    }),
+    recover.strongFair(vars),
+  }
+
+  temporal eventuallyStable = eventually(always(not(crashed)))
+  temporal eventuallyRunning = eventually(always(not(paused)))
+  temporal eventuallyRoomy = eventually(always(capacity > 0))
+
+  /// I17: a pause that stays applied drains every held position.
+  temporal pauseDrainsPositions =
+    (fairness and always(paused) and eventuallyStable)
+      implies eventually(positions == Set())
+
+  /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
+  temporal everyBegunSettles =
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+      implies TASKS.forall(id =>
+        always(
+          (tickets.get(id).phase != Executing)
+            or eventually(tickets.get(id).phase == Settled
+                            or tickets.get(id).phase == Abandoned)
+        ))
+
+  /// I19: strictly weaker than I18 -- parked at Planned under capacity 0 is
+  /// quiescent and has completed nothing.
+  temporal reachesQuiescence =
+    (fairness and eventuallyStable) implies eventually(always(not(step.enabled())))
 }
 
 module delivery {

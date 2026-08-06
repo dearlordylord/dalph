@@ -31,6 +31,7 @@ datatype Phase =
   | Integrating
   | Promoted
   | Settled
+  | Abandoned
 
 datatype Option<T> = None | Some(value: T)
 
@@ -227,6 +228,24 @@ class Delivery {
     head := head + 1;
   }
 
+  /* The escape from a stale integration head. Present for parity with the
+   * other encodings, where liveness required it; it earns nothing here,
+   * because Dafny has no way to state the property that demanded it. A ticket
+   * parked in Integrating forever is a fully verified Delivery object. */
+  method AbandonIntegration(t: nat)
+    requires Valid() && t in Tasks
+    requires !crashed && tickets[t].phase == Integrating
+    requires tickets[t].expectedHead != head
+    modifies this
+    ensures Valid()
+    ensures tickets[t].phase == Abandoned && target.None?
+    ensures head == old(head) && holds == old(holds)
+    ensures crashed == old(crashed) && paused == old(paused)
+  {
+    tickets := tickets[t := tickets[t].(phase := Abandoned)];
+    target := None;
+  }
+
   method Settle(t: nat)
     requires Valid() && t in Tasks
     requires !crashed && tickets[t].phase == Promoted
@@ -328,6 +347,10 @@ method StaleHeadIsReachable()
   d.ExternalTargetAdvance();
   assert d.tickets[0].phase == Integrating;
   assert d.tickets[0].expectedHead != d.head;
+  // And the escape. Nothing in this file forces it to be taken -- that is
+  // exactly the liveness claim Dafny cannot make.
+  d.AbandonIntegration(0);
+  assert d.tickets[0].phase == Abandoned;
 }
 
 /* Crash clears process-local resources; recovery restores exactly the

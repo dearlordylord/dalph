@@ -104,4 +104,14 @@ worth recording in `SCOREBOARD.md`.
 | I1–I3 | yes | yes | yes | yes | yes | yes | yes |
 | I4–I6 | yes | yes | yes | yes | yes | typed away | yes |
 | I7–I15 | yes | yes | yes | partial | costly | costly | stateful PBT |
-| I16–I19 | I16–I17 | yes | yes | — | — | — | — |
+| I16 | yes | yes | yes | yes | yes | yes | yes |
+| I17–I19 | statable, no backend | yes | yes | **not expressible** | statable, not attempted | statable, not attempted | bounded surrogate only |
+
+The last row is the only one where the expectations set at the start of the
+bake-off turned out wrong in both directions. Quint states the temporal
+properties most cleanly of anything here and cannot check them — Apalache stops
+at `Handling fairness is not supported yet!`. Alloy answers all three in 105
+seconds where TLC returns no verdict on I18 at two tasks in half an hour,
+reversing the ordering the safety results establish. Dafny's `—` is a genuine
+capability gap rather than a scope decision, and fast-check's pass is vacuous:
+its witness counters show it never reaches the state I18 constrains.

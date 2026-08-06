@@ -50,9 +50,16 @@ Their presence in the model is a lesson, not an implementation detail.
 NoObligation -> Claimed -> Planned -> Executing -> Accepted
                                    -> SuspensionRequested -> Suspended -> Executing
 Accepted -> Integrating -> Promoted -> Settled
+Integrating -> Abandoned                    (stale captured head)
 ```
 
 Position held exactly in `Executing` and `SuspensionRequested`.
+
+`Settled` and `Abandoned` are both terminal and they are not interchangeable.
+`Settled` drops the obligation; `Abandoned` **keeps** it, so a retained ticket
+is still delivered. That is the difference between the two disjuncts of I18,
+and it mirrors `CorrectionLimitReached` in
+`specs/acceptedResultIntegration.qnt`.
 
 ## Actions
 
@@ -68,12 +75,26 @@ Position held exactly in `Executing` and `SuspensionRequested`.
 | `reportAccepted(id)` | terminal accepted; releases the position |
 | `startIntegration(id)` | acquires the exclusive target resource, captures `expectedHead` |
 | `promote(id)` | compare-and-set against `targetHead`; advances it; releases the resource |
+| `abandonIntegration(id)` | the captured head went stale; releases the resource, retains the obligation with a reason |
 | `settle(id)` | terminal delivery fact |
 | `applyPause` / `applyUnpause` | operator direction |
 | `changeCapacity(c)` | policy revision; existing holders continue |
 | `externalTargetAdvance` | the integration target moves outside Dalph, staling a captured head |
 | `crash` | clears every process-local resource; `Integrating` falls back to `Accepted` |
 | `recover` | reconstructs positions for existing responsibilities; plans nothing new |
+
+## One deliberate divergence between encodings
+
+`Abandoned` and `abandonIntegration` exist in the five executable encodings
+(Quint, TLA+, Alloy, Dafny, fast-check) and **not** in `lean/L2.lean` or
+`agda/L2.agda`.
+
+They were added because liveness demanded them: without the action a ticket
+parks in `Integrating` behind a stale head forever, which violates no safety
+property and falsifies I18. The Lean and Agda developments prove safety only —
+liveness there is a second development that was not attempted — so the phase
+would add 17 more proof cases and change no result. The divergence is recorded
+here rather than silently absorbed.
 
 ## Deliberate omissions
 

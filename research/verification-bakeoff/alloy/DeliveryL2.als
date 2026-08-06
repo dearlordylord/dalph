@@ -14,7 +14,8 @@ module deliveryL2
 
 abstract sig Phase {}
 one sig NoObligation, Claimed, Planned, Executing, SuspensionRequested,
-        Suspended, Accepted, Integrating, Promoted, Settled extends Phase {}
+        Suspended, Accepted, Integrating, Promoted, Settled,
+        Abandoned extends Phase {}
 
 sig Task {
   var phase        : one Phase,
@@ -135,6 +136,20 @@ pred promote[t : Task] {
   graphUnchanged and flagsUnchanged and holdsUnchanged
 }
 
+/*
+ * The escape from a stale integration head. Only the liveness checks in
+ * DeliveryLiveness.als need this: without it a ticket parks in Integrating
+ * forever, which violates no safety property at all.
+ */
+pred abandonIntegration[t : Task] {
+  live and t.phase = Integrating and t.expectedHead != Sys.head
+  phase' = phase ++ (t -> Abandoned)
+  no Sys.target'
+  Sys.capacity' = Sys.capacity and Sys.head' = Sys.head
+  attempts' = attempts and expectedHead' = expectedHead
+  graphUnchanged and flagsUnchanged and holdsUnchanged
+}
+
 pred settle[t : Task] {
   live and t.phase = Promoted
   phase' = phase ++ (t -> Settled)
@@ -195,7 +210,8 @@ pred step {
   (some t : Task |
       observeGraph[t] or acquireClaim[t] or planAttempt[t] or beginWork[t]
    or requestSuspension[t] or safelySuspend[t] or resumeWork[t]
-   or reportAccepted[t] or startIntegration[t] or promote[t] or settle[t])
+   or reportAccepted[t] or startIntegration[t] or promote[t] or settle[t]
+   or abandonIntegration[t])
   or applyPause or applyUnpause or changeCapacity
   or externalTargetAdvance or crash or recover or stutter
 }

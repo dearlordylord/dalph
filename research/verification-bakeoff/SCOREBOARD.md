@@ -88,9 +88,9 @@ Each states the invariant and either discharges it or refuses.
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
-| Dafny, L2 | 38 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
+| Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
 | Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
-| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 61ms | 501s |
+| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 61ms | 361s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
 refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
@@ -141,6 +141,151 @@ I11 (claim exclusivity with an exact token) and I12 (two ordered candidate
 parents) are booleans in the Quint, TLA+, and fast-check models — a mutant
 flips the flag and the "detection" tests the flag. In Alloy they are relations
 over atoms, so the defect is a shape and the solver searches for it.
+
+## Liveness (I17-I19)
+
+The temporal half of `INVARIANTS.md`, checked last and the only place where the
+ranking from the safety results reverses.
+
+| Tool | I17 pause | I18 no silent drop | I19 quiescence | Cost |
+|---|---|---|---|---|
+| TLA+ / TLC | holds | holds at 1 task; **no verdict at 2 in 30 min** | holds at 1 task | 28s / 6s / 4s |
+| Alloy 6 | holds in scope | holds in scope | holds in scope | **94s for the file** |
+| Quint | statable, **no backend** | statable, no backend | statable, no backend | Apalache: `Handling fairness is not supported yet!` |
+| Quint `--backend tlc` | holds, 96 000 states | TLC's problem | TLC's problem | 35s |
+| fast-check | holds (bounded) | **holds vacuously** | **holds vacuously** | 0.9s |
+| Dafny | **not expressible** | not expressible | not expressible | — |
+| Lean / Agda | statable, not attempted | statable, not attempted | statable, not attempted | a second development |
+
+Alloy scopes: 2 Task, 5 Int, 1..12 steps. TLC: full reachability under
+`StateConstraint`, 30-minute budget per property; the 1-task column is
+`tlaplus/run-liveness.sh --small`, 1 824 states. fast-check: 20 000 runs,
+25-step prefix, 40-step drain.
+
+### A run stuck forever violates no safety property
+
+That is the entire argument for checking liveness, and one property demonstrated
+it. Stated as `phase = "Executing" ~> phase = "Settled"`, I18 failed with a
+ticket parked in `Integrating` at `expectedHead = 1` against `targetHead = 2`,
+then `State 11: Stuttering`. `Promote`'s compare-and-set guard was permanently
+unsatisfiable and the only escape in the model was a crash. Nine safety
+invariants, three engines and 96 000 states had nothing to say about it.
+
+Two things were wrong, and only one was the model. The property had dropped half
+of I18 — the invariant reads "settles **or is retained together with an exact
+stated reason**" — and the model had no state for the second disjunct.
+Production does: `CorrectionRequired` bounded by `CORRECTION_LIMIT`, terminating
+in `CorrectionLimitReached`. Hence the `Abandoned` phase, the only addition
+liveness demanded, added to all five executable encodings. Every safety verdict
+was unchanged; the state count moved 81 792 → 96 000.
+
+### Fairness is where the mistakes are, not the properties
+
+The properties are one line each. Getting the *spec* right took two corrections,
+both caught by TLC:
+
+**`WF_vars(Next)` was decoration.** It says only that some step keeps happening,
+and is satisfied by a machine that observes the graph forever and never touches
+a ticket.
+
+**Fairness on a disjunction is far too weak.** `SF_vars(Progress(t))` over the
+ten lifecycle actions looks right and is discharged by taking *any* disjunct
+infinitely often. TLC returned a lasso cycling
+`Executing → SuspensionRequested → Suspended → Executing` in which
+`ReportAccepted` is enabled at every pass and never chosen. All ten actions have
+to be named separately — 21 `SF_vars` conjuncts at two tasks.
+
+`alloy/DeliveryLiveness.als` keeps that mistake as a checked negative control:
+`disjunctionFairnessIsTooWeak` is SAT, and Alloy hands back the same lasso as a
+structure you can step through rather than as console text.
+
+Every liveness property also needs an environment hypothesis — `<>[]~crashed`,
+`<>[]~paused`, `<>[](capacity > 0)`. None of the nine safety invariants needed
+one. Perpetual crashing, perpetual pause and a capacity pinned at zero are each
+harmless for safety and each independently falsify every property in the
+temporal catalog.
+
+### The cost ordering inverts
+
+For safety, TLC was the outright winner: 96 000 states in 3 seconds, every
+mutant caught, and Alloy's L2 file took 361s. For liveness:
+
+| | safety | liveness |
+|---|---|---|
+| TLC | 3s | 28s for I17; no verdict for I18 at 2 tasks in 30 min |
+| Alloy | 361s | 94s for all three |
+
+Same model, same machine. The explanation is that they are answering different
+questions. TLC checks every behaviour of the finite state graph against a
+tableau whose size is exponential in the number of fairness conjuncts. Alloy
+searches for a counterexample **lasso of bounded length** — 12 steps here. "No
+counterexample lasso within 12 steps" is a real result and a strictly weaker
+one, and it is what makes Alloy cheap.
+
+The practical reading: Alloy is the tool to reach for first on a liveness
+question, and its answer does not mean what TLC's means.
+
+### Where the vocabulary and the engine part company
+
+Quint states these properties better than anything else here. `always`,
+`eventually`, `weakFair` and `strongFair` are builtins, `strongFair(A, v)` *is*
+`SF_v(A)`, and `enabled` is a builtin so I19 is one line —
+`eventually(always(not(step.enabled())))` — against ten hand-written guard
+predicates in Alloy.
+
+Then `quint run` cannot evaluate temporal operators at all, `quint verify`
+prompts you to reconsider before it will try, and Apalache stops at
+
+```
+error: Handling fairness is not supported yet!
+```
+
+Every property in this catalog needs fairness, so for Apalache the answer is not
+"slow", it is "cannot". `--backend tlc` works and reports 96 000 states, exactly
+matching the independently hand-written `tlaplus/Delivery.tla` — a useful
+cross-check that the two models agree. For liveness, Quint is a front end for
+TLC.
+
+Alloy's problem is the mirror image: the engine handles liveness well and the
+*language* has no `ENABLED`, no `WF_`/`SF_`, and no way to abstract over a
+formula. The trace is fixed, so "some successor satisfies A" is inexpressible
+and every guard has to be restated as an `en*` predicate that duplicates its
+action. That drift is not hypothetical — the first `enAcquireClaim` here carried
+a selection guard copied from the TLA+ model that `DeliveryL2.als` does not
+have, and a wrong `enabled` predicate weakens fairness silently while the check
+still passes.
+
+### The one hard "cannot", and the one vacuous pass
+
+**Dafny cannot state these at all.** No temporal operators, no `~>`, no fairness
+vocabulary. `decreases` proves one call terminates and says nothing about a
+reactive system that never terminates by design. A ticket parked in
+`Integrating` forever is a fully verified `Delivery` object. This is the only
+capability gap in the bake-off rather than a cost difference — and it lands on
+the tool with otherwise the most complete L2 encoding.
+
+**fast-check passes, and the witnesses say it means nothing.** All three
+bounded surrogates hold in 0.9 seconds:
+
+```
+| Witness at end of prefix | share of runs |
+| Executing                | 0.58% |
+| Integrating              | 0.02% |
+| staleIntegrating         | 0.00% |
+| Settled                  | 0.00% |
+```
+
+Over 40 000 prefixes the model reached a *stale* `Integrating` zero times, so
+I18 and I19 pass without ever visiting the state they exist to constrain. The
+`--no-abandon` negative control removes the escape hatch and the properties
+**still pass** — a control that does not fire. Raising the prefix to 150 steps
+brings `Integrating` to 2.23% and `staleIntegrating` to 0.00% still. Switching
+to fast-check's own `fc.commands` idiom, choosing among *enabled* actions rather
+than discarding disabled ones, helps the shallow phases and not this one.
+
+Same lesson as M6, stated more starkly: deep protocol states are not reachable
+by random walk, and a passing property-based test carries no information about
+them.
 
 ## Cost
 

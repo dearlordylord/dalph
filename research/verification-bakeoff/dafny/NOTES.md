@@ -57,8 +57,8 @@ absent at a larger one.
 ## L2: the class invariant is the induction
 
 `DeliveryL2.dfy` is the protocol as a class whose mutable state is constrained
-by `Valid()`, with each action a method that must re-establish it. 38
-obligations, 2 seconds.
+by `Valid()`, with each action a method that must re-establish it. 40
+obligations, 3 seconds.
 
 This is a different shape from every other L2 encoding, and it lands at a
 distinct point on the axis they span:
@@ -136,8 +136,20 @@ most readable of the four.
 `docs/OPERATIONAL-SCENARIOS.md`: crash, recover, and assert the attempt count
 is still 1.
 
-### Still not covered
+### Liveness: the one hard "cannot"
 
-Liveness. Dafny has no temporal operators, so I17–I19 are not expressible here
-at all — the only tool in the lineup where that is a hard "cannot" rather than
-a "not attempted".
+I17–I19 are not expressible in Dafny. There are no temporal operators, so
+there is no way to write `eventually`, no `~>`, and no fairness vocabulary.
+Every other tool in the bake-off states all three properties; this is the only
+place where the answer is a capability gap rather than a cost.
+
+The nearest available thing is a termination measure — `decreases` on a loop or
+a recursive method — which proves that *one call* finishes. It says nothing
+about a reactive system that never terminates by design, which is what I17–I19
+are about. A ticket parked in `Integrating` forever is a perfectly well-typed,
+fully verified `Delivery` object.
+
+That is not a defect in Dafny so much as its scope: it verifies code against
+pre/postconditions, and "this run eventually settles or is retained with a
+stated reason" is not a postcondition of anything. The gap is worth naming
+precisely because the L2 encoding is otherwise the most complete one here.

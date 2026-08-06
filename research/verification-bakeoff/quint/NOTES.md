@@ -43,3 +43,71 @@ it, a clean bill of health is not.
 
 On a model this small, TLC's explicit enumeration beats both: 10/10 on M6 in
 under a second, and the whole faithful state space in 3.
+
+## Liveness
+
+Quint states I17–I19 more directly than any other tool here. `always`,
+`eventually`, `weakFair` and `strongFair` are builtins, and `strongFair(A, v)`
+is defined to be exactly `SF_v(A)`:
+
+```quint
+temporal fairness = and {
+  TASKS.forall(id => and {
+    promote(id).strongFair(vars),
+    abandonIntegration(id).strongFair(vars),
+    ...
+  }),
+  recover.strongFair(vars),
+}
+```
+
+`enabled` is a builtin too, so `reachesQuiescence` is one line —
+`eventually(always(not(step.enabled())))` — against ten hand-written guard
+predicates in Alloy.
+
+Then nothing in the default toolchain can check any of it.
+
+`quint run` cannot evaluate temporal operators at all, so the cheap simulator
+is out. `quint verify` prompts before it will even try:
+
+```
+WARNING: Apalache has experimental support for temporal properties and might
+give incorrect results. Consider using --backend tlc, which fully supports
+temporal properties.
+
+Do you want to proceed with Apalache anyway? (y/N)
+```
+
+Answering yes gets as far as the rewriting pass and stops:
+
+```
+PASS #5: TemporalPass
+  > Rewriting temporal operators...
+  > Found 1 temporal properties
+  > Adding logic for loop finding
+error: Handling fairness is not supported yet!
+```
+
+So the fairness vocabulary type-checks, reads well, and has no symbolic
+back end. Every liveness property in this benchmark needs fairness, so the
+answer for Apalache is not "slow" — it is "cannot".
+
+`--backend tlc` does work, and confirms the model:
+
+```
+quint verify deliveryCore.qnt --temporal pauseDrainsPositions --backend tlc
+  96,000 distinct states found
+  [ok] No violation found (35756ms).
+```
+
+96 000 states is exactly what the hand-written `../tlaplus/Delivery.tla`
+reports, which is the useful cross-check: two independently written models of
+the same protocol agree on the size of the reachable set.
+
+The 35s against TLC's own 28s is the transpilation overhead, and the same cost
+profile applies — `everyBegunSettles` through this backend is TLC's problem,
+not Quint's.
+
+The honest summary: for liveness Quint is a **front end for TLC**. That is not
+nothing, since one file still feeds simulation, Apalache safety checking and
+TLC. But the tool's own advice is to leave its default engine.

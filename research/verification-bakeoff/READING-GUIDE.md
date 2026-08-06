@@ -9,15 +9,15 @@ directory, not a paraphrase.
 
 ## Coverage
 
-| Tool | L1 (pure projection) | L2 (protocol) |
-|---|---|---|
-| fast-check | `fastcheck/run.mjs` | `fastcheck/run.mjs`, random sequences |
-| Quint + Apalache | `quint/deliveryCore.qnt` | same file |
-| TLA+ / TLC | `tlaplus/Delivery.tla` | same file |
-| Alloy 6 | `alloy/Delivery.als` | `alloy/DeliveryL2.als`, temporal |
-| Dafny | `dafny/Delivery.dfy` | `dafny/DeliveryL2.dfy`, class invariant |
-| Lean 4 | `lean/L1.lean` | `lean/L2.lean` |
-| Agda | `agda/L1.agda` | `agda/L2.agda` |
+| Tool | L1 (pure projection) | L2 (protocol) | L3 (liveness) |
+|---|---|---|---|
+| fast-check | `fastcheck/run.mjs` | `fastcheck/run.mjs`, random sequences | `fastcheck/liveness.mjs`, bounded surrogate |
+| Quint + Apalache | `quint/deliveryCore.qnt` | same file | same file; needs `--backend tlc` |
+| TLA+ / TLC | `tlaplus/Delivery.tla` | same file | `tlaplus/DeliveryLiveness.tla` |
+| Alloy 6 | `alloy/Delivery.als` | `alloy/DeliveryL2.als`, temporal | `alloy/DeliveryLiveness.als` |
+| Dafny | `dafny/Delivery.dfy` | `dafny/DeliveryL2.dfy`, class invariant | **not expressible** |
+| Lean 4 | `lean/L1.lean` | `lean/L2.lean` | statable, not attempted |
+| Agda | `agda/L1.agda` | `agda/L2.agda` | statable, not attempted |
 
 ## Proposition 1 — the bound (I1)
 
@@ -234,6 +234,50 @@ M6 was undetectable until the model could advance the integration target from
 outside; without that action the compare-and-set guard is unreachable and I13
 holds vacuously in *every* tool.
 
+## Proposition 5 — no silent drop (I18)
+
+*Every begun responsibility eventually settles or is retained together with an
+exact stated reason.*
+
+The first temporal proposition, and the one that shows what safety cannot see.
+
+**TLA+** — leads-to, and an environment hypothesis that safety never needed.
+```tla
+EveryBegunSettles ==
+  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy) =>
+    \A t \in Tasks : (tickets[t].phase = "Executing") ~> Terminal(t)
+```
+
+**Alloy** — the same shape, since `always`/`eventually` are first-class.
+```alloy
+all t : Task |
+  always (t.phase = Executing implies eventually t.phase in Settled + Abandoned)
+```
+
+**Quint** — states it best of the three, and cannot check it.
+```quint
+temporal everyBegunSettles =
+  (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+    implies TASKS.forall(id => always(...))
+```
+
+**Dafny** — no encoding exists. There are no temporal operators.
+
+**fast-check** — not the proposition at all, but a bounded surrogate: random
+prefix, stop the environment, run a fair scheduler, assert it drains.
+
+What to notice: the properties are nearly identical everywhere they can be
+written, and *all* the difficulty is in the spec around them. Compare the
+fairness blocks instead — `tlaplus/DeliveryLiveness.tla` has 21 `SF_vars`
+conjuncts, `alloy/DeliveryLiveness.als` writes the same schema out by hand ten
+times plus ten `enabled` predicates Alloy cannot derive, and Quint says it in
+one `strongFair` per action and then has no engine.
+
+Read `disjunctionFairnessIsTooWeak` in the Alloy file next. It preserves the
+mistake both TLA+ and Alloy make first — fairness on a disjunction of actions
+instead of per action — and hands back the `Executing → SuspensionRequested →
+Suspended` lasso that results.
+
 ## Where to start reading
 
 1. `agda/L1.agda` — shortest complete artifact, 145 lines, shows the
@@ -246,5 +290,8 @@ holds vacuously in *every* tool.
    `planAttempt` case in both.
 5. `tlaplus/DeliveryTranspiled.tla` — what `quint compile` emits. Read against
    the hand-written module to see what Quint's surface syntax is buying.
-6. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
+6. `tlaplus/DeliveryLiveness.tla` and `alloy/DeliveryLiveness.als` — the same
+   three temporal properties, and the two opposite ways a tool can fail you:
+   TLC gives no verdict at two tasks, Alloy answers a weaker question in 94s.
+7. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
    protocol turned back on this repository's own gated models.

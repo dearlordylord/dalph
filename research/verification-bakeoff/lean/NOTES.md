@@ -152,3 +152,33 @@ invariant, and it did not discover that `attemptsBounded` needs
 `phaseBoundsAttempts` to go through. Those were supplied. That is precisely the
 division every essay in this area predicts: the mechanical proof labour is
 collapsing, and deciding what to prove is not.
+
+## Liveness: statable, and a different development
+
+I17–I19 are expressible here, unlike in Dafny, but nothing in `L2.lean` is
+reusable for them. The safety proofs are induction over `Reachable`, a finite
+tree; liveness is a statement about infinite behaviours, so it needs a
+coinductive `Trace` (or `Nat → St` plus a step law), a fairness predicate as a
+hypothesis, and well-founded arguments to get the "eventually" out.
+
+The concrete shape of I18:
+
+```lean
+def Fair (r : Nat → St) : Prop :=
+  ∀ t, (∀ n, ∃ m ≥ n, enabled (reportAccepted t) (r m)) →
+       (∀ n, ∃ m ≥ n, takes (reportAccepted t) (r m) (r (m+1)))
+
+theorem every_begun_settles (r : Nat → St) (h : IsRun r) (hf : Fair r) :
+    ∀ n t, (r n).ticket t |>.phase = executing →
+      ∃ m ≥ n, ((r m).ticket t).phase = settled ∨ ((r m).ticket t).phase = abandoned
+```
+
+The proof is a ranking function on phases — `Executing` 4, `Accepted` 3,
+`Integrating` 2, `Promoted` 1, terminal 0 — plus the argument that fairness
+forces the rank down and no action raises it. That is a well-founded recursion
+over `Nat`, and roughly the size of the existing L2 development again.
+
+The payoff is that it would be a proof about **unbounded** runs with an
+arbitrary number of steps, which no model checker in this bake-off delivers.
+The cost is that TLC states the same thing in one line and answers in seconds
+at one task. Not attempted here, and the ratio is the reason.
