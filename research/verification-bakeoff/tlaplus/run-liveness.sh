@@ -22,8 +22,13 @@ cd "$(dirname "$0")"
 TLA_TOOLS=${TLA_TOOLS:-$HOME/.cache/dalph-bakeoff/tla2tools.jar}
 if [[ ! -f $TLA_TOOLS ]]; then
   mkdir -p "$(dirname "$TLA_TOOLS")"
-  curl -sSL -o "$TLA_TOOLS" \
-    https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+  # Same pinned-tag, atomic fetch as ./run.sh (v1.7.4 when pinned; see NOTES.md).
+  TLA_TAG=${TLA_TAG:-$(latest=$(curl -fsSL https://api.github.com/repos/tlaplus/tlaplus/releases/latest) \
+        && grep -m1 '"tag_name"' <<<"$latest" | cut -d'"' -f4)}
+  tmp="$TLA_TOOLS.tmp.$$"
+  curl -fsSL -o "$tmp" \
+    "https://github.com/tlaplus/tlaplus/releases/download/$TLA_TAG/tla2tools.jar" \
+    && mv "$tmp" "$TLA_TOOLS" || { rm -f "$tmp"; echo "tla2tools.jar fetch failed" >&2; exit 1; }
 fi
 
 TIMEOUT=${TIMEOUT:-1800}

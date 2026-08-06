@@ -1,7 +1,7 @@
 /**
  * Mutation analysis of the gated Quint models under specs/.
  *
- *   node mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20]
+ *   node mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20] [--seed 31337]
  *
  * For each spec it perturbs the *model* -- actions, init, and the derivations
  * they use -- one token at a time, discards mutants that no longer typecheck,
@@ -24,6 +24,16 @@ import { basename, join } from "node:path"
 import { promisify } from "node:util"
 
 const run = promisify(execFile)
+
+// Run quint through pnpm when invoked from a pnpm context, so the mutation
+// runs use the gate's pinned quint. Fall back to PATH with a warning, since
+// this script also documents Homebrew-based usage.
+const pnpmEntryPoint = process.env.npm_execpath
+const quintExecutable = pnpmEntryPoint === undefined ? "quint" : process.execPath
+const quintPrefix = pnpmEntryPoint === undefined ? [] : [pnpmEntryPoint, "quint"]
+if (pnpmEntryPoint === undefined) {
+  console.warn("warning: npm_execpath unset, using `quint` from PATH, which may not be the gate's pinned version")
+}
 
 const SPECS = [
   {
@@ -118,7 +128,7 @@ const SPECS = [
   }
 ]
 
-const DECL = /^\s{0,4}(?:pure\s+)?(?:val|def|action|var|type|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
+const DECL = /^\s*(?:pure\s+)?(?:val|def|action|var|type|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
 
 /**
  * A declaration is protected if it is a gated invariant, a gated witness, or
@@ -135,6 +145,13 @@ const protectedLines = (lines, protectedNames) => {
     const match = DECL.exec(line)
     if (match) starts.push({ index, name: match[1] })
   })
+  // Fail loudly if a protected name matched nothing: a renamed invariant must
+  // not silently lose its protection.
+  const found = new Set(starts.map(({ name }) => name))
+  const missing = [...protectedNames].filter((name) => !found.has(name))
+  if (missing.length > 0) {
+    throw new Error(`protected declarations not found in the spec: ${missing.join(", ")}`)
+  }
   const blocked = new Set()
   starts.forEach(({ index, name }, position) => {
     if (!protectedNames.has(name) && !isObservation(name)) return
@@ -181,7 +198,7 @@ const generate = (lines, blocked) => {
 
 const quint = async (args, timeoutMilliseconds) => {
   try {
-    const { stdout, stderr } = await run("quint", args, {
+    const { stdout, stderr } = await run(quintExecutable, [...quintPrefix, ...args], {
       maxBuffer: 32 * 1024 * 1024,
       ...(timeoutMilliseconds === undefined ? {} : { timeout: timeoutMilliseconds, killSignal: "SIGKILL" })
     })
@@ -202,6 +219,8 @@ const arg = (name, fallback) => {
 const samples = arg("samples", "20000")
 const steps = arg("steps", "20")
 const only = arg("spec", null)
+// Pinned per-invocation seed, so a kill or a survival reproduces exactly.
+const seed = arg("seed", "31337")
 
 /**
  * `--verify` swaps random sampling for Apalache. Sampling is flaky at depth,
@@ -220,6 +239,7 @@ const budgetMilliseconds = Number(arg("timeout", "90")) * 1000
 
 const workDir = await mkdtemp(join(tmpdir(), "quint-mutation-"))
 
+try {
 for (const spec of SPECS) {
   if (only && spec.name !== only) continue
 
@@ -234,6 +254,7 @@ for (const spec of SPECS) {
   let compiled = 0
   let killedByWitness = 0
   let timedOut = 0
+  let errored = 0
 
   for (const [ordinal, mutant] of mutants.entries()) {
     const file = join(workDir, `${spec.name}-${ordinal}.qnt`)
@@ -249,7 +270,7 @@ for (const spec of SPECS) {
         )
       : await quint([
           "run", file, "--invariants", ...spec.invariants,
-          "--max-samples", samples, "--max-steps", steps, "--verbosity", "0"
+          "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "0"
         ])
     if (all.timedOut === true) {
       timedOut += 1
@@ -263,12 +284,22 @@ for (const spec of SPECS) {
       if (spec.witnesses.length > 0) {
         const witnessed = await quint([
           "run", file, "--witnesses", ...spec.witnesses,
-          "--max-samples", samples, "--max-steps", steps, "--verbosity", "1"
+          "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "1"
         ])
-        const unreached = spec.witnesses.filter((witness) => {
-          const found = new RegExp(`${witness} was witnessed in (\\d+) trace`).exec(witnessed.output)
-          return found !== null && Number(found[1]) === 0
-        })
+        // Fail closed: a witness run that errors, times out, or whose output
+        // does not parse is an error, never an "unreached" and never a
+        // "survived".
+        if (witnessed.timedOut === true) {
+          timedOut += 1
+          continue
+        }
+        const counts = spec.witnesses.map((witness) =>
+          new RegExp(`${witness} was witnessed in (\\d+) trace`).exec(witnessed.output))
+        if (!witnessed.ok || counts.some((found) => found === null)) {
+          errored += 1
+          continue
+        }
+        const unreached = spec.witnesses.filter((_, position) => Number(counts[position][1]) === 0)
         if (unreached.length > 0) {
           for (const witness of unreached) witnessKills[witness] = (witnessKills[witness] ?? 0) + 1
           killedByWitness += 1
@@ -288,7 +319,7 @@ for (const spec of SPECS) {
           )
         : await quint([
             "run", file, "--invariant", invariant,
-            "--max-samples", samples, "--max-steps", steps, "--verbosity", "0"
+            "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "0"
           ])
       if (!single.ok && single.timedOut !== true) kills[invariant] += 1
     }
@@ -296,12 +327,13 @@ for (const spec of SPECS) {
 
   const dead = spec.invariants.filter((name) => kills[name] === 0)
 
-  const killed = compiled - survivors.length - timedOut
-  console.log(`\n## ${basename(spec.file)}${useVerify ? " (Apalache)" : ""}`)
+  const killed = compiled - survivors.length - timedOut - errored
+  console.log(`\n## ${basename(spec.file)}${useVerify ? " (Apalache)" : ""} (seed ${seed})`)
   console.log(`\n${mutants.length} mutants generated, ${compiled} typecheck, ` +
               `${killed} killed (${killed - killedByWitness} by an invariant, ` +
               `${killedByWitness} by a witness only), ${survivors.length} survive` +
-              `${timedOut > 0 ? `, ${timedOut} exceeded the ${budgetMilliseconds / 1000}s budget` : ""}.\n`)
+              `${timedOut > 0 ? `, ${timedOut} exceeded the ${budgetMilliseconds / 1000}s budget` : ""}` +
+              `${errored > 0 ? `, ${errored} errored (fail-closed, no verdict recorded)` : ""}.\n`)
   console.log("| Invariant | mutants killed |")
   console.log("|---|---|")
   for (const invariant of spec.invariants) {
@@ -324,5 +356,6 @@ for (const spec of SPECS) {
     }
   }
 }
-
-await rm(workDir, { recursive: true, force: true })
+} finally {
+  await rm(workDir, { recursive: true, force: true })
+}

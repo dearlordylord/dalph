@@ -7,12 +7,7 @@
  * and the invariants are pre/post conditions on them. Nothing is sampled and
  * nothing is enumerated: the SMT solver discharges the obligations, or it does
  * not and you get a specific unproved assertion.
- *
- * MUTANT is a module-level constant. ../run.sh rewrites it per mutant, because
- * Dafny has no way to parameterize a constant from the command line.
  */
-
-const MUTANT: nat := 0
 
 datatype Reason =
   | SuccessfulCompletion

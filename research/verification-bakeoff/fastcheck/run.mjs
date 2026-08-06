@@ -1,15 +1,15 @@
 /**
  * The property-based-testing tier of the bake-off.
  *
- *   node run.mjs [--runs 20000] [--steps 25] [--m8]
+ *   node run.mjs [--runs 20000] [--steps 25] [--seed N] [--m8]
  *
  * Two properties per mutant:
  *   L1  a direct property over one generated graph and capacity
  *   L2  a random action sequence over ../MODEL.md, the same search Quint's
  *       simulator performs, so the two rows are directly comparable
  *
- * `--m8` swaps invariant I8 for the seeded specification error of
- * ../MUTANTS.md and runs it against the faithful model.
+ * `--m8` adds the seeded specification error of ../MUTANTS.md alongside the
+ * faithful invariants and runs all of them against the faithful model.
  */
 import fc from "fast-check"
 import {
@@ -31,6 +31,7 @@ const arg = (name, fallback) => {
 }
 const numRuns = arg("runs", 20000)
 const maxSteps = arg("steps", 25)
+const seed = arg("seed", undefined)
 const useM8 = process.argv.includes("--m8")
 
 const invariantNames = useM8 ? [...defaultInvariantNames, "ceilingOverHeldPositions"] : defaultInvariantNames
@@ -81,14 +82,20 @@ const l2Property = (mutant) =>
 
 const verdict = (mutant, property) => {
   const startedAt = Date.now()
-  const result = fc.check(property(mutant), { numRuns })
+  const result = fc.check(property(mutant), { numRuns, ...(seed === undefined ? {} : { seed }) })
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
-  if (!result.failed) return { seconds, text: mutant === 0 ? "clean" : "missed" }
+  if (!result.failed) return { seconds, text: mutant === 0 ? "clean" : "missed", detail: "" }
   const message = String(result.errorInstance?.message ?? "property false").split("\n")[0]
-  return { seconds, text: `caught (${message})` }
+  // Reproduction data: the seed replays this exact catch, the path shows how
+  // shrinking reached the counterexample.
+  const counterexample = JSON.stringify(result.counterexample) ?? ""
+  const detail =
+    `    seed ${result.seed}, path [${result.counterexamplePath}]` +
+    `${counterexample.length <= 160 ? `, shrunk ${counterexample}` : ""}`
+  return { seconds, text: `caught (${message})`, detail }
 }
 
-console.log(`fast-check ${numRuns} runs, up to ${maxSteps} steps${useM8 ? ", I8 replaced by the M8 state predicate" : ""}`)
+console.log(`fast-check ${numRuns} runs, up to ${maxSteps} steps${seed === undefined ? "" : `, seed ${seed}`}${useM8 ? ", M8 state predicate added" : ""}`)
 console.log("")
 console.log("| Mutant | L1 property | s | L2 random sequence | s |")
 console.log("|---|---|---|---|---|")
@@ -97,4 +104,7 @@ for (const mutant of [0, 1, 2, 4, 5, 6]) {
   const l1 = verdict(mutant, l1Property)
   const l2 = verdict(mutant, l2Property)
   console.log(`| M${mutant} | ${l1.text} | ${l1.seconds} | ${l2.text} | ${l2.seconds} |`)
+  for (const { detail } of [l1, l2]) {
+    if (detail !== "") console.log(detail)
+  }
 }

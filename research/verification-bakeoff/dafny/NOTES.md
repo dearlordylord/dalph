@@ -7,6 +7,29 @@ needed. Homebrew was the obvious route and failed for an unrelated reason (an
 untrusted third-party tap blocks every `brew install`), so `run.sh` fetches the
 release binary directly.
 
+## Linux aarch64 workaround
+
+There is no prebuilt Dafny for linux-aarch64, and the linux-x64 build does not
+survive qemu-user either (Boogie's thread pool segfaults). The recipe that
+verified the four `.dfy` files on Debian 12 aarch64, all artifacts under
+`~/.cache/dalph-bakeoff`:
+
+1. .NET runtime 8.0.29 linux-arm64 (the `dotnet-install.sh` script), with
+   `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`.
+2. The managed DLLs from the x64 zip, run framework-dependent through that
+   runtime. The entry point is `DafnyDriver.dll` (`Dafny.dll` is a 4 KB
+   redirector stub). Six bundled DLLs are IL-only but PE-stamped `x86-64`,
+   which CoreCLR rejects on arm64; patch the PE machine field to AnyCPU
+   (`0x8664` → `0x14c` at the PE header) for `Dafny`, `DafnyDriver`,
+   `DafnyLanguageServer`, `DafnyPipeline`, `DafnyRuntime`, `DafnyServer`.
+3. An arm64 Z3 — the PyPI `z3-solver` 4.13.4.0 manylinux_2_34_aarch64 wheel
+   ships one — passed as `--solver-path` (5.0.0 needs glibc 2.38 > bookworm's).
+
+Result was full parity with the macOS figures: 9 + 40 obligations verified,
+3 + 3 mutant rejections, seconds per file. Note the solver skew: Z3 4.13.4 in
+place of the x64-bundled one. `run.sh` prints a pointer here on this platform;
+set `DAFNY` to a wrapper for the above and it runs unchanged.
+
 ## Character
 
 Dafny is the only tool in the lineup that verifies *code* rather than a model.

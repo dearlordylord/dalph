@@ -515,3 +515,42 @@ nothing, and reasoning about a spec is not a substitute for mutating it.
 specs, including the four invariants that really do kill nothing, the one
 genuinely vacuous invariant that has since been repaired, and the finding that
 witnesses catch nearly as many mutants as invariants do.
+
+## Addendum: Linux aarch64 re-run
+
+Everything above was measured on macOS/arm64. The whole study was later re-run
+on Debian 12 aarch64 (a machine with qemu-user binfmt for x86_64), and every
+slice reproduced its verdicts: TLC caught M1–M6 and M8 with the same invariant
+names, fast-check caught M1/M2 and missed M4/M5/M6, Quint simulate caught all
+six, Alloy's temporal checks and inductiveness results matched, Dafny verified
+the faithful files and rejected all six mutants, and Lean and Agda checked
+every proof and rejected every mutant.
+
+What the re-run added:
+
+- **Quint simulate's M6 flakiness is real and reproduced live.** At the same
+  nominal budget (50 000 samples, 25 steps) one run caught M6 and the
+  `--witnesses` rerun missed it. The harness now pins a seed, and the pin was
+  chosen to be a seed that *does* reach the stale head — an arbitrary pin can
+  bake in a false negative.
+- **Lean is now pinned**: `lean/lean-toolchain` fixes `leanprover/lean4:v4.32.2`
+  (the 2026 elan stable). The proofs check on it with no warnings, so the
+  unrecorded toolchain version is no longer a compatibility question.
+- **Agda runs from the prebuilt static x86-64 binary** (`Agda-v2.8.0-linux.tar.xz`)
+  under qemu binfmt. Static linking is what makes this work; there is no
+  linux-aarch64 build.
+- **Alloy 6.2.0 ships no linux-aarch64 native SAT solver** (`findPlatform
+  unknown Linux aarch64`) and falls back to pure-Java SAT4J — and still ran
+  faster than the macOS figures above (DeliveryL2.als 239s vs ~324s). The
+  predicted `open deliveryL2` module-resolution failure on case-sensitive
+  filesystems did not occur; Alloy resolves `DeliveryL2.als` fine.
+- **Dafny needed an arm64 recipe**: no prebuilt linux-aarch64 exists and the
+  x64 build segfaults under qemu-user in Boogie's thread pool. The working
+  combination — arm64 .NET 8 runtime, framework-dependent `DafnyDriver.dll`
+  with six PE headers patched from x64 to AnyCPU, and an arm64 Z3 4.13.4 from
+  the PyPI `z3-solver` wheel — is documented in `dafny/NOTES.md`,
+  "Linux aarch64 workaround".
+
+The fetchers are also pinned since the re-run: TLC's jar to release tag
+`v1.7.4` (resolved from the releases API), all downloads atomic and
+fail-closed, and Quint's simulate/witness runs to a seed.

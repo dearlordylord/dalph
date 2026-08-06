@@ -17,6 +17,10 @@ MaxCapacity == 2
 MaxExternalAdvance == 2
 MaxAttempts == 3
 
+\* Fail closed on a .cfg typo: a MUTANT outside the seeded set is an error,
+\* not a silent faithful run.
+ASSUME MUTANT \in 0..6
+
 VARIABLES
   tickets,                    \* [Tasks -> ticket record]
   capacity,

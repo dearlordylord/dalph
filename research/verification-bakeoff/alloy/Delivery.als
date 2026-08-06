@@ -15,8 +15,6 @@
  */
 module delivery
 
-open util/ordering[Head] as headOrder
-
 // ------------------------------------------------------------------- atoms
 
 sig Task {}

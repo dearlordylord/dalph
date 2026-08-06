@@ -15,8 +15,12 @@ cd "$(dirname "$0")"
 ALLOY_JAR=${ALLOY_JAR:-$HOME/.cache/dalph-bakeoff/alloy.jar}
 if [[ ! -f $ALLOY_JAR ]]; then
   mkdir -p "$(dirname "$ALLOY_JAR")"
-  curl -sSL -o "$ALLOY_JAR" \
-    https://github.com/AlloyTools/org.alloytools.alloy/releases/download/v6.2.0/org.alloytools.alloy.dist.jar
+  # -f so an error page is never cached; tempfile + rename in the same
+  # directory so the jar appears atomically.
+  tmp="$ALLOY_JAR.tmp.$$"
+  curl -fsSL -o "$tmp" \
+    https://github.com/AlloyTools/org.alloytools.alloy/releases/download/v6.2.0/org.alloytools.alloy.dist.jar \
+    && mv "$tmp" "$ALLOY_JAR" || { rm -f "$tmp"; echo "alloy.jar fetch failed" >&2; exit 1; }
 fi
 
 start=$SECONDS

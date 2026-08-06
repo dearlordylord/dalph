@@ -13,8 +13,16 @@ cd "$(dirname "$0")"
 TLA_TOOLS=${TLA_TOOLS:-$HOME/.cache/dalph-bakeoff/tla2tools.jar}
 if [[ ! -f $TLA_TOOLS ]]; then
   mkdir -p "$(dirname "$TLA_TOOLS")"
-  curl -sSL -o "$TLA_TOOLS" \
-    https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+  # Pinned release tag (v1.7.4 when pinned; see NOTES.md), resolved live from
+  # the releases API, rather than releases/latest, so the jar cannot move
+  # silently. -f so an error page is never cached; tempfile + rename in the
+  # same directory so the jar appears atomically.
+  TLA_TAG=${TLA_TAG:-$(latest=$(curl -fsSL https://api.github.com/repos/tlaplus/tlaplus/releases/latest) \
+        && grep -m1 '"tag_name"' <<<"$latest" | cut -d'"' -f4)}
+  tmp="$TLA_TOOLS.tmp.$$"
+  curl -fsSL -o "$tmp" \
+    "https://github.com/tlaplus/tlaplus/releases/download/$TLA_TAG/tla2tools.jar" \
+    && mv "$tmp" "$TLA_TOOLS" || { rm -f "$tmp"; echo "tla2tools.jar fetch failed" >&2; exit 1; }
 fi
 
 WORK=$(mktemp -d)
@@ -80,7 +88,7 @@ for m in 0 1 2 4 5 6; do
         -config "$WORK/M$m.cfg" -metadir "$WORK/states$m" -workers auto \
         Delivery 2>&1)
   secs=$((SECONDS - start))
-  states=$(grep -oE '[0-9]+ distinct states found' <<<"$out" | head -1 | grep -oE '^[0-9]+')
+  states=$(grep -oE '[0-9]+ distinct states found' <<<"$out" | tail -1 | grep -oE '^[0-9]+')
 
   if grep -q 'Invariant .* is violated' <<<"$out"; then
     which=$(grep -oE 'Invariant [A-Za-z]+ is violated' <<<"$out" | head -1 | awk '{print $2}')

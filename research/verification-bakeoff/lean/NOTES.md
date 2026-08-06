@@ -2,7 +2,9 @@
 
 ## Setup
 
-`elan` via the official install script, then `lean L1.lean`. No Mathlib, no
+`elan` via the official install script, then `lean L1.lean`. The toolchain is
+pinned by `lean-toolchain` (`leanprover/lean4:v4.32.2`), the version the Linux
+re-run checked against. No Mathlib, no
 `lakefile`, no project scaffolding — the file is self-contained and checks in
 2 seconds. That is a much lower barrier than Lean's reputation suggests, and it
 only holds because L1 needs nothing beyond `List` and `Nat` from core.

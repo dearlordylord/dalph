@@ -40,8 +40,10 @@ state vector, and it is the reason the M6 trace was readable enough to confirm
 the stale head came from `ExternalTargetAdvance` rather than from a modelling
 slip.
 
-Setup is one 2 MB jar and no installation. Of everything here it has the lowest
-setup cost per unit of result.
+Setup is one 2 MB jar and no installation. The fetch is pinned to release tag
+`v1.7.4` (resolved from the releases API at fetch time, `TLA_TAG` overridable)
+rather than `releases/latest`, so the jar cannot move silently between runs.
+Of everything here it has the lowest setup cost per unit of result.
 
 ## Liveness
 
