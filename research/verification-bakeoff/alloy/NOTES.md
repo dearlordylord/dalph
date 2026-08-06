@@ -103,15 +103,17 @@ the state-only checks, 6 for the claim machine. "Holds in scope" is not
 
 ## Cost
 
-316 lines including comments, 13 seconds for all twelve commands. Per unit of
+341 lines including comments, 12 seconds for all thirteen commands. Per unit of
 structural insight it is the cheapest tool here; per unit of temporal
 confidence it is the most expensive, because it offers none.
 
 ## L2: a real transition system, and the counterexample to induction
 
 `DeliveryL2.als` is the protocol as `var` state with temporal formulas, not the
-state-only encoding of `Delivery.als`. Same actions as the Quint, TLA+, Lean,
-and Agda files. 319 lines, 324 seconds for all eight commands — by far the
+state-only encoding of `Delivery.als`. The same protocol as the Quint, TLA+,
+Lean, and Agda files, though not the same action list: Lean and Agda have no
+`Abandoned` phase at all, which `../MODEL.md` records as a deliberate
+divergence. 319 lines, 324 seconds for all eight commands — by far the
 slowest tool here, and the reason is scope: 14 steps of a
 19-action relation over two tasks is a large SAT problem.
 

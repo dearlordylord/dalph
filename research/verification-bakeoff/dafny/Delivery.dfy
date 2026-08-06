@@ -129,12 +129,12 @@ lemma SettlementDropped(taskId: nat, p: Placement, e: Evidence)
 {
 }
 
-/* I6: placement alone never creates an obligation. Two deliveries built from
- * the same evidence under different placements agree. */
-lemma NoInvention(taskId: nat, p1: Placement, p2: Placement, e: Evidence)
-  ensures Deliver(taskId, p1, e).obligated == Deliver(taskId, p2, e).obligated
-{
-}
+/* I6 is TYPED AWAY by this signature and is not stated as a lemma. `Deliver`
+ * computes `obligated` from `e` alone, so "placement alone never creates an
+ * obligation" is a fact about the arity of `ObligatedFrom`. Written as a lemma
+ * — two placements, same evidence, equal obligation — it unfolds to `x == x`,
+ * which is the shape this file just removed from I5. A defect no mutant can
+ * introduce needs no theorem. */
 
 /* I8, the capacity trap, as an imperative method with a loop invariant.
  *

@@ -15,7 +15,7 @@ for that encoding, not that the tool is incapable.
 
 | Mutant | Defect | fast-check L1 | fast-check L2 | Quint simulate | Quint verify (Apalache) | TLC |
 |---|---|---|---|---|---|---|
-| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 3s, 96 000 states |
+| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 2-3s, 96 000 states |
 | M1 | `rank <= capacity` | caught 0.0s | caught `boundRespected` 0.0s | caught 1s | not run | caught `BoundRespected` <1s |
 | M2 | deliveries lose retained tickets | caught 0.0s | caught `retentionHolds` 0.0s | caught 1s | not run | caught `RetentionHolds` 1s |
 | M4 | position released at suspension request | — | caught `positionDiscipline` 0.5s | caught 1s | not run | caught `PositionDiscipline` 1s |
@@ -51,7 +51,7 @@ simulator picks among *enabled* actions at each step and therefore wastes far
 fewer steps on disabled guards. `fc.commands` would close most of that gap.
 
 **Exhaustive beats symbolic at this size, by a lot.** TLC enumerated all 96 000
-distinct states in 3 seconds and caught every mutant including M6. Apalache
+distinct states in 2-3 seconds and caught every mutant including M6. Apalache
 found M6 in 38 seconds, but on the faithful model it reached step 12, began
 discharging the state invariants, and was terminated at 45 minutes without a
 verdict — a refutation is cheap for it, a clean bill of health is not. Bounded
@@ -70,12 +70,12 @@ of the protocol, not decoration.
 **Two invariants could not be stated as state predicates at all.** I8 (admission
 ceiling) and I13 (promotion) are properties of transitions. Quint, TLA+ and
 fast-check carry a history variable for them; Dafny uses a loop invariant and a
-precondition; Alloy and Agda rely on the action guards alone; and **Lean
-declares the history variables and then never touches them** — `admissionOk`
-and `promotedExact` are set once in `init`, updated by no `Step`, and read by no
-clause of `Inv`. Lean encodes neither invariant, and nothing in Lean says so,
-because an unused structure field is not an error and the proof is no harder
-for carrying two constants. In the I8 case the naive state predicate
+precondition; Alloy, Agda and Lean rely on the action guards. **Lean also
+declares history variables and then never touches them** — `admissionOk` and
+`promotedExact` are set once in `init`, updated by no `Step`, and read by no
+clause of `Inv`. That is decoration rather than absence, which is why nothing
+reports it: an unused structure field is not an error, and the proof is no
+harder for carrying two constants. In the I8 case the naive state predicate
 `|positions| <= capacity` is not merely weaker, it is wrong: a capacity
 contraction legitimately leaves more holders than the ceiling. Run
 `tlaplus/run.sh --m8`: TLC reports the *faithful* model violated in about a
@@ -105,9 +105,9 @@ Each states the invariant and either discharges it or refuses.
 | Agda, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
-| Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
+| Dafny, L1 | 10 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
-| Alloy 6, L1 | 5 checks UNSAT, 3 witnesses SAT | the misordered-parent, double-claim and returning-token counterexamples constructed | 13s |
+| Alloy 6, L1 | 5 checks UNSAT, 3 witnesses SAT | 4 counterexamples constructed, one per check | 12s |
 | Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 324s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
@@ -412,6 +412,15 @@ Auditing `INVARIANTS.md` row by row against what each encoding actually
 contains moved four rows, and the direction was always the same — the coverage
 was overstated.
 
+**I5 is discharged by five tools and provable by none of them.** Every
+state-machine encoding states it as `phase = Settled ⇒ ¬hasObligation(t)` and
+defines `hasObligation` as `phase ∉ {NoObligation, Settled}`. Substitute and it
+is `⊤`. TLC, Quint, Apalache, fast-check and Dafny all report it discharged; no
+mutant in `MUTANTS.md` can break it; and it reads like a real invariant. Dafny's
+version now at least computes the obligation from an evidence value, so a
+mutated `ObligatedFrom` would fail — the others cannot be repaired without
+separating evidence from phase, which is a different model.
+
 **Two invariants are in no tool at all.** I9 (every executor interaction
 carries the exact `RunId` and `AttemptId`) and I15 (the journal is append-only
 and its reduction a pure, total, idempotent fold) are absent from all seven
@@ -438,7 +447,7 @@ two are not interchangeable.
 | fast-check | none, already a dependency | 221 lines model + 100 lines harness | L1 + L2 |
 | Quint + Apalache | `brew install quint`, Apalache auto-fetched | 573 lines | L1 + L2 |
 | TLA+ / TLC | one 2 MB jar, no install | 313 lines | L1 + L2 |
-| Alloy 6 | one 21 MB jar, no install | 316 lines L1 + 319 lines L2 + 229 lines liveness | L1 structural I11/I12, and L2 temporal |
+| Alloy 6 | one 21 MB jar, no install | 341 lines L1 + 319 lines L2 + 229 lines liveness | L1 structural I11/I12, and L2 temporal |
 | Dafny | 100 MB release zip | 158 lines L1 + 370 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |

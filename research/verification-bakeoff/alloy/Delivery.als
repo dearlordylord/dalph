@@ -192,6 +192,26 @@ pred mutantClaimStep {
   or claimsFrozen
 }
 
+// `mutantAcquire` draws from `Token - Claim.token`, which still cannot give
+// two SIMULTANEOUS claims the same token -- so it is no control at all for
+// `tokensAreUnique`. This one drops the token rule entirely.
+pred sharedTokenAcquire[t : Task] {
+  no c : Claim | c.task = t
+  some c : Claim' - Claim, o : Owner, k : Token {
+    Claim' = Claim + c
+    task'  = task  + (c -> t)
+    owner' = owner + (c -> o)
+    token' = token + (c -> k)
+    Issued' = Issued + k
+  }
+}
+
+pred sharedTokenStep {
+  (some t : Task | sharedTokenAcquire[t])
+  or (some c : Claim | releaseClaim[c, c.owner, c.token])
+  or claimsFrozen
+}
+
 // I12: exactly two ordered parents, target head first.
 pred candidateParentsOrdered {
   all c : Candidate |
@@ -273,12 +293,17 @@ check releasedTokensNeverReturn {
     always (all k : Issued - Claim.token | always k not in Claim.token)
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
-// The negative control. Drop the exclusivity guard and mint from the tokens
-// not currently held rather than from those never minted; Alloy must construct
-// both the double claim and the returning token. Expected SAT.
+// One control per check, because a control that fires on the wrong conjunct is
+// no evidence for the other one. Drop the exclusivity guard: expected SAT, and
+// the instance is the double claim.
 check claimsExclusiveUnderMutant {
-  (no Claim and no Issued and always mutantClaimStep) implies
-    always (claimExclusivity and tokenUnique)
+  (no Claim and no Issued and always mutantClaimStep) implies always claimExclusivity
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
+
+// Drop the token rule entirely: expected SAT, and the instance is two live
+// claims on one token.
+check tokensUniqueUnderMutant {
+  (no Claim and no Issued and always sharedTokenStep) implies always tokenUnique
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
 check releasedTokensNeverReturnUnderMutant {

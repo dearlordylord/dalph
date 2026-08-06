@@ -102,44 +102,59 @@ which were assumptions. The distinction each cell makes:
 | | |
 |---|---|
 | **checked** | a property that could fail, discharged by the tool |
+| **definitional** | stated, discharged, and true by unfolding the definitions — it cannot fail |
 | **guard** | enforced by an action precondition; the transition cannot violate it, and nothing checks that |
+| **history flag** | a variable the actions maintain and an invariant reads — the standard encoding of a transition property |
 | **assumed** | constrained rather than checked; the tool is told it, not asked |
 | **typed away** | the defect is unwriteable in the encoding, so no property is needed |
+| **dead flag** | a history variable that is declared, initialised, and then never updated or read |
 | **not modelled** | the shared benchmark omits the phenomenon — a scope decision, not a tool limit |
 | **—** | the tool cannot state it at all |
 
-A `guard` is weaker evidence than it looks. It says the *encoding* respects the
-rule, which is the same thing as saying a mutant that removes it is the only
-way to violate it. That is exactly what M4, M5 and M6 test, so a `guard` cell
-plus a mutant is real; a `guard` cell alone is not.
+Only **checked** and **history flag** are evidence on their own. **guard** says
+the encoding respects the rule and nothing tests that it must: a guard cell is
+worth something only where a mutant removes the guard, which here is true for
+M4/M5/M6 in Quint, TLA+, fast-check and Dafny — and for none of the cells
+labelled `guard`.
+
+**definitional** is the trap this table exists to expose. Three tools state I5
+as `phase = Settled ⇒ ¬hasObligation(t)` while defining `hasObligation` as
+`phase ∉ {NoObligation, Settled}`. Substituting gives `⊤`. It is discharged
+instantly by every engine, no mutant can break it, and it looks exactly like a
+result.
 
 | Invariant | Quint | TLA+/TLC | Alloy 6 | Dafny | Lean 4 | Agda | fast-check |
 |---|---|---|---|---|---|---|---|
 | I1 bound | checked | checked | assumed | checked | checked | checked | checked |
 | I2 order independence | typed away | typed away | typed away | statable, not stated | length half only | not stated | typed away |
-| I3 classification | checked, definitional | typed away | typed away | asserted on one witness | typed away | typed away | typed away |
-| I4 retention | checked | checked | checked, definitional | checked | checked | checked | checked |
-| I5 settlement drop | checked | checked | definitional | checked | not modelled | not modelled | checked |
-| I6 no invention | typed away | typed away | typed away | checked | checked | typed away | typed away |
+| I3 classification | definitional | typed away | typed away | asserted on one witness | typed away | typed away | typed away |
+| I4 retention | checked | checked | definitional | checked | checked | checked | checked |
+| I5 settlement drop | definitional | definitional | definitional | definitional | not modelled | not modelled | definitional |
+| I6 no invention | typed away | typed away | typed away | typed away | typed away | typed away | typed away |
 | I7 position discipline | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
-| I8 admission ceiling | history flag | history flag | guard (L2) | loop invariant | **dead flag** | guard | history flag |
+| I8 admission ceiling | history flag | history flag | guard (L2) | loop invariant | guard + **dead flag** | guard | history flag |
 | I9 exact correlation | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I10 one attempt | checked | checked | checked | checked | checked | checked | checked |
 | I11 claim exclusivity | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I12 candidate shape | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
-| I13 promotion | history flag | history flag | guard (L2) | precondition | **dead flag** | precondition | history flag |
+| I13 promotion | history flag | history flag | guard (L2) | guard | guard + **dead flag** | guard | history flag |
 | I14 authority separation | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
 | I15 journal | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I16 recovery | checked | checked | checked | checked | checked | checked | checked |
-| I17–I19 | statable, no backend | checked at 1 task | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
+| I17–I19 | statable, no backend | I17 at 2 tasks, I18–I19 at 1 | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
 
 **dead flag** is the sharpest cell in the table. `lean/L2.lean:63-64` declares
 `admissionOk` and `promotedExact`, `init` sets both `true`, no `Step`
-constructor updates either, and no clause of `Inv` reads either. The fields
-look like the TLA+ and Quint history variables and do the work of neither, so
-Lean encodes I8 and I13 not at all. Nothing in Lean complains: an unused
-structure field is not an error, and the proof of `Inv` is no harder for
-carrying two constants.
+constructor updates either, and no clause of `Inv` reads either. Nothing in
+Lean complains: an unused structure field is not an error, and the proof of
+`Inv` is no harder for carrying two constants.
+
+What the flags do *not* mean is that Lean encodes less than Agda. Both carry
+the same two premises — `heldCount s < s.capacity` on `beginWork` and
+`expectedHead = s.head` on `promote` — so both stand at `guard`. Lean simply
+also carries two variables that look like the TLA+ and Quint history flags and
+do none of their work. The failure mode is *decoration*, not absence, which is
+why nothing reports it.
 
 ### What the columns of `not modelled` mean
 
@@ -170,28 +185,37 @@ I1, I7 and I14 are still assumptions in that file. They are checked by TLC,
 Quint and fast-check, so nothing is lost, but the Alloy column is not evidence
 for them.
 
-The same shape appears twice more, both found by a review pass rather than by
-any tool:
+The same shape appears three more times, all found by review rather than by any
+tool:
 
-- `dafny/Delivery.dfy` stated I5 over the free field `obligated` as
-  `!d.obligated ==> !d.obligated`, a lemma Dafny discharges with an empty body
-  and which mentions settlement nowhere. I5 and I6 both constrain where
-  `obligated` *comes from*, so neither is statable until the field is derived
-  from evidence. It now is, and I6 became statable in the same move.
 - `alloy/DeliveryL2.als` had a `strengtheningExcludesTheCTI` check whose
   consequent was a strict weakening of its antecedent. `invIsInductive` was
   always the statement that wanted making.
+- `dafny/Delivery.dfy` stated I5 over the free field `obligated` as
+  `!d.obligated ==> !d.obligated`, mentioning settlement nowhere. `obligated`
+  is now computed from an `Evidence` value, so a mutated `ObligatedFrom` breaks
+  the lemma. It is still *definitional* rather than checked, which is the most
+  the shape allows.
+- Quint's `pauseBlocksAdmission` — added during this very audit, as I17's
+  safety half — cannot fail either. `positionDiscipline` already pins
+  `positions` to the tasks in a holding phase, and `Planned` is not one, so the
+  predicate is true whether or not a pause is applied and `paused` is never
+  consulted. It has been removed rather than left in `allInvariants`.
 
-None of these three reported anything. UNSAT, verified, and UNSAT.
+None of these reported anything. UNSAT, verified, UNSAT, and clean.
+
+That last one is the honest summary of this whole exercise: the pass that went
+looking for invariants which cannot fail added one, and it took another review
+to notice.
 
 ### The temporal row
 
 Quint states I17–I19 most cleanly of anything here and cannot check them —
-Apalache stops at `Handling fairness is not supported yet!`. TLC's cell says
-"at 1 task" because that is the only size at which I18 returns a verdict; at
-the benchmark size of two it does not finish in half an hour. Alloy answers all
-three in about 131 seconds, reversing the ordering the safety results
-establish. Dafny's `—`
+Apalache stops at `Handling fairness is not supported yet!`. TLC discharges I17
+at the benchmark size of two tasks in 28 seconds, but I18 and I19 only at one:
+at two, I18 does not return a verdict in half an hour. Alloy answers all three
+in about 131 seconds, reversing the ordering the safety results establish.
+Dafny's `—`
 is a genuine capability gap rather than a scope decision, and fast-check's pass
 is vacuous: its witness counters show it never reaches the state I18
 constrains.

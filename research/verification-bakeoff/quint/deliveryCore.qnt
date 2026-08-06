@@ -121,9 +121,17 @@ module deliveryCore {
   val processLocalLostOnCrash: bool =
     not(crashed) or (positions == Set() and targetResource == Set())
 
-  /** 17. Pause admits no new work. */
-  val pauseBlocksAdmission: bool =
-    not(paused) or TASKS.forall(id => tickets.get(id).phase != Planned or not(positions.contains(id)))
+  /* 17's safety half has no state predicate here, and the obvious one is a
+   * trap. `not(paused) or no Planned task holds a position` reads like "a
+   * pause admits no new work" and cannot fail: `positionDiscipline` above
+   * already pins `positions` to the tasks in a holding phase, and `Planned` is
+   * not one of them. It is true of every state, paused or not, and `paused` is
+   * never consulted. The M8 shape exactly -- reads correct, constrains
+   * nothing.
+   *
+   * I17 is a property of the admission TRANSITION, so it lives in the
+   * `not(paused)` guards on `beginWork` and `resumeWork` and in the temporal
+   * `pauseDrainsPositions` below. */
 
   val allInvariants: bool = and {
     boundRespected,
@@ -136,7 +144,6 @@ module deliveryCore {
     targetResourceExclusive,
     promotionUsedExactHead,
     processLocalLostOnCrash,
-    pauseBlocksAdmission,
   }
 
   // ----------------------------------------------------------------- witnesses
@@ -507,7 +514,12 @@ module deliveryCore {
   /// as a proof that the work is safely stopped and "has preserved what it
   /// needs to resume the same attempt", so progress survives a suspend/resume
   /// cycle and an operator suspending forever does not prevent completion.
-  /// Used by `everyBegunSettlesUninterrupted` below.
+  ///
+  /// Used by `everyBegunSettlesUninterrupted` below -- which, like every
+  /// temporal definition in this section, is a STATEMENT and not a check.
+  /// Apalache refuses fairness and `quint run` cannot evaluate temporal
+  /// operators, so nothing here is executed by `./run.sh`. That is the Quint
+  /// result, not an oversight.
   temporal eventuallyUninterrupted =
     eventually(always(
       TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
