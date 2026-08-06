@@ -61,37 +61,50 @@ exclusive, so each task's `StartIntegration` is repeatedly enabled and
 repeatedly disabled. `WF` permits starving one forever. This is the sound
 argument for SF here.
 
-**And a lasso that is not a fairness problem at all.** `SF_vars(Progress(t))`
-over a disjunction of the ten lifecycle actions is discharged by taking *any*
-disjunct infinitely often, and TLC returns a lasso cycling
+**And a lasso that is a modelling artifact.** `SF_vars(Progress(t))` over a
+disjunction of the ten lifecycle actions is discharged by taking *any* disjunct
+infinitely often, and TLC returns a lasso cycling
 `Executing → SuspensionRequested → Suspended → Executing` with `ReportAccepted`
 enabled at every pass and never chosen.
 
-The tempting reading is "fairness on a disjunction is too weak, name the
-actions separately". Naming them separately does remove the lasso — and it is
-the wrong fix. **An operator is entitled to request suspension forever**, and
-under that behaviour the work genuinely never finishes, so the lasso is an
-honest counterexample and I18 is missing a hypothesis, exactly the way it needs
-`<>[]~paused`. `SF_vars(ReportAccepted(t))` removes it by *assuming* the
-executor outruns the operator: work is atomic in this model, so "enabled
-infinitely often" cannot be told apart from "given long enough to finish".
+Two readings compete, and **neither the tool nor the model can settle it — only
+the domain can.** `docs/CONTEXT.md` defines planned-attempt executor-work
+suspension as the executor's proof that its work
 
-`./run-liveness.sh --lasso` separates the two explanations, one task:
+> is safely stopped, **has preserved what it needs to resume the same attempt**,
+> and has no executor-owned activity for that attempt still running
+
+and adds that a session or worker-process interruption alone does *not* prove
+suspension. So progress survives the cycle, and an operator suspending forever
+does not prevent completion. The lasso is an artifact of work being atomic in
+this model: with no accumulator, a cycle that preserves progress is
+indistinguishable from one that makes none.
+
+That makes per-action `SF_vars(ReportAccepted(t))` the faithful encoding rather
+than a dodge. It abstracts *preservation + finite work + fair scheduling*, which
+is exactly what the domain guarantees. An `EventuallyUninterrupted` hypothesis
+would also remove the lasso, and would weaken I18 below what the system actually
+provides.
+
+`./run-liveness.sh --lasso` shows all three, one task:
 
 | Spec | Property | TLC |
 |---|---|---|
-| `DisjunctionSpec` | `EveryBegunSettlesPlain` | violated |
-| `DisjunctionSpec` | `EveryBegunSettles` | holds |
-| `LiveSpec` | `EveryBegunSettlesPlain` | holds |
+| `DisjunctionSpec` | `EveryBegunSettles` | violated — the artifact |
+| `DisjunctionSpec` | `EveryBegunSettlesUninterrupted` | holds, by assuming the operator away |
+| `LiveSpec` | `EveryBegunSettles` | holds — the primary form |
 
-Row 2 is the honest formulation: weak fairness plus a stated hypothesis. Row 3
-holds for the wrong reason. `EventuallyUninterrupted` is therefore a hypothesis
-of I18 rather than something the fairness constraints quietly supply.
+The general lesson: **when a liveness counterexample appears, the question is
+whether the domain permits that behaviour, and the model is not the place to
+look it up.** Both available fixes here — strengthen fairness, or add a
+hypothesis — remove the counterexample, and only one of them matches the
+domain.
 
-The general lesson is not about fairness syntax: **when a liveness property
-fails, the first question is whether the environment is entitled to behave that
-way.** If it is, the property is wrong, not the system — and strengthening
-fairness will hide that every time.
+A progress counter (`work : TaskId -> 0..N`, `reportAccepted` requiring
+`work = N`) would let this be *derived* rather than encoded: fairness would sit
+on `doWork`, and completion across infinitely many interruptions would follow
+from preservation instead of being asserted by SF. That is the principled fix
+and it is not in this model.
 
 ### Liveness found a real gap in the model that safety could not
 
@@ -143,12 +156,12 @@ counterexample. These verdicts are therefore about behaviours that stay inside
 the constraint.
 
 Every property here is an implication with environment hypotheses —
-`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`, `EventuallyUninterrupted`.
-None of the safety invariants needed one. Perpetual crashing, perpetual pause,
-a capacity pinned at zero and an operator who suspends forever are all harmless
-for safety, all legitimate, and each independently falsifies every liveness
-property in the catalog. Enumerating them *is* most of the work of stating a
-liveness property.
+`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`. None of the safety
+invariants needed one. Perpetual crashing, perpetual pause and a capacity pinned
+at zero are all harmless for safety, all legitimate, and each independently
+falsifies every liveness property in the catalog. Enumerating them *is* most of
+the work of stating a liveness property — and so is establishing that a
+candidate hypothesis is **not** needed, which is a domain question every time.
 
 ## Arrival, and where bounded checking gives out
 

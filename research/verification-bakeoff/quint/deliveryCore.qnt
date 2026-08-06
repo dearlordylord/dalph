@@ -487,12 +487,13 @@ module deliveryCore {
   temporal eventuallyRunning = eventually(always(not(paused)))
   temporal eventuallyRoomy = eventually(always(capacity > 0))
 
-  /// The operator eventually stops interrupting. `requestSuspension` is the
-  /// only way into `SuspensionRequested`, so this permits finitely many
-  /// suspend/resume cycles and forbids infinitely many.
+  /// The operator eventually stops interrupting.
   ///
-  /// The same kind of hypothesis as `eventuallyRunning`: an operator is
-  /// entitled to suspend forever, and under that behaviour nothing settles.
+  /// NOT a hypothesis of I18. docs/CONTEXT.md defines executor-work suspension
+  /// as a proof that the work is safely stopped and "has preserved what it
+  /// needs to resume the same attempt", so progress survives a suspend/resume
+  /// cycle and an operator suspending forever does not prevent completion.
+  /// Kept for the comparison in ../tlaplus/run-liveness.sh --lasso.
   temporal eventuallyUninterrupted =
     eventually(always(
       TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
@@ -504,8 +505,7 @@ module deliveryCore {
 
   /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
   temporal everyBegunSettles =
-    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy
-       and eventuallyUninterrupted)
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
       implies TASKS.forall(id =>
         always(
           (tickets.get(id).phase != Executing)

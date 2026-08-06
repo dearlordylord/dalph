@@ -99,14 +99,16 @@ pred eventuallyRunning { eventually always (Sys not in Paused) }
 pred eventuallyRoomy   { eventually always Sys.capacity > 0 }
 
 /*
- * The operator eventually stops interrupting. requestSuspension is the only
- * way into SuspensionRequested, so this permits finitely many suspend/resume
- * cycles and forbids infinitely many.
+ * The operator eventually stops interrupting.
  *
- * The same KIND of hypothesis as eventuallyRunning, and it belongs beside it:
- * an operator is entitled to suspend forever, and under that behaviour the
- * work genuinely never finishes. I18 is false without this, for a reason that
- * is not a defect.
+ * NOT a hypothesis of I18. docs/CONTEXT.md defines executor-work suspension as
+ * a proof that the work "is safely stopped, HAS PRESERVED WHAT IT NEEDS TO
+ * RESUME the same attempt, and has no executor-owned activity still running",
+ * so progress survives a suspend/resume cycle and an operator suspending
+ * forever does not prevent completion.
+ *
+ * Kept because `interruptionForeverBreaksI18` needs it to show what assuming
+ * it would buy.
  */
 pred eventuallyUninterrupted {
   eventually always (no t : Task | t.phase = SuspensionRequested)
@@ -120,12 +122,9 @@ check pauseDrainsPositions {
     implies eventually (no Holds)
 } for 2 Task, 5 Int, 1..12 steps
 
-// I18. Both disjuncts of "settles or is retained with a stated reason", and
-// four hypotheses, every one of them something the operator or the world is
-// entitled to do forever.
+// I18. Both disjuncts of "settles or is retained with a stated reason".
 check everyBegunSettles {
-  (liveTrace and eventuallyStable and eventuallyRunning and eventuallyRoomy
-     and eventuallyUninterrupted)
+  (liveTrace and eventuallyStable and eventuallyRunning and eventuallyRoomy)
     implies (all t : Task |
       always (t.phase = Executing implies eventually t.phase in Settled + Abandoned))
 } for 2 Task, 5 Int, 1..12 steps
@@ -139,18 +138,17 @@ check reachesQuiescence {
 /*
  * The negative control, and the more interesting of the two commands here.
  *
- * Drop `eventuallyUninterrupted` and weaken fairness to the disjunction, and
- * I18 fails with a lasso in which the ticket cycles
- * Executing -> SuspensionRequested -> Suspended -> Executing forever.
+ * Weaken fairness to the disjunction and I18 fails with a lasso in which the
+ * ticket cycles Executing -> SuspensionRequested -> Suspended -> Executing
+ * forever.
  *
- * The lasso is NOT a fairness defect. An operator may request suspension
- * forever, and then nothing settles -- so the counterexample is honest and the
- * missing piece is the hypothesis, not the fairness. Per-action strong
- * fairness also makes it disappear, by assuming SF on reportAccepted, i.e.
- * that the executor outruns the operator; work is atomic in this model, so
- * "enabled infinitely often" cannot be told apart from "given long enough to
- * finish". `../tlaplus/run-liveness.sh --lasso` runs the three-way comparison
- * that separates the two explanations.
+ * The lasso is a MODELLING ARTIFACT, not a domain behaviour. Work is atomic
+ * here, so a cycle that preserves progress is indistinguishable from one that
+ * makes none -- and docs/CONTEXT.md says safe suspension preserves what is
+ * needed to resume. Adding `eventuallyUninterrupted` removes the lasso by
+ * assuming the operator away; per-action strong fairness removes it by
+ * abstracting preservation plus finite work, which is the faithful choice.
+ * `../tlaplus/run-liveness.sh --lasso` runs the three-way comparison.
  *
  * Alloy earns its place here by handing the lasso back as a structure you can
  * step through in the visualizer rather than as fourteen states of console

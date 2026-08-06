@@ -93,14 +93,17 @@ EventuallyStable  == <>[](~crashed)
 EventuallyRunning == <>[](~paused)
 EventuallyRoomy   == <>[](capacity > 0)
 
-(* The operator eventually stops interrupting. RequestSuspension is the only
-   way into SuspensionRequested, so this permits finitely many suspend/resume
-   cycles and forbids infinitely many.
+(* The operator eventually stops interrupting.
 
-   This is the same KIND of hypothesis as EventuallyRunning and belongs beside
-   it: an operator suspending forever is a legitimate thing to do, and under it
-   nothing settles. Without this, I18 is false for a reason that is not a
-   defect. *)
+   NOT a hypothesis of I18, and the reason is a domain fact rather than a
+   modelling preference. docs/CONTEXT.md defines planned-attempt executor-work
+   suspension as the executor's proof that its work "is safely stopped, HAS
+   PRESERVED WHAT IT NEEDS TO RESUME the same attempt, and has no
+   executor-owned activity still running". Progress survives a suspend/resume
+   cycle, so an operator suspending forever does not prevent completion.
+
+   Used only by EveryBegunSettlesUninterrupted below, to show what assuming it
+   would buy. *)
 EventuallyUninterrupted ==
   <>[](\A t \in Tasks : tickets[t].phase # "SuspensionRequested")
 
@@ -142,8 +145,7 @@ PauseDrainsPositions ==
 Terminal(t) == tickets[t].phase \in {"Settled", "Abandoned"}
 
 EveryBegunSettles ==
-  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy
-     /\ EventuallyUninterrupted) =>
+  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy) =>
     \A t \in Tasks :
       (tickets[t].phase = "Executing") ~> Terminal(t)
 
@@ -188,9 +190,11 @@ DisjunctionSpec ==
   /\ \A t \in Tasks : SF_vars(Progress(t))
   /\ SF_vars(Recover)
 
-\* I18 without the operator hypothesis: false, and rightly so.
-EveryBegunSettlesPlain ==
-  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy) =>
+\* I18 with the operator hypothesis added. Not the primary form: the domain
+\* does not need it, because safe suspension preserves progress.
+EveryBegunSettlesUninterrupted ==
+  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy
+     /\ EventuallyUninterrupted) =>
     \A t \in Tasks : (tickets[t].phase = "Executing") ~> Terminal(t)
 
 

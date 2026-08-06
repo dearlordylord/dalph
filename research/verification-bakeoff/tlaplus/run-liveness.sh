@@ -64,8 +64,11 @@ EOF
 fi
 
 if [[ ${1:-} == --lasso ]]; then
-  echo "One task. An operator may request suspension forever, so I18 needs"
-  echo "EventuallyUninterrupted the way it needs <>[]~paused."
+  echo "One task. Is the suspend/resume lasso a domain behaviour or a modelling"
+  echo "artifact? docs/CONTEXT.md settles it: safe suspension preserves what is"
+  echo "needed to resume, so progress survives the cycle. The lasso is an"
+  echo "artifact of atomic work in this model, and per-action SF is the correct"
+  echo "encoding of the preservation guarantee -- not a way to dodge the issue."
   echo ""
   echo "| Spec | Property | TLC |"
   echo "|---|---|---|"
@@ -84,13 +87,15 @@ EOF
     else v="error"; fi
     echo "| $1 | $2 | $v |"
   }
-  lasso DisjunctionSpec EveryBegunSettlesPlain
   lasso DisjunctionSpec EveryBegunSettles
-  lasso LiveSpec EveryBegunSettlesPlain
+  lasso DisjunctionSpec EveryBegunSettlesUninterrupted
+  lasso LiveSpec EveryBegunSettles
   echo ""
-  echo "Row 2 is the honest formulation: weak fairness plus a stated hypothesis."
-  echo "Row 3 holds for the wrong reason -- per-action SF on ReportAccepted"
-  echo "assumes the executor outruns the operator instead of saying so."
+  echo "Row 1 is the artifact: atomic work makes a preserved-progress cycle look"
+  echo "like no progress. Row 2 shows assuming the operator away also removes it,"
+  echo "at the cost of a hypothesis the domain does not need. Row 3 is the"
+  echo "primary form: per-action SF on ReportAccepted abstracts preservation"
+  echo "plus finite work plus fair scheduling, which is what the domain says."
   exit 0
 fi
 

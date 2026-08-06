@@ -273,28 +273,29 @@ conjuncts, `alloy/DeliveryLiveness.als` writes the same schema out by hand ten
 times plus ten `enabled` predicates Alloy cannot derive, and Quint says it in
 one `strongFair` per action and then has no engine.
 
-Then compare the *hypotheses*, which is where the real content is. Four of
-them, and each names something the environment may do forever:
+Then compare the *hypotheses*, which is where the real content is:
 
 ```tla
-EventuallyStable        == <>[](~crashed)
-EventuallyRunning       == <>[](~paused)
-EventuallyRoomy         == <>[](capacity > 0)
-EventuallyUninterrupted == <>[](\A t \in Tasks : tickets[t].phase # "SuspensionRequested")
+EventuallyStable  == <>[](~crashed)
+EventuallyRunning == <>[](~paused)
+EventuallyRoomy   == <>[](capacity > 0)
 ```
 
-The fourth is the one to sit with. Drop it and I18 fails with a lasso cycling
-`Executing → SuspensionRequested → Suspended`. That looks like a fairness bug
-and is not one: an operator is entitled to suspend forever, so the
-counterexample is honest and the property was missing an assumption.
-`tlaplus/run-liveness.sh --lasso` runs the three-way comparison that proves it,
-and `interruptionForeverBreaksI18` in the Alloy file hands the same lasso back
-as a structure you can step through.
+Three, and each names something the environment may do forever. Now read the
+one that is deliberately **absent**. Under weaker fairness, I18 fails with a
+lasso cycling `Executing → SuspensionRequested → Suspended`, and an
+`EventuallyUninterrupted` hypothesis would make it pass. So would per-action
+strong fairness. Both fixes work; they are not equivalent, and no tool in this
+directory can tell you which is right.
 
-**When a liveness property fails, ask first whether the environment is entitled
-to behave that way.** Strengthening fairness will hide that every time — here
-`SF_vars(ReportAccepted(t))` "fixes" it by assuming the executor outruns the
-operator.
+`docs/CONTEXT.md` can: safe suspension is defined as preserving what is needed
+to resume, so progress survives the cycle and the lasso is an artifact of work
+being atomic in the model. Per-action SF abstracts the real guarantee; the extra
+hypothesis assumes the operator away and weakens the claim.
+
+`tlaplus/run-liveness.sh --lasso` runs all three,
+`interruptionForeverBreaksI18` in the Alloy file hands the cycle back as a
+steppable structure, and **the resolution is in neither place.**
 
 ## Where to start reading
 

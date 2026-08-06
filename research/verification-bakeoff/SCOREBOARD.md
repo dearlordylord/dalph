@@ -179,48 +179,49 @@ in `CorrectionLimitReached`. Hence the `Abandoned` phase, the only addition
 liveness demanded, added to all five executable encodings. Every safety verdict
 was unchanged; the state count moved 81 792 → 96 000.
 
-### The hard part is the hypotheses, not the properties
+### The hard part is the hypotheses, and only the domain can settle them
 
 The properties are one line each. Everything difficult is in the spec around
 them, and the difficulty is always the same question: **what is the environment
-entitled to do forever?**
+entitled to do, and what does the system guarantee in return?**
 
-`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`, `EventuallyUninterrupted`.
-None of the nine safety invariants needed a single hypothesis. Perpetual
-crashing, perpetual pause, a capacity pinned at zero and an operator who
-suspends forever are all legitimate, all harmless for safety, and each
-independently falsifies every property in the temporal catalog.
+I17–I19 need `<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`. None of the
+nine safety invariants needed a hypothesis at all.
 
-The last one is the instructive case. `SF_vars(Progress(t))` — fairness on the
-disjunction of the lifecycle actions — yields a lasso cycling
-`Executing → SuspensionRequested → Suspended → Executing` with `ReportAccepted`
-enabled at every pass and never chosen. The tempting reading is that fairness on
-a disjunction is too weak and the actions must be named separately.
-
-That reading is wrong, and `tlaplus/run-liveness.sh --lasso` shows it:
+The instructive case is a hypothesis that turned out *not* to be needed.
+`SF_vars(Progress(t))` — fairness on the disjunction of the lifecycle actions —
+yields a lasso cycling `Executing → SuspensionRequested → Suspended → Executing`
+with `ReportAccepted` enabled at every pass and never chosen. Two fixes remove
+it, and they are not equivalent:
 
 | Spec | Property | TLC |
 |---|---|---|
-| disjunction fairness | I18 without the operator hypothesis | **violated** |
-| disjunction fairness | I18 with it | holds |
-| per-action fairness | I18 without it | holds |
+| disjunction fairness | I18 | **violated** |
+| disjunction fairness | I18 + `EventuallyUninterrupted` | holds |
+| per-action fairness | I18 | holds |
 
-An operator may request suspension forever, so the lasso is an honest
-counterexample and the missing piece is a hypothesis. Per-action
-`SF_vars(ReportAccepted(t))` removes it by *assuming* the executor outruns the
-operator — work is atomic in this model, so "enabled infinitely often" cannot be
-told apart from "given long enough to finish". Row 3 holds for the wrong reason.
+`docs/CONTEXT.md` decides between them. Executor-work suspension is defined as
+the executor's proof that its work "is safely stopped, **has preserved what it
+needs to resume the same attempt**, and has no executor-owned activity for that
+attempt still running". Progress survives the cycle, so an operator suspending
+forever does *not* prevent completion — the lasso is an artifact of work being
+atomic in the model, where a cycle that preserves progress and one that makes
+none are the same state sequence.
 
-**When a liveness property fails, ask first whether the environment is entitled
-to behave that way. If it is, the property is wrong, not the system — and
-strengthening fairness will hide that every time.** Strong rather than weak
-fairness is still justified here, but by a different argument: `StartIntegration`
-is repeatedly enabled and disabled under an exclusive target, and WF permits
-starving one task forever.
+So row 3 is faithful: per-action SF abstracts preservation plus finite work plus
+fair scheduling. Row 2 buys the same verdict by assuming the operator away, and
+states an I18 weaker than the system actually provides.
+
+**Neither the tool nor the model can tell you which fix is right.** Both make
+the counterexample disappear. That is the most transferable thing in this
+study: a liveness counterexample is a question addressed to the domain, and the
+model is not where the answer lives.
 
 `alloy/DeliveryLiveness.als` keeps the lasso as a checked control,
 `interruptionForeverBreaksI18`, and hands it back as a structure you can step
-through rather than as console text.
+through rather than as console text. Strong-over-weak fairness has its own
+independent justification: `StartIntegration` is repeatedly enabled and disabled
+under an exclusive target, and WF permits starving one task forever.
 
 ### Where bounded checking gives out: arrival
 

@@ -61,10 +61,10 @@ cutoff. "Eventually" becomes "within 40 steps". And the round-robin scheduler is
 
 The third has an interesting consequence. The scheduler never picks
 `requestSuspension`, so this file structurally cannot exhibit the
-`Executing → SuspensionRequested → Suspended` cycle — which means it silently
-implements `EventuallyUninterrupted`, the hypothesis I18 needs and that the
-TLA+ and Alloy encodings state explicitly. Baking an assumption into a test
-harness is exactly how it stops being visible.
+`Executing → SuspensionRequested → Suspended` cycle at all. It happens not to
+matter — that cycle is a modelling artifact rather than a real behaviour — but
+the harness could not have told you either way. Baking a scheduling assumption
+into a test is exactly how it stops being visible.
 
 All three properties pass in **0.9 seconds**, against 28s for one TLC property
 and 94s for the whole Alloy file.

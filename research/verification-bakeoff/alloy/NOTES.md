@@ -182,8 +182,9 @@ SAT, and the instance is the same `Executing → SuspensionRequested → Suspend
 Executing` lasso TLC finds — except Alloy hands it back as a structure you can
 step through in the visualizer rather than as 14 states of console text.
 
-The lasso is not a defect. An operator may request suspension forever, and then
-nothing settles, so the counterexample is honest and the property is the thing
-that was missing an assumption. Being able to *look* at the cycle rather than
-read it is what makes that distinction easy to reach, and it is the clearest
-thing Alloy does better than TLC here.
+The lasso is a modelling artifact. `docs/CONTEXT.md` defines safe suspension as
+preserving what is needed to resume, so progress survives the cycle — atomic
+work in the model is what makes a preserving cycle look like a stalling one.
+Being able to *look* at the cycle rather than read fourteen states of console
+text is what makes that diagnosis reachable, and it is the clearest thing Alloy
+does better than TLC here.

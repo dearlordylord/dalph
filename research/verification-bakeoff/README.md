@@ -71,12 +71,13 @@ tools by which level it picked.
 reached. Every clean result here is paired with a witness that the interesting
 state is reachable at all.
 
-**A failing liveness property is usually a wrong property.** Every one of
-I17-I19 needs hypotheses about what the environment may do forever — crash,
-pause, pin capacity at zero, suspend repeatedly. None of the nine safety
-invariants needed one. When the check fails, ask first whether the environment
-is entitled to behave that way; strengthening fairness will hide that every
-time.
+**A liveness counterexample is a question for the domain.** I17-I19 each need
+hypotheses about what the environment may do forever, where no safety invariant
+needed any. And when the check fails, several fixes will make the
+counterexample disappear while meaning different things: the suspend/resume
+lasso here is removed either by strengthening fairness or by assuming the
+operator away, and only `docs/CONTEXT.md` says which is faithful. No tool in
+this directory can tell you.
 
 **A run stuck forever violates no safety property.** Nine safety invariants,
 three engines and 96 000 states had nothing to say about a ticket parked in
