@@ -66,9 +66,9 @@ violated", which points at the model.
 
 ## Friction
 
-Almost none, and that is itself a finding. Eleven obligations verified in 1.3
-seconds on the first attempt, with no triggers, no `assume`, and no manual
-lemma invocation beyond one `RetentionHolds` call. The SMT solver handled
+Almost none, and that is itself a finding. Nine obligations verified in about a
+second, with no triggers, no `assume`, and no manual lemma invocation beyond one
+`RetentionHolds` call. The SMT solver handled
 sequences and lengths without help.
 
 This is the honeymoon case: L1 is a total function over lists with linear

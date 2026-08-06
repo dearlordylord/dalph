@@ -115,7 +115,7 @@ Each states the invariant and either discharges it or refuses.
 | Agda, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
-| Dafny, L1 | 10 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
+| Dafny, L1 | 9 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
 | Alloy 6, L1 | 5 checks UNSAT, 3 witnesses SAT | 4 counterexamples constructed, one per check | 12s |
 | Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 324s |
@@ -551,6 +551,7 @@ What the re-run added:
   the PyPI `z3-solver` wheel — is documented in `dafny/NOTES.md`,
   "Linux aarch64 workaround".
 
-The fetchers are also pinned since the re-run: TLC's jar to release tag
-`v1.7.4` (resolved from the releases API), all downloads atomic and
-fail-closed, and Quint's simulate/witness runs to a seed.
+The fetchers are also pinned: TLC's jar to release tag `v1.7.4`, Alloy to
+`v6.2.0`, Dafny to `v4.11.0`, Lean through `lean/lean-toolchain`, Apalache to
+`0.56.1`. All downloads are atomic and fail-closed, and Quint's
+simulate/witness runs are seeded.

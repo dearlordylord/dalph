@@ -13,12 +13,11 @@ cd "$(dirname "$0")"
 TLA_TOOLS=${TLA_TOOLS:-$HOME/.cache/dalph-bakeoff/tla2tools.jar}
 if [[ ! -f $TLA_TOOLS ]]; then
   mkdir -p "$(dirname "$TLA_TOOLS")"
-  # Pinned release tag (v1.7.4 when pinned; see NOTES.md), resolved live from
-  # the releases API, rather than releases/latest, so the jar cannot move
-  # silently. -f so an error page is never cached; tempfile + rename in the
-  # same directory so the jar appears atomically.
-  TLA_TAG=${TLA_TAG:-$(latest=$(curl -fsSL https://api.github.com/repos/tlaplus/tlaplus/releases/latest) \
-        && grep -m1 '"tag_name"' <<<"$latest" | cut -d'"' -f4)}
+  # Pinned release tag, overridable, rather than releases/latest: the version
+  # ../SCOREBOARD.md reports against is the version this fetches. -f so an
+  # error page is never cached; tempfile + rename in the same directory so the
+  # jar appears atomically.
+  TLA_TAG=${TLA_TAG:-v1.7.4}
   tmp="$TLA_TOOLS.tmp.$$"
   curl -fsSL -o "$tmp" \
     "https://github.com/tlaplus/tlaplus/releases/download/$TLA_TAG/tla2tools.jar" \
