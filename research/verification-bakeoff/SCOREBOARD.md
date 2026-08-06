@@ -555,3 +555,20 @@ The fetchers are also pinned: TLC's jar to release tag `v1.7.4`, Alloy to
 `v6.2.0`, Dafny to `v4.11.0`, Lean through `lean/lean-toolchain`, Apalache to
 `0.56.1`. All downloads are atomic and fail-closed, and Quint's
 simulate/witness runs are seeded.
+
+Two operational caveats survived the re-run and are recorded for whoever runs
+this next:
+
+- **`quint verify --backend tlc` needs a warm `~/.quint`.** Quint's TLC backend
+  does not use `~/.cache/dalph-bakeoff/tla2tools.jar`; it runs the TLC bundled
+  inside the Apalache jar. On a fresh machine (or CI runner) any `--backend
+  tlc` invocation fails with `Apalache JAR not found` until one default-backend
+  `quint verify` has downloaded the dist. Found by source inspection
+  (`node_modules/@informalsystems/quint/dist/src/tlc.js`), confirmed live.
+- **Agda's qemu binfmt is a host property, not a container one.** The
+  registration lives in the container host's runtime and survives fresh
+  shells, but a container recreated on a host without qemu-user binfmt loses
+  Agda entirely (`Exec format error`), with no in-container remedy. The Dafny
+  recipe has the mirror-image property: fully native and self-contained, but
+  cache-resident — wipe `~/.cache/dalph-bakeoff` and the `dafny/NOTES.md`
+  recipe must be re-run.

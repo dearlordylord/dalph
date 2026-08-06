@@ -37,6 +37,7 @@ tlaplus/run-liveness.sh --lasso       # is the suspend/resume lasso a bug or a m
 tlaplus/run-liveness.sh --arrival     # I19 when new work keeps arriving; neither verdict is usable
 node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witnesses
 node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
+node fastcheck/journal-run.mjs        # the I15 fold: four propositions + negative controls
 alloy/run.sh                          # relational structure search, seconds
 alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
 alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~131s
@@ -50,6 +51,31 @@ Quint and Agda come from Homebrew, Lean from elan. TLC, Alloy, and Dafny are
 single downloads that each `run.sh` fetches into `~/.cache/dalph-bakeoff`.
 Nothing here is wired into the quality gate; `specs/*.qnt` remains the gated
 model suite.
+
+### Linux aarch64 environment notes
+
+The study also runs on Debian 12 aarch64 (see the SCOREBOARD addendum for the
+re-run results), with four caveats a fresh session should know:
+
+- **`quint verify --backend tlc` does not use `tla2tools.jar`.** Quint runs the
+  TLC bundled inside the Apalache jar (`~/.quint/apalache-dist-*/.../apalache.jar`).
+  On a fresh machine or CI runner the dist is absent and the backend fails with
+  `Apalache JAR not found ... Run 'quint verify' with Apalache backend first to
+  download it`. Warm-up is one `quint verify` of any spec on the default
+  backend; only then does `--backend tlc` work. This is the one network step a
+  TLC-backend gate job needs beyond `pnpm install`.
+- **Agda depends on host-level qemu-user binfmt.** The prebuilt binary is
+  static x86-64; it survives fresh shells here because the binfmt registration
+  lives in the container's host runtime. Recreate the container on a host
+  without qemu binfmt and Agda fails with `Exec format error` — there is
+  nothing to export or reinstall inside the container.
+- **Dafny's arm64 recipe lives in `~/.cache/dalph-bakeoff`.** The wrapper at
+  `~/.cache/dalph-bakeoff/dafny-arm64/dafny` is self-contained, but if the
+  cache is wiped the .NET/PE-patch/arm64-z3 recipe in `dafny/NOTES.md`
+  ("Linux aarch64 workaround") must be re-run.
+- **Alloy is SAT4J-only here** (no linux-aarch64 native solvers in 6.2.0).
+  A performance note, not a blocker: SAT4J ran the L2 file faster than the
+  recorded macOS figures (239s vs ~324s).
 
 Each `run.sh` checks the faithful encoding *and* confirms the seeded defects are
 rejected. The second half is not optional: a tool that accepts the mutants has
