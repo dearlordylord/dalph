@@ -378,6 +378,14 @@ requirements. Constructing, comparing, or observing a proposal performs no
 action and acquires no process-local resource.
 _Avoid_: Workflow occurrence, admitted action, runtime ownership
 
+**Run quiescence**:
+The process-local condition for one Run in which no delivery action is currently
+executable and no admitted delivery action is still running. It does not prove
+that every task completed, every responsibility settled, the tracker graph was
+freshly reconfirmed, the Run may terminate, or the coordinator process should
+remain alive.
+_Avoid_: Run completion, empty target, polling permission, finality proof
+
 **Delivery settlement**:
 An established terminal delivery fact backed by the accepted integration and
 exact resource-disposition protocols. A terminal executor report, accepted
