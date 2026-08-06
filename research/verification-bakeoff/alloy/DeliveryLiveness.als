@@ -62,11 +62,14 @@ pred quiescent {
 
 /* ------------------------------------------------------------------ fairness
  *
- * Strong fairness, per action, for the reasons ../tlaplus/DeliveryLiveness.tla
- * gives: weak fairness starves StartIntegration under an exclusive target, and
- * fairness on the DISJUNCTION of the actions is satisfied by an
- * Executing -> SuspensionRequested -> Suspended -> Executing cycle that never
- * chooses reportAccepted.
+ * Strong rather than weak, for the reason ../tlaplus/DeliveryLiveness.tla
+ * gives: weak fairness starves startIntegration under an exclusive target.
+ *
+ * Per action rather than on the disjunction is the weaker justification. It
+ * removes the suspend/resume lasso, but by assuming reportAccepted eventually
+ * wins against an interrupting operator rather than by saying so -- see
+ * `interruptionForeverBreaksI18` at the bottom. `eventuallyUninterrupted` is
+ * what actually earns I18.
  *
  * requestSuspension is deliberately absent: being asked to suspend is an
  * operator decision, not an obligation.
@@ -95,6 +98,20 @@ pred eventuallyStable  { eventually always (Sys not in Crashed) }
 pred eventuallyRunning { eventually always (Sys not in Paused) }
 pred eventuallyRoomy   { eventually always Sys.capacity > 0 }
 
+/*
+ * The operator eventually stops interrupting. requestSuspension is the only
+ * way into SuspensionRequested, so this permits finitely many suspend/resume
+ * cycles and forbids infinitely many.
+ *
+ * The same KIND of hypothesis as eventuallyRunning, and it belongs beside it:
+ * an operator is entitled to suspend forever, and under that behaviour the
+ * work genuinely never finishes. I18 is false without this, for a reason that
+ * is not a defect.
+ */
+pred eventuallyUninterrupted {
+  eventually always (no t : Task | t.phase = SuspensionRequested)
+}
+
 /* ------------------------------------------------------------------- I17-I19 */
 
 // I17. A pause that stays applied drains every held position.
@@ -103,9 +120,12 @@ check pauseDrainsPositions {
     implies eventually (no Holds)
 } for 2 Task, 5 Int, 1..12 steps
 
-// I18. Both disjuncts of "settles or is retained with a stated reason".
+// I18. Both disjuncts of "settles or is retained with a stated reason", and
+// four hypotheses, every one of them something the operator or the world is
+// entitled to do forever.
 check everyBegunSettles {
-  (liveTrace and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+  (liveTrace and eventuallyStable and eventuallyRunning and eventuallyRoomy
+     and eventuallyUninterrupted)
     implies (all t : Task |
       always (t.phase = Executing implies eventually t.phase in Settled + Abandoned))
 } for 2 Task, 5 Int, 1..12 steps
@@ -117,10 +137,24 @@ check reachesQuiescence {
 } for 2 Task, 5 Int, 1..12 steps
 
 /*
- * The negative control. Fairness on the disjunction rather than per action is
- * the mistake ../tlaplus/DeliveryLiveness.tla made first, and Alloy reproduces
- * the same suspend/resume lasso -- as an instance you can step through, which
- * is the one thing it does better than TLC here.
+ * The negative control, and the more interesting of the two commands here.
+ *
+ * Drop `eventuallyUninterrupted` and weaken fairness to the disjunction, and
+ * I18 fails with a lasso in which the ticket cycles
+ * Executing -> SuspensionRequested -> Suspended -> Executing forever.
+ *
+ * The lasso is NOT a fairness defect. An operator may request suspension
+ * forever, and then nothing settles -- so the counterexample is honest and the
+ * missing piece is the hypothesis, not the fairness. Per-action strong
+ * fairness also makes it disappear, by assuming SF on reportAccepted, i.e.
+ * that the executor outruns the operator; work is atomic in this model, so
+ * "enabled infinitely often" cannot be told apart from "given long enough to
+ * finish". `../tlaplus/run-liveness.sh --lasso` runs the three-way comparison
+ * that separates the two explanations.
+ *
+ * Alloy earns its place here by handing the lasso back as a structure you can
+ * step through in the visualizer rather than as fourteen states of console
+ * text.
  */
 pred sfDisjunction {
   all t : Task |
@@ -128,7 +162,7 @@ pred sfDisjunction {
       implies (always eventually (reportAccepted[t] or safelySuspend[t] or resumeWork[t]))
 }
 
-check disjunctionFairnessIsTooWeak {
+check interruptionForeverBreaksI18 {
   (init and always step and sfDisjunction and eventuallyStable and eventuallyRunning
      and eventuallyRoomy)
     implies (all t : Task |

@@ -179,31 +179,74 @@ in `CorrectionLimitReached`. Hence the `Abandoned` phase, the only addition
 liveness demanded, added to all five executable encodings. Every safety verdict
 was unchanged; the state count moved 81 792 → 96 000.
 
-### Fairness is where the mistakes are, not the properties
+### The hard part is the hypotheses, not the properties
 
-The properties are one line each. Getting the *spec* right took two corrections,
-both caught by TLC:
+The properties are one line each. Everything difficult is in the spec around
+them, and the difficulty is always the same question: **what is the environment
+entitled to do forever?**
 
-**`WF_vars(Next)` was decoration.** It says only that some step keeps happening,
-and is satisfied by a machine that observes the graph forever and never touches
-a ticket.
+`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`, `EventuallyUninterrupted`.
+None of the nine safety invariants needed a single hypothesis. Perpetual
+crashing, perpetual pause, a capacity pinned at zero and an operator who
+suspends forever are all legitimate, all harmless for safety, and each
+independently falsifies every property in the temporal catalog.
 
-**Fairness on a disjunction is far too weak.** `SF_vars(Progress(t))` over the
-ten lifecycle actions looks right and is discharged by taking *any* disjunct
-infinitely often. TLC returned a lasso cycling
-`Executing → SuspensionRequested → Suspended → Executing` in which
-`ReportAccepted` is enabled at every pass and never chosen. All ten actions have
-to be named separately — 21 `SF_vars` conjuncts at two tasks.
+The last one is the instructive case. `SF_vars(Progress(t))` — fairness on the
+disjunction of the lifecycle actions — yields a lasso cycling
+`Executing → SuspensionRequested → Suspended → Executing` with `ReportAccepted`
+enabled at every pass and never chosen. The tempting reading is that fairness on
+a disjunction is too weak and the actions must be named separately.
 
-`alloy/DeliveryLiveness.als` keeps that mistake as a checked negative control:
-`disjunctionFairnessIsTooWeak` is SAT, and Alloy hands back the same lasso as a
-structure you can step through rather than as console text.
+That reading is wrong, and `tlaplus/run-liveness.sh --lasso` shows it:
 
-Every liveness property also needs an environment hypothesis — `<>[]~crashed`,
-`<>[]~paused`, `<>[](capacity > 0)`. None of the nine safety invariants needed
-one. Perpetual crashing, perpetual pause and a capacity pinned at zero are each
-harmless for safety and each independently falsify every property in the
-temporal catalog.
+| Spec | Property | TLC |
+|---|---|---|
+| disjunction fairness | I18 without the operator hypothesis | **violated** |
+| disjunction fairness | I18 with it | holds |
+| per-action fairness | I18 without it | holds |
+
+An operator may request suspension forever, so the lasso is an honest
+counterexample and the missing piece is a hypothesis. Per-action
+`SF_vars(ReportAccepted(t))` removes it by *assuming* the executor outruns the
+operator — work is atomic in this model, so "enabled infinitely often" cannot be
+told apart from "given long enough to finish". Row 3 holds for the wrong reason.
+
+**When a liveness property fails, ask first whether the environment is entitled
+to behave that way. If it is, the property is wrong, not the system — and
+strengthening fairness will hide that every time.** Strong rather than weak
+fairness is still justified here, but by a different argument: `StartIntegration`
+is repeatedly enabled and disabled under an exclusive target, and WF permits
+starving one task forever.
+
+`alloy/DeliveryLiveness.als` keeps the lasso as a checked control,
+`interruptionForeverBreaksI18`, and hands it back as a structure you can step
+through rather than as console text.
+
+### Where bounded checking gives out: arrival
+
+I19 reads "**with no new tracker facts** the run reaches quiescence". Every
+encoding here omits that hypothesis, because none of them can express new
+facts: the task set is fixed and no phase returns to `NoObligation`, so work is
+exhaustible by construction. A clean I19 verdict is weaker than it looks.
+
+`ArrivalSpec` in `tlaplus/DeliveryLiveness.tla` adds arrival by recycling
+finished tickets. Neither route gives a usable answer:
+
+| | verdict |
+|---|---|
+| no state constraint | no verdict in 7 minutes |
+| `CONSTRAINT StateConstraint` | both properties hold, 5 472 states |
+
+Every completed responsibility advances `targetHead`, so an endless arrival
+stream is an endless state space. Adding the constraint makes it finite and
+makes the verdict *wrong*: quiescence-without-the-hypothesis should be false,
+and comes back clean only because the constraint truncates the recycling loop
+before it closes. That is the state-constraint-plus-liveness hazard TLC warns
+about, in the concrete.
+
+The practical consequence: cap arrivals, and not for realism — an uncapped
+stream is not checkable here by either route. The cap belongs in the hypothesis,
+which is what I19 already said.
 
 ### The cost ordering inverts
 

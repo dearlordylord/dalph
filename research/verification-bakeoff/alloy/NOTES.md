@@ -62,7 +62,7 @@ confidence it is the most expensive, because it offers none.
 
 `DeliveryL2.als` is the protocol as `var` state with temporal formulas, not the
 state-only encoding of `Delivery.als`. Same actions and invariants as the
-Quint, TLA+, Lean, and Agda files. 280 lines, 501 seconds for all nine
+Quint, TLA+, Lean, and Agda files. 280 lines, 361 seconds for all nine
 commands — by far the slowest tool here, and the reason is scope: 14 steps of a
 17-action relation over two tasks is a large SAT problem.
 
@@ -176,9 +176,14 @@ ten-disjunct `no t : Task | ...` over the same hand-written guards.
 
 ### Where it wins outright
 
-`disjunctionFairnessIsTooWeak` is a deliberate negative control: fairness on the
-disjunction of actions rather than per action. It is SAT, and the instance is
-the same `Executing → SuspensionRequested → Suspended → Executing` lasso TLC
-found — except Alloy hands it back as a structure you can step through in the
-visualizer rather than as 14 states of console text. For a mistake this easy to
-make, that presentation is worth a lot.
+`interruptionForeverBreaksI18` is a deliberate negative control: I18 without
+`eventuallyUninterrupted`, under fairness on the disjunction of actions. It is
+SAT, and the instance is the same `Executing → SuspensionRequested → Suspended →
+Executing` lasso TLC finds — except Alloy hands it back as a structure you can
+step through in the visualizer rather than as 14 states of console text.
+
+The lasso is not a defect. An operator may request suspension forever, and then
+nothing settles, so the counterexample is honest and the property is the thing
+that was missing an assumption. Being able to *look* at the cycle rather than
+read it is what makes that distinction easy to reach, and it is the clearest
+thing Alloy does better than TLC here.

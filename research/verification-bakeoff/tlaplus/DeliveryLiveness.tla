@@ -36,22 +36,32 @@ Progress(t) ==
 AnyProgress == (\E t \in Tasks : Progress(t)) \/ Recover
 
 (***************************************************************************)
-(* Strong, not weak, and per action, not per disjunction.                   *)
+(* Strong, not weak.                                                       *)
 (*                                                                          *)
-(* Two independent choices here, and getting either wrong makes I18 fail.   *)
+(* With two tasks Accepted, the integration resource is exclusive, so each  *)
+(* task's StartIntegration is repeatedly enabled and repeatedly disabled.   *)
+(* WF permits starving one of them forever; SF does not. Same for BeginWork *)
+(* under a fluctuating capacity. That is the real argument for SF here.     *)
 (*                                                                          *)
-(* SF rather than WF: with two tasks Accepted, the integration resource is  *)
-(* exclusive, so each task's StartIntegration is repeatedly enabled and     *)
-(* repeatedly disabled. WF permits starving one of them forever; SF does    *)
-(* not. Same for BeginWork under a fluctuating capacity.                    *)
+(* Per action rather than SF_vars(Progress(t)) is a WEAKER claim than it    *)
+(* looks, and it is worth knowing exactly what it buys. Fairness on a       *)
+(* disjunction is discharged by taking any disjunct infinitely often, so    *)
+(* under SF_vars(Progress(t)) a ticket may cycle                            *)
+(* Executing -> SuspensionRequested -> Suspended -> Executing forever with  *)
+(* ReportAccepted enabled at every pass and never chosen.                   *)
 (*                                                                          *)
-(* Per action rather than `SF_vars(Progress(t))`: fairness on a disjunction *)
-(* is satisfied by taking ANY disjunct infinitely often. Under the weaker   *)
-(* form TLC returns a lasso in which a ticket cycles                        *)
-(* Executing -> SuspensionRequested -> Suspended -> Executing forever.      *)
-(* ReportAccepted is enabled at every pass and simply never chosen, and the *)
-(* disjunction is still taken infinitely often, so the constraint is met.   *)
-(* Naming each action separately is what forces the cycle to be left.       *)
+(* Naming the actions separately removes that lasso -- but not because the  *)
+(* lasso was a fairness defect. An operator is entitled to request          *)
+(* suspension forever, and under that behaviour the work genuinely never    *)
+(* finishes. SF_vars(ReportAccepted(t)) removes the lasso by ASSUMING the   *)
+(* executor outruns the operator: work is atomic in this model, so "enabled *)
+(* infinitely often" and "given long enough to finish" are indistinguish-   *)
+(* able. That assumption belongs in the open, which is why                  *)
+(* EventuallyUninterrupted is a hypothesis of I18 below rather than         *)
+(* something the fairness constraints quietly supply.                       *)
+(*                                                                          *)
+(* DisjunctionSpec at the bottom of this file makes the difference          *)
+(* checkable rather than arguable.                                          *)
 (***************************************************************************)
 Fairness(t) ==
   /\ SF_vars(AcquireClaim(t))
@@ -83,6 +93,17 @@ EventuallyStable  == <>[](~crashed)
 EventuallyRunning == <>[](~paused)
 EventuallyRoomy   == <>[](capacity > 0)
 
+(* The operator eventually stops interrupting. RequestSuspension is the only
+   way into SuspensionRequested, so this permits finitely many suspend/resume
+   cycles and forbids infinitely many.
+
+   This is the same KIND of hypothesis as EventuallyRunning and belongs beside
+   it: an operator suspending forever is a legitimate thing to do, and under it
+   nothing settles. Without this, I18 is false for a reason that is not a
+   defect. *)
+EventuallyUninterrupted ==
+  <>[](\A t \in Tasks : tickets[t].phase # "SuspensionRequested")
+
 (***************************************************************************)
 (* I17 Pause.                                                              *)
 (*                                                                          *)
@@ -108,17 +129,21 @@ PauseDrainsPositions ==
 (* have to exclude: perpetual crashing, perpetual pause, and a capacity     *)
 (* pinned at zero. Each was harmless for safety.                            *)
 (*                                                                          *)
-(* The disjunction in Terminal is load-bearing and was the first thing this *)
-(* check caught. Stated as `~> Settled` the property is FALSE, with a       *)
-(* counterexample that parks a ticket in Integrating behind a stale head    *)
-(* forever. Both halves of I18 have to be present: the invariant says       *)
-(* "settles OR is retained with an exact stated reason", and Abandoned is   *)
-(* that second disjunct.                                                    *)
+(* The disjunction in Terminal is load-bearing. Stated as `~> Settled` the  *)
+(* property is FALSE, with a counterexample that parks a ticket in          *)
+(* Integrating behind a stale head forever. Both halves of I18 have to be   *)
+(* present: the invariant says "settles OR is retained with an exact stated *)
+(* reason", and Abandoned is that second disjunct.                          *)
+(*                                                                          *)
+(* Four hypotheses, and every one of them is a thing an operator or the     *)
+(* world is entitled to do forever. None of the nine safety invariants      *)
+(* needed a single one.                                                     *)
 (***************************************************************************)
 Terminal(t) == tickets[t].phase \in {"Settled", "Abandoned"}
 
 EveryBegunSettles ==
-  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy) =>
+  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy
+     /\ EventuallyUninterrupted) =>
     \A t \in Tasks :
       (tickets[t].phase = "Executing") ~> Terminal(t)
 
@@ -139,6 +164,35 @@ EveryBegunSettles ==
 (* never return there.                                                      *)
 (***************************************************************************)
 OneTask == {0}
+
+(***************************************************************************)
+(* The suspend/resume lasso, isolated.                                     *)
+(*                                                                          *)
+(* Two explanations compete for it: fairness on a disjunction is too weak,  *)
+(* or I18 is missing an environment hypothesis. Three runs separate them,   *)
+(* all at one task -- see ./run-liveness.sh --lasso:                        *)
+(*                                                                          *)
+(*   DisjunctionSpec |= EveryBegunSettlesPlain          VIOLATED            *)
+(*   DisjunctionSpec |= EveryBegunSettles               HOLDS               *)
+(*   LiveSpec        |= EveryBegunSettlesPlain          HOLDS               *)
+(*                                                                          *)
+(* The middle row is the answer: weak fairness plus an honest hypothesis is *)
+(* enough. The third row holds for the wrong reason -- per-action SF on     *)
+(* ReportAccepted assumes away the operator rather than saying so.          *)
+(***************************************************************************)
+
+\* Fairness on the disjunction rather than per action.
+DisjunctionSpec ==
+  /\ Init
+  /\ [][Next]_vars
+  /\ \A t \in Tasks : SF_vars(Progress(t))
+  /\ SF_vars(Recover)
+
+\* I18 without the operator hypothesis: false, and rightly so.
+EveryBegunSettlesPlain ==
+  (EventuallyStable /\ EventuallyRunning /\ EventuallyRoomy) =>
+    \A t \in Tasks : (tickets[t].phase = "Executing") ~> Terminal(t)
+
 
 Quiescent == ~ENABLED AnyProgress
 

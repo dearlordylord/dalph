@@ -57,10 +57,14 @@ random prefix -> stop the environment -> run a fair scheduler
 
 Three separate weakenings, each worth naming. `<>[]~crashed` becomes a hard
 cutoff. "Eventually" becomes "within 40 steps". And the round-robin scheduler is
-*one* fairness-satisfying strategy, where `SF_vars` quantifies over all of them
-— which means this file structurally cannot find the
-`Executing → SuspensionRequested → Suspended` cycle that broke the first TLA+
-fairness attempt, because the scheduler never picks `requestSuspension`.
+*one* fairness-satisfying strategy, where `SF_vars` quantifies over all of them.
+
+The third has an interesting consequence. The scheduler never picks
+`requestSuspension`, so this file structurally cannot exhibit the
+`Executing → SuspensionRequested → Suspended` cycle — which means it silently
+implements `EventuallyUninterrupted`, the hypothesis I18 needs and that the
+TLA+ and Alloy encodings state explicitly. Baking an assumption into a test
+harness is exactly how it stops being visible.
 
 All three properties pass in **0.9 seconds**, against 28s for one TLC property
 and 94s for the whole Alloy file.

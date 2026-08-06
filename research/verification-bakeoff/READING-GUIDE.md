@@ -273,10 +273,28 @@ conjuncts, `alloy/DeliveryLiveness.als` writes the same schema out by hand ten
 times plus ten `enabled` predicates Alloy cannot derive, and Quint says it in
 one `strongFair` per action and then has no engine.
 
-Read `disjunctionFairnessIsTooWeak` in the Alloy file next. It preserves the
-mistake both TLA+ and Alloy make first — fairness on a disjunction of actions
-instead of per action — and hands back the `Executing → SuspensionRequested →
-Suspended` lasso that results.
+Then compare the *hypotheses*, which is where the real content is. Four of
+them, and each names something the environment may do forever:
+
+```tla
+EventuallyStable        == <>[](~crashed)
+EventuallyRunning       == <>[](~paused)
+EventuallyRoomy         == <>[](capacity > 0)
+EventuallyUninterrupted == <>[](\A t \in Tasks : tickets[t].phase # "SuspensionRequested")
+```
+
+The fourth is the one to sit with. Drop it and I18 fails with a lasso cycling
+`Executing → SuspensionRequested → Suspended`. That looks like a fairness bug
+and is not one: an operator is entitled to suspend forever, so the
+counterexample is honest and the property was missing an assumption.
+`tlaplus/run-liveness.sh --lasso` runs the three-way comparison that proves it,
+and `interruptionForeverBreaksI18` in the Alloy file hands the same lasso back
+as a structure you can step through.
+
+**When a liveness property fails, ask first whether the environment is entitled
+to behave that way.** Strengthening fairness will hide that every time — here
+`SF_vars(ReportAccepted(t))` "fixes" it by assuming the executor outruns the
+operator.
 
 ## Where to start reading
 

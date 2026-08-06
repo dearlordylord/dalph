@@ -28,6 +28,8 @@ tlaplus/run.sh --witness              # the vacuity check
 tlaplus/run.sh --m8                   # the seeded specification error
 tlaplus/run-liveness.sh --small       # I17-I19, one task
 tlaplus/run-liveness.sh               # I17-I19, two tasks; I18 does not finish
+tlaplus/run-liveness.sh --lasso       # is the suspend/resume lasso a bug or a missing hypothesis?
+tlaplus/run-liveness.sh --arrival     # I19 when new work keeps arriving; neither verdict is usable
 node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witnesses
 node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
 alloy/run.sh                          # relational structure search, seconds
@@ -68,6 +70,13 @@ tools by which level it picked.
 **A pass is not evidence.** Random engines report clean on states they never
 reached. Every clean result here is paired with a witness that the interesting
 state is reachable at all.
+
+**A failing liveness property is usually a wrong property.** Every one of
+I17-I19 needs hypotheses about what the environment may do forever — crash,
+pause, pin capacity at zero, suspend repeatedly. None of the nine safety
+invariants needed one. When the check fails, ask first whether the environment
+is entitled to behave that way; strengthening fairness will hide that every
+time.
 
 **A run stuck forever violates no safety property.** Nine safety invariants,
 three engines and 96 000 states had nothing to say about a ticket parked in

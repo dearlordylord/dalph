@@ -58,15 +58,40 @@ that TLC found for me, in order:
 
 **Strong, not weak.** With two tasks Accepted, the integration resource is
 exclusive, so each task's `StartIntegration` is repeatedly enabled and
-repeatedly disabled. `WF` permits starving one forever.
+repeatedly disabled. `WF` permits starving one forever. This is the sound
+argument for SF here.
 
-**Per action, not per disjunction.** `SF_vars(Progress(t))` over a disjunction
-of the ten lifecycle actions looks right and is far too weak: fairness on a
-disjunction is discharged by taking *any* disjunct infinitely often. TLC
-returned a lasso cycling
-`Executing → SuspensionRequested → Suspended → Executing` in which
-`ReportAccepted` is enabled at every pass and simply never chosen. Naming all
-ten actions separately is what forces the cycle to be left.
+**And a lasso that is not a fairness problem at all.** `SF_vars(Progress(t))`
+over a disjunction of the ten lifecycle actions is discharged by taking *any*
+disjunct infinitely often, and TLC returns a lasso cycling
+`Executing → SuspensionRequested → Suspended → Executing` with `ReportAccepted`
+enabled at every pass and never chosen.
+
+The tempting reading is "fairness on a disjunction is too weak, name the
+actions separately". Naming them separately does remove the lasso — and it is
+the wrong fix. **An operator is entitled to request suspension forever**, and
+under that behaviour the work genuinely never finishes, so the lasso is an
+honest counterexample and I18 is missing a hypothesis, exactly the way it needs
+`<>[]~paused`. `SF_vars(ReportAccepted(t))` removes it by *assuming* the
+executor outruns the operator: work is atomic in this model, so "enabled
+infinitely often" cannot be told apart from "given long enough to finish".
+
+`./run-liveness.sh --lasso` separates the two explanations, one task:
+
+| Spec | Property | TLC |
+|---|---|---|
+| `DisjunctionSpec` | `EveryBegunSettlesPlain` | violated |
+| `DisjunctionSpec` | `EveryBegunSettles` | holds |
+| `LiveSpec` | `EveryBegunSettlesPlain` | holds |
+
+Row 2 is the honest formulation: weak fairness plus a stated hypothesis. Row 3
+holds for the wrong reason. `EventuallyUninterrupted` is therefore a hypothesis
+of I18 rather than something the fairness constraints quietly supply.
+
+The general lesson is not about fairness syntax: **when a liveness property
+fails, the first question is whether the environment is entitled to behave that
+way.** If it is, the property is wrong, not the system — and strengthening
+fairness will hide that every time.
 
 ### Liveness found a real gap in the model that safety could not
 
@@ -117,9 +142,41 @@ behaviours, and a behaviour truncated by the constraint is not a
 counterexample. These verdicts are therefore about behaviours that stay inside
 the constraint.
 
-Every property here is an implication with an environment hypothesis
-(`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`). None of the safety
-invariants needed one. Perpetual crashing, perpetual pause and a capacity
-pinned at zero are all harmless for safety and each independently falsifies
-every liveness property in the catalog.
+Every property here is an implication with environment hypotheses —
+`<>[]~crashed`, `<>[]~paused`, `<>[](capacity > 0)`, `EventuallyUninterrupted`.
+None of the safety invariants needed one. Perpetual crashing, perpetual pause,
+a capacity pinned at zero and an operator who suspends forever are all harmless
+for safety, all legitimate, and each independently falsifies every liveness
+property in the catalog. Enumerating them *is* most of the work of stating a
+liveness property.
+
+## Arrival, and where bounded checking gives out
+
+I19 reads "**with no new tracker facts** the run reaches quiescence". That
+hypothesis is absent from `ReachesQuiescence` because the base model cannot
+express new facts: `Tasks` is fixed and no phase returns to `NoObligation`, so
+work is exhaustible by construction and the hypothesis holds silently. A clean
+I19 verdict is weaker than it looks.
+
+`ArrivalSpec` adds it — finished tickets recycle, and `SealGraph` is the
+tracker falling quiet. `./run-liveness.sh --arrival`:
+
+| | verdict |
+|---|---|
+| no `CONSTRAINT` | no verdict in 7 minutes |
+| `CONSTRAINT StateConstraint` | both properties hold, 5 472 states |
+
+Neither row is usable, and that is the finding. Every completed responsibility
+advances `targetHead`, so an endless arrival stream is an endless state space.
+Adding the constraint makes it finite and makes the verdict *wrong*:
+`ReachesQuiescenceUnsealed` should be false, since an endless arrival stream is
+a legitimate behaviour under which the run never goes quiet, and it comes back
+clean only because the constraint truncates the recycling loop before it can
+close.
+
+This is the state-constraint-plus-liveness hazard TLC warns about, in the
+concrete, and it is worth more than the answer would have been. The practical
+consequence: **cap arrivals, and not for realism** — an uncapped stream is not
+checkable here by either route. The cap belongs in the hypothesis, which is
+what I19 already said.
 

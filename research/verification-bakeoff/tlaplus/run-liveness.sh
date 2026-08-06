@@ -4,6 +4,10 @@
 #   ./run-liveness.sh          two tasks, the same size the safety run uses
 #   ./run-liveness.sh --small  one task, which is the only size that finishes
 #                              EveryBegunSettles in a usable time
+#   ./run-liveness.sh --lasso  the suspend/resume experiment, one task: is the
+#                              lasso a fairness defect or a missing hypothesis?
+#   ./run-liveness.sh --arrival  I19 over a model where new work keeps arriving.
+#                              Both rows are unsound; that is the finding.
 #
 # Liveness is a different cost class from safety here, which is the point of
 # keeping this separate from ./run.sh. Same model, same size, same machine:
@@ -25,6 +29,70 @@ fi
 TIMEOUT=${TIMEOUT:-1800}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+if [[ ${1:-} == --arrival ]]; then
+  echo "One task, ArrivalSpec: finished tickets recycle, so work keeps arriving."
+  echo ""
+  echo "Unconstrained, TLC gives no verdict -- every completed responsibility"
+  echo "advances targetHead, so an endless arrival stream is an endless state"
+  echo "space. Under CONSTRAINT both rows below come back clean, and the second"
+  echo "one is WRONG: an endless arrival stream is a legitimate behaviour under"
+  echo "which the run never goes quiet. The constraint truncates the recycling"
+  echo "loop before it can close. This is the state-constraint-plus-liveness"
+  echo "hazard TLC warns about, in the concrete."
+  echo ""
+  echo "| Property | hypothesis | TLC (constrained) |"
+  echo "|---|---|---|"
+  arrival() { # $1 property, $2 label
+    cat > "$WORK/a.cfg" <<EOF
+SPECIFICATION ArrivalSpec
+CONSTANT MUTANT = 0
+CONSTANT Tasks <- OneTask
+CONSTRAINT StateConstraint
+PROPERTY $1
+EOF
+    out=$(timeout "${TIMEOUT:-900}" java -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
+          -config "$WORK/a.cfg" -metadir "$WORK/a$1" -workers auto DeliveryArrival 2>&1)
+    if grep -q 'No error has been found' <<<"$out"; then v="holds"
+    elif grep -q 'Temporal properties were violated' <<<"$out"; then v="violated"
+    else v="**no verdict**"; fi
+    echo "| $1 | $2 | $v |"
+  }
+  arrival ReachesQuiescenceUnderArrival "eventually sealed"
+  arrival ReachesQuiescenceUnsealed "none -- should be false"
+  exit 0
+fi
+
+if [[ ${1:-} == --lasso ]]; then
+  echo "One task. An operator may request suspension forever, so I18 needs"
+  echo "EventuallyUninterrupted the way it needs <>[]~paused."
+  echo ""
+  echo "| Spec | Property | TLC |"
+  echo "|---|---|---|"
+  lasso() { # $1 spec, $2 property
+    cat > "$WORK/l.cfg" <<EOF
+SPECIFICATION $1
+CONSTANT MUTANT = 0
+CONSTANT Tasks <- OneTask
+CONSTRAINT StateConstraint
+PROPERTY $2
+EOF
+    out=$(timeout "${TIMEOUT:-600}" java -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
+          -config "$WORK/l.cfg" -metadir "$WORK/l$2$1" -workers auto DeliveryLiveness 2>&1)
+    if grep -q 'No error has been found' <<<"$out"; then v="holds"
+    elif grep -q 'Temporal properties were violated' <<<"$out"; then v="**violated**"
+    else v="error"; fi
+    echo "| $1 | $2 | $v |"
+  }
+  lasso DisjunctionSpec EveryBegunSettlesPlain
+  lasso DisjunctionSpec EveryBegunSettles
+  lasso LiveSpec EveryBegunSettlesPlain
+  echo ""
+  echo "Row 2 is the honest formulation: weak fairness plus a stated hypothesis."
+  echo "Row 3 holds for the wrong reason -- per-action SF on ReportAccepted"
+  echo "assumes the executor outruns the operator instead of saying so."
+  exit 0
+fi
 
 SIZE_LINE=""
 LABEL="2 tasks"

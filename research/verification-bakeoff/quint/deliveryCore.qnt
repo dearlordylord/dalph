@@ -487,6 +487,16 @@ module deliveryCore {
   temporal eventuallyRunning = eventually(always(not(paused)))
   temporal eventuallyRoomy = eventually(always(capacity > 0))
 
+  /// The operator eventually stops interrupting. `requestSuspension` is the
+  /// only way into `SuspensionRequested`, so this permits finitely many
+  /// suspend/resume cycles and forbids infinitely many.
+  ///
+  /// The same kind of hypothesis as `eventuallyRunning`: an operator is
+  /// entitled to suspend forever, and under that behaviour nothing settles.
+  temporal eventuallyUninterrupted =
+    eventually(always(
+      TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
+
   /// I17: a pause that stays applied drains every held position.
   temporal pauseDrainsPositions =
     (fairness and always(paused) and eventuallyStable)
@@ -494,7 +504,8 @@ module deliveryCore {
 
   /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
   temporal everyBegunSettles =
-    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy
+       and eventuallyUninterrupted)
       implies TASKS.forall(id =>
         always(
           (tickets.get(id).phase != Executing)
@@ -504,6 +515,12 @@ module deliveryCore {
 
   /// I19: strictly weaker than I18 -- parked at Planned under capacity 0 is
   /// quiescent and has completed nothing.
+  ///
+  /// INVARIANTS.md states I19 as "with no new tracker facts". That hypothesis
+  /// is absent here because this model cannot express new facts: TASKS is
+  /// fixed and no phase returns to NoObligation, so work is exhaustible by
+  /// construction. See ../tlaplus/DeliveryLiveness.tla for what happens when
+  /// arrival is modelled.
   temporal reachesQuiescence =
     (fairness and eventuallyStable) implies eventually(always(not(step.enabled())))
 }
