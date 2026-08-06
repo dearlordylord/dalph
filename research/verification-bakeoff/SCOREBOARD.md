@@ -37,8 +37,10 @@ eight ordered actions to reach. Over ten repetitions at the same budget:
 A tool that never finds a defect at least tells you so consistently. A tool that
 finds it 40% of the time makes a green run meaningless and a red run look like a
 flake to be retried. Quint's own witness counts show the mechanism, and `quint/run.sh --witnesses`
-prints them: `settledReached` fires in 6 traces out of 50 000, 0.01%, while `crashReached`
-fires in 99.91% of them. Sampling coverage is the number to look at, not the pass.
+prints them: `settledReached` fires in low single digits of traces out of 50 000
+— 2 and 6 on two runs, 0.00–0.01% — while `crashReached` fires in over 99.9% of
+them. The counts are themselves sampled and move run to run, which is the point:
+sampling coverage is the number to look at, not the pass.
 
 fast-check's 0/10 against Quint's 4/10 is an encoding difference, not a tool
 difference: fast-check generates a blind action list up front, while Quint's
@@ -77,6 +79,12 @@ witness needs capacity raised to 2, two admissions, then a contraction — about
 nine ordered actions. The same deep-state blindness as M6, now hiding a
 specification error instead of a defect.
 
+`quint/run.sh --m8` reports M0 violated in one second, and every mutant with
+it. Same random-simulation family as fast-check, opposite outcome, and the
+reason is the one already given for M6: Quint picks among *enabled* actions
+while fast-check generates a blind list. Nine ordered actions is out of reach
+for one and routine for the other.
+
 ## The proof-and-structure tools
 
 These do not fit the mutant table, because they do not search a state space.
@@ -90,7 +98,7 @@ Each states the invariant and either discharges it or refuses.
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
-| Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | the misordered-parent counterexample constructed | 2s |
+| Alloy 6, L1 | 4 checks UNSAT, 3 witnesses SAT | the misordered-parent and double-claim counterexamples constructed | 7s |
 | Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 361s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
@@ -137,11 +145,28 @@ excludes a state the transition relation permits but the reachable set never
 contains. TLC never mentions induction; Lean and Agda give you a stuck goal.
 If a proof is the destination, run the Alloy inductiveness check first.
 
-Two invariants exist here that no state-machine encoding could state honestly.
-I11 (claim exclusivity with an exact token) and I12 (two ordered candidate
-parents) are booleans in the Quint, TLA+, and fast-check models — a mutant
-flips the flag and the "detection" tests the flag. In Alloy they are relations
-over atoms, so the defect is a shape and the solver searches for it.
+Two invariants appear in exactly one column. I11 (claim exclusivity with an
+exact token) and I12 (two ordered candidate parents) are **absent from every
+other encoding** — the Quint, TLA+, fast-check, Dafny, Lean and Agda models
+have no claim entity and no candidate entity at all. In Alloy they are
+relations over atoms, so a defect is a shape and the solver searches for it:
+`parentsOrderedUnderMutant` constructs the misordered candidate,
+`claimsExclusiveUnderMutant` constructs the double claim.
+
+I11 nearly failed to be a result. Written as `wellFormed implies
+claimExclusivity` with `claimExclusivity` a conjunct of `wellFormed`, the check
+is `P implies P` — UNSAT, "holds in scope", and evidence of nothing. It now
+derives exclusivity and token freshness from the guard on acquisition, over a
+six-step relation of its own, with `run claimsAreAcquired` as the witness that
+claims are acquired at all. That witness was UNSAT on the first attempt: a
+static field inside a `var sig` silently forces the signature to be constant,
+so no claim could ever be acquired and both checks passed over frozen traces.
+Alloy reports that as a warning, not an error.
+
+The same file assumes I1, I7 and I14 rather than checking them: they are
+conjuncts of `wellFormed` that nothing is checked against. And I13 is not there
+at all — it constrains the promotion *transition*, and as a state predicate it
+is simply false, which `run staleHeadIsPossible` demonstrates.
 
 ## Liveness (I17-I19)
 
@@ -151,7 +176,7 @@ ranking from the safety results reverses.
 | Tool | I17 pause | I18 no silent drop | I19 quiescence | Cost |
 |---|---|---|---|---|
 | TLA+ / TLC | holds | holds at 1 task; **no verdict at 2 in 30 min** | holds at 1 task | 28s / 6s / 4s |
-| Alloy 6 | holds in scope | holds in scope | holds in scope | **~73s for the file** |
+| Alloy 6 | holds in scope | holds in scope | holds in scope | **~131s for the file** |
 | Quint | statable, **no backend** | statable, no backend | statable, no backend | Apalache: `Handling fairness is not supported yet!` |
 | Quint `--backend tlc` | holds, 96 000 states | TLC's problem | TLC's problem | 35s |
 | fast-check | holds (bounded) | **holds vacuously** | **holds vacuously** | ~3s each |
@@ -218,9 +243,20 @@ the counterexample disappear. That is the most transferable thing in this
 study: a liveness counterexample is a question addressed to the domain, and the
 model is not where the answer lives.
 
-`alloy/DeliveryLiveness.als` keeps the lasso as a checked control,
-`interruptionForeverBreaksI18`, and hands it back as a structure you can step
-through rather than as console text. Strong-over-weak fairness has its own
+`alloy/DeliveryLiveness.als` reproduces all three rows —
+`interruptionForeverBreaksI18` SAT, `interruptionRestoresI18UnderDisjunction`
+UNSAT, `everyBegunSettles` UNSAT — and hands the lasso back as a structure you
+can step through rather than as console text.
+
+Getting the *control* right took two attempts, and the failure mode is worth
+recording. Alloy's `sfDisjunction` was first written over three actions where
+TLA+'s `SF_vars(Progress(t))` is the disjunction of ten. Row 1 was SAT either
+way, so nothing looked wrong; row 2 came back SAT and disagreed with TLC.
+Nothing forced `startIntegration`, so the ticket parked in `Accepted` and the
+lasso never had to appear. **A negative control that fires for the wrong reason
+still fires**, and only the cross-tool disagreement exposed it.
+
+Strong-over-weak fairness has its own
 independent justification: `StartIntegration` is repeatedly enabled and disabled
 under an exclusive target, and WF permits starving one task forever.
 
@@ -233,8 +269,10 @@ verdict over an empty set of behaviours, including the 29-second TLC run and the
 96 000-state Quint cross-check.
 
 The fix is `<>[]paused => <>[](positions = {})`, plus a witness that the
-hypothesis is satisfiable at all: TLC refutes `[]<>(~paused)`, and Alloy's
-`run pauseIsSustainable` is SAT.
+hypothesis is satisfiable at all: TLC refutes `[]<>(~paused)` and Alloy's
+`run pauseIsSustainable` is SAT. Both are now driven by their runners —
+`PauseIsSustainable` was written, committed, and then run by nothing, which is
+the same defect one level up.
 
 Worth dwelling on, because this study has a rule about exactly this — every
 clean result paired with a witness that the interesting state is reachable — and
@@ -276,7 +314,7 @@ mutant caught, and Alloy's L2 file took 361s. For liveness:
 | | safety | liveness |
 |---|---|---|
 | TLC | 3s | 28s for I17; no verdict for I18 at 2 tasks in 30 min |
-| Alloy | 361s | ~73s for all three |
+| Alloy | 361s | ~131s for all three |
 
 Same model, same machine. The explanation is that they are answering different
 questions. TLC checks every behaviour of the finite state graph against a
@@ -353,6 +391,31 @@ Same lesson as M6, stated more starkly: deep protocol states are not reachable
 by random walk, and a passing property-based test carries no information about
 them.
 
+## What the catalog covers, and what it does not
+
+Auditing `INVARIANTS.md` row by row against what each encoding actually
+contains moved four rows, and the direction was always the same — the coverage
+was overstated.
+
+**Two invariants are in no tool at all.** I9 (every executor interaction
+carries the exact `RunId` and `AttemptId`) and I15 (the journal is append-only
+and its reduction a pure, total, idempotent fold) are absent from all seven
+encodings. No model here has an identifier or a journal; `oneAttemptPerTask`
+counts attempts and never names one. Those are two of the invariants production
+leans on hardest, and the bake-off says nothing about either.
+
+**Two more are in exactly one.** I11 and I12 exist only in `alloy/Delivery.als`
+— and I11 only became a result during this audit, having been a `P implies P`
+tautology before it.
+
+**Three cells were assumptions dressed as results.** I1, I7 and I14 in the
+Alloy L1 column are conjuncts of `wellFormed`, checked against nothing.
+
+The pattern is that a grouped coverage table ("I7–I15: yes") hides exactly this.
+The per-invariant table now distinguishes *checked*, *assumed*, *typed away* and
+*not modelled*, because the last two are honest scope decisions and the first
+two are not interchangeable.
+
 ## Cost
 
 | Tool | Setup | Encoding | Level covered |
@@ -360,7 +423,7 @@ them.
 | fast-check | none, already a dependency | 221 lines model + 100 lines harness | L1 + L2 |
 | Quint + Apalache | `brew install quint`, Apalache auto-fetched | 556 lines | L1 + L2 |
 | TLA+ / TLC | one 2 MB jar, no install | 313 lines | L1 + L2 |
-| Alloy 6 | one 21 MB jar, no install | 197 lines L1 + 318 lines L2 | L1 structural I11/I12, and L2 temporal |
+| Alloy 6 | one 21 MB jar, no install | 279 lines L1 + 318 lines L2 + 229 lines liveness | L1 structural I11/I12, and L2 temporal |
 | Dafny | 100 MB release zip | 158 lines L1 + 370 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |

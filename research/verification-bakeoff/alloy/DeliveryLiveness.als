@@ -107,8 +107,8 @@ pred eventuallyRoomy   { eventually always Sys.capacity > 0 }
  * so progress survives a suspend/resume cycle and an operator suspending
  * forever does not prevent completion.
  *
- * Kept because `interruptionForeverBreaksI18` needs it to show what assuming
- * it would buy.
+ * Used by `interruptionRestoresI18UnderDisjunction` at the bottom, which shows
+ * what assuming it would buy.
  */
 pred eventuallyUninterrupted {
   eventually always (no t : Task | t.phase = SuspensionRequested)
@@ -169,15 +169,52 @@ check reachesQuiescence {
  * step through in the visualizer rather than as fourteen states of console
  * text.
  */
+// The faithful port of `SF_vars(Progress(t))`: fairness on the disjunction of
+// ALL ten lifecycle actions, not on a three-action subset. A subset would make
+// the control below SAT for a trivial reason -- nothing forces
+// `startIntegration` at all, so the ticket parks in `Accepted` and the
+// suspend/resume lasso never has to appear.
+pred progressDisjunctionEnabled[t : Task] {
+  enAcquireClaim[t] or enPlanAttempt[t] or enBeginWork[t] or enSafelySuspend[t]
+  or enResumeWork[t] or enReportAccepted[t] or enStartIntegration[t]
+  or enPromote[t] or enAbandon[t] or enSettle[t]
+}
+
+pred progressDisjunctionTaken[t : Task] {
+  acquireClaim[t] or planAttempt[t] or beginWork[t] or safelySuspend[t]
+  or resumeWork[t] or reportAccepted[t] or startIntegration[t]
+  or promote[t] or abandonIntegration[t] or settle[t]
+}
+
 pred sfDisjunction {
   all t : Task |
-    (always eventually (enReportAccepted[t] or enSafelySuspend[t] or enResumeWork[t]))
-      implies (always eventually (reportAccepted[t] or safelySuspend[t] or resumeWork[t]))
+    (always eventually progressDisjunctionEnabled[t])
+      implies (always eventually progressDisjunctionTaken[t])
+  (always eventually enRecover) implies (always eventually recover)
 }
 
 check interruptionForeverBreaksI18 {
   (init and always step and sfDisjunction and eventuallyStable and eventuallyRunning
      and eventuallyRoomy)
+    implies (all t : Task |
+      always (t.phase = Executing implies eventually t.phase in Settled + Abandoned))
+} for 2 Task, 5 Int, 1..12 steps
+
+/*
+ * Row 2 of the three-way comparison `../tlaplus/run-liveness.sh --lasso` runs.
+ * Same weakened fairness, plus the assumption that the operator eventually
+ * stops interrupting. Expected UNSAT: assuming the operator away removes the
+ * lasso too.
+ *
+ * Both fixes work, and that is the point -- neither the tool nor the model
+ * says which one is right. Per-action fairness (the primary checks above) is
+ * the faithful one, because the domain guarantees preservation across
+ * suspension; this one buys the same verdict with a hypothesis the domain does
+ * not need.
+ */
+check interruptionRestoresI18UnderDisjunction {
+  (init and always step and sfDisjunction and eventuallyStable and eventuallyRunning
+     and eventuallyRoomy and eventuallyUninterrupted)
     implies (all t : Task |
       always (t.phase = Executing implies eventually t.phase in Settled + Abandoned))
 } for 2 Task, 5 Int, 1..12 steps

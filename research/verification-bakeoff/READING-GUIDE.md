@@ -312,6 +312,6 @@ steppable structure, and **the resolution is in neither place.**
    the hand-written module to see what Quint's surface syntax is buying.
 6. `tlaplus/DeliveryLiveness.tla` and `alloy/DeliveryLiveness.als` — the same
    three temporal properties, and the two opposite ways a tool can fail you:
-   TLC gives no verdict at two tasks, Alloy answers a weaker question in ~73s.
+   TLC gives no verdict at two tasks, Alloy answers a weaker question in ~131s.
 7. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
    protocol turned back on this repository's own gated models.

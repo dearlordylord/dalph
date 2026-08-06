@@ -25,6 +25,8 @@ than on a dining-philosophers example.
 node fastcheck/run.mjs                # property-based testing, seconds
 quint/run.sh                          # random simulation, seconds
 quint/run.sh --verify                 # Apalache symbolic checking, minutes
+quint/run.sh --witnesses              # sampling coverage: the vacuity check
+quint/run.sh --m8                     # the seeded specification error
 tlaplus/run.sh                        # TLC exhaustive checking, seconds
 tlaplus/run.sh --witness              # the vacuity check
 tlaplus/run.sh --m8                   # the seeded specification error
@@ -36,7 +38,7 @@ node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witn
 node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
 alloy/run.sh                          # relational structure search, seconds
 alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
-alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~73s
+alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~131s
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not

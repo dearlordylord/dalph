@@ -17,11 +17,15 @@ reports `M0` violated has an encoding error, not a finding.
 | M6 | promotion drops the compare-and-set guard against the exact expected head | I13 | L2 |
 
 M3 and M7 are deliberately unallocated. M3 exists only in `alloy/Delivery.als`,
-where the candidate-parent order is a relation rather than a boolean and a
-mutant can therefore be a *shape*: `parentsOrderedUnderMutant` asks Alloy to
-construct a candidate whose first parent is not the expected head. It has no
-counterpart in the tools where I12 is a flag, so it is not in the table above
-and never appears in a mutant column.
+where the candidate-parent order is a relation and a mutant can therefore be a
+*shape*: `parentsOrderedUnderMutant` asks Alloy to construct a candidate whose
+first parent is not the expected head. It has no counterpart anywhere else,
+because I12 is not encoded anywhere else — the other models have no candidate
+at all. So M3 is not in the table above and never appears in a mutant column.
+
+`claimsExclusiveUnderMutant` is the same idea for I11 and is likewise
+Alloy-only: it drops the exclusivity guard and the fresh-token requirement from
+claim acquisition, and Alloy constructs the double claim.
 
 ## M8 — the vacuity mutant
 

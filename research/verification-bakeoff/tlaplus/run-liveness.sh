@@ -138,3 +138,24 @@ EOF
   fi
   echo "| $P | $verdict | ${states:--} | $secs |"
 done
+
+# The hypothesis witness. PauseDrainsPositions is `<>[]paused => ...`, which
+# holds over no behaviours at all if `<>[]paused` is unsatisfiable -- the exact
+# vacuity that the earlier `[]paused` form had. TLC is asked to REFUTE
+# `[]<>(~paused)`, so a violation here means a permanently paused behaviour
+# exists and the hypothesis is satisfiable.
+cat > "$WORK/w.cfg" <<EOF
+SPECIFICATION LiveSpec
+CONSTANT MUTANT = 0
+$SIZE_LINE
+CONSTRAINT StateConstraint
+PROPERTY PauseIsSustainable
+EOF
+start=$SECONDS
+out=$(timeout "$TIMEOUT" java -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
+      -config "$WORK/w.cfg" -metadir "$WORK/wPause" -workers auto \
+      DeliveryLiveness 2>&1)
+if grep -q 'Temporal properties were violated' <<<"$out"; then w="satisfiable"
+elif grep -q 'No error has been found' <<<"$out"; then w="**UNSATISFIABLE -- I17 is vacuous**"
+else w="no verdict"; fi
+echo "| PauseIsSustainable (refuted: hypothesis of I17) | $w | - | $((SECONDS - start)) |"

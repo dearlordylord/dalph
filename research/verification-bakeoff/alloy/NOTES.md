@@ -26,27 +26,61 @@ Getting this backwards is the classic first mistake, and the table is in
 
 ## What it did that the others could not
 
-I11 and I12 are the reason Alloy is in the lineup. In the Quint, TLA+, and
-fast-check encodings, "a candidate has exactly two ordered parents" and "at
-most one claim per task, with an exact token" are **booleans a mutant flips**.
-That tests the flag, not the shape.
+I11 and I12 are the reason Alloy is in the lineup, and the reason is stronger
+than it first looks: **no other encoding in the bake-off states them at all.**
+There is no `Claim` and no `Candidate` in the Quint, TLA+, fast-check, Dafny,
+Lean or Agda models. A claim carrying an exact token and a commit with two
+ordered parents are relational shapes, and a state-machine language prices them
+high enough that the shared model dropped them.
 
-Here they are relations over atoms. `Claim` is a signature with `task`, `owner`,
-and `token` fields, so `all t : Task | lone c : Claim | c.task = t` is a real
-structural constraint, and Alloy searches for two distinct claims on one task
-rather than checking whether someone remembered to set a flag.
+Here they are relations over atoms. `check parentsOrderedUnderMutant` returned
+SAT: Alloy constructed a candidate whose first parent is not the expected head,
+which is the M3 defect as an object rather than as an assertion.
 
-`check parentsOrderedUnderMutant` returned SAT: Alloy constructed a candidate
-whose first parent is not the expected head, which is the M3 defect as an
-object rather than as an assertion.
+### I11 was a tautology, and the witness is what said so
+
+`check claimsAreExclusive { wellFormed implies claimExclusivity }` looks like a
+structural search and is not one, because `wellFormed` *contains*
+`claimExclusivity`. `P implies P` is UNSAT, `run.sh` prints "holds in scope",
+and nothing about claims has been tested.
+
+The repair is to derive exclusivity instead of assuming it. `acquireClaim`
+carries the guard I11 rests on — no existing claim for the task, and a token
+not already in use — and `claimsAreExclusive` asks whether a second claim is
+*reachable* over six steps. `claimsExclusiveUnderMutant` drops the guard and
+comes back SAT with the double claim.
+
+Two hazards showed up in doing it, both silent:
+
+- A **static field inside a `var sig`** forces the signature itself to be
+  constant. With `task : one Task` rather than `var task : one Task`, `no Claim
+  and some Claim'` is UNSAT, no claim can ever be acquired, and both checks pass
+  over frozen traces. Alloy emits a warning, not an error.
+- The `run claimsAreAcquired` witness is what caught it. Without a witness that
+  the machine moves, a temporal check over `always claimStep` is satisfied by
+  stuttering forever.
+
+### What this file assumes rather than checks
+
+`positionDiscipline` (I7), `targetResourceExclusive` (I14) and `boundRespected`
+(I1) are conjuncts of `wellFormed` and appear in no check. They are inputs, not
+results; TLC, Quint and fast-check are what verify them.
+
+I13 is absent by nature rather than by omission. It constrains the promotion
+transition, and this file has no transition relation apart from the claim
+machine. As a state predicate — "an integrating task's captured head is the
+current target head" — it is false of well-formed states, and `run
+staleHeadIsPossible` is exactly that falsehood, deliberately, because a
+captured head going stale is the phenomenon the compare-and-set guard defends
+against.
 
 ## What it gave up
 
-There is no transition relation in `Delivery.als`. Alloy 6 has temporal
-operators and `var` signatures, and the state is declared with them, but the
-checks quantify over well-formed states rather than over a hand-written step
-relation. That means it says nothing about I16–I19, and its I7 result is weaker
-than TLC's — it constrains states, not the transitions between them.
+`Delivery.als` has one transition relation, `claimStep`, and it is there under
+protest: I11 cannot be a result without it. Everything else quantifies over
+well-formed states. Alloy 6 has temporal operators and `var` signatures, and
+the state is declared with them, but a state-only encoding says nothing about
+I16–I19, and it is why I13 has no home here at all.
 
 Everything is also bounded by scope (4 Task, 4 Head, 4 Commit, 1 step). "Holds
 in scope" is not "holds". The small scope hypothesis is an empirical claim, not
@@ -54,7 +88,7 @@ a theorem.
 
 ## Cost
 
-197 lines including comments, 2 seconds for all seven commands. Per unit of
+279 lines including comments, 7 seconds for all ten commands. Per unit of
 structural insight it is the cheapest tool here; per unit of temporal
 confidence it is the most expensive, because it offers none.
 
@@ -136,7 +170,7 @@ unlike the Lean and Agda proofs there is no claim about unbounded `head`,
 
 ## Liveness
 
-`DeliveryLiveness.als` checks I17–I19. All three hold in scope, in about **73
+`DeliveryLiveness.als` checks I17–I19. All three hold in scope, in about **131
 seconds for the whole file** — cheaper than this directory's own safety run and
 far cheaper than TLC, which does not return a verdict on I18 at two tasks in
 half an hour. That ordering is the opposite of the safety result and is the
@@ -176,12 +210,17 @@ ten-disjunct `no t : Task | ...` over the same hand-written guards.
 
 ### Where it wins outright
 
-`interruptionForeverBreaksI18` is a deliberate negative control: the same I18
-the primary check states, but under fairness on the disjunction of actions
-rather than per action. It is
-SAT, and the instance is the same `Executing → SuspensionRequested → Suspended →
-Executing` lasso TLC finds — except Alloy hands it back as a structure you can
-step through in the visualizer rather than as 14 states of console text.
+Two negative controls reproduce, in Alloy, the three-row comparison
+`../tlaplus/run-liveness.sh --lasso` runs in TLC:
+
+| Command | Alloy | TLC's row |
+|---|---|---|
+| `interruptionForeverBreaksI18` | **SAT** | disjunction fairness, I18: violated |
+| `interruptionRestoresI18UnderDisjunction` | UNSAT | + `EventuallyUninterrupted`: holds |
+| `everyBegunSettles` | UNSAT | per-action fairness, I18: holds |
+
+Alloy hands the lasso back as a structure you can step through in the
+visualizer rather than as 14 states of console text.
 
 The lasso is a modelling artifact. `docs/CONTEXT.md` defines safe suspension as
 preserving what is needed to resume, so progress survives the cycle — atomic
@@ -189,3 +228,12 @@ work in the model is what makes a preserving cycle look like a stalling one.
 Being able to *look* at the cycle rather than read fourteen states of console
 text is what makes that diagnosis reachable, and it is the clearest thing Alloy
 does better than TLC here.
+
+**The control has to be the faithful port, and the first version was not.**
+`sfDisjunction` was written over three actions — `reportAccepted`,
+`safelySuspend`, `resumeWork` — where TLA+'s `SF_vars(Progress(t))` is the
+disjunction of all ten. Row 1 was SAT either way, so the control looked
+healthy; row 2 came back SAT too, disagreeing with TLC. The cause was that
+nothing forced `startIntegration` at all, so the ticket parked in `Accepted`
+and the suspend/resume lasso never had to appear. A negative control that fires
+for the wrong reason still fires.

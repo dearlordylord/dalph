@@ -28,7 +28,9 @@ echo "| Command | Alloy | Reading |"
 echo "|---|---|---|"
 
 while read -r line; do
-  [[ $line =~ ^[0-9]+\.[[:space:]]+(check|run)[[:space:]]+([A-Za-z]+) ]] || continue
+  # The name class has to include digits, or `interruptionForeverBreaksI18`
+  # prints as `interruptionForeverBreaksI`.
+  [[ $line =~ ^[0-9]+\.[[:space:]]+(check|run)[[:space:]]+([A-Za-z0-9]+) ]] || continue
   kind=${BASH_REMATCH[1]}
   name=${BASH_REMATCH[2]}
   if grep -q 'SAT' <<<"${line/UNSAT/}"; then result=SAT; else result=UNSAT; fi

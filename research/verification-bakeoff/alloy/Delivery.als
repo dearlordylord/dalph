@@ -1,10 +1,15 @@
 /*
  * The shared benchmark of ../MODEL.md in Alloy 6.
  *
- * Alloy earns its place here on I11 and I12. Every other encoding models claim
- * exclusivity and candidate parent order as booleans, because a boolean is what
- * a state-machine language makes cheap. Here they are relations over atoms, so
- * the defect is a shape rather than a flag, and Alloy searches for the shape.
+ * Alloy earns its place here on I11 and I12, which appear in NO other encoding
+ * in the bake-off. A claim carrying an exact token and a candidate with two
+ * ordered parents are expensive enough in a state-machine language that the
+ * shared model leaves them out entirely. Here they are relations over atoms, so
+ * a defect is a shape and Alloy searches for the shape.
+ *
+ * I1, I7 and I14 also appear below, but as constraints inside `wellFormed`
+ * rather than as claims about the model. They are assumptions here; TLC, Quint
+ * and fast-check are what check them.
  *
  * Run with alloy/run.sh, which drives each `check` and `run` separately.
  */
@@ -29,7 +34,6 @@ one sig NoObligation, Claimed, Planned, Executing, SuspensionRequested,
 var sig Eligible in Task {}          // present in the graph and open
 var sig Selected in Eligible {}      // inside the current bound
 var sig Holding in Task {}           // holds a task-work position
-var sig Paused in Task {}            // unused placeholder keeps Paused a set
 
 var one sig Runtime {
   var capacity     : one Int,
@@ -43,6 +47,11 @@ var sig Ticket in Task {
 }
 
 // A claim is a task, an owner, and the exact token that authorizes its release.
+//
+// The fields have to be `var` even though a claim's task, owner and token never
+// change: a static field of a variable signature forces the signature itself to
+// be constant, so `no Claim and some Claim'` becomes UNSAT and no claim can
+// ever be acquired. Alloy reports that only as a warning.
 var sig Claim {
   var task  : one Task,
   var owner : one Owner,
@@ -106,45 +115,97 @@ pred tokenUnique {
   all disj c1, c2 : Claim | c1.token != c2.token
 }
 
+/* --------------------------------------------------- claims, as a machine
+ *
+ * I11 is the one invariant in this file that must NOT be an assumption.
+ * `claimExclusivity` cannot appear in `wellFormed` and then be checked against
+ * it: that is `P implies P`, UNSAT for a reason with nothing to do with claims.
+ *
+ * So exclusivity and token uniqueness are DERIVED, from the guard on
+ * acquisition, over a transition relation of their own. This is the only
+ * place in `Delivery.als` with a step relation, and it is here because the
+ * alternative is a tautology.
+ */
+
+pred acquireClaim[t : Task] {
+  no c : Claim | c.task = t                     // the guard I11 rests on
+  some c : Claim' - Claim, o : Owner, k : Token - Claim.token {
+    Claim' = Claim + c                          // one new claim, for t,
+    task'  = task  + (c -> t)                   // with a freshly minted token
+    owner' = owner + (c -> o)
+    token' = token + (c -> k)
+  }
+}
+
+// A release names the EXACT current owner and token. A token from an earlier
+// claim authorizes nothing, which is why `o` and `k` are matched against the
+// claim rather than merely quantified.
+pred releaseClaim[c : Claim, o : Owner, k : Token] {
+  c.owner = o and c.token = k
+  Claim' = Claim - c
+  task'  = task  - (c -> Task)
+  owner' = owner - (c -> Owner)
+  token' = token - (c -> Token)
+}
+
+pred claimsFrozen { Claim' = Claim and task' = task and owner' = owner and token' = token }
+
+pred claimStep {
+  (some t : Task | acquireClaim[t])
+  or (some c : Claim | releaseClaim[c, c.owner, c.token])
+  or claimsFrozen
+}
+
+// The mutant: acquisition without the exclusivity guard and without the
+// freshness requirement on the token. Everything else is identical.
+pred mutantAcquire[t : Task] {
+  some c : Claim' - Claim, o : Owner, k : Token {
+    Claim' = Claim + c
+    task'  = task  + (c -> t)
+    owner' = owner + (c -> o)
+    token' = token + (c -> k)
+  }
+}
+
+pred mutantClaimStep {
+  (some t : Task | mutantAcquire[t])
+  or (some c : Claim | releaseClaim[c, c.owner, c.token])
+  or claimsFrozen
+}
+
 // I12: exactly two ordered parents, target head first.
 pred candidateParentsOrdered {
   all c : Candidate |
     c.firstParent = c.forTask.expectedHead and c.secondParent = c.accepted
 }
 
-// I13: an integrating task's captured head is the current target head.
-pred promotionUsesExactHead {
-  all t : Ticket | t.phase = Integrating implies t.expectedHead = Runtime.targetHead
-}
+// I13 has no home in this file. It is a property of the promotion TRANSITION
+// -- an offer is made only by compare-and-set against the exact expected head
+// -- and there is no transition relation here. Stated as the state predicate
+// "an integrating task's captured head is the current target head" it is
+// simply FALSE of well-formed states, which `run staleHeadIsPossible` below
+// demonstrates: a captured head going stale is the phenomenon the guard
+// defends against, not a violation. I13 lives in the TLC, Quint and
+// fast-check history flags.
 
 // I14: the integration target resource is exclusive and process-local.
 pred targetResourceExclusive { lone Runtime.targetHolder }
 
 // -------------------------------------------------------------------- traces
 
-pred init {
-  no Claim
-  no Candidate
-  no Holding
-  no Selected
-  Ticket = Task
-  all t : Ticket | t.phase = NoObligation
-  no Ticket.expectedHead
-  Runtime.capacity = 1
-  Runtime.targetHead = headOrder/first
-  no Runtime.targetHolder
-}
-
-pred stutter { Ticket' = Ticket and Claim' = Claim and Candidate' = Candidate }
-
-// The transition relation is left deliberately loose. Alloy's strength here is
+// Apart from `claimStep` above, the transition relation is left deliberately
+// loose. Alloy's strength here is
 // searching structures that satisfy the constraints, not simulating a machine,
 // so the checks below quantify over all well-formed states rather than over a
 // hand-written step relation.
+//
+// Everything named here is an ASSUMPTION, not a result. `positionDiscipline`
+// (I7), `targetResourceExclusive` (I14) and `boundRespected` (I1) are
+// constrained rather than checked in this file; TLC and Quint are what
+// actually check them. Only a predicate OUTSIDE this one is a claim about the
+// model, which is why `claimExclusivity` and `tokenUnique` are not here.
 pred wellFormed {
   positionDiscipline
-  claimExclusivity
-  tokenUnique
   targetResourceExclusive
   boundRespected
   // an integrating task holds the target resource and has captured a head
@@ -173,15 +234,36 @@ check parentsOrderedUnderMutant {
   (wellFormed and mutantSwappedParents) implies candidateParentsOrdered
 } for 4 but 4 Task, 4 Head, 4 Commit, 1 steps
 
-// I11 as a structure search: two distinct claims on one task.
+// I11 as a structure search: is a second claim on one task REACHABLE from the
+// acquisition guard? Expected UNSAT, and unlike the state-only form this one
+// can fail.
 check claimsAreExclusive {
-  wellFormed implies claimExclusivity
-} for 4 but 4 Task, 4 Head, 4 Commit, 1 steps
+  (no Claim and always claimStep) implies always claimExclusivity
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
+
+// Fresh tokens are the other half of I11: a token from an earlier claim
+// authorizes nothing, so no two claims may ever share one.
+check tokensAreUnique {
+  (no Claim and always claimStep) implies always tokenUnique
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
+
+// The negative control for both. Drop the guard and the fresh-token
+// requirement and Alloy must construct the double claim. Expected SAT.
+check claimsExclusiveUnderMutant {
+  (no Claim and always mutantClaimStep) implies always (claimExclusivity and tokenUnique)
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
 // ---------------------------------------------------------------- witnesses
 //
 // Vacuity checks. Each must find an instance, or the corresponding check above
 // proved nothing.
+
+// Without this the two claim checks above hold over traces that never acquire
+// anything, which is the `always claimStep` version of a vacuous pass.
+run claimsAreAcquired {
+  no Claim and always claimStep
+  eventually (some disj c1, c2 : Claim | c1.task != c2.task)
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
 run someCandidateExists {
   wellFormed and faithful and some Candidate

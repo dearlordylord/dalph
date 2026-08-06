@@ -94,26 +94,73 @@ retained together with an exact stated reason.
 Quiescence proves no currently executable action, not completion, not an empty
 target, and not permission to terminate the run.
 
-## Coverage expectations per tool
+## Coverage per tool
 
-`—` means the tool cannot state the invariant at all, which is itself a result
-worth recording in `SCOREBOARD.md`.
+One row per invariant, because grouping them hid which cells were results and
+which were assumptions. The distinction each cell makes:
 
-| Invariant | Quint/Apalache | TLA+/TLC | Alloy 6 | Dafny | Lean 4 | Agda | fast-check |
+| | |
+|---|---|
+| **checked** | a property that could fail, discharged by the tool |
+| **assumed** | constrained rather than checked; the tool is told it, not asked |
+| **typed away** | the defect is unwriteable in the encoding, so no property is needed |
+| **not modelled** | the shared benchmark omits the phenomenon — a scope decision, not a tool limit |
+| **—** | the tool cannot state it at all |
+
+| Invariant | Quint | TLA+/TLC | Alloy 6 | Dafny | Lean 4 | Agda | fast-check |
 |---|---|---|---|---|---|---|---|
-| I1, I3 | yes | yes | yes | yes | yes | yes | yes |
-| I2 | yes | yes | yes | yes | length half only | **no** | yes |
-| I4–I6 | yes | yes | yes | yes | yes | typed away | yes |
-| I7–I15 | yes | yes | yes | partial | costly | costly | stateful PBT |
-| I16 | yes | yes | yes | yes | yes | yes | yes |
-| I17–I19 | statable, no backend | yes | yes | **not expressible** | statable, not attempted | statable, not attempted | bounded surrogate only |
+| I1 bound | checked | checked | assumed | checked | checked | checked | checked |
+| I2 order independence | typed away | typed away | typed away | statable, not stated | length half only | not stated | typed away |
+| I3 classification | checked, definitional | typed away | typed away | checked | typed away | typed away | typed away |
+| I4 retention | checked | checked | checked, definitional | checked | checked | checked | checked |
+| I5 settlement drop | checked | checked | not modelled | checked | not modelled | not modelled | checked |
+| I6 no invention | typed away | typed away | typed away | typed away | typed away | typed away | typed away |
+| I7 position discipline | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
+| I8 admission ceiling | history flag | history flag | **not modelled** | loop invariant | history flag | history flag | history flag |
+| I9 exact correlation | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I10 one attempt | checked | checked | checked | checked | checked | checked | checked |
+| I11 claim exclusivity | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I12 candidate shape | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I13 promotion | history flag | history flag | **not modelled** | precondition | history flag | history flag | history flag |
+| I14 authority separation | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
+| I15 journal | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I16 recovery | checked | checked | checked | checked | checked | checked | checked |
+| I17–I19 | statable, no backend | checked | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
 
-Two rows moved from the expectations set at the start. I2 costs a permutation
-development that Agda cannot afford at all and Lean can afford only half of;
-see `SCOREBOARD.md`. And the last row went wrong in both directions. Quint states the temporal
-properties most cleanly of anything here and cannot check them — Apalache stops
-at `Handling fairness is not supported yet!`. Alloy answers all three in about 73
-seconds where TLC returns no verdict on I18 at two tasks in half an hour,
-reversing the ordering the safety results establish. Dafny's `—` is a genuine
-capability gap rather than a scope decision, and fast-check's pass is vacuous:
-its witness counters show it never reaches the state I18 constrains.
+### What the columns of `not modelled` mean
+
+**I9 and I15 are in no encoding at all.** No model here carries a `RunId`, an
+`AttemptId`, or a journal; `oneAttemptPerTask` counts attempts and never names
+one. So the bake-off says nothing about exact correlation or about the journal
+being an append-only pure fold — and those are two of the four invariants the
+production system rests on hardest. `JOURNAL-EVENTS.md` is the design I15
+starts from; nothing is built.
+
+**I11 and I12 exist only in Alloy**, and that is the whole reason Alloy is in
+the lineup. They are not "booleans a mutant flips" in the other tools; they are
+absent, because a state-machine language makes a claim-with-a-token and a
+two-parent candidate expensive enough that the shared model omits them. M3, the
+misordered-parent mutant, therefore has no counterpart outside `alloy/`.
+
+### What `assumed` means, and where it bit
+
+`alloy/Delivery.als` has no transition relation, so its checks read
+`wellFormed implies P`. When `P` is also a conjunct of `wellFormed` the check
+is `P implies P` — UNSAT for a reason with nothing to do with the model. I11
+was written that way and reported "holds in scope" while proving nothing. It
+now derives exclusivity from the guard on acquisition, over a small step
+relation of its own, and the mutant that drops the guard is caught.
+
+I1, I7 and I14 are still assumptions in that file. They are checked by TLC,
+Quint and fast-check, so nothing is lost, but the Alloy column is not evidence
+for them.
+
+### The temporal row
+
+Quint states I17–I19 most cleanly of anything here and cannot check them —
+Apalache stops at `Handling fairness is not supported yet!`. Alloy answers all
+three in about 131 seconds where TLC returns no verdict on I18 at two tasks in
+half an hour, reversing the ordering the safety results establish. Dafny's `—`
+is a genuine capability gap rather than a scope decision, and fast-check's pass
+is vacuous: its witness counters show it never reaches the state I18
+constrains.
