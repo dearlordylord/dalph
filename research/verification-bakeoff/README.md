@@ -16,6 +16,8 @@ than on a dining-philosophers example.
    measurements.
 6. `GATED-SPECS-MUTATION.md` — the same protocol applied back to this
    repository's own gated models under `specs/`.
+7. `JOURNAL-EVENTS.md` — the event alphabet I15 folds over, and the four
+   reconstruction propositions worth proving. Design only; nothing built.
 
 ## Run
 
