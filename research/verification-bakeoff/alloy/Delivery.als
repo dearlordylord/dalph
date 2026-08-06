@@ -58,6 +58,12 @@ var sig Claim {
   var token : one Token
 }
 
+// Every token ever minted, including those whose claim has been released.
+// Without this, "a token from an earlier claim authorizes nothing" is
+// unstateable: a rule that only avoids the tokens of LIVE claims lets a
+// released token come back, and no state predicate can tell the difference.
+var sig Issued in Token {}
+
 // A candidate is a commit with two ORDERED direct parents. Order is what the
 // invariant is about, so it is two distinct fields, not a set.
 var sig Candidate {
@@ -129,26 +135,37 @@ pred tokenUnique {
 
 pred acquireClaim[t : Task] {
   no c : Claim | c.task = t                     // the guard I11 rests on
-  some c : Claim' - Claim, o : Owner, k : Token - Claim.token {
+  some c : Claim' - Claim, o : Owner, k : Token - Issued {
     Claim' = Claim + c                          // one new claim, for t,
-    task'  = task  + (c -> t)                   // with a freshly minted token
+    task'  = task  + (c -> t)                   // with a token never yet minted
     owner' = owner + (c -> o)
     token' = token + (c -> k)
+    Issued' = Issued + k
   }
 }
 
-// A release names the EXACT current owner and token. A token from an earlier
-// claim authorizes nothing, which is why `o` and `k` are matched against the
-// claim rather than merely quantified.
+/*
+ * Release. Note what this does NOT establish: the parameters are only ever
+ * supplied as `releaseClaim[c, c.owner, c.token]`, so `c.owner = o and
+ * c.token = k` constrains nothing here. I11's "a release names the exact
+ * current owner and token" is a precondition on a CALLER, and a model whose
+ * caller can always read the claim it is releasing cannot exhibit the defect.
+ * The half of I11 that IS checkable in this encoding is token freshness across
+ * releases -- see `releasedTokensNeverReturn`.
+ */
 pred releaseClaim[c : Claim, o : Owner, k : Token] {
   c.owner = o and c.token = k
   Claim' = Claim - c
   task'  = task  - (c -> Task)
   owner' = owner - (c -> Owner)
   token' = token - (c -> Token)
+  Issued' = Issued                              // a released token stays minted
 }
 
-pred claimsFrozen { Claim' = Claim and task' = task and owner' = owner and token' = token }
+pred claimsFrozen {
+  Claim' = Claim and task' = task and owner' = owner and token' = token
+  Issued' = Issued
+}
 
 pred claimStep {
   (some t : Task | acquireClaim[t])
@@ -156,14 +173,16 @@ pred claimStep {
   or claimsFrozen
 }
 
-// The mutant: acquisition without the exclusivity guard and without the
-// freshness requirement on the token. Everything else is identical.
+// The mutant: acquisition without the exclusivity guard, and drawing tokens
+// from those not CURRENTLY held rather than those never minted. Everything
+// else is identical.
 pred mutantAcquire[t : Task] {
-  some c : Claim' - Claim, o : Owner, k : Token {
+  some c : Claim' - Claim, o : Owner, k : Token - Claim.token {
     Claim' = Claim + c
     task'  = task  + (c -> t)
     owner' = owner + (c -> o)
     token' = token + (c -> k)
+    Issued' = Issued + k
   }
 }
 
@@ -238,19 +257,33 @@ check parentsOrderedUnderMutant {
 // acquisition guard? Expected UNSAT, and unlike the state-only form this one
 // can fail.
 check claimsAreExclusive {
-  (no Claim and always claimStep) implies always claimExclusivity
+  (no Claim and no Issued and always claimStep) implies always claimExclusivity
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
-// Fresh tokens are the other half of I11: a token from an earlier claim
-// authorizes nothing, so no two claims may ever share one.
+// No two SIMULTANEOUS claims share a token.
 check tokensAreUnique {
-  (no Claim and always claimStep) implies always tokenUnique
+  (no Claim and no Issued and always claimStep) implies always tokenUnique
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
-// The negative control for both. Drop the guard and the fresh-token
-// requirement and Alloy must construct the double claim. Expected SAT.
+// The other half of I11, and the one a state predicate cannot reach: a token
+// whose claim has been released never authorizes a later one. `Issued -
+// Claim.token` is exactly the set of released tokens at each instant.
+check releasedTokensNeverReturn {
+  (no Claim and no Issued and always claimStep) implies
+    always (all k : Issued - Claim.token | always k not in Claim.token)
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
+
+// The negative control. Drop the exclusivity guard and mint from the tokens
+// not currently held rather than from those never minted; Alloy must construct
+// both the double claim and the returning token. Expected SAT.
 check claimsExclusiveUnderMutant {
-  (no Claim and always mutantClaimStep) implies always (claimExclusivity and tokenUnique)
+  (no Claim and no Issued and always mutantClaimStep) implies
+    always (claimExclusivity and tokenUnique)
+} for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
+
+check releasedTokensNeverReturnUnderMutant {
+  (no Claim and no Issued and always mutantClaimStep) implies
+    always (all k : Issued - Claim.token | always k not in Claim.token)
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
 // ---------------------------------------------------------------- witnesses
@@ -260,9 +293,13 @@ check claimsExclusiveUnderMutant {
 
 // Without this the two claim checks above hold over traces that never acquire
 // anything, which is the `always claimStep` version of a vacuous pass.
+// Two claims on different tasks coexist, AND a release is taken -- without the
+// second conjunct the release branch of `claimStep` is never exercised and
+// `releasedTokensNeverReturn` holds over traces with nothing to release.
 run claimsAreAcquired {
-  no Claim and always claimStep
+  no Claim and no Issued and always claimStep
   eventually (some disj c1, c2 : Claim | c1.task != c2.task)
+  eventually (some k : Issued | k not in Claim.token)
 } for 4 but 4 Task, 4 Head, 4 Commit, 1..6 steps
 
 run someCandidateExists {

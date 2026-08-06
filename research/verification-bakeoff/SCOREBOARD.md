@@ -3,7 +3,10 @@
 Measured on darwin/arm64, Quint 0.31.0, Apalache 0.56.1, TLC from tla2tools
 (2026-08 release), Agda 2.8.0, fast-check 4.9.0, Node 22.
 
-Reproduce with the `run.sh` / `run.mjs` in each tool directory.
+Reproduce with the `run.sh` / `run.mjs` in each tool directory. One caveat:
+`node fastcheck/run.mjs` defaults to 20 000 runs and 25 steps and reports M4,
+M5 and M6 *missed*. The table below is at `--runs 50000 --steps 40`, and the
+gap between the two is itself the fast-check result.
 
 ## Mutant detection
 
@@ -12,7 +15,7 @@ for that encoding, not that the tool is incapable.
 
 | Mutant | Defect | fast-check L1 | fast-check L2 | Quint simulate | Quint verify (Apalache) | TLC |
 |---|---|---|---|---|---|---|
-| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 2s, 96 000 states |
+| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 3s, 96 000 states |
 | M1 | `rank <= capacity` | caught 0.0s | caught `boundRespected` 0.0s | caught 1s | not run | caught `BoundRespected` <1s |
 | M2 | deliveries lose retained tickets | caught 0.0s | caught `retentionHolds` 0.0s | caught 1s | not run | caught `RetentionHolds` 1s |
 | M4 | position released at suspension request | — | caught `positionDiscipline` 0.5s | caught 1s | not run | caught `PositionDiscipline` 1s |
@@ -48,7 +51,7 @@ simulator picks among *enabled* actions at each step and therefore wastes far
 fewer steps on disabled guards. `fc.commands` would close most of that gap.
 
 **Exhaustive beats symbolic at this size, by a lot.** TLC enumerated all 96 000
-distinct states in 2 seconds and caught every mutant including M6. Apalache
+distinct states in 3 seconds and caught every mutant including M6. Apalache
 found M6 in 38 seconds, but on the faithful model it reached step 12, began
 discharging the state invariants, and was terminated at 45 minutes without a
 verdict — a refutation is cheap for it, a clean bill of health is not. Bounded
@@ -65,8 +68,14 @@ and I13 held vacuously. No engine reports this. It surfaced only from asking
 of the protocol, not decoration.
 
 **Two invariants could not be stated as state predicates at all.** I8 (admission
-ceiling) and I13 (promotion) are properties of transitions. Every encoding
-carries a history variable for them. In the I8 case the naive state predicate
+ceiling) and I13 (promotion) are properties of transitions. Quint, TLA+ and
+fast-check carry a history variable for them; Dafny uses a loop invariant and a
+precondition; Alloy and Agda rely on the action guards alone; and **Lean
+declares the history variables and then never touches them** — `admissionOk`
+and `promotedExact` are set once in `init`, updated by no `Step`, and read by no
+clause of `Inv`. Lean encodes neither invariant, and nothing in Lean says so,
+because an unused structure field is not an error and the proof is no harder
+for carrying two constants. In the I8 case the naive state predicate
 `|positions| <= capacity` is not merely weaker, it is wrong: a capacity
 contraction legitimately leaves more holders than the ceiling. Run
 `tlaplus/run.sh --m8`: TLC reports the *faithful* model violated in about a
@@ -98,8 +107,8 @@ Each states the invariant and either discharges it or refuses.
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
-| Alloy 6, L1 | 4 checks UNSAT, 3 witnesses SAT | the misordered-parent and double-claim counterexamples constructed | 7s |
-| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 361s |
+| Alloy 6, L1 | 5 checks UNSAT, 3 witnesses SAT | the misordered-parent, double-claim and returning-token counterexamples constructed | 13s |
+| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 324s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
 refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
@@ -265,7 +274,7 @@ under an exclusive target, and WF permits starving one task forever.
 I17 was stated as `[]paused => <>(positions = {})` in TLA+, Alloy and Quint, and
 reported clean in all three. `Init` sets `paused = FALSE`, so **no behaviour
 satisfies `[]paused`** and the property was vacuously true everywhere — a clean
-verdict over an empty set of behaviours, including the 29-second TLC run and the
+verdict over an empty set of behaviours, including the 28-second TLC run and the
 96 000-state Quint cross-check.
 
 The fix is `<>[]paused => <>[](positions = {})`, plus a witness that the
@@ -309,12 +318,12 @@ which is what I19 already said.
 ### The cost ordering inverts
 
 For safety, TLC was the outright winner: 96 000 states in 3 seconds, every
-mutant caught, and Alloy's L2 file took 361s. For liveness:
+mutant caught, and Alloy's L2 file took 324s. For liveness:
 
 | | safety | liveness |
 |---|---|---|
 | TLC | 3s | 28s for I17; no verdict for I18 at 2 tasks in 30 min |
-| Alloy | 361s | ~131s for all three |
+| Alloy | 324s | ~131s for all three |
 
 Same model, same machine. The explanation is that they are answering different
 questions. TLC checks every behaviour of the finite state graph against a
@@ -330,9 +339,15 @@ question, and its answer does not mean what TLC's means.
 
 Quint states these properties better than anything else here. `always`,
 `eventually`, `weakFair` and `strongFair` are builtins, `strongFair(A, v)` *is*
-`SF_v(A)`, and `enabled` is a builtin so I19 is one line —
-`eventually(always(not(step.enabled())))` — against ten hand-written guard
-predicates in Alloy.
+`SF_v(A)`, and `enabled` is a builtin so I19 is one line against ten
+hand-written guard predicates in Alloy.
+
+The tempting one-liner `eventually(always(not(step.enabled())))` is wrong, and
+instructively so: `observeGraph` has no guard, so `step.enabled()` is true in
+every state and the property is unsatisfiable rather than weak. Only the
+lifecycle actions count, which costs a hand-written `anyProgress` disjunction —
+still cheaper than Alloy, which needs that list *and* an `en*` duplicate of
+every guard in it.
 
 Then `quint run` cannot evaluate temporal operators at all, `quint verify`
 prompts you to reconsider before it will try, and Apalache stops at
@@ -421,9 +436,9 @@ two are not interchangeable.
 | Tool | Setup | Encoding | Level covered |
 |---|---|---|---|
 | fast-check | none, already a dependency | 221 lines model + 100 lines harness | L1 + L2 |
-| Quint + Apalache | `brew install quint`, Apalache auto-fetched | 556 lines | L1 + L2 |
+| Quint + Apalache | `brew install quint`, Apalache auto-fetched | 573 lines | L1 + L2 |
 | TLA+ / TLC | one 2 MB jar, no install | 313 lines | L1 + L2 |
-| Alloy 6 | one 21 MB jar, no install | 279 lines L1 + 318 lines L2 + 229 lines liveness | L1 structural I11/I12, and L2 temporal |
+| Alloy 6 | one 21 MB jar, no install | 316 lines L1 + 319 lines L2 + 229 lines liveness | L1 structural I11/I12, and L2 temporal |
 | Dafny | 100 MB release zip | 158 lines L1 + 370 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |

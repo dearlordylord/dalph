@@ -70,16 +70,10 @@ function Select(capacity: nat, eligible: seq<nat>): seq<nat>
   else [eligible[0]] + Select(capacity - 1, eligible[1..])
 }
 
-/* The M1 mutant: `rank <= capacity`, expressed as taking one element too many.
- * Its `ensures` clause is the same as above, so Dafny rejects the function
- * itself rather than reporting a counterexample. */
-function SelectMutant(capacity: nat, eligible: seq<nat>): seq<nat>
-  ensures |SelectMutant(capacity, eligible)| <= capacity + 1
-{
-  if |eligible| == 0 then []
-  else if capacity == 0 then [eligible[0]]
-  else [eligible[0]] + SelectMutant(capacity - 1, eligible[1..])
-}
+/* The M1 mutant lives in ./DeliveryMutants.dfy, where `SelectM1` carries the
+ * FAITHFUL postcondition and Dafny rejects the function itself rather than
+ * reporting a counterexample. A weakened postcondition here would verify and
+ * prove nothing. */
 
 /* I4: retention. A task with an outstanding obligation appears in the ticket
  * deliveries under every placement, including AbsentFromCurrentGraph. */
@@ -106,15 +100,39 @@ lemma RetentionWhenAbsent(obligated: seq<nat>, t: nat)
   RetentionHolds([], obligated, t);
 }
 
-/* I5: settlement drops the obligation. */
-predicate StillDelivers(d: TicketDelivery)
+/* I5 and I6 both constrain where `obligated` COMES FROM, so neither is
+ * statable while it is a free field of TicketDelivery. Stated over the field,
+ * I5 degenerates to `!d.obligated ==> !d.obligated`: a lemma Dafny discharges
+ * with an empty body, which mentions settlement nowhere. */
+
+datatype Evidence =
+  | OutstandingWork
+  | Settled
+  | TaskExternalSuccessSettled
+
+function ObligatedFrom(e: Evidence): bool
 {
-  d.obligated
+  e.OutstandingWork?
 }
 
-lemma SettlementDropped(d: TicketDelivery)
-  requires !d.obligated
-  ensures !StillDelivers(d)
+/* The projection: a delivery's obligation is a function of the exact evidence,
+ * and its placement is carried alongside rather than consulted. */
+function Deliver(taskId: nat, placement: Placement, e: Evidence): TicketDelivery
+{
+  TicketDelivery(taskId, placement, ObligatedFrom(e))
+}
+
+/* I5: `Settled` and `TaskExternalSuccessSettled` evidence yields no obligation. */
+lemma SettlementDropped(taskId: nat, p: Placement, e: Evidence)
+  requires e.Settled? || e.TaskExternalSuccessSettled?
+  ensures !Deliver(taskId, p, e).obligated
+{
+}
+
+/* I6: placement alone never creates an obligation. Two deliveries built from
+ * the same evidence under different placements agree. */
+lemma NoInvention(taskId: nat, p1: Placement, p2: Placement, e: Evidence)
+  ensures Deliver(taskId, p1, e).obligated == Deliver(taskId, p2, e).obligated
 {
 }
 

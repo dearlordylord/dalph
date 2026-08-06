@@ -136,6 +136,7 @@ module deliveryCore {
     targetResourceExclusive,
     promotionUsedExactHead,
     processLocalLostOnCrash,
+    pauseBlocksAdmission,
   }
 
   // ----------------------------------------------------------------- witnesses
@@ -506,7 +507,7 @@ module deliveryCore {
   /// as a proof that the work is safely stopped and "has preserved what it
   /// needs to resume the same attempt", so progress survives a suspend/resume
   /// cycle and an operator suspending forever does not prevent completion.
-  /// Kept for the comparison in ../tlaplus/run-liveness.sh --lasso.
+  /// Used by `everyBegunSettlesUninterrupted` below.
   temporal eventuallyUninterrupted =
     eventually(always(
       TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
@@ -523,6 +524,20 @@ module deliveryCore {
   /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
   temporal everyBegunSettles =
     (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+      implies TASKS.forall(id =>
+        always(
+          (tickets.get(id).phase != Executing)
+            or eventually(tickets.get(id).phase == Settled
+                            or tickets.get(id).phase == Abandoned)
+        ))
+
+  /// Row 2 of the three-way lasso comparison. NOT the primary form of I18: the
+  /// domain does not need the operator hypothesis, because safe suspension
+  /// preserves progress. Stated so the Quint file carries all three rows that
+  /// ../tlaplus/run-liveness.sh --lasso and ../alloy/DeliveryLiveness.als do.
+  temporal everyBegunSettlesUninterrupted =
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy
+       and eventuallyUninterrupted)
       implies TASKS.forall(id =>
         always(
           (tickets.get(id).phase != Executing)

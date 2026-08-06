@@ -312,7 +312,8 @@ run attemptsCounterexampleToInduction {
     t.phase = Claimed and t.attempts = 1 and planAttempt[t] and after t.attempts = 2
 } for 2 Task, 5 Int, 2 steps
 
-// And the strengthening is exactly what excludes it.
-check strengtheningExcludesTheCTI {
-  phaseBoundsAttempts => (all t : Task | t.phase = Claimed => t.attempts = 0)
-} for 2 Task, 5 Int, 2 steps
+// There is no separate check that the strengthening excludes the CTI. Written
+// as `phaseBoundsAttempts => (t.phase = Claimed => t.attempts = 0)` the
+// consequent is a strict weakening of the antecedent, so it is UNSAT for a
+// reason with nothing to do with the model -- and `invIsInductive` above is
+// already the statement that wanted making.

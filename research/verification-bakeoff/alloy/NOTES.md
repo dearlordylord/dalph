@@ -45,10 +45,25 @@ structural search and is not one, because `wellFormed` *contains*
 and nothing about claims has been tested.
 
 The repair is to derive exclusivity instead of assuming it. `acquireClaim`
-carries the guard I11 rests on — no existing claim for the task, and a token
-not already in use — and `claimsAreExclusive` asks whether a second claim is
+carries the guards I11 rests on — no existing claim for the task, and a token
+never yet minted — and `claimsAreExclusive` asks whether a second claim is
 *reachable* over six steps. `claimsExclusiveUnderMutant` drops the guard and
 comes back SAT with the double claim.
+
+The second sentence of I11, "a token from an earlier claim authorizes nothing",
+needs history rather than state. A rule that avoids the tokens of *live* claims
+lets a released token come back, and no state predicate can see the difference:
+at every instant the tokens are still unique. Hence `var sig Issued in Token`,
+and `releasedTokensNeverReturn` over `Issued - Claim.token`. The mutant that
+mints from `Token - Claim.token` instead of `Token - Issued` is caught by that
+check and by nothing else.
+
+What is *not* checkable here is the release side. `releaseClaim[c, o, k]`
+requires `c.owner = o and c.token = k`, and every call site supplies
+`releaseClaim[c, c.owner, c.token]` — so the guard constrains nothing. "A
+release names the exact current owner and token" is a precondition on a
+*caller*, and a model whose caller can always read the claim it is releasing
+cannot exhibit the defect. Stating it looks like coverage and is not.
 
 Two hazards showed up in doing it, both silent:
 
@@ -82,23 +97,23 @@ well-formed states. Alloy 6 has temporal operators and `var` signatures, and
 the state is declared with them, but a state-only encoding says nothing about
 I16–I19, and it is why I13 has no home here at all.
 
-Everything is also bounded by scope (4 Task, 4 Head, 4 Commit, 1 step). "Holds
-in scope" is not "holds". The small scope hypothesis is an empirical claim, not
-a theorem.
+Everything is also bounded by scope: 4 Task, 4 Head, 4 Commit, and 1 step for
+the state-only checks, 6 for the claim machine. "Holds in scope" is not
+"holds". The small scope hypothesis is an empirical claim, not a theorem.
 
 ## Cost
 
-279 lines including comments, 7 seconds for all ten commands. Per unit of
+316 lines including comments, 13 seconds for all twelve commands. Per unit of
 structural insight it is the cheapest tool here; per unit of temporal
 confidence it is the most expensive, because it offers none.
 
 ## L2: a real transition system, and the counterexample to induction
 
 `DeliveryL2.als` is the protocol as `var` state with temporal formulas, not the
-state-only encoding of `Delivery.als`. Same actions and invariants as the
-Quint, TLA+, Lean, and Agda files. 318 lines, 361 seconds for all nine
-commands — by far the slowest tool here, and the reason is scope: 14 steps of a
-17-action relation over two tasks is a large SAT problem.
+state-only encoding of `Delivery.als`. Same actions as the Quint, TLA+, Lean,
+and Agda files. 319 lines, 324 seconds for all eight commands — by far the
+slowest tool here, and the reason is scope: 14 steps of a
+19-action relation over two tasks is a large SAT problem.
 
 ### The result that justifies the file
 
@@ -149,7 +164,7 @@ One equation updates the touched task and frames every other. The Lean and Agda
 encodings needed a hand-written `upd` function plus a family of lemmas about
 it, and that machinery is most of their line count.
 
-The tax is the frame conditions. Alloy has no `UNCHANGED`, so all seventeen
+The tax is the frame conditions. Alloy has no `UNCHANGED`, so all nineteen
 actions spell out everything they leave alone; the file carries five
 `...Unchanged` predicates purely for that. TLA+'s `UNCHANGED << ... >>` is the
 clear winner on this axis.
@@ -167,6 +182,13 @@ Priming a predicate (`Inv'`) is a type error; the temporal operator is `after`.
 Bounded twice over: 2 tasks, and 14 steps. "Holds in scope" is not "holds", and
 unlike the Lean and Agda proofs there is no claim about unbounded `head`,
 `attempts`, or `capacity`.
+
+`Present` and `Opened` are **dead state**. `observeGraph` writes them, every
+other action frames them, `init` empties them, and no guard and no invariant
+reads them — `acquireClaim` here is deliberately not selection-gated. They
+widen the step relation that the 324-second run pays for and constrain nothing.
+Nothing reports this; a solver has no opinion about state you never constrain,
+and the frame conditions make them look load-bearing.
 
 ## Liveness
 

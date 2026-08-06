@@ -67,7 +67,7 @@ the harness could not have told you either way. Baking a scheduling assumption
 into a test is exactly how it stops being visible.
 
 All three properties pass in about **3 seconds each**, against 28s for one TLC
-property and ~73s for the whole Alloy file.
+property and ~131s for the whole Alloy file.
 
 ### And they pass vacuously
 

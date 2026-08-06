@@ -102,30 +102,44 @@ which were assumptions. The distinction each cell makes:
 | | |
 |---|---|
 | **checked** | a property that could fail, discharged by the tool |
+| **guard** | enforced by an action precondition; the transition cannot violate it, and nothing checks that |
 | **assumed** | constrained rather than checked; the tool is told it, not asked |
 | **typed away** | the defect is unwriteable in the encoding, so no property is needed |
 | **not modelled** | the shared benchmark omits the phenomenon — a scope decision, not a tool limit |
 | **—** | the tool cannot state it at all |
 
+A `guard` is weaker evidence than it looks. It says the *encoding* respects the
+rule, which is the same thing as saying a mutant that removes it is the only
+way to violate it. That is exactly what M4, M5 and M6 test, so a `guard` cell
+plus a mutant is real; a `guard` cell alone is not.
+
 | Invariant | Quint | TLA+/TLC | Alloy 6 | Dafny | Lean 4 | Agda | fast-check |
 |---|---|---|---|---|---|---|---|
 | I1 bound | checked | checked | assumed | checked | checked | checked | checked |
 | I2 order independence | typed away | typed away | typed away | statable, not stated | length half only | not stated | typed away |
-| I3 classification | checked, definitional | typed away | typed away | checked | typed away | typed away | typed away |
+| I3 classification | checked, definitional | typed away | typed away | asserted on one witness | typed away | typed away | typed away |
 | I4 retention | checked | checked | checked, definitional | checked | checked | checked | checked |
-| I5 settlement drop | checked | checked | not modelled | checked | not modelled | not modelled | checked |
-| I6 no invention | typed away | typed away | typed away | typed away | typed away | typed away | typed away |
+| I5 settlement drop | checked | checked | definitional | checked | not modelled | not modelled | checked |
+| I6 no invention | typed away | typed away | typed away | checked | checked | typed away | typed away |
 | I7 position discipline | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
-| I8 admission ceiling | history flag | history flag | **not modelled** | loop invariant | history flag | history flag | history flag |
+| I8 admission ceiling | history flag | history flag | guard (L2) | loop invariant | **dead flag** | guard | history flag |
 | I9 exact correlation | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I10 one attempt | checked | checked | checked | checked | checked | checked | checked |
 | I11 claim exclusivity | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I12 candidate shape | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
-| I13 promotion | history flag | history flag | **not modelled** | precondition | history flag | history flag | history flag |
+| I13 promotion | history flag | history flag | guard (L2) | precondition | **dead flag** | precondition | history flag |
 | I14 authority separation | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
 | I15 journal | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I16 recovery | checked | checked | checked | checked | checked | checked | checked |
-| I17–I19 | statable, no backend | checked | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
+| I17–I19 | statable, no backend | checked at 1 task | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
+
+**dead flag** is the sharpest cell in the table. `lean/L2.lean:63-64` declares
+`admissionOk` and `promotedExact`, `init` sets both `true`, no `Step`
+constructor updates either, and no clause of `Inv` reads either. The fields
+look like the TLA+ and Quint history variables and do the work of neither, so
+Lean encodes I8 and I13 not at all. Nothing in Lean complains: an unused
+structure field is not an error, and the proof of `Inv` is no harder for
+carrying two constants.
 
 ### What the columns of `not modelled` mean
 
@@ -144,23 +158,40 @@ misordered-parent mutant, therefore has no counterpart outside `alloy/`.
 
 ### What `assumed` means, and where it bit
 
-`alloy/Delivery.als` has no transition relation, so its checks read
+Most of `alloy/Delivery.als` has no transition relation, so its checks read
 `wellFormed implies P`. When `P` is also a conjunct of `wellFormed` the check
 is `P implies P` — UNSAT for a reason with nothing to do with the model. I11
 was written that way and reported "holds in scope" while proving nothing. It
-now derives exclusivity from the guard on acquisition, over a small step
-relation of its own, and the mutant that drops the guard is caught.
+now derives exclusivity, token uniqueness, and non-return of released tokens
+from the guards on acquisition, over a small step relation of its own, and both
+mutants are caught.
 
 I1, I7 and I14 are still assumptions in that file. They are checked by TLC,
 Quint and fast-check, so nothing is lost, but the Alloy column is not evidence
 for them.
 
+The same shape appears twice more, both found by a review pass rather than by
+any tool:
+
+- `dafny/Delivery.dfy` stated I5 over the free field `obligated` as
+  `!d.obligated ==> !d.obligated`, a lemma Dafny discharges with an empty body
+  and which mentions settlement nowhere. I5 and I6 both constrain where
+  `obligated` *comes from*, so neither is statable until the field is derived
+  from evidence. It now is, and I6 became statable in the same move.
+- `alloy/DeliveryL2.als` had a `strengtheningExcludesTheCTI` check whose
+  consequent was a strict weakening of its antecedent. `invIsInductive` was
+  always the statement that wanted making.
+
+None of these three reported anything. UNSAT, verified, and UNSAT.
+
 ### The temporal row
 
 Quint states I17–I19 most cleanly of anything here and cannot check them —
-Apalache stops at `Handling fairness is not supported yet!`. Alloy answers all
-three in about 131 seconds where TLC returns no verdict on I18 at two tasks in
-half an hour, reversing the ordering the safety results establish. Dafny's `—`
+Apalache stops at `Handling fairness is not supported yet!`. TLC's cell says
+"at 1 task" because that is the only size at which I18 returns a verdict; at
+the benchmark size of two it does not finish in half an hour. Alloy answers all
+three in about 131 seconds, reversing the ordering the safety results
+establish. Dafny's `—`
 is a genuine capability gap rather than a scope decision, and fast-check's pass
 is vacuous: its witness counters show it never reaches the state I18
 constrains.

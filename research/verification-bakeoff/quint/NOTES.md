@@ -12,7 +12,7 @@ means `TASKS.mapBy(id => ...)`, not `tickets.mapBy(...)`.
 `next` is a built-in name and cannot be a parameter.
 
 Every action must assign every variable. There is no `UNCHANGED` shorthand, so
-a sixteen-action model repeats nine assignments per action. This is the single
+an eighteen-action model repeats nine assignments per action. This is the single
 largest source of bulk in the encoding and the easiest place to introduce a
 silent bug — an omitted assignment is a type error, but a wrong one is not.
 
@@ -61,9 +61,13 @@ temporal fairness = and {
 }
 ```
 
-`enabled` is a builtin too, so `reachesQuiescence` is one line —
-`eventually(always(not(step.enabled())))` — against ten hand-written guard
-predicates in Alloy.
+`enabled` is a builtin too, so `reachesQuiescence` is one line. It is not
+`eventually(always(not(step.enabled())))` though, and the reason is worth
+knowing: `observeGraph` has no guard, so `step.enabled()` is true in every
+state and that form is unsatisfiable rather than merely weak. The test has to
+be over the lifecycle actions only, which means a hand-written `anyProgress`
+disjunction — the same list Alloy spells out, minus Alloy's separate `en*`
+duplicates of every guard.
 
 Then nothing in the default toolchain can check any of it.
 
