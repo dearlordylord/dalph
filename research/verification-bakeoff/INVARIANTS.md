@@ -101,16 +101,18 @@ worth recording in `SCOREBOARD.md`.
 
 | Invariant | Quint/Apalache | TLA+/TLC | Alloy 6 | Dafny | Lean 4 | Agda | fast-check |
 |---|---|---|---|---|---|---|---|
-| I1–I3 | yes | yes | yes | yes | yes | yes | yes |
+| I1, I3 | yes | yes | yes | yes | yes | yes | yes |
+| I2 | yes | yes | yes | yes | length half only | **no** | yes |
 | I4–I6 | yes | yes | yes | yes | yes | typed away | yes |
 | I7–I15 | yes | yes | yes | partial | costly | costly | stateful PBT |
 | I16 | yes | yes | yes | yes | yes | yes | yes |
 | I17–I19 | statable, no backend | yes | yes | **not expressible** | statable, not attempted | statable, not attempted | bounded surrogate only |
 
-The last row is the only one where the expectations set at the start of the
-bake-off turned out wrong in both directions. Quint states the temporal
+Two rows moved from the expectations set at the start. I2 costs a permutation
+development that Agda cannot afford at all and Lean can afford only half of;
+see `SCOREBOARD.md`. And the last row went wrong in both directions. Quint states the temporal
 properties most cleanly of anything here and cannot check them — Apalache stops
-at `Handling fairness is not supported yet!`. Alloy answers all three in 105
+at `Handling fairness is not supported yet!`. Alloy answers all three in about 73
 seconds where TLC returns no verdict on I18 at two tasks in half an hour,
 reversing the ordering the safety results establish. Dafny's `—` is a genuine
 capability gap rather than a scope decision, and fast-check's pass is vacuous:

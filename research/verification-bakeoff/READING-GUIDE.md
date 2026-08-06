@@ -118,7 +118,7 @@ assistants stop being two dialects of the same thing.
 ```tla
 OneAttemptPerTask == \A t \in Tasks : tickets[t].attempts <= 1
 ```
-That is the whole obligation. TLC enumerates 81 792 states and reports clean in
+That is the whole obligation. TLC enumerates 96 000 states and reports clean in
 two seconds. You never learn *why* it holds.
 
 **Lean and Agda** — the same predicate is **not provable**.
@@ -157,7 +157,7 @@ check attemptsAloneIsInductive {
 check invIsInductive { (Inv and step) => after Inv } for 2 Task, 5 Int, 2 steps
                                        -- UNSAT: the strengthening works
 ```
-The SAT result hands back the missing case in 61 ms: `phase = Claimed`,
+The SAT result hands back the missing case in 49 ms: `phase = Claimed`,
 `attempts = 1`, one `planAttempt`, `attempts = 2`. Unreachable from `init`, and
 that is the point — a strengthening excludes states the transition relation
 permits but the reachable set never contains.
@@ -198,9 +198,10 @@ witness, and they look completely different.
 
 **Quint** — witness counts, as percentages of sampled traces.
 ```
-settledReached was witnessed in 9 trace(s) out of 50000 explored (0.02%)
+settledReached was witnessed in 6 trace(s) out of 50000 explored (0.01%)
 ```
-A pass with a number like that has not checked anything interesting.
+A pass with a number like that has not checked anything interesting. Run
+`quint/run.sh --witnesses` to reproduce.
 
 **TLC** — refute the negation. A reported violation means the state *is*
 reachable.
@@ -311,6 +312,6 @@ steppable structure, and **the resolution is in neither place.**
    the hand-written module to see what Quint's surface syntax is buying.
 6. `tlaplus/DeliveryLiveness.tla` and `alloy/DeliveryLiveness.als` — the same
    three temporal properties, and the two opposite ways a tool can fail you:
-   TLC gives no verdict at two tasks, Alloy answers a weaker question in 94s.
+   TLC gives no verdict at two tasks, Alloy answers a weaker question in ~73s.
 7. `SCOREBOARD.md` for the measurements, `GATED-SPECS-MUTATION.md` for the same
    protocol turned back on this repository's own gated models.

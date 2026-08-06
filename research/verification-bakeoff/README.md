@@ -36,7 +36,7 @@ node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witn
 node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
 alloy/run.sh                          # relational structure search, seconds
 alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
-alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~94s
+alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~73s
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not
@@ -62,7 +62,7 @@ that way. This directory is a study, not a second gate. Two things flow back:
 - L2 here is a coarser sibling of `specs/plannedAttemptExecutor.qnt`, extended
   with integration, promotion, and process loss.
 
-## The three lessons the layout is built around
+## The lessons the layout is built around
 
 **Level determines fit.** L1 is a total function; L2 is a transition system.
 Proof assistants are strong on the first and expensive on the second; model

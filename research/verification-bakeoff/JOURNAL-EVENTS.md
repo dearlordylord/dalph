@@ -12,11 +12,18 @@ action." The split is structural, not cosmetic — every event exposed to a
 generic consumer has exactly one action/non-action classification, and adding a
 variant must break exhaustive consumers.
 
-**Intent precedes an ambiguous effect.** "Intent is recorded before an effect
-whose outcome could become ambiguous. After a lost response or crash, the
-ordinary protocol reconciles the recorded intent with the system that owns the
-result." Two effects here qualify: the tracker claim write and the promotion ref
-mutation. Each becomes an intent action plus an outcome occurrence.
+**Intent precedes an ambiguous effect.** `journal-and-reconstruction.md`:
+"Before a request whose outcome may become ambiguous, Dalph records the exact
+intent and waits for the append acknowledgement. It then calls the owning
+system. After the call it records the exact returned or observed result." The
+same doc names the specializations: "A claim intent is reconciled against the
+tracker claim record; **a worktree intent against Git**; an executor
+responsibility through the Dalph executor."
+
+So three protocols carry the pattern, not two. Each becomes an intent action
+plus an outcome occurrence. The promotion ref mutation is a fourth by the same
+argument (`specs/gitReconciliation.qnt` has `ambiguousTargetNeverPromotes`),
+though the docs do not list it among the specializations.
 
 **There is no crash event.** "A dying coordinator cannot record its own death;
 recovery accepts every retained journal prefix without a fabricated crash
@@ -36,9 +43,13 @@ hard case is a journal that ends between an intent and its outcome.
 | `WorkAdmitted(task, attemptId)` | position allocated |
 | `SuspensionRequested(task, attemptId)` | |
 | `ResumeRequested(task, attemptId)` | |
+| `WorktreeIntentRecorded(task, attemptId)` | before the ambiguous Git worktree effect |
 | `IntegrationSessionOpened(task, expectedHead)` | captures the head |
 | `PromotionIntentRecorded(task, expectedHead)` | before the ref mutation |
-| `IntegrationAbandoned(task, reason)` | terminal, retained rather than settled |
+| `CandidateConstructionNonConvergent(task, reason)` | terminal, retained rather than settled |
+| `DeliverySettled(task)` | the terminal delivery fact — I18's first disjunct |
+| `WorkflowRunBegun(runId, target)` | first durable fact for a Run |
+| `WorkflowRunTerminated(runId)` | final fact for a normally completed Run |
 | `CapacityRevised(capacity)` | |
 | `DirectionApplied(subject, Pause \| Unpause)` | |
 
@@ -48,14 +59,31 @@ hard case is a journal that ends between an intent and its outcome.
 |---|---|
 | `TrackerFactsObserved(subjects, facts, complete, contentIdentity)` | the graph read |
 | `ClaimRecordRead(task, owner, token)` | the reread after an unknown result |
+| `ClaimedTaskEligibilityObserved(task, revision)` | ADR 0002's precondition for planning an attempt |
+| `ClaimedTaskIneligible(task, MissingFromTargetClosure \| NotOpen \| PrerequisitesUnsatisfied)` | its negative outcomes |
+| `WorktreeReconciliationObserved(task, attemptId, outcome)` | resolves the worktree intent |
 | `ExecutorReported(task, attemptId, Running \| SafelySuspended \| Terminal(r))` | |
 | `PromotionOutcomeObserved(task, head)` | resolves the promotion intent |
 | `TargetHeadObserved(head)` | external advance |
 
-Sixteen events against eighteen model actions, close to 1:1 except where the two
-ambiguous effects split.
+Twenty-three events. The mapping to the eighteen model actions is *not* close to
+1:1, and the gaps are the interesting part:
 
-## Two shape decisions
+- three ambiguous effects **split** into intent plus outcome (claim, worktree,
+  promotion);
+- `applyPause` and `applyUnpause` **merge** into one `DirectionApplied`, and
+  `safelySuspend` and `reportAccepted` into one `ExecutorReported`;
+- `crash` and `recover` have **no events at all** — crash is truncation, and
+  recovery is the fold itself rather than something the fold consumes;
+- `ClaimReleaseIntentRecorded`, the Run lifecycle pair, and ADR 0002's
+  eligibility outcomes have **no model action**, because the shared benchmark
+  has no claim release, no Run boundary, and no eligibility precondition.
+
+That last group is the useful signal: the alphabet is wider than the model
+because the model is a deliberately coarse benchmark, not because the alphabet
+is speculative.
+
+## Shape decisions
 
 ### `TrackerFactsObserved` carries completeness, not the full quality vector
 
@@ -75,9 +103,24 @@ retains later observation identity" depends on.
 
 **Assumed away, explicitly:** consistency and freshness. Incomparable facts and
 staleness are not represented, so no property here can say anything about
-conflict resolution.
+conflict resolution — which also means Proposition 3 below is *not* about the
+ADR 0006 conflicts, only about a region whose events are structurally
+inconsistent.
 
-### `IntegrationAbandoned` carries a named reason, not a string
+### The terminal-but-not-settled event uses the domain's own name
+
+`IntegrationAbandoned` would have been invented vocabulary, and worse,
+"attempt abandonment" is in the _Avoid_ set for executor-work suspension
+(`CONTEXT.md`). The domain term is **Non-convergent candidate construction**:
+"the durable disposition after either the separately selected positive
+correction limit or automatic agent-continuation limit is exhausted in one
+integration session. Dalph preserves the accepted result and isolated Git work,
+leaves the task incomplete, and releases the process-local integration-target
+resource."
+
+That is exactly I18's second disjunct, named by the domain rather than by me.
+
+### It carries a named reason, not a string
 
 Modelled the way I3 models exclusion: a nonempty reason type, so a reason-free
 abandonment cannot be written down. `Abandoned` is retained rather than settled
@@ -85,34 +128,47 @@ precisely *because* it carries a stated reason, and a free-text field would make
 the second disjunct of I18 unfalsifiable.
 
 ```
-Reason = StaleTargetHead | CorrectionLimitReached | ContinuationLimitReached
+Reason = CorrectionLimitExhausted | ContinuationLimitExhausted | StaleTargetHead
 ```
 
-**Assumed, explicitly:** `specs/acceptedResultIntegration.qnt` has
-`CorrectionLimitReached` and `ContinuationLimitReached` as real terminal states.
-The bake-off model reaches only `StaleTargetHead`, because it has no correction
-loop. The other two are in the type so the alphabet matches production, and they
-are unreachable in this abstraction — which the witnesses must state rather than
-leave to be discovered.
+**Assumed, explicitly:** the first two limits are real —
+`specs/acceptedResultIntegration.qnt:16-17` declares `CorrectionLimitReached`
+and `ContinuationLimitReached` as terminal phases, and
+`packages/dalph/src/cassettes/recorded-domain.ts` carries the production
+counterparts. `StaleTargetHead` is *this study's* addition, reachable in the
+bake-off model and with no production counterpart, because the benchmark has no
+correction loop. The other two are unreachable in this abstraction, which the
+witnesses must state rather than leave to be discovered.
 
-## Journal positions are not in events
+## An event does not carry its own position, but may reference one
 
 `ARCHITECTURE.md`: "A workflow event is the immutable domain value for one
-past-tense occurrence; a **journal record is its durable envelope**." Position
-belongs to the envelope. Two identical occurrences at different positions are
-the same value, and putting the position inside would make them different ones.
-`CONTEXT.md` also keeps "journal position" as a distinct concept in the _Avoid_
-set for **Task**.
+past-tense occurrence; a **journal record is its durable envelope**." An event's
+*own* position belongs to the envelope. Two identical occurrences at different
+positions are the same value, and putting the position inside would make them
+different ones. `CONTEXT.md` keeps "journal position" out of the **Task revision
+fingerprint** for the same reason.
+
+That is not a blanket rule against positions appearing in events, and the
+distinction matters here. `journal-and-reconstruction.md`: "A tracker graph
+observation **retains the logical read identity and journal position that
+recorded it**", and `CONTEXT.md` has an integration responsibility's
+"workflow-journal position supplies its order". A position *referenced as
+evidence* is ordinary data; a position *identifying the event itself* is
+envelope.
 
 ```
-Event  = ...              -- no position
-Record = { position, event }
+Event  = ...                       -- no position of its own
+Record = { position, event }       -- the envelope supplies that
 fold   : List Event -> State
 ```
 
-The consequence is what "idempotent under replay" can mean. With no positions
-there is no dedup-by-id, and there should not be: two genuine identical
-occurrences must both count. So replay is **recomputation from the origin**, not
+So `TrackerFactsObserved` legitimately carries the journal position of the read
+that recorded it, while no event carries the position at which it is appended.
+
+The consequence is what "idempotent under replay" can mean. With no
+self-identifying position there is no dedup-by-id, and there should not be: two
+genuine identical occurrences must both count. So replay is **recomputation from the origin**, not
 re-application to current state, and idempotence reduces to determinism of the
 fold.
 

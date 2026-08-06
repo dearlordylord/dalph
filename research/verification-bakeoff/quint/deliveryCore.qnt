@@ -458,15 +458,17 @@ module deliveryCore {
   // than the Alloy ones do -- `strongFair` is literally `SF_e(A)`.
   //
   // The catch is at the back end. `quint run` cannot evaluate temporal
-  // operators at all, and only Apalache can, so every property below is
-  // reachable exclusively through `quint verify --temporal`. See ./NOTES.md
-  // for what that actually did.
+  // operators at all, and Apalache stops at `Handling fairness is not
+  // supported yet!`, so every property below is reachable only through
+  // `quint verify --temporal --backend tlc`. See ./NOTES.md.
 
   val vars = (tickets, capacity, positions, paused, targetResource, targetHead,
               crashed, admissionRespectedCeiling, promotedFromExactHead)
 
-  /// Strong, not weak, and per action, not on the disjunction: the two
-  /// mistakes ../tlaplus/DeliveryLiveness.tla made and TLC caught.
+  /// Strong, not weak: weak fairness starves `startIntegration` under an
+  /// exclusive target. Per action, not on the disjunction: that removes the
+  /// suspend/resume lasso, which is an artifact of work being atomic here
+  /// rather than a real behaviour. See ../tlaplus/run-liveness.sh --lasso.
   temporal fairness = and {
     TASKS.forall(id => and {
       acquireClaim(id).strongFair(vars),
@@ -481,6 +483,17 @@ module deliveryCore {
       settle(id).strongFair(vars),
     }),
     recover.strongFair(vars),
+  }
+
+  /// The lifecycle actions only. The environment can always act, so quiescence
+  /// has to be about what Dalph can still do.
+  action anyProgress: bool = {
+    nondet id = TASKS.oneOf()
+    any {
+      acquireClaim(id), planAttempt(id), beginWork(id), safelySuspend(id),
+      resumeWork(id), reportAccepted(id), startIntegration(id), promote(id),
+      abandonIntegration(id), settle(id), recover,
+    }
   }
 
   temporal eventuallyStable = eventually(always(not(crashed)))
@@ -499,9 +512,13 @@ module deliveryCore {
       TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
 
   /// I17: a pause that stays applied drains every held position.
+  ///
+  /// `eventually(always(paused))`, not `always(paused)`. `init` sets
+  /// `paused = false`, so `always(paused)` holds of no behaviour and that form
+  /// makes the property vacuously true.
   temporal pauseDrainsPositions =
-    (fairness and always(paused) and eventuallyStable)
-      implies eventually(positions == Set())
+    (fairness and eventually(always(paused)) and eventuallyStable)
+      implies eventually(always(positions == Set()))
 
   /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
   temporal everyBegunSettles =
@@ -521,8 +538,13 @@ module deliveryCore {
   /// fixed and no phase returns to NoObligation, so work is exhaustible by
   /// construction. See ../tlaplus/DeliveryLiveness.tla for what happens when
   /// arrival is modelled.
+  /// `step.enabled()` is NOT the right test: `observeGraph` has no guard, so it
+  /// is true in every state and the consequent would be unsatisfiable. Only the
+  /// lifecycle actions count, matching `AnyProgress` in
+  /// ../tlaplus/DeliveryLiveness.tla and `quiescent` in
+  /// ../alloy/DeliveryLiveness.als.
   temporal reachesQuiescence =
-    (fairness and eventuallyStable) implies eventually(always(not(step.enabled())))
+    (fairness and eventuallyStable) implies eventually(always(not(anyProgress.enabled())))
 }
 
 module delivery {

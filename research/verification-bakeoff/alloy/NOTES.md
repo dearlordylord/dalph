@@ -54,7 +54,7 @@ a theorem.
 
 ## Cost
 
-95 lines including comments, 2 seconds for all seven commands. Per unit of
+197 lines including comments, 2 seconds for all seven commands. Per unit of
 structural insight it is the cheapest tool here; per unit of temporal
 confidence it is the most expensive, because it offers none.
 
@@ -62,7 +62,7 @@ confidence it is the most expensive, because it offers none.
 
 `DeliveryL2.als` is the protocol as `var` state with temporal formulas, not the
 state-only encoding of `Delivery.als`. Same actions and invariants as the
-Quint, TLA+, Lean, and Agda files. 280 lines, 361 seconds for all nine
+Quint, TLA+, Lean, and Agda files. 318 lines, 361 seconds for all nine
 commands — by far the slowest tool here, and the reason is scope: 14 steps of a
 17-action relation over two tasks is a large SAT problem.
 
@@ -80,7 +80,7 @@ inductive?"** directly.
 That middle row is the whole point. `attemptsBounded` is exactly the invariant
 TLC discharged without comment, and exactly the one that cannot be proved by
 induction in Lean or Agda until it is strengthened. Alloy finds the obstruction
-*mechanically*, as a two-state counterexample, in 61 milliseconds.
+*mechanically*, as a two-state counterexample, in 49 milliseconds.
 
 `attemptsCounterexampleToInduction` exhibits it concretely: a task with
 `phase = Claimed` and `attempts = 1`, one `planAttempt` step, and a successor
@@ -136,7 +136,7 @@ unlike the Lean and Agda proofs there is no claim about unbounded `head`,
 
 ## Liveness
 
-`DeliveryLiveness.als` checks I17–I19. All three hold in scope, in **94
+`DeliveryLiveness.als` checks I17–I19. All three hold in scope, in about **73
 seconds for the whole file** — cheaper than this directory's own safety run and
 far cheaper than TLC, which does not return a verdict on I18 at two tasks in
 half an hour. That ordering is the opposite of the safety result and is the
@@ -176,8 +176,9 @@ ten-disjunct `no t : Task | ...` over the same hand-written guards.
 
 ### Where it wins outright
 
-`interruptionForeverBreaksI18` is a deliberate negative control: I18 without
-`eventuallyUninterrupted`, under fairness on the disjunction of actions. It is
+`interruptionForeverBreaksI18` is a deliberate negative control: the same I18
+the primary check states, but under fairness on the disjunction of actions
+rather than per action. It is
 SAT, and the instance is the same `Executing → SuspensionRequested → Suspended →
 Executing` lasso TLC finds — except Alloy hands it back as a structure you can
 step through in the visualizer rather than as 14 states of console text.

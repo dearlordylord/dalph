@@ -75,7 +75,9 @@ natural-number type, so the bound `appliedCount >= 0` has to be stated as an
 invariant. It constrains which states are representable, not how the model
 behaves, and it is named to say so.
 
-The other four were repaired, below. Each followed the same shape: the
+Three others were genuinely inert and were repaired, below; Repair 4 is a
+rename of that same by-design invariant rather than a fourth repair. Each of
+the three followed the same shape: the
 invariant stated a real rule from `docs/CONTEXT.md`, and the *model* could not
 express its violation. Repairing an inert invariant almost always means adding
 the adversarial phenomenon, not rewriting the invariant.

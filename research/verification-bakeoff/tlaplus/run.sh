@@ -40,15 +40,28 @@ INVARIANT OneAttemptPerTask
 INVARIANT TargetResourceExclusive
 INVARIANT PromotionUsedExactHead
 INVARIANT ProcessLocalLostOnCrash'
-WITNESS_BLOCK='INVARIANT NoSettledReached
-INVARIANT NoStaleHeadReached'
+# One at a time: TLC stops at the first violated invariant, so listing both
+# would only ever report NoStaleHeadReached and understate the evidence.
+WITNESS_INVARIANTS=(NoSettledReached NoStaleHeadReached)
 
 if [[ ${1:-} == --witness ]]; then
-  BLOCK=$WITNESS_BLOCK
   echo "Refuting witnesses: a reported violation means the state IS reachable."
   echo ""
-  echo "| Mutant | witness refuted | states | s |"
-elif [[ ${1:-} == --m8 ]]; then
+  echo "| Witness | refuted on M0 | states | s |"
+  echo "|---|---|---|---|"
+  for w in "${WITNESS_INVARIANTS[@]}"; do
+    emit_cfg 0 "INVARIANT $w"
+    start=$SECONDS
+    out=$(java -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
+          -config "$WORK/M0.cfg" -metadir "$WORK/w$w" -workers auto Delivery 2>&1)
+    states=$(grep -oE '[0-9]+ distinct states found' <<<"$out" | tail -1 | grep -oE '^[0-9]+')
+    grep -q "Invariant $w is violated" <<<"$out" && v="reachable" || v="**UNREACHABLE**"
+    echo "| $w | $v | ${states:--} | $((SECONDS - start)) |"
+  done
+  exit 0
+fi
+
+if [[ ${1:-} == --m8 ]]; then
   BLOCK='INVARIANT CeilingOverHeldPositions'
   echo "M8: I8 replaced by the seeded specification error. A violation on M0"
   echo "means the specification is wrong, not the model."

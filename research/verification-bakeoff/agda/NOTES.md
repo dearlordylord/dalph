@@ -54,7 +54,7 @@ proof/test dichotomy, is what decides where this tool pays.
 
 `L2.agda` is the same development as `../lean/L2.lean` — same model, same
 invariant, same five fields, same theorem names — so reading them side by side
-isolates the language rather than the modelling. 506 lines against Lean's 500.
+isolates the language rather than the modelling. 580 lines against Lean's 500.
 
 That near-identical line count is the surprise, and it hides a real difference
 in where the lines go.

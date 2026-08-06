@@ -12,7 +12,7 @@ for that encoding, not that the tool is incapable.
 
 | Mutant | Defect | fast-check L1 | fast-check L2 | Quint simulate | Quint verify (Apalache) | TLC |
 |---|---|---|---|---|---|---|
-| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 2s, 81 792 states |
+| M0 | none | clean 0.1s | clean 1.8s | clean 3s | no verdict, terminated at 45 min | clean 2s, 96 000 states |
 | M1 | `rank <= capacity` | caught 0.0s | caught `boundRespected` 0.0s | caught 1s | not run | caught `BoundRespected` <1s |
 | M2 | deliveries lose retained tickets | caught 0.0s | caught `retentionHolds` 0.0s | caught 1s | not run | caught `RetentionHolds` 1s |
 | M4 | position released at suspension request | — | caught `positionDiscipline` 0.5s | caught 1s | not run | caught `PositionDiscipline` 1s |
@@ -36,16 +36,16 @@ eight ordered actions to reach. Over ten repetitions at the same budget:
 
 A tool that never finds a defect at least tells you so consistently. A tool that
 finds it 40% of the time makes a green run meaningless and a red run look like a
-flake to be retried. Quint's own witness counts show the mechanism:
-`settledReached` appeared in 0.02% of 50 000 traces. Sampling coverage is the
-number to look at, not the pass.
+flake to be retried. Quint's own witness counts show the mechanism, and `quint/run.sh --witnesses`
+prints them: `settledReached` fires in 6 traces out of 50 000, 0.01%, while `crashReached`
+fires in 99.91% of them. Sampling coverage is the number to look at, not the pass.
 
 fast-check's 0/10 against Quint's 4/10 is an encoding difference, not a tool
 difference: fast-check generates a blind action list up front, while Quint's
 simulator picks among *enabled* actions at each step and therefore wastes far
 fewer steps on disabled guards. `fc.commands` would close most of that gap.
 
-**Exhaustive beats symbolic at this size, by a lot.** TLC enumerated all 81 792
+**Exhaustive beats symbolic at this size, by a lot.** TLC enumerated all 96 000
 distinct states in 2 seconds and caught every mutant including M6. Apalache
 found M6 in 38 seconds, but on the faithful model it reached step 12, began
 discharging the state invariants, and was terminated at 45 minutes without a
@@ -67,8 +67,9 @@ ceiling) and I13 (promotion) are properties of transitions. Every encoding
 carries a history variable for them. In the I8 case the naive state predicate
 `|positions| <= capacity` is not merely weaker, it is wrong: a capacity
 contraction legitimately leaves more holders than the ceiling. Run
-`tlaplus/run.sh --m8`: TLC reports the *faithful* model violated in 1 second,
-1 295 states, for every mutant including M0. The tool is right and the
+`tlaplus/run.sh --m8`: TLC reports the *faithful* model violated in about a
+second, for every mutant including M0. The state count varies between runs
+because TLC stops at the first violation and the workers race. The tool is right and the
 specification is wrong, and nothing in the output says which.
 
 `node fastcheck/run.mjs --m8` at a small budget reports M0 clean, because the
@@ -89,8 +90,8 @@ Each states the invariant and either discharges it or refuses.
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
 | Dafny, L1 | 11 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
-| Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | M3 counterexample constructed | 2s |
-| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 61ms | 361s |
+| Alloy 6, L1 | 4 checks UNSAT, 2 witnesses SAT | the misordered-parent counterexample constructed | 2s |
+| Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 361s |
 
 Alloy is the only one of the four that reports a *counterexample* rather than a
 refusal: `check parentsOrderedUnderMutant` returned SAT with a concrete
@@ -129,7 +130,7 @@ mentions it.
 
 **Alloy sits between the two, and that is the practical takeaway.** It is the
 only tool here that answers *"is my invariant inductive?"* directly.
-`attemptsAloneIsInductive` returns SAT in 61 ms with a two-state counterexample:
+`attemptsAloneIsInductive` returns SAT in 49 ms with a two-state counterexample:
 `phase = Claimed`, `attempts = 1`, one `planAttempt`, `attempts = 2`. That state
 is unreachable from `init`, which is exactly what a strengthening is for — it
 excludes a state the transition relation permits but the reachable set never
@@ -150,10 +151,10 @@ ranking from the safety results reverses.
 | Tool | I17 pause | I18 no silent drop | I19 quiescence | Cost |
 |---|---|---|---|---|
 | TLA+ / TLC | holds | holds at 1 task; **no verdict at 2 in 30 min** | holds at 1 task | 28s / 6s / 4s |
-| Alloy 6 | holds in scope | holds in scope | holds in scope | **94s for the file** |
+| Alloy 6 | holds in scope | holds in scope | holds in scope | **~73s for the file** |
 | Quint | statable, **no backend** | statable, no backend | statable, no backend | Apalache: `Handling fairness is not supported yet!` |
 | Quint `--backend tlc` | holds, 96 000 states | TLC's problem | TLC's problem | 35s |
-| fast-check | holds (bounded) | **holds vacuously** | **holds vacuously** | 0.9s |
+| fast-check | holds (bounded) | **holds vacuously** | **holds vacuously** | ~3s each |
 | Dafny | **not expressible** | not expressible | not expressible | — |
 | Lean / Agda | statable, not attempted | statable, not attempted | statable, not attempted | a second development |
 
@@ -223,6 +224,24 @@ through rather than as console text. Strong-over-weak fairness has its own
 independent justification: `StartIntegration` is repeatedly enabled and disabled
 under an exclusive target, and WF permits starving one task forever.
 
+### The vacuity that nearly got away
+
+I17 was stated as `[]paused => <>(positions = {})` in TLA+, Alloy and Quint, and
+reported clean in all three. `Init` sets `paused = FALSE`, so **no behaviour
+satisfies `[]paused`** and the property was vacuously true everywhere — a clean
+verdict over an empty set of behaviours, including the 29-second TLC run and the
+96 000-state Quint cross-check.
+
+The fix is `<>[]paused => <>[](positions = {})`, plus a witness that the
+hypothesis is satisfiable at all: TLC refutes `[]<>(~paused)`, and Alloy's
+`run pauseIsSustainable` is SAT.
+
+Worth dwelling on, because this study has a rule about exactly this — every
+clean result paired with a witness that the interesting state is reachable — and
+the rule was applied to the *conclusions* of these properties and not to their
+*hypotheses*. An implication is vacuous from either end. Nothing in any of the
+three tools said a word.
+
 ### Where bounded checking gives out: arrival
 
 I19 reads "**with no new tracker facts** the run reaches quiescence". Every
@@ -257,7 +276,7 @@ mutant caught, and Alloy's L2 file took 361s. For liveness:
 | | safety | liveness |
 |---|---|---|
 | TLC | 3s | 28s for I17; no verdict for I18 at 2 tasks in 30 min |
-| Alloy | 361s | 94s for all three |
+| Alloy | 361s | ~73s for all three |
 
 Same model, same machine. The explanation is that they are answering different
 questions. TLC checks every behaviour of the finite state graph against a
@@ -309,23 +328,26 @@ capability gap in the bake-off rather than a cost difference — and it lands on
 the tool with otherwise the most complete L2 encoding.
 
 **fast-check passes, and the witnesses say it means nothing.** All three
-bounded surrogates hold in 0.9 seconds:
+bounded surrogates hold in about 3 seconds each. At the default budget of
+20 000 runs and a 25-step prefix, over 40 000 task slots:
 
-```
-| Witness at end of prefix | share of runs |
-| Executing                | 0.58% |
-| Integrating              | 0.02% |
-| staleIntegrating         | 0.00% |
-| Settled                  | 0.00% |
-```
+| Witness at end of prefix | count | share |
+|---|---|---|
+| Executing | 88 | 0.22% |
+| Integrating | 4 | 0.01% |
+| staleIntegrating | **0** | 0.00% |
+| Settled | 1 | 0.00% |
 
-Over 40 000 prefixes the model reached a *stale* `Integrating` zero times, so
-I18 and I19 pass without ever visiting the state they exist to constrain. The
-`--no-abandon` negative control removes the escape hatch and the properties
-**still pass** — a control that does not fire. Raising the prefix to 150 steps
-brings `Integrating` to 2.23% and `staleIntegrating` to 0.00% still. Switching
-to fast-check's own `fc.commands` idiom, choosing among *enabled* actions rather
-than discarding disabled ones, helps the shallow phases and not this one.
+A *stale* `Integrating` is never reached, so I18 and I19 pass without once
+visiting the state they exist to constrain, and the `--no-abandon` negative
+control — which removes the escape hatch that state needs — **still passes**.
+A control that does not fire.
+
+Raising the prefix to 150 steps fixes the shallow phases and not this one:
+`Integrating` reaches 357 and `Settled` 1 243, while `staleIntegrating` stays
+at 0. Switching to fast-check's own `fc.commands` idiom, choosing among
+*enabled* actions rather than discarding disabled ones, has the same shape of
+effect.
 
 Same lesson as M6, stated more starkly: deep protocol states are not reachable
 by random walk, and a passing property-based test carries no information about
@@ -335,13 +357,13 @@ them.
 
 | Tool | Setup | Encoding | Level covered |
 |---|---|---|---|
-| fast-check | none, already a dependency | 250 lines model + 100 lines harness | L1 + L2 |
-| Quint + Apalache | `brew install quint`, Apalache auto-fetched | 440 lines | L1 + L2 |
-| TLA+ / TLC | one 2 MB jar, no install | 300 lines | L1 + L2 |
-| Alloy 6 | one 21 MB jar, no install | 95 lines L1 + 280 lines L2 | L1 structural I11/I12, and L2 temporal |
-| Dafny | 100 MB release zip | 150 lines L1 + 330 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
+| fast-check | none, already a dependency | 221 lines model + 100 lines harness | L1 + L2 |
+| Quint + Apalache | `brew install quint`, Apalache auto-fetched | 556 lines | L1 + L2 |
+| TLA+ / TLC | one 2 MB jar, no install | 313 lines | L1 + L2 |
+| Alloy 6 | one 21 MB jar, no install | 197 lines L1 + 318 lines L2 | L1 structural I11/I12, and L2 temporal |
+| Dafny | 100 MB release zip | 158 lines L1 + 370 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
-| Agda | `brew install agda`, no stdlib needed | 145 lines L1 + 506 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
+| Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
 
 Agda and Lean hold I3 the same way, and it is the reason both are here. I3
 costs *zero* proof: `excluded` takes a head reason and a tail, so a reason-free

@@ -65,11 +65,11 @@ pred quiescent {
  * Strong rather than weak, for the reason ../tlaplus/DeliveryLiveness.tla
  * gives: weak fairness starves startIntegration under an exclusive target.
  *
- * Per action rather than on the disjunction is the weaker justification. It
- * removes the suspend/resume lasso, but by assuming reportAccepted eventually
- * wins against an interrupting operator rather than by saying so -- see
- * `interruptionForeverBreaksI18` at the bottom. `eventuallyUninterrupted` is
- * what actually earns I18.
+ * Per action rather than on the disjunction removes the suspend/resume lasso,
+ * and that is faithful rather than convenient: docs/CONTEXT.md defines safe
+ * suspension as preserving what is needed to resume, so the cycle progresses
+ * and the lasso is an artifact of work being atomic here. I18 carries no
+ * operator hypothesis -- see `interruptionForeverBreaksI18` at the bottom.
  *
  * requestSuspension is deliberately absent: being asked to suspend is an
  * operator decision, not an obligation.
@@ -116,10 +116,25 @@ pred eventuallyUninterrupted {
 
 /* ------------------------------------------------------------------- I17-I19 */
 
-// I17. A pause that stays applied drains every held position.
+/*
+ * I17. A pause that stays applied drains every held position and keeps them
+ * empty, since beginWork and resumeWork are disabled by their own guards.
+ *
+ * `eventually always`, NOT `always`. `init` says `no Paused` and `liveTrace`
+ * conjoins `init`, so `always (Sys in Paused)` holds of no trace at all and
+ * that form makes the check vacuously UNSAT. `pauseIsSustainable` below is
+ * the witness that the hypothesis is satisfiable.
+ */
 check pauseDrainsPositions {
-  (liveTrace and always (Sys in Paused) and eventuallyStable)
-    implies eventually (no Holds)
+  (liveTrace and eventually always (Sys in Paused) and eventuallyStable)
+    implies eventually always (no Holds)
+} for 2 Task, 5 Int, 1..12 steps
+
+// Must be SAT: a position is held, then a pause is applied and never lifted.
+run pauseIsSustainable {
+  liveTrace and eventuallyStable
+  eventually always (Sys in Paused)
+  eventually (some Holds)
 } for 2 Task, 5 Int, 1..12 steps
 
 // I18. Both disjuncts of "settles or is retained with a stated reason".

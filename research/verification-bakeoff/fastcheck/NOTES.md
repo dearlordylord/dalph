@@ -66,29 +66,32 @@ matter — that cycle is a modelling artifact rather than a real behaviour — b
 the harness could not have told you either way. Baking a scheduling assumption
 into a test is exactly how it stops being visible.
 
-All three properties pass in **0.9 seconds**, against 28s for one TLC property
-and 94s for the whole Alloy file.
+All three properties pass in about **3 seconds each**, against 28s for one TLC
+property and ~73s for the whole Alloy file.
 
 ### And they pass vacuously
 
-```
-| Witness at end of prefix | share of runs |
-| Executing                | 0.58% |
-| Integrating              | 0.02% |
-| staleIntegrating         | 0.00% |
-| Settled                  | 0.00% |
-```
+At the default budget — 20 000 runs, 25-step prefix, so 40 000 task slots:
 
-Zero. Over 40 000 prefixes the model reached `Integrating` once and a *stale*
-`Integrating` never — so I18 and I19 pass without once visiting the state they
-exist to constrain. `--no-abandon` removes the escape hatch that stale state
-needs, and the properties still pass: **a negative control that does not fire.**
+| Witness at end of prefix | count | share |
+|---|---|---|
+| Executing | 88 | 0.22% |
+| Integrating | 4 | 0.01% |
+| staleIntegrating | **0** | 0.00% |
+| Settled | 1 | 0.00% |
 
-Raising the prefix to 150 steps moves `Integrating` to 2.23% and
-`staleIntegrating` to 0.00% still. Choosing among *enabled* actions rather than
-discarding disabled ones — fast-check's own `fc.commands` idiom, and a real
-improvement over the encoding in `run.mjs` — helps the shallow phases and does
-not help this one.
+A *stale* `Integrating` is never reached, so I18 and I19 pass without once
+visiting the state they exist to constrain. `--no-abandon` removes the escape
+hatch that stale state needs, and the properties still pass: **a negative
+control that does not fire.**
+
+Raising the prefix to 150 steps fixes the shallow phases and not this one —
+`Integrating` 357, `Settled` 1 243, `staleIntegrating` still 0. Choosing among
+*enabled* actions rather than discarding disabled ones (fast-check's own
+`fc.commands` idiom, and a real improvement over `run.mjs`) has the same shape
+of effect.
+
+The exact counts move with the seed; the zero does not.
 
 This is the same lesson as M6 (caught 4 times in 10 at 50 000 samples), stated
 more starkly: the deep states of a protocol are not reachable by random walk,

@@ -173,6 +173,11 @@ theorem every_begun_settles (r : Nat → St) (h : IsRun r) (hf : Fair r) :
       ∃ m ≥ n, ((r m).ticket t).phase = settled ∨ ((r m).ticket t).phase = abandoned
 ```
 
+`abandoned` does not exist in `L2.lean`. Per `../MODEL.md`, the phase was added
+to the five executable encodings and not to the two proof developments, so the
+sketch above assumes it would be added first — 17 more proof cases, changing no
+safety result.
+
 The proof is a ranking function on phases — `Executing` 4, `Accepted` 3,
 `Integrating` 2, `Promoted` 1, terminal 0 — plus the argument that fairness
 forces the rank down and no action raises it. That is a well-founded recursion

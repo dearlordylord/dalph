@@ -12,6 +12,9 @@ INV=allInvariants
 STEPS=25
 SAMPLES=50000
 VERIFY_STEPS=12
+# Witness counts are the vacuity check: an [ok] over traces that never reached a
+# deep phase has proved nothing. `./run.sh --witnesses` prints the percentages.
+WITNESSES="executingReached suspendedReached integratingReached settledReached crashReached"
 
 verdict() { grep -qE '^\[violation\]' <<<"$1" && echo caught || { grep -qE '^\[ok\]' <<<"$1" && echo missed || echo error; }; }
 
@@ -22,7 +25,10 @@ for main in delivery deliveryM1 deliveryM2 deliveryM4 deliveryM5 deliveryM6; do
   label=${main#delivery}; label=${label:-M0}
 
   start=$SECONDS
+  WITNESS_ARGS=()
+  [[ ${1:-} == --witnesses ]] && WITNESS_ARGS=(--witnesses $WITNESSES)
   out=$(quint run "$SPEC" --main "$main" --invariant "$INV" \
+        "${WITNESS_ARGS[@]}" \
         --max-steps "$STEPS" --max-samples "$SAMPLES" --verbosity 1 2>&1)
   sim=$(verdict "$out"); simSec=$((SECONDS - start))
 
@@ -36,4 +42,7 @@ for main in delivery deliveryM1 deliveryM2 deliveryM4 deliveryM5 deliveryM6; do
 
   [[ $label == M0 ]] && { sim=${sim/missed/clean}; ver=${ver/missed/clean}; }
   echo "| $label | $sim | $simSec | $ver | $verSec |"
+  if [[ ${1:-} == --witnesses && $label == M0 ]]; then
+    grep -E 'was witnessed in' <<<"$out" | sed 's/^/    /'
+  fi
 done

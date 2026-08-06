@@ -16,6 +16,13 @@ reports `M0` violated has an encoding error, not a finding.
 | M5 | recovery treats process loss as a reason to plan a second attempt | I10, I16 | L2 |
 | M6 | promotion drops the compare-and-set guard against the exact expected head | I13 | L2 |
 
+M3 and M7 are deliberately unallocated. M3 exists only in `alloy/Delivery.als`,
+where the candidate-parent order is a relation rather than a boolean and a
+mutant can therefore be a *shape*: `parentsOrderedUnderMutant` asks Alloy to
+construct a candidate whose first parent is not the expected head. It has no
+counterpart in the tools where I12 is a flag, so it is not in the table above
+and never appears in a mutant column.
+
 ## M8 — the vacuity mutant
 
 M8 seeds no code defect. It replaces invariant I8 with the state predicate

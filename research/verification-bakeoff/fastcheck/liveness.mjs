@@ -98,7 +98,8 @@ const ALL = [
     "changeCapacity",
     "externalTargetAdvance",
   "crash",
-  "recover"
+  "recover",
+  "abandonIntegration"
 ]
 
 const stepArb = fc.record({
@@ -122,8 +123,9 @@ const prefixArb = fc.array(stepArb, { minLength: 1, maxLength: maxSteps, size: "
  * no-ops: over 40 000 prefixes it reached `Integrating` once and a STALE
  * `Integrating` never, so every property below passed without visiting the
  * state they are about. Choosing among enabled actions is fast-check's own
- * idiom for this (`fc.commands` with a `check` guard) and it is what makes the
- * `--no-abandon` negative control fire.
+ * idiom for this (`fc.commands` with a `check` guard). It helps the shallow
+ * phases and does not rescue the deep ones: the `--no-abandon` negative
+ * control still fails to fire, which is the finding rather than a defect.
  */
 const runPrefix = (steps) => {
   let state = initialState()
@@ -140,10 +142,10 @@ const runPrefix = (steps) => {
 }
 
 /** I19, bounded: the scheduler runs out of enabled actions before the budget. */
-const reachesQuiescence = (allowAbandon) =>
+const reachesQuiescence =
   fc.property(prefixArb, (steps) => {
     const state = runPrefix(steps)
-    const result = drain(state, allowAbandon)
+    const result = drain(state)
     if (!result.quiescent) {
       const stuck = TASKS.map((id) => `${id}:${result.state.tickets[id].phase}`).join(" ")
       throw new Error(`no quiescence in ${drainBudget} steps (${stuck})`)
@@ -205,7 +207,7 @@ console.log("|---|---|---|")
 
 verdict("I17 pauseDrainsPositions", pauseDrainsPositions)
 verdict("I18 everyBegunSettles", everyBegunSettles)
-verdict("I19 reachesQuiescence", reachesQuiescence(true))
+verdict("I19 reachesQuiescence", reachesQuiescence)
 
 /*
  * Witness rates, in the same spirit as Quint's witness counts: a green table
@@ -233,8 +235,9 @@ fc.assert(
 )
 
 console.log("")
-console.log("| Witness at end of prefix | share of runs |")
+// Counted per task, so the denominator is runs x tasks, not runs.
+console.log("| Witness at end of prefix | share of task slots |")
 console.log("|---|---|")
 for (const [name, count] of Object.entries(witnesses)) {
-  console.log(`| ${name} | ${((100 * count) / sampled).toFixed(2)}% |`)
+  console.log(`| ${name} | ${((100 * count) / (sampled * TASKS.length)).toFixed(2)}% |`)
 }

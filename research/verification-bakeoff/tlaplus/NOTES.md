@@ -31,7 +31,7 @@ lose the name of the actual failure for free.
 ## Character
 
 Exhaustive breadth-first enumeration, and at this size it is simply the best
-tool in the lineup: 81 792 distinct states in 2 seconds, all five defects
+tool in the lineup: 96 000 distinct states in 2 seconds, all five defects
 caught, plus the M8 specification error that random search missed.
 
 Counterexamples are full behaviours — every state from `Init` to the violation,

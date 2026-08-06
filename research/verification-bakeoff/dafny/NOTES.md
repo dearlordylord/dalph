@@ -140,8 +140,10 @@ is still 1.
 
 I17–I19 are not expressible in Dafny. There are no temporal operators, so
 there is no way to write `eventually`, no `~>`, and no fairness vocabulary.
-Every other tool in the bake-off states all three properties; this is the only
-place where the answer is a capability gap rather than a cost.
+TLA+, Alloy and Quint state all three; Lean and Agda can state them and did
+not; fast-check states a bounded surrogate that is not the same proposition.
+Dafny is the only place where the answer is a capability gap rather than a
+cost or a choice.
 
 The nearest available thing is a termination measure — `decreases` on a loop or
 a recursive method — which proves that *one call* finishes. It says nothing
