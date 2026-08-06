@@ -1,7 +1,11 @@
 # The journal event alphabet
 
-The alphabet I15 folds over, at the abstraction of `MODEL.md`. Nothing here is
-built yet; this is the design the L1 journal work starts from.
+The alphabet I15 folds over, at the abstraction of `MODEL.md`. Propositions
+1–4 below are built in fast-check: `fastcheck/journal.mjs` (alphabet and
+fold), `fastcheck/journal-run.mjs` (properties, witnesses, negative
+controls), with the interpretation decisions recorded in
+`fastcheck/NOTES.md`. The Lean, Agda and Dafny developments remain unbuilt;
+this is still the design they start from.
 
 ## Three constraints from the domain
 
