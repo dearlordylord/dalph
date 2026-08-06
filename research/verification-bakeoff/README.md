@@ -27,6 +27,7 @@ quint/run.sh                          # random simulation, seconds
 quint/run.sh --verify                 # Apalache symbolic checking, minutes
 quint/run.sh --witnesses              # sampling coverage: the vacuity check
 quint/run.sh --m8                     # the seeded specification error
+quint/run.sh --inductive              # is the invariant inductive? ~151s
 tlaplus/run.sh                        # TLC exhaustive checking, seconds
 tlaplus/run.sh --witness              # the vacuity check
 tlaplus/run.sh --m8                   # the seeded specification error

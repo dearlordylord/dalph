@@ -146,6 +146,89 @@ module deliveryCore {
     processLocalLostOnCrash,
   }
 
+  // -------------------------------------------------------- inductive invariant
+  //
+  // `quint verify --inductive-invariant I` discharges three obligations rather
+  // than exploring a state space:
+  //
+  //   init => I        I and step => I'        I => Inv
+  //
+  // The middle one is the question ../alloy/DeliveryL2.als exists to answer, and
+  // the same question Lean and Agda force by construction: nothing here mentions
+  // reachability, so the check is unbounded in TIME. It is not unbounded in
+  // DATA, which is why `stateBounds` below has to exist.
+  //
+  // Apalache starts the check from I rather than from `init`, so I must assign
+  // every variable a domain -- without `stateBounds` the run dies at
+  // `tickets is used before it is assigned`. That requirement is not
+  // bureaucratic: the finite domains become part of the invariant and have to be
+  // proved closed under `step`, which is what `headAdvancesWithPromotions` is
+  // for. Alloy's `for 2 Task, 5 Int` states the same bound and never asks you to
+  // prove the transition respects it.
+
+  pure val PHASES: Set[Phase] = Set(NoObligation, Claimed, Planned, Executing,
+    SuspensionRequested, Suspended, Accepted, Integrating, Promoted, Settled,
+    Abandoned)
+  pure val BOOLS: Set[bool] = Set(false, true)
+  /// 2 external advances plus at most one promotion per task.
+  pure val HEADS: Set[int] = 0.to(4)
+  pure val TICKET_VALUES: Set[Ticket] =
+    tuples(PHASES, 0.to(2), BOOLS, BOOLS, HEADS).map(((p, a, pr, o, e)) =>
+      { phase: p, attempts: a, present: pr, open: o, expectedHead: e })
+
+  /// The TypeOK of this model: every variable ranges over a finite domain.
+  /// `attempts` reaches 2 so that the counterexample to induction is expressible
+  /// rather than excluded by the bound.
+  val stateBounds: bool = and {
+    tickets.in(setOfMaps(TASKS, TICKET_VALUES)),
+    capacity.in(0.to(MAX_CAPACITY)),
+    positions.in(TASKS.powerset()),
+    paused.in(BOOLS),
+    targetResource.in(TASKS.powerset()),
+    targetHead.in(HEADS),
+    crashed.in(BOOLS),
+    admissionRespectedCeiling.in(BOOLS),
+    promotedFromExactHead.in(BOOLS),
+  }
+
+  /// NOT inductive, and the point of the exercise. `oneAttemptPerTask` is the
+  /// invariant every engine here discharges without comment; as an induction
+  /// hypothesis it fails on one step, because a state with `phase = Claimed` and
+  /// `attempts = 1` satisfies it and `planAttempt` takes that state to
+  /// `attempts = 2`. The state is unreachable, which is exactly what a
+  /// strengthening is for.
+  val inductiveCandidate: bool = stateBounds and allInvariants
+
+  /// The strengthening. Identical to `phaseBoundsAttempts` in
+  /// ../alloy/DeliveryL2.als, ../lean/L2.lean and ../agda/L2.agda -- three tools
+  /// arrived at the same missing clause by three different routes.
+  val phaseBoundsAttempts: bool =
+    TASKS.forall(id =>
+      (tickets.get(id).phase != NoObligation and tickets.get(id).phase != Claimed)
+        or tickets.get(id).attempts == 0)
+
+  /// The bound obligation, not a domain invariant. `promote` increments
+  /// `targetHead` with no ceiling of its own, so `targetHead.in(HEADS)` is not
+  /// preserved unless the advance is tied to something exhaustible: two
+  /// `externalTargetAdvance` steps plus one promotion per task.
+  val headAdvancesWithPromotions: bool =
+    targetHead <= 2 + TASKS.filter(id =>
+      tickets.get(id).phase == Promoted or tickets.get(id).phase == Settled).size()
+
+  val inductiveInvariant: bool = and {
+    stateBounds,
+    allInvariants,
+    phaseBoundsAttempts,
+    headAdvancesWithPromotions,
+  }
+
+  /// Negative control: drops the bound obligation only. The counterexample is
+  /// `targetHead = 4` and a `promote`, which is a fact about `HEADS` and not
+  /// about the protocol -- the shape of failure Apalache adds and Alloy hides.
+  val inductiveWithoutHeadBound: bool = and {
+    stateBounds, allInvariants, phaseBoundsAttempts,
+  }
+
   // ----------------------------------------------------------------- witnesses
 
   val executingReached: bool = TASKS.exists(id => tickets.get(id).phase == Executing)

@@ -44,6 +44,74 @@ it, a clean bill of health is not.
 On a model this small, TLC's explicit enumeration beats both: 10/10 on M6 in
 under a second, and the whole faithful state space in 3.
 
+## Induction
+
+`quint verify --inductive-invariant I` asks a different question from everything
+else in this directory. No state space, no step bound: three obligations,
+`init => I`, `I and step => I'`, and `I => Inv`. `./run.sh --inductive` runs it.
+
+| Invariant | Model | Result | s |
+|---|---|---|---|
+| `inductiveCandidate` | M0 | CTI found | 15 |
+| `inductiveWithoutHeadBound` | M0 | CTI found | 21 |
+| `inductiveInvariant` | M0 | **inductive** | 27 |
+| `inductiveInvariant` | M1 | CTI found | 13 |
+| `inductiveInvariant` | M2 | CTI found | 13 |
+| `inductiveInvariant` | M4 | CTI found | 16 |
+| `inductiveInvariant` | M5 | CTI found | 25 |
+| `inductiveInvariant` | M6 | CTI found | 21 |
+
+Row 1 is the result. `allInvariants` — the conjunction Apalache and TLC both
+discharge without comment — is **not inductive**, and the counterexample is the
+one `../alloy/DeliveryL2.als` returns:
+
+```
+[State 0]  tickets[0] = { phase: Claimed, attempts: 1, ... }
+[State 1]  tickets[0] = { phase: Planned, attempts: 2, ... }
+```
+
+`oneAttemptPerTask` holds in state 0 and `planAttempt` breaks it. The state is
+unreachable from `init`, which is precisely why the strengthening
+`phaseBoundsAttempts` is needed — and it is the same clause `../lean/L2.lean`
+and `../agda/L2.agda` carry, arrived at by a third route.
+
+### The obligation Alloy does not make you discharge
+
+Apalache starts the induction check *from the invariant*, so the invariant has
+to assign every variable a domain. Without `stateBounds` the run dies at
+
+```
+error: tickets is used before it is assigned.
+```
+
+That is not a formality. The finite domains become conjuncts, so `step` has to
+be proved to respect them, and row 2 is what that costs: drop
+`headAdvancesWithPromotions` and the counterexample is `targetHead = 4`
+followed by a `promote` — a fact about the declared range of `HEADS`, not about
+the protocol. Closing it needs a real argument (the head advances at most twice
+externally plus once per task, and promotions are exhaustible).
+
+Alloy declares the same bound as `for 2 Task, 5 Int` and never asks. The
+scope sits outside the formula, so an instance that would leave it is simply not
+searched. Apalache's version is the more honest of the two and the more work.
+
+### Where it sits between the tools
+
+Same three-way split as `../alloy/NOTES.md` describes, with Quint now on both
+sides of it: `quint verify` (bounded, reachable, no induction) and `quint verify
+--inductive-invariant` (unbounded in time, no reachability) are the same file
+and the same invariant, one flag apart. That is the cheapest demonstration in
+the bake-off that the two questions are different — and Quint is the only tool
+here that answers both from one source.
+
+Cost: 27 seconds against Alloy's 49 milliseconds for the same CTI. Alloy is
+answering over 2 tasks and 5-bit integers; Apalache is answering for every state
+in `stateBounds`, which is why it needs the bound argument Alloy skips.
+
+The mutant rows are a bonus rather than the point. All five are caught, and M6
+— the one random simulation finds only 4 times in 10 — is caught in 21 seconds
+with no sampling involved.
+
 ## Liveness
 
 Quint states I17–I19 more directly than any other tool here. `always`,

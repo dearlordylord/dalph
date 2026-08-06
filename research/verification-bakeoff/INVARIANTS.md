@@ -156,6 +156,13 @@ also carries two variables that look like the TLA+ and Quint history flags and
 do none of their work. The failure mode is *decoration*, not absence, which is
 why nothing reports it.
 
+Every **checked** cell in the Quint column is discharged twice over, and the
+second way is stronger: `quint/run.sh --inductive` proves the same conjunction
+is preserved by every step from every state satisfying its bounds, with no step
+limit. That removes the step bound, not the data bound — `stateBounds` still
+fixes two tasks and finite ranges, and the ranges then have to be proved closed
+under the step relation, which is a conjunct the reachability runs never needed.
+
 ### What the columns of `not modelled` mean
 
 **I9 and I15 are in no encoding at all.** No model here carries a `RunId`, an

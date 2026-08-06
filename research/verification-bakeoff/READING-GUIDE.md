@@ -148,8 +148,7 @@ attA s t _ (subst (\ n -> suc n <= 1) (sym (phaseAttempts i t (inr e))) (s<=s z<
 
 The tactic is shorter. It is not doing anything the `subst` is not.
 
-**Alloy** can be asked the induction question directly, which neither of the
-others can:
+**Alloy** can be asked the induction question directly:
 ```alloy
 check attemptsAloneIsInductive {
   (attemptsBounded and step) => after attemptsBounded
@@ -161,6 +160,19 @@ The SAT result hands back the missing case in 49 ms: `phase = Claimed`,
 `attempts = 1`, one `planAttempt`, `attempts = 2`. Unreachable from `init`, and
 that is the point — a strengthening excludes states the transition relation
 permits but the reachable set never contains.
+
+**Quint** asks it of the same file the model checker reads, one flag apart:
+```sh
+quint verify deliveryCore.qnt --inductive-invariant inductiveCandidate
+#   -> CTI: tickets[0] = { phase: Claimed, attempts: 1 } then attempts: 2
+quint verify deliveryCore.qnt --inductive-invariant inductiveInvariant \
+                             --invariant allInvariants        # -> [ok]
+```
+Same counterexample as Alloy, 15 seconds instead of 49 ms, and one extra
+obligation: Apalache starts the check *from* the invariant, so
+`inductiveInvariant` must bound every variable and prove `step` respects the
+bounds. Alloy's `for 2 Task, 5 Int` states that bound outside the formula and
+never asks.
 
 **Dafny** puts the same inductive invariant in a class invariant, and each
 method's `ensures Valid()` is one case of the induction:
@@ -174,9 +186,10 @@ ghost predicate Valid() reads this {
 Drop the second clause and `PlanAttempt` stops verifying. Same obstruction,
 reported as a method failing to re-establish its own invariant.
 
-**The lesson to take from reading these five side by side:** a model checker
+**The lesson to take from reading these six side by side:** a model checker
 *discovers* the reachable set; a proof assistant makes you *characterize* it;
-Alloy will tell you mechanically which characterization you are missing.
+Alloy and Apalache will tell you mechanically which characterization you are
+missing.
 The 500-line proofs and the tactic fluency are mechanical next to that one
 requirement. This is what the literature means by the human residue that
 automation has not removed.

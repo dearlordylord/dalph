@@ -1,6 +1,6 @@
 # Scoreboard
 
-Measured on darwin/arm64, Quint 0.31.0, Apalache 0.56.1, TLC from tla2tools
+Measured on darwin/arm64, Quint 0.32.0, Apalache 0.56.1, TLC from tla2tools
 (2026-08 release), Agda 2.8.0, fast-check 4.9.0, Node 22.
 
 Reproduce with the `run.sh` / `run.mjs` in each tool directory. One caveat:
@@ -58,6 +58,16 @@ verdict — a refutation is cheap for it, a clean bill of health is not. Bounded
 symbolic checking pays off when the state space is wide, not when it is small
 and finite, which is the opposite of the intuition that "SMT is the serious
 engine."
+
+**Asked the right question, the same engine answers in 27 seconds.** Apalache
+cannot clear the faithful model by bounded reachability in 45 minutes;
+`quint/run.sh --inductive` proves `inductiveInvariant` is preserved by every
+step in 27, with no step bound and no state space. The difference is the
+question, not the solver: reachability makes it unroll 12 transitions,
+induction makes it discharge one. The price is that the invariant has to be
+strong enough to be inductive and has to bound its own variables — `allInvariants`
+as handed to TLC is neither, and the counterexample to induction says so in 15
+seconds. See `quint/NOTES.md`.
 
 **The tool that catches a mutant fastest is not the tool that taught the most.**
 M6 was originally undetectable by every engine, because the first model had no
@@ -130,29 +140,40 @@ with `phaseBoundsAttempts`. TLC was handed the same invariant and never asked.
 characterize it.** The 500 lines and the tactic fluency are mechanical next to
 that.
 
-**Four tools, four positions on one axis.** This is the single most useful
-thing the bake-off produced:
+**One axis, and every tool has a position on it.** This is the single most
+useful thing the bake-off produced:
 
 | Tool | What you supply | What it does |
 |---|---|---|
 | TLC | an invariant | discovers the reachable set |
 | Alloy | an invariant | tells you whether it is inductive |
+| Apalache, `--inductive-invariant` | an invariant **and its state bounds** | tells you whether it is inductive |
 | Lean / Agda | an **inductive** invariant | you prove every case by hand |
 | Dafny | an **inductive** invariant | SMT proves every case |
 
 The same obstruction — `attemptsBounded` is not inductive — shows up as a stuck
-`planAttempt` goal in Lean and Agda, a SAT counterexample in Alloy, and a
-method that cannot re-establish its own class invariant in Dafny. TLC never
-mentions it.
+`planAttempt` goal in Lean and Agda, a SAT counterexample in Alloy, a
+counterexample to induction in Apalache, and a method that cannot re-establish
+its own class invariant in Dafny. TLC never mentions it.
 
-**Alloy sits between the two, and that is the practical takeaway.** It is the
-only tool here that answers *"is my invariant inductive?"* directly.
-`attemptsAloneIsInductive` returns SAT in 49 ms with a two-state counterexample:
-`phase = Claimed`, `attempts = 1`, one `planAttempt`, `attempts = 2`. That state
-is unreachable from `init`, which is exactly what a strengthening is for — it
-excludes a state the transition relation permits but the reachable set never
-contains. TLC never mentions induction; Lean and Agda give you a stuck goal.
-If a proof is the destination, run the Alloy inductiveness check first.
+**The middle rows are the practical takeaway.** Alloy's
+`attemptsAloneIsInductive` returns SAT in 49 ms with a two-state
+counterexample: `phase = Claimed`, `attempts = 1`, one `planAttempt`,
+`attempts = 2`. That state is unreachable from `init`, which is exactly what a
+strengthening is for — it excludes a state the transition relation permits but
+the reachable set never contains. `./quint/run.sh --inductive` returns the same
+two states in 15 seconds, from the same `allInvariants` that `quint verify` and
+TLC both discharge without comment — one CLI flag apart, same source file.
+
+The 600× is not the interesting difference. Apalache runs the check *from* the
+invariant, so the invariant must bound every variable, and those bounds then
+have to be proved closed under `step`: dropping
+`headAdvancesWithPromotions` yields a counterexample about the declared range of
+`targetHead` rather than about the protocol. Alloy's `for 2 Task, 5 Int` states
+the same bound outside the formula and never asks anyone to discharge it. Alloy
+is the cheapest way to ask the question; Apalache asks a stricter version of it.
+
+If a proof is the destination, run an inductiveness check first.
 
 Two invariants appear in exactly one column. I11 (claim exclusivity with an
 exact token) and I12 (two ordered candidate parents) are **absent from every

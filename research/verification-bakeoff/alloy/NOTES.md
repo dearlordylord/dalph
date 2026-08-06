@@ -119,8 +119,12 @@ slowest tool here, and the reason is scope: 14 steps of a
 
 ### The result that justifies the file
 
-Alloy is the only tool in the bake-off that can be asked **"is my invariant
-inductive?"** directly.
+Alloy answers **"is my invariant inductive?"** directly. So does Apalache, via
+`quint verify --inductive-invariant` — see `../quint/NOTES.md`, which reaches
+the same counterexample from the same starting invariant. Alloy is 600× faster
+at it and asks for less; the difference is that Apalache also makes you prove
+the state bounds are closed under the step relation, where Alloy's `for 2 Task,
+5 Int` puts that bound outside the formula.
 
 | Command | Result | Meaning |
 |---|---|---|
@@ -142,17 +146,17 @@ unreachable counterexample to induction is precisely what a strengthening is
 for: it rules out a state the transition relation alone permits but the
 reachable set never contains.
 
-So the three tool families line up on one axis:
+So the tool families line up on one axis:
 
 - **TLC** enumerates the reachable set and never mentions induction.
 - **Lean and Agda** demand an inductive invariant and give you nothing but a
   stuck goal when yours is not.
-- **Alloy** sits between: it answers the induction question as a search, and
-  hands back the missing case as a structure.
+- **Alloy and Apalache** sit between: they answer the induction question as a
+  search, and hand back the missing case as a structure.
 
-If the plan is to write a proof, running the Alloy inductiveness check first is
+If the plan is to write a proof, running an inductiveness check first is
 strictly cheaper than discovering the same thing from a failed `planAttempt`
-case.
+case. Alloy is the fastest way to ask.
 
 ### Encoding notes
 
