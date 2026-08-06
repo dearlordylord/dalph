@@ -1,34 +1,3 @@
-# Dalph agent instructions
-
-## Project memory
-
-- Codex's built-in Memories are disabled for this project. The checked-in
-  OptMem store is advisory project memory.
-- After a fresh clone, run `git submodule update --init tools/optmem` before
-  using project memory or starting Codex.
-- The `SessionStart` hook performs the same read as `pnpm memory:wake`. If the
-  hook was not trusted or did not run, execute that command before relying on
-  prior project context.
-- Multiple independent root Codex sessions may publish concurrently when they
-  share `master`'s primary worktree; OptMem's local file lock serializes their
-  record positions. Before adding a note, reread or recall related memory to
-  avoid semantic duplicates. Treat memory changes from other sessions as
-  shared worktree changes: never discard them, and review them before commit.
-- Subagents and agents in separate task worktrees must put proposed memories in
-  their handoff. The wrapper enforces the Git location; the root-agent
-  restriction is an instruction because a process cannot identify its caller.
-- Record only durable project decisions, verified repository facts, and
-  reusable lessons with `pnpm memory -- note "<one line>"`. Never record
-  credentials, secrets, personal facts, private incident details, speculative
-  conclusions, or facts owned by GitHub, Git, an executor, or Dalph's journal.
-- If OptMem requests a compression after `note` or `wake`, complete the shown
-  `nap` command before continuing. If another session settled it first, reread
-  memory and continue with the next pending compression. Treat checked-in
-  documentation, accepted scenarios, and tracker records as authoritative
-  when they disagree with memory.
-- Read `.codex/PROJECT-MEMORY.md` before changing the memory tooling or update
-  protocol.
-
 ## Package manager and branch
 
 - Use pnpm, never npm.
@@ -58,10 +27,7 @@
 
 - Read `docs/CONTEXT.md` and `docs/ARCHITECTURE.md` before changing domain or
   architecture language.
-- Dalph is a clean graph-native orchestrator, not a rewrite or compatibility
-  layer for the historical `ralph-run.sh` experiment.
-- Use Effect V4 services, layers, Schema boundaries, schedules, streams, scoped
-  concurrency, and typed failures for the production control plane.
+- Use Effect V4 features at its fullest. Be idiomatic.
 - The tracker owns task identity, lifecycle, dependencies, grouping, and
   claims. Git owns lineage, refs, commits, worktrees, and integration facts.
   The execution substrate owns session and process observations. Dalph's
@@ -78,16 +44,11 @@
 ## Delivery invariants
 
 - One exact worktree and planned Base SHA per task attempt.
-- Bounded concurrent task execution; integration resources remain distinct and
-  serialized according to the accepted target protocol.
-- The production-shaped fake-provider milestone treats executor work as one
-  coarse planned-attempt responsibility. Detailed reviewer, handback, retry,
-  restoration, and convergence policy is post-milestone design; current
-  experimental behavior is not a delivery invariant.
+- Bounded concurrent task execution
 - Intent before ambiguity-crossing effects, observation afterward, and
   reconcile-before-retry after ambiguous outcomes.
 - Cleanup is disposition-typed, exact, recoverable, and fail-closed.
-- Dry-run, live-fake, test, and production interpret one workflow algebra.
+- Dry-run, test, and production interpret one workflow algebra.
 
 ## Verification and review
 
@@ -96,7 +57,7 @@
   three times” over “bounded acquisition,” “check GitHub again” over
   “perform an authoritative reread,” and “repository label used as the task
   claim record” over “label-backed lock.” Introduce the canonical term after
-  the concrete behavior is clear.
+  the concrete behavior is clear or not at all
 - Use focused package tests while developing. Do not inherit target
   repositories' application-specific typecheck, model-checking, or MBT gates
   as Dalph implementation gates.
