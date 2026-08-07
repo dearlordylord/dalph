@@ -145,7 +145,10 @@ const controlDirectionDriver = defineDriver(
               ? new Set(history.runState.pause.tasks.taskIds)
               : new Set<TaskId>()
           return {
-            appliedCount: records.length - 1,
+            // Saturates to mirror the model's counter (specs/controlDirectionApplication.qnt).
+            // The spec keeps only the 0 vs >0 distinction, so an exact count here
+            // diverges from step two onward.
+            appliedCount: Math.min(records.length - 1, 1),
             executorInterrupted: false,
             executorResumed: false,
             finalPausePhaseClaimed: false,

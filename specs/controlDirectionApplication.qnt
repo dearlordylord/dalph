@@ -15,6 +15,15 @@ module controlDirectionApplication {
     // Every invariant and witness below uses only that == 0 vs > 0 distinction,
     // and the saturation keeps the state space finite so the gate's exhaustive
     // TLC run is genuinely exhaustive. Revisit the day anyone needs an actual count.
+    //
+    // TODO: the saturation buys exhaustive checking by giving up detection power.
+    // One application and two are the same state here, so a production defect that
+    // applies a direction twice is unrepresentable and no mutant can express it.
+    // The conformance driver must saturate to match
+    // (packages/dalph/test/conformance/control-direction-application.mbt.test.ts),
+    // which couples spec and driver in a way nothing enforces. Decide whether the
+    // exhaustive run is worth more than double-application coverage; a bounded
+    // counter with an explicit ceiling would keep both.
     appliedCount: int,
     lastApplied: AppliedDirection,
     lastAppliedWasOperatorInitiated: bool,
