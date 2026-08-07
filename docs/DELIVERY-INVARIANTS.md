@@ -25,6 +25,14 @@ it rather than in a delivery invariant list.
 | `statable, not stated` | a tool could express it at benchmark size and none does |
 | `—` | no tool in the study expresses it, and the reason is stated |
 
+`Encoding` describes the verification study and not production coverage. Six of
+the seven tools are bound to no Dalph code at all, so `→ I10` means a model
+states the invariant, never that the shipped code is checked against it. What
+checks production is indexed per function under "Coverage per production
+surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the four
+models under `specs/` that reach production do so through
+`packages/dalph/test/conformance/*.mbt.test.ts`.
+
 ## Identity
 
 **D1 Exact identity on every action.** Every action names the exact identity it
@@ -191,6 +199,10 @@ and Dalph does not attribute an unauthenticated outside edit to a person.
 
 ## Integration and promotion
 
+**Unverified against production.** These come from issues 56, 57, 138 and 139,
+all open. Candidate construction and promotion exist in production; whether they
+satisfy these rules has not been checked.
+
 **D26 Candidate shape.** An integration candidate has exactly two ordered direct
 parents: the fixed expected target head first, the immutable accepted result
 second. The order is never reversed and a newer head is never substituted.
@@ -268,8 +280,10 @@ repeated work.
 → `—` every model's actions are enabled by state rather than by observation, so
 a repeated identical observation is not a distinguishable event.
 
-**D37 Every Run is convergeable.** Under the same hypotheses as D33, every
-retained obligation has an Operator resolution that settles it, so no Run is
+**D37 Every Run is convergeable.** *Not implemented: no Operator resolution
+exists for a task closed without success or removed from the target closure, so
+a Run in that state cannot currently terminate.* Under the same hypotheses as
+D33, every retained obligation has an Operator resolution that settles it, so no Run is
 left permanently unable to terminate. This binds the cases where no outside
 event clears the constraint on its own: a task closed without success, and a
 task removed from the target closure. The minimum resolution is discarding the
@@ -334,6 +348,9 @@ a caller argument, and recovery requires no initial-policy input.
 
 ## Serialized integration
 
+**Not implemented.** This whole section is accepted specification from issues 56,
+57 and 138, all open. Nothing here describes what Dalph does today.
+
 **D41 Integration admission is a distinct resource from task-work capacity.**
 Queued or started integration is not counted against task-work capacity, and
 acquiring task-work capacity is not acquiring the serialized integration
@@ -369,6 +386,9 @@ capability.
 
 ## Operator requests
 
+**Partly implemented.** Applying a direction ships; the request-identity and
+race-arbitration rules are accepted specification from issue 65, which is open.
+
 **D47 Receipt is not application.** Receiving an Operator command is ephemeral;
 applying one exact direction is a durable action. Command receipt is never
 recorded as an applied policy change.
@@ -397,11 +417,7 @@ Items below are unresolved and must not be read as settled behavior.
    value that production always leaves empty, while settlement actions are
    separately proposed and executed. Whether the empty value is future work or
    dead design is undecided.
-2. **Several invariants state required behavior rather than shipped behavior.**
-   Ten of the scenario files that this list was swept from belong to open
-   issues, so the rules taken from them are accepted specification that
-   production may not yet satisfy. `scenarios/README.md` records which. The
-   clearest cases are D37, whose Operator resolution does not exist, and the
-   integration and promotion family D26–D28, which comes from issues 56, 57,
-   138 and 139. Nothing here should be read as a description of current
-   behavior without checking.
+2. **Integration and promotion.** D26–D28 come from issues 56, 57, 138 and 139,
+   all open. They are marked at their own section rather than here once their
+   implementation state is established; today they are unverified against
+   production.
