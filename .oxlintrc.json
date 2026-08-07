@@ -130,10 +130,43 @@
       }
     },
     {
-      "files": [
-        "packages/orchestrator/src/cli.test.ts",
-        "packages/dalph/test/conformance/planned-attempt-executor-source-boundary.test.ts"
-      ],
+      "files": ["packages/dalph/src/**/*.ts"],
+      "rules": {
+        "dalph/no-restricted-import-path": [
+          "error",
+          {
+            "patterns": [
+              {
+                "pattern": "coordination/(?:activation|delivery|frontier|run)/",
+                "message": "Reach coordination through the @dalph/orchestrator package boundary instead of its internal modules."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts"],
+      "rules": {
+        "dalph/no-restricted-import-path": [
+          "error",
+          {
+            "patterns": [
+              {
+                "pattern": "^\\./ticket-delivery-projection",
+                "message": "The runtime consumer stays independent of domain projection implementations; take projections through the relation services."
+              },
+              {
+                "pattern": "^\\.\\./(?:frontier/(?:frontier|fresh-facts|integration-frontier|recovery|recovery-frontier)|reconstruction|run/fresh-workflow)",
+                "message": "The runtime consumer stays independent of frontier, reconstruction, and fresh-workflow derivation; take them through the relation services."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/orchestrator/src/cli.test.ts"],
       "rules": {
         "import/no-nodejs-modules": "off"
       }

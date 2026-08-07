@@ -190,6 +190,48 @@ const requireCanonicalEffectImport = {
   })
 }
 
+const noRestrictedImportPath = {
+  meta: {
+    schema: [
+      {
+        type: "object",
+        properties: {
+          patterns: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                message: { type: "string" },
+                pattern: { type: "string" }
+              },
+              required: ["message", "pattern"],
+              additionalProperties: false
+            }
+          }
+        },
+        additionalProperties: false
+      }
+    ]
+  },
+  create: (context) => {
+    const patterns = (context.options?.[0]?.patterns ?? []).map(({ message, pattern }) => ({
+      message,
+      regex: new RegExp(pattern)
+    }))
+    const checkSource = (node) => {
+      if (node.source === null || typeof node.source.value !== "string") return
+      for (const { message, regex } of patterns) {
+        if (regex.test(node.source.value)) report(context, node.source, message)
+      }
+    }
+    return {
+      ExportAllDeclaration: checkSource,
+      ExportNamedDeclaration: checkSource,
+      ImportDeclaration: checkSource
+    }
+  }
+}
+
 const naturalKeyCollator = new Intl.Collator("en", { numeric: true })
 
 const patternKey = (node) => {
@@ -268,6 +310,7 @@ export default {
     "no-clock-read": noClockRead,
     "no-double-type-assertion": noDoubleTypeAssertion,
     "no-module-mocks": noModuleMocks,
+    "no-restricted-import-path": noRestrictedImportPath,
     "no-throw-statement": noThrowStatement,
     "no-type-assertion": noTypeAssertion,
     "property-test-placement": propertyTestPlacement,
