@@ -6,11 +6,35 @@ one or more `D` entries, chosen so that seven very different tools could all
 encode it at a size where they all finish. Several projections are weakened, and
 the weakening is what the study is about.
 
-TODO: link each `I` entry below to the `D` entries it projects, and state the
-weakening inline. Until that is done, `docs/DELIVERY-INVARIANTS.md` carries the
-mapping in its `Encoding` fields and is the authority when the two disagree.
+| Benchmark | Projects | Weakened |
+|---|---|---|
+| I1 bound | D6 | upper bound only in Quint; graph order unstated |
+| I2 order independence | D7 | |
+| I4 retention | D10 | |
+| I5 settlement drop | D24 | settlement drop only, not the general no-inferred-completion rule |
+| I6 no invention | D11 | |
+| I7 position discipline | D12 | no correlation on the report |
+| I8 admission ceiling | D13 | unevenly: a history flag in three tools, a bare guard in four |
+| I9 exact correlation | D1 | correlation only, and only in the fast-check journal arm |
+| I10 one attempt | D3 | |
+| I11 claim exclusivity | D4 | |
+| I12 candidate shape | D26 | |
+| I13 promotion | D27 | no reconciliation branch |
+| I14 authority separation | D29 | |
+| I15 journal | D32 | reduction only; record admission is D32a |
+| I16 recovery | D31 | no identity outside the journal arm, so "the same attempt" is unstateable |
+| I17 pause | D20, D47 | run-wide pause only, no subject scoping, and no receipt step |
+| I18 no silent drop | D33 | the no-new-facts hypothesis is inexpressible where the task set is constant |
+| I19 quiescence | D34 | |
+
+Thirty-two specification entries project to nothing here. That is the study's
+main finding, not a gap in this table: no encoding carries a worktree, an intent
+record, observation quality, an actor, an integration session, a queue, an
+Operator request, or more than one Run.
+
 This catalog is temporary; it survives because the mutant catalog, the seven
 tool encodings, the scoreboard, and the coverage index all reference its numbers.
+`docs/DELIVERY-INVARIANTS.md` is the authority when the two disagree.
 
 The fixed benchmark for the verification bake-off. Every tool under
 `./<tool>/` encodes these and nothing else, so results are comparable.
