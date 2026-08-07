@@ -16,7 +16,41 @@ acceptance-test mapping.
 
 ## Currency
 
-The files here have not been checked against their tracker issues. Treat an
-individual file as a claim to verify rather than as settled behavior until it
-is marked current. `../DELIVERY-INVARIANTS.md` names the invariants most
-exposed to that review.
+Every file here corresponds to an accepted issue that is either open or closed
+as completed. No issue is abandoned, closed as not planned, or superseded, and
+no issue declares any file here outdated.
+
+**Describes shipped behavior** — the owning issue is closed as completed.
+
+| File | Issue |
+|---|---|
+| `issue-131-conflicting-capacity-observation.md` | 131 |
+| `issue-134-pause-whole-run.md` | 134 |
+| `issue-135-pause-task-grouping-descendants.md` | 135 |
+| `issue-164-journal-first-tracker-observations.md` | 164 |
+| `issue-165-domain-readable-cassettes.md` | 165 |
+| `issue-170-maintained-cassette-catalog.md` | 170 |
+
+**Accepted, not yet implemented** — the owning issue is open. These state
+required behavior and must not be read as a description of what Dalph does
+today.
+
+| File | Issue |
+|---|---|
+| `issue-53-refresh-complete-task-pipelines.md` | 53 |
+| `issue-54-resize-task-admission.md` | 54 |
+| `issue-55-localize-task-conflicts.md` | 55 |
+| `issue-56-queue-accepted-integration.md` | 56 |
+| `issue-57-build-two-parent-integration-candidate.md` | 57 |
+| `issue-65-cancel-or-continue-attempt.md` | 65 |
+| `issue-136-reconcile-changed-task-facts.md` | 136 |
+| `issue-137-reconcile-task-claims.md` | 137 |
+| `issue-138-reconcile-blockers-around-promotion.md` | 138 |
+| `issue-139-reconcile-git-facts.md` | 139 |
+
+**Milestone-scoped** — accepted against a milestone rather than one issue.
+`authored-cassette-abstraction-levels.md` refines the vocabulary accepted in
+issue 173, `planned-attempt-executor-boundary.md` is accepted for the
+production-shaped fake-executor milestone, `workflow-occurrence-projection.md`
+for the runtime occurrence-classification milestone, and
+`fresh-run-single-start.md` names no owner.

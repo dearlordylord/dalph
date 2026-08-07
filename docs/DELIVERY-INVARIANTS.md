@@ -285,9 +285,11 @@ Items below are unresolved and must not be read as settled behavior.
    value that production always leaves empty, while settlement actions are
    separately proposed and executed. Whether the empty value is future work or
    dead design is undecided.
-2. **Source currency.** The scenario files under `docs/scenarios/` have not been
-   validated against the task tracker. Each needs marking as current, updating,
-   or deleting, and this list needs re-deriving from whatever survives. The
-   invariant most exposed to that review is D12, whose "not because tracker
-   completion is pending" clause comes from a single scenario that may record a
-   resolved argument rather than a standing rule.
+2. **Several invariants state required behavior rather than shipped behavior.**
+   Ten of the scenario files that this list was swept from belong to open
+   issues, so the rules taken from them are accepted specification that
+   production may not yet satisfy. `scenarios/README.md` records which. The
+   clearest cases are D37, whose Operator resolution does not exist, and the
+   integration and promotion family D26–D28, which comes from issues 56, 57,
+   138 and 139. Nothing here should be read as a description of current
+   behavior without checking.
