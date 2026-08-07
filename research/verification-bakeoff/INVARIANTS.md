@@ -1,7 +1,7 @@
 # Delivery invariant benchmark
 
 **This is a benchmark, not the specification.** `docs/DELIVERY-INVARIANTS.md`
-holds the specification, numbered `D1`–`D36`. Each entry here is a projection of
+holds the specification, numbered `D1`–`D37`. Each entry here is a projection of
 one or more `D` entries, chosen so that seven very different tools could all
 encode it at a size where they all finish. Several projections are weakened, and
 the weakening is what the study is about.
@@ -110,11 +110,17 @@ tickets forever there is nothing to prove, so the property is meaningless
 without it. The encodings supply the first three hypotheses —
 `eventuallyStable`, `eventuallyRunning` and `eventuallyRoomy` at
 `quint/deliveryCore.qnt:592-594`, and the same triple in `alloy/` and
-`tlaplus/`. None supplies the fourth, because none can: `TASKS` is a fixed
-two-element set in every model, so a ticket arriving mid-run is inexpressible.
-That is the same admission the I19 comment makes about its own hypothesis, and
-it means "tickets added to the graph mid-run" — a stated delivery requirement —
-is outside the reach of every liveness result in this study.
+`tlaplus/`. None of those three supplies the fourth: `TASKS` is a fixed
+two-element set in each, so a ticket arriving mid-run cannot be written down
+there.
+
+Arrival is not unwriteable in general. `tlaplus/DeliveryArrival.tla` models it
+directly, with `NewTaskArrives`, `SealGraph`, and a quiescence property over an
+unsealed graph. What it establishes is that arrival is undecidable at this
+size rather than inexpressible: TLC returns no verdict on the uncapped run, and
+the capped run is unsound for a liveness claim. So "tickets added to the graph
+mid-run" is outside the reach of every liveness *result* here, which is a
+statement about tractability, not about expressiveness.
 
 **I19 Quiescence.** With no new tracker facts the run reaches quiescence.
 Quiescence proves no currently executable action, not completion, not an empty
@@ -158,13 +164,13 @@ result.
 | I6 no invention | typed away | typed away | typed away | typed away | typed away | typed away | typed away |
 | I7 position discipline | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
 | I8 admission ceiling | history flag | history flag | guard (L2) | loop invariant | guard + **dead flag** | guard | history flag |
-| I9 exact correlation | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I9 exact correlation | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | checked (journal arm) |
 | I10 one attempt | checked | checked | checked | checked | checked | checked | checked |
 | I11 claim exclusivity | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I12 candidate shape | **not modelled** | **not modelled** | **checked** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
 | I13 promotion | history flag | history flag | guard (L2) | guard | guard + **dead flag** | guard | history flag |
 | I14 authority separation | checked | checked | assumed (L1), checked (L2) | checked | checked | checked | checked |
-| I15 journal | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** |
+| I15 journal | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | **not modelled** | checked |
 | I16 recovery | checked | checked | checked | checked | checked | checked | checked |
 | I17–I19 | statable, no backend | I17 at 2 tasks, I18–I19 at 1 | checked | **—** | statable, not attempted | statable, not attempted | bounded surrogate |
 
@@ -190,12 +196,17 @@ under the step relation, which is a conjunct the reachability runs never needed.
 
 ### What the columns of `not modelled` mean
 
-**I9 and I15 are in no encoding at all.** No model here carries a `RunId`, an
-`AttemptId`, or a journal; `oneAttemptPerTask` counts attempts and never names
-one. So the bake-off says nothing about exact correlation or about the journal
-being an append-only pure fold — and those are two of the four invariants the
-production system rests on hardest. `JOURNAL-EVENTS.md` is the design I15
-starts from; nothing is built.
+**I9 and I15 exist only in the fast-check journal arm.** The six L1/L2 models
+carry no `RunId`, no `AttemptId`, and no journal; `oneAttemptPerTask` counts
+attempts and never names one. `fastcheck/journal.mjs` is the exception: it
+carries the 23-event alphabet of `JOURNAL-EVENTS.md`, correlates attempt-scoped
+events on `(runId, attemptId)`, and enforces Run-scoping as fold guards — an
+event after `WorkflowRunTerminated` and an attempt planned under a foreign
+`runId` are both rejected. `fastcheck/journal-run.mjs` checks the four
+propositions and `fastcheck/journal-mutants.mjs` the negative controls.
+
+So the comparison says nothing about exact correlation or the journal, because
+six of seven tools do not reach them — not because nothing is built.
 
 **I11 and I12 exist only in Alloy**, and that is the whole reason Alloy is in
 the lineup. They are not "booleans a mutant flips" in the other tools; they are
@@ -276,7 +287,7 @@ reason. No policy, no bound, no evidence.
 | exhaustive classification | example | `ticket-delivery-projection.test.ts:162` | one graph of five tasks covering `Eligible` and all three exclusion reasons |
 | prerequisite order | example | `:182` | two unsatisfied prerequisites, asserted sorted |
 | publication coherence | example | `:148` | `frontier.source` and `frontier.publication` are asserted with `toBe`, so the accepted observation is carried, not rebuilt |
-| I2 order independence | property, transitive | `ticket-delivery-projection.property.test.ts:46` | the `toSorted` at `:67` is the mechanism; the assertion is on arrow 2's output |
+| I2 order independence | property, transitive | `ticket-delivery-projection.property.test.ts:46` | the `toSorted` at `ticket-delivery-projection.ts:67` is the mechanism; the assertion is on arrow 2's output |
 | empty graph | example | `:225` | `GraphNotEstablished` yields no standings |
 
 **Gap — the two-reason case is unreachable in every test.** `exclusionsFor`
@@ -346,22 +357,29 @@ the only one carrying three invariants at once.
 | I5 settlement drop | example, half | `:418` | `Settled` only |
 | I4, I5, I6 | model only | the seven L1 encodings | no production code |
 
-**Gap — five of the seven evidence tags never enter the function.** Every test
-that calls `ticketDeliveriesOf` passes `ResponsibilityFacts` or
-`SyntheticExecutorFacts`. `AcceptedAwaitingIntegration`, `QueuedIntegration`,
-`StartedIntegration`, `IntegrationCandidate` and `IntegrationWait` are never
-constructed as delivery evidence anywhere in `packages/`. The first three are
-precisely the tags for which `obligationFrom` returns an obligation, so I4 —
-the invariant this arrow exists to uphold — is checked only for the
-responsibility-shaped obligation and for none of the three integration-shaped
-ones. The concepts are tested elsewhere, in the integration protocol and
-proposal-route suites; the path through this function is not.
+**Gap — the five integration evidence tags reach the function only indirectly,
+on one path.** Production constructs all five: `AcceptedAwaitingIntegration`,
+`QueuedIntegration`, `StartedIntegration` and `IntegrationCandidate` in
+`journaledIntegrationEvidenceOf` (`delivery-evidence.ts:45-56`), and
+`IntegrationWait` in `reactive-delivery-relations.ts:69`. No test that calls
+`ticketDeliveriesOf` directly supplies any of them; every direct call passes
+`ResponsibilityFacts` or `SyntheticExecutorFacts`. Four of the five arrive only
+through one recovery test — `recovered-settlement-relation.test.ts:243`, which
+builds the full reactive relation and so reaches the function through
+`in-memory-relations.ts:153` — and only on its happy path.
 
-**Gap — `candidateStandingFrom` is unreachable.** Its three branches at `:185`
-distinguish `CandidateConstructed`, the two limit-reached states, and active
-work. They are reached only through `IntegrationCandidate`, which no test
-supplies, so the branch that classifies non-convergent integration as retained
-rather than settled has never been evaluated. That is I18's second disjunct.
+The consequence for I4 is narrower than the tag count suggests but still real:
+the three tags for which `obligationFrom` returns an obligation are exercised
+on one trajectory, chosen for a different purpose, with no generated coverage
+and no failure cases.
+
+**Gap — two of `candidateStandingFrom`'s three branches are unreached.** Its
+branches at `:185` distinguish `CandidateConstructed`, the two limit-reached
+states, and active work. The `CandidateConstructed` branch is exercised by the
+recovery test above, which asserts that state before building the relation. The
+limit-reached branch — `IntegrationNonConvergencePreserved`, which classifies
+non-convergent integration as retained rather than settled — is not, and that
+is I18's second disjunct. Neither is the `CandidateWorkActive` fall-through.
 
 **Gap — I5 is half-tested.** `evidenceStillDescribesDelivery` at `:158` drops
 `Settled` and `TaskExternalSuccessSettled`. Only `Settled` has a test. The
@@ -382,7 +400,7 @@ recovered modes all build on this layer, so it is empty in every mode.
 |---|---|---|---|
 | settlement set is empty | example | `delivery.test.ts:152`, `:526`, `delivery-consequences.test.ts:160` | asserted `[]`, including after a relation is reconstructed on restart |
 | source-chain identity | example | `delivery-consequences.test.ts:212` | `settlements.source === ticketDeliveries` and `trackerConsequences.source === settlements`, compared by reference |
-| settlement proposals route through | example | `delivery.test.ts:350` | `proposedActions` collected from the partition |
+| settlement partition is empty under a fixture | example | `delivery.test.ts:333` | the stream is exposed without performing an action; `:350` asserts the partition is `[[]]` |
 | `DeliverySettlement` construction | none | — | no production code constructs one |
 | I18 first disjunct | none | — | see below |
 
@@ -418,8 +436,9 @@ does not implement the thing they agree about.
 ### `reflectDeliverySettlements` — arrow 5 of `delivery.ts`
 
 `DeliveryReflectionProjection`, declared in `relations.ts:664` and implemented
-once, at `in-memory-relations.ts:173`. `DeliverySettlements → DeliveryReflection`,
-then `makeDeliveryConsequences` in `relations.ts:711`.
+once, at `in-memory-relations.ts:174`. `DeliverySettlements → DeliveryReflection`,
+then `makeDeliveryConsequences` (`relations.ts:297`), applied by
+`reflectDeliverySettlements` at `relations.ts:711`.
 
 The projection is `mapCurrentSignal(relation.current, makeDeliveryReflection)`,
 and `makeDeliveryReflection` (`relations.ts:275`) stores its argument in a
@@ -430,8 +449,8 @@ branded wrapper and computes nothing. Its `proposedActions` is
 
 | Property | Binding | Artifact | What it reaches |
 |---|---|---|---|
-| chain reconstruction | example | `delivery-consequences.test.ts:212` | `makeDeliveryConsequences` rebuilds all five values by walking `.source`, asserted by reference identity |
-| reflection emits no actions | example | `delivery.test.ts:350`, `delivery-consequences.test.ts:286` | `proposedActions` collected and empty |
+| chain reconstruction | example | `delivery-consequences.test.ts:212` | `makeDeliveryConsequences` (`relations.ts:297`) rebuilds all five values by walking `.source`, asserted by reference identity |
+| reflection emits no actions | example | `delivery-consequences.test.ts:292` | `proposedActions` collected and empty |
 | tracker reflection | none | — | no production code writes a tracker consequence |
 
 **The one thing this arrow establishes is causal coherence, and it does it by

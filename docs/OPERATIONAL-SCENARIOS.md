@@ -41,9 +41,10 @@ remains the readable register of both.
 `DELIVERY-STORY.md` is the same three-register split applied to one long
 chronology that spans many issues rather than one.
 
-The currency of individual files under `docs/scenarios/` is not established.
-Each needs checking against its tracker issue and then marking, updating, or
-deleting.
+`scenarios/README.md` classifies each file by whether its owning issue is
+closed as completed or still open. Ten of the sixteen issue-backed files belong
+to open issues and state required behavior rather than describing what Dalph
+does today.
 
 ## Required scenario fields
 

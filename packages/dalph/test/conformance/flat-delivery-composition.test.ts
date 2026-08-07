@@ -41,6 +41,9 @@ it("keeps the descriptive delivery composition to its five ordered arrows", () =
   ]
 
   const positions = arrows.map((arrow) => body.indexOf(arrow))
-  expect(positions.every((position) => position !== -1), `every arrow appears: ${arrows.join(", ")}`).toBe(true)
+  expect(
+    positions.every((position) => position !== -1),
+    `every arrow appears: ${arrows.join(", ")}`
+  ).toBe(true)
   expect(positions).toEqual([...positions].toSorted((left, right) => left - right))
 })

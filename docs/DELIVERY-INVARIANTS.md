@@ -22,6 +22,7 @@ it rather than in a delivery invariant list.
 |---|---|
 | `Iₙ` | projected into the benchmark as that entry |
 | `Iₙ (weakened)` | projected, in a form that loses something — the loss is stated |
+| `statable, not stated` | a tool could express it at benchmark size and none does |
 | `—` | no tool in the study expresses it, and the reason is stated |
 
 ## Identity
@@ -29,16 +30,19 @@ it rather than in a delivery invariant list.
 **D1 Exact identity on every action.** Every action names the exact identity it
 acts on: Run, task, attempt, claim and token, worktree, operation, integration
 responsibility. No identity substitutes for another. A coordinator process
-identity is not an attempt identity, an operation name is not a classification,
-and an executor-internal identity may not add or release a task-work position.
-→ `I9 (weakened: correlation only)`
+identity is not an attempt identity, and an operation name is not a
+classification. Executor-internal structure is invisible outside the executor
+boundary: generic orchestration neither allocates a second executor identity nor
+exposes an executor-internal step.
+→ `I9 (weakened: correlation only, and only in the fast-check journal arm — the six L1/L2 models carry no identity at all)`
 
 **D2 Attempt immutability.** A planned attempt's recorded facts — task revision
 fingerprint, Base SHA, branch, worktree, executor locator — never change after
 it is planned. A later observation of changed instructions is recorded beside
 the attempt, never absorbed into it.
-→ `—` no model carries attempt-local facts; every model treats an attempt as a
-counter.
+→ `—` the six L1/L2 models treat an attempt as a counter. The fast-check
+journal arm carries `(runId, attemptId)` but no attempt-local facts, so
+immutability of those facts is unstated everywhere.
 
 **D3 One unsettled attempt per task.** At most one planned attempt per task is
 unsettled, across crash and recovery. Process loss is not executor completion
@@ -59,7 +63,7 @@ reacquires it, and never infers who created it.
 
 **D6 Bound.** The selected set is the first `capacity` eligible tasks in
 deterministic graph order. Live positions are not an input to selection.
-→ `I1`
+→ `I1 (weakened: Quint checks `selected.size() <= capacity`, an upper bound, not the equality I1 states, and neither states graph order)`
 
 **D7 Order independence.** Selection is invariant under permutation of the
 tracker's task order.
@@ -97,40 +101,54 @@ timeout, not process death.
 capacity. A capacity reduction never evicts, cancels, suspends, or discards an
 existing holder; the ceiling applies to the next reservation. Held positions may
 exceed capacity, including across restart.
-→ `I8 (weakened: history flag, not a transition property)`
+→ `I8 (weakened unevenly: Quint, TLA+ and fast-check maintain a history flag,
+which the benchmark counts as evidence; Alloy, Dafny, Lean and Agda have only
+an admission guard, which nothing tests)`
 
-**D14 One position per attempt.** An attempt occupies at most one task-work
-position at a time.
+**D14 One position per attempt, added and released by the exact holder.** An
+attempt occupies at most one task-work position at a time, and an
+executor-internal identity may neither add nor release one.
 → `—` positions are a set of task ids in every model, so a second position for
 the same attempt is unwriteable.
 
 **D15 Admission is the only entry to work.** No worker starts before admission.
 An applied operator direction is not capacity admission.
-→ `—`
+→ `guard` — the work-starting action carries `positions < capacity` as a
+precondition in Quint, Dafny, Lean and Agda, so starting unadmitted is
+unwriteable. No encoding states the second sentence, because no model has an
+operator direction that could be confused with admission.
 
 ## Preservation
 
 **D16 Work in progress survives every constraint.** No reconciliation,
 constraint, pause, suspension, capacity change, or restart deletes or resets a
 worktree, discards work in progress, or treats preserved work as disposable.
-→ `—` no model has a worktree.
+→ `—` the journal arm models worktree *existence* — intent, reconciliation
+outcome, pending state — and no arm models worktree *contents*, so preservation
+of work in progress is unstated.
 
 **D17 Cleanup is disposition-typed, exact, recoverable, and fail-closed.**
 Cleanup names what it disposes of and why. Nothing is repaired, abandoned, or
 cleaned automatically on an unproven fact.
-→ `—`
+→ `—` no model has a disposable resource, so there is nothing to clean up.
+
+D37 resolves a retained execution without stating what becomes of its worktree,
+and no invariant here makes disposal obligatory. A Run may therefore terminate
+under D35 leaving durable state that nothing owns.
 
 ## Locality
 
 **D18 A constraint is local to its subject.** A constraint on one task never
 stops another task, never becomes a Run-wide stop, and never isolates unrelated
 responsibilities. Independent work remains selectable throughout.
-→ `—` the benchmark's two-task model can express it and no encoding states it.
+→ `statable, not stated` — the benchmark's two-task model can express it and no
+encoding does.
 
 **D19 Constraints clear independently.** Clearing one constraint clears only
 that one. A reopened task clears its lifecycle wait and nothing else; every
 other continuation fact must independently authorize resumption.
-→ `—`
+→ `—` no model carries more than one constraint per task, so independence has
+nothing to range over.
 
 **D20 Pause scope is exactly what was directed.** Pause applies to the named
 subject. It does not follow prerequisite or dependant edges, does not pause
@@ -144,13 +162,15 @@ cancellation, and unpause is not cancellation.
 outcome may become ambiguous, Dalph records the exact intent and waits for the
 append acknowledgement, then calls the owning system, then records the exact
 observed result.
-→ `—` no model has an intent record.
+→ `—` in the six L1/L2 models. The fast-check journal arm has the intent/outcome
+split for claim, worktree and promotion, so D21's shape is encoded there.
 
 **D22 Reconcile before retry.** After an ambiguous outcome, Dalph rereads the
 owning system before acting again. A lost response never proves the effect did
 not happen, and never authorizes a duplicate request, a second override, or a
 second release.
-→ `—`
+→ `—` no model represents an ambiguous outcome; every boundary call in every
+encoding either succeeds or fails observably.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or
@@ -160,9 +180,8 @@ never collapsed.
 
 **D24 No inferred completion across boundaries.** Success at one boundary never
 implies success at another. An executor terminal report is not tracker
-completion, claim removal is not completion, terminal-without-success is not
-successful completion, and a clean working tree is not proof of required commit
-parents.
+completion, claim removal is not completion, and terminal-without-success is not
+successful completion. D28 owns the Git-side form of this.
 → `I5 (weakened: settlement-drop only)`
 
 **D25 Dalph never invents an actor.** An initiated action names its actor. A
@@ -186,7 +205,8 @@ reverified rather than reused against a different head.
 **D28 Verification precedes promotion.** Only a verified candidate is offered.
 Process success, the newest worktree commit, or a clean tree do not classify a
 candidate as verified.
-→ `—`
+→ `—` no model distinguishes a verified candidate from a constructed one, so
+the premise of the guard is absent.
 
 ## Process and durability
 
@@ -202,17 +222,26 @@ volatile state, and infers nothing from abandoned process memory.
 → `—` crash is an action in every model, which is the opposite encoding.
 
 **D31 Recovery continues the same work.** After process loss, restart
-reconstructs the existing responsibility and continues that exact attempt. It
-plans no replacement attempt, creates no second claim, and creates no second
-worktree.
-→ `I16 (weakened: no identity, so "same attempt" is unstateable)`
+reconstructs the existing responsibility and continues that exact attempt. D3
+and D4 already forbid the replacement attempt and the second claim; the
+recovery-specific clause is that no second worktree is created for a
+reconstructed attempt.
+→ `I16 (weakened: the six L1/L2 models carry no identity, so "same attempt" is
+unstateable there; the fast-check journal arm carries `attemptId` and correlates
+on it)`
 
-**D32 Journal shape.** Append-only. Reduction is a pure fold, total over
-contradictory histories, and idempotent under replay. Records are scoped to
-their Run: none precedes the Run's beginning fact, none follows its termination
-fact, there is exactly one of each, and no record for another target is placed
-under a Run.
-→ `—` no model carries a journal.
+**D32 Journal reduction.** Append-only. Reduction is a pure fold, total over
+contradictory histories, and idempotent under replay.
+→ `I15`, checked in `fastcheck/journal.mjs` over the 23-event alphabet, with the
+four propositions in `journal-run.mjs` and negative controls in
+`journal-mutants.mjs`.
+
+**D32a Journal record admission.** Records are scoped to their Run: none
+precedes the Run's beginning fact, none follows its termination fact, there is
+exactly one of each, and no record for another target is placed under a Run.
+→ `checked` in `fastcheck/journal.mjs`, as fold guards rather than as a stated
+property. This is a property of which records may be admitted, not of the
+reduction function, which is why it is separate from D32.
 
 ## Progress
 
@@ -223,20 +252,21 @@ eventually settles or is retained together with an exact stated reason.
 a fixed constant in every model)`
 
 **D34 Quiescence is not completion.** With no new tracker facts the run reaches
-quiescence. Quiescence proves no currently executable action — not completion,
-not an empty target, and not permission to terminate. Quiescence is never
+quiescence. Quiescence proves no currently executable action — not completion
+and not an empty target. D35 owns what termination requires. Quiescence is never
 inferred from process loss, a timeout, or missing session data.
 → `I19`
 
 **D35 A Run does not terminate while it owes work.** Termination requires no
 outstanding obligation and no executable action. An unsettled retained
 responsibility keeps the Run active.
-→ `—` stated nowhere in the benchmark; it is the safety companion to D33 and
-D34.
+→ `statable, not stated` — the safety companion to D33 and D34, and stated by
+no encoding.
 
 **D36 No busy loop on unchanged facts.** Unchanged observations do not produce
 repeated work.
-→ `—`
+→ `—` every model's actions are enabled by state rather than by observation, so
+a repeated identical observation is not a distinguishable event.
 
 **D37 Every Run is convergeable.** Under the same hypotheses as D33, every
 retained obligation has an Operator resolution that settles it, so no Run is
@@ -272,10 +302,92 @@ The **bounded** form assumes a ceiling on the closure instead:
 which implies `◇□¬insert`, since only finitely many insertions can occur. The
 bounded form is strictly stronger and is what a finite-state checker needs.
 
-Every model in the study takes a third, degenerate position: `T` is a fixed
+The L1 and L2 models take a third, degenerate position: `T` is a fixed
 constant, so `N = |T|` and *zero* insertions are permitted. That is stronger
-than either form, and it is why a ticket arriving mid-run is not merely
-unchecked but unwriteable.
+than either usable form.
+
+`research/verification-bakeoff/tlaplus/DeliveryArrival.tla` is the exception and
+models arrival directly, with a task arriving and the graph later sealing. What
+it establishes is that arrival is *undecidable at this size*, not inexpressible:
+TLC returns no verdict on the uncapped run, and capping the run makes the
+liveness claim unsound. So a ticket arriving mid-run is writeable and unchecked,
+which is a statement about tractability rather than about expressiveness.
+
+## Run boundaries
+
+**D38 One Run is activated, and a foreign Run is neither ignored nor resumed.**
+When durable history holds more than one unterminated Run, startup fails closed
+naming every Run identity it found, and mutates no tracker, Git, or executor
+state for any of them. Historical responsibility entries belonging to another
+Run neither block the activated Run nor cause completed work to repeat.
+→ `—` every model has exactly one Run.
+
+**D39 A fresh-start request is not recovery.** A repeated request to start a Run
+fresh is never classified as recovery of an existing Run, and actions from two
+fresh starts are never merged into one workflow-journal history.
+→ `—` no model distinguishes an inbound start request from process restart.
+
+**D40 The capacity ceiling is durable and reconstructed.** After process loss the
+ceiling comes from journaled applied policy. It is neither a process default nor
+a caller argument, and recovery requires no initial-policy input.
+→ `—` capacity is a free variable in every model, with no provenance.
+
+## Serialized integration
+
+**D41 Integration admission is a distinct resource from task-work capacity.**
+Queued or started integration is not counted against task-work capacity, and
+acquiring task-work capacity is not acquiring the serialized integration
+resource.
+→ `—` no model separates the two resources.
+
+**D42 The integration queue is single and its order is acceptance-derived.**
+Order follows accepted-result acceptance, not task identity, completion time, or
+insertion order. The same-target queue is never reordered, and one responsibility
+does not move ahead of another merely because that other is waiting.
+→ `—` no model has a queue.
+
+**D43 The serialized target resource is released while only waiting.** Process-local
+target ownership is not retained across a wait on tracker facts.
+→ `—`
+
+**D44 One integration session per accepted result.** At most one integration
+session is unsettled for a given accepted result. Exhaustion, a lost response, or
+a lost editing process never silently starts a replacement session or creates a
+replacement candidate, and a submission is routed by its exact session rather
+than guessed or inferred from a worktree tip.
+→ `—` D3's shape applied to sessions; no model has an integration session.
+
+**D45 Conflict work is isolated from the planned worktree.** Integration and
+conflict resolution never apply edits to the planned task worktree.
+→ `—` no model has a worktree.
+
+**D46 A withdrawn capability stays withdrawn.** Once a recorded cutoff removes a
+capability — pre-integration cancellation after integration starts — it is not
+offered again, and restart reconstructs the cutoff rather than resurrecting the
+capability.
+→ `—` no model offers a capability that can be withdrawn.
+
+## Operator requests
+
+**D47 Receipt is not application.** Receiving an Operator command is ephemeral;
+applying one exact direction is a durable action. Command receipt is never
+recorded as an applied policy change.
+→ `I17 (weakened: the models apply a direction with no receipt step)`
+
+**D48 An applied direction authorizes exactly one matching later action.** A
+reacquisition intent requires a prior matching applied direction. A direction
+applied after exact or unreadable evidence cannot authorize a later loss, a
+restoration ends an earlier direction, and a stale identity is rejected.
+→ `—`
+
+**D49 Operator request identity is exact.** Exact redelivery of a request returns
+its recorded result rather than acting twice. Reuse of a request identity for a
+different Run, task, attempt, fingerprint pair, or choice is a typed
+contradiction. Where two valid requests race, the first committed to the journal
+wins regardless of arrival order, and a later change of instructions requires a
+fresh choice.
+→ `—` D21 and D22 govern outbound ambiguity; nothing in the study models inbound
+request identity.
 
 ## Open questions
 

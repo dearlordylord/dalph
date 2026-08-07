@@ -99,32 +99,37 @@ no obligation is outstanding, so the Run may terminate.
 
 | # | Beat | Graph | Cap | Held | Retained | Awaiting Alice | Invariants |
 |---|---|---|---|---|---|---|---|
-| 1 | tracker read | G₀ | 3 | — | — | — | I1 I2 I14 |
-| 2 | A B C begin | G₀ | 3 | A B C | — | — | I7 I10 I11 |
-| 3 | B's instructions edited | G₁ | 3 | A B C | — | — | — |
-| 4 | B asked to suspend | G₁ | 3 | A B C | — | — | I7 |
-| 5 | B safely suspended | G₁ | 3 | A C | B | B | I4 I7 |
-| 6 | D admitted | G₁ | 3 | A C D | B | B | I1 I8 |
-| 7 | capacity 3 → 2 | G₁ | 2 | A C D | B | B | **I8** |
-| 8 | process loss | G₁ | 2 | — | — | — | I14 |
-| 9 | restart | G₁ | 2 | A C D | B | B | **I16 I9 I10** |
-| 10 | C closed, asked to suspend | G₂ | 2 | A C D | B | B | — |
-| 11 | C safely suspended | G₂ | 2 | A D | B C | B | I4 I7 |
-| 12 | Alice continues B | G₂ | 2 | A D | B C | — | I17 |
-| 13 | A accepted; B admitted | G₂ | 2 | B D | C | — | I1 I10 |
-| 14 | A queued for integration | G₂ | 2 | B D | A C | — | I4 |
-| 15 | candidate built | G₂ | 2 | B D | A C | — | **I12** |
-| 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **I13** |
-| 17 | reconciled and promoted; A settles | G₂ | 2 | B D | C | — | I13 I18 |
-| 18 | C reopened | G₃ | 2 | B D | C | — | — |
-| 19 | capacity 2 → 3; C admitted | G₃ | 3 | B C D | — | — | I1 I8 |
-| 20 | F and G added | G₄ | 3 | B C D | — | — | I2 |
-| 21 | B C D settle; E F G admitted | G₄ | 3 | E F G | — | — | I1 I18 |
-| 22 | all complete | G₄ | 3 | — | — | — | **I19** |
+| 1 | tracker read | G₀ | 3 | — | — | — | D6 D7 D29 |
+| 2 | A B C begin | G₀ | 3 | A B C | — | — | D3 D4 D12 |
+| 3 | B's instructions edited | G₁ | 3 | A B C | — | — | D2 |
+| 4 | B asked to suspend | G₁ | 3 | A B C | — | — | D12 D18 |
+| 5 | B safely suspended | G₁ | 3 | A C | B | B | D10 D12 D16 |
+| 6 | D admitted | G₁ | 3 | A C D | B | B | D6 D13 D15 |
+| 7 | capacity 3 → 2 | G₁ | 2 | A C D | B | B | **D13** |
+| 8 | process loss | G₁ | 2 | — | — | — | D29 D30 |
+| 9 | restart | G₁ | 2 | A C D | B | B | **D31 D1 D3** |
+| 10 | C closed, asked to suspend | G₂ | 2 | A C D | B | B | D18 D24 |
+| 11 | C safely suspended | G₂ | 2 | A D | B C | B | D10 D12 D16 |
+| 12 | Alice continues B | G₂ | 2 | A D | B C | — | D15 D20 |
+| 13 | A accepted; B admitted | G₂ | 2 | B D | A C | — | D10 D24 |
+| 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
+| 15 | candidate built | G₂ | 2 | B D | A C | — | **D26** |
+| 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
+| 17 | reconciled and promoted; A settles | G₂ | 2 | B D | C | — | D27 D28 D33 |
+| 18 | C reopened | G₃ | 2 | B D | C | — | D9 D19 |
+| 19 | capacity 2 → 3; C admitted | G₃ | 3 | B C D | — | — | D6 D13 |
+| 20 | F and G added | G₄ | 3 | B C D | — | — | D7 D9 |
+| 21 | B C D settle; E F G admitted | G₄ | 3 | E F G | B C D | — | D6 D33 |
+| 22 | all complete | G₄ | 3 | — | — | — | **D34 D35** |
 
-Held plus retained is the whole of what Dalph owes at any row. A row whose held
-count exceeds capacity is legal and appears twice, at 7 and 9: the ceiling
-governs admission, never eviction.
+Held plus retained is the whole of what Dalph owes at any row, and the rule is
+load-bearing: an accepted result is an obligation before it is integrated, so a
+task appears in Retained from the moment its executor reports until its
+promotion settles it. That is why A is retained at rows 13 and 14, and why B, C
+and D are retained at row 21 while their results pass through integration.
+
+A row whose held count exceeds capacity is legal and appears twice, at 7 and 9:
+the ceiling governs admission, never eviction.
 
 ## Where the story does not converge
 
