@@ -1,6 +1,18 @@
-# Delivery invariant catalog
+# Delivery invariant benchmark
 
-The fixed specification for the verification bake-off. Every tool under
+**This is a benchmark, not the specification.** `docs/DELIVERY-INVARIANTS.md`
+holds the specification, numbered `D1`–`D36`. Each entry here is a projection of
+one or more `D` entries, chosen so that seven very different tools could all
+encode it at a size where they all finish. Several projections are weakened, and
+the weakening is what the study is about.
+
+TODO: link each `I` entry below to the `D` entries it projects, and state the
+weakening inline. Until that is done, `docs/DELIVERY-INVARIANTS.md` carries the
+mapping in its `Encoding` fields and is the authority when the two disagree.
+This catalog is temporary; it survives because the mutant catalog, the seven
+tool encodings, the scoreboard, and the coverage index all reference its numbers.
+
+The fixed benchmark for the verification bake-off. Every tool under
 `./<tool>/` encodes these and nothing else, so results are comparable.
 
 Vocabulary is `docs/CONTEXT.md`. Levels split the catalog because the level is
