@@ -21,6 +21,11 @@ const runId = RunId.make("admission-test-run")
 const taskId = TaskId.make("A")
 const correlation = { attemptId: AttemptId.make("attempt:A:0"), runId }
 
+// TODO(#54): no case here contracts capacity below the number of held
+// positions. The ceiling binds admission only, so existing holders must keep
+// their positions and the next reserve must be refused until the count drops.
+// See I8 in research/verification-bakeoff/INVARIANTS.md.
+
 it.effect("executor start reserves an exact planned-attempt position", () =>
   Effect.gen(function* () {
     const integrationTargets = yield* makeIntegrationTargetResourceController()

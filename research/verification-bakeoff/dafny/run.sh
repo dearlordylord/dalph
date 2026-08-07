@@ -9,6 +9,13 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 DAFNY=${DAFNY:-$HOME/.cache/dalph-bakeoff/dafny/dafny}
+# On Linux aarch64 there is no prebuilt Dafny; NOTES.md's "Linux aarch64
+# workaround" installs a self-contained wrapper next to the cache. Prefer it
+# over the fetch path, which has nothing to offer this platform.
+if [[ ! -x $DAFNY && $(uname -sm) == "Linux aarch64" ]]; then
+  candidate=$HOME/.cache/dalph-bakeoff/dafny-arm64/dafny
+  [[ -x $candidate ]] && DAFNY=$candidate
+fi
 if [[ ! -x $DAFNY ]]; then
   mkdir -p "$HOME/.cache/dalph-bakeoff"
   # The release publishes one asset per platform; select by host.
@@ -34,12 +41,15 @@ fi
 echo "| File | Expected | Dafny | s |"
 echo "|---|---|---|---|"
 
-faithful() { # $1 file
+FAIL=0
+
+faithful() { # $1 file, $2 extra Dafny flags (optional)
   local start=$SECONDS out count errors verdict
-  out=$("$DAFNY" verify "$1" 2>&1)
+  out=$("$DAFNY" verify $2 "$1" 2>&1)
   count=$(grep -oE '[0-9]+ verified' <<<"$out" | grep -oE '^[0-9]+')
   errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
   verdict=$([[ ${errors:-1} == 0 ]] && echo "${count:-?} verified" || echo "**unexpected ${errors} errors**")
+  [[ ${errors:-1} == 0 ]] || FAIL=1
   echo "| $1 | verifies | $verdict | $((SECONDS - start)) |"
 }
 
@@ -49,6 +59,7 @@ mutants() { # $1 file, $2 expected count
   errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
   # Exactly the expected rejections: more or fewer both mean the file drifted.
   verdict=$([[ ${errors:-0} == "$2" ]] && echo "$errors rejected" || echo "**${errors:-0} rejected, expected $2**")
+  [[ ${errors:-0} == "$2" ]] || FAIL=1
   echo "| $1 | $2 rejections | $verdict | $((SECONDS - start)) |"
   LAST_OUT=$out
 }
@@ -60,3 +71,5 @@ mutants DeliveryL2Mutants.dfy 3
 
 echo ""
 grep -E 'Error: a (postcondition|precondition)' <<<"$LAST_OUT" | sed 's/^/    /'
+
+exit $FAIL

@@ -473,10 +473,10 @@ two are not interchangeable.
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
 
-Agda and Lean hold I3 the same way, and it is the reason both are here. I3
-costs *zero* proof: `excluded` takes a head reason and a tail, so a reason-free
-exclusion cannot be written. I1 and I4 cost real theorems but are then proved
-for all inputs, not sampled.
+Agda and Lean encode exclusion reasons the same way, and it is the reason both
+are here. That encoding costs *zero* proof: `excluded` takes a head reason and a
+tail, so a reason-free exclusion cannot be written. I1 and I4 cost real theorems
+but are then proved for all inputs, not sampled.
 
 I2 (order independence) is where they separate. Agda cannot afford it at all:
 stating it needs a permutation relation and a proof that selection commutes

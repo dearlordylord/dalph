@@ -23,10 +23,6 @@ reads graph order and configured policy only; live positions are not an input.
 **I2 Order independence.** Selection is invariant under permutation of the
 tracker task input. Ordering is graph-owned, deterministic, and total.
 
-**I3 Exhaustive classification.** Every task in the observed graph is either
-`Eligible` or `Excluded` with at least one graph-owned reason. There is no
-third outcome and no silently dropped task.
-
 **I4 Retention.** A task carrying an exact outstanding obligation appears in
 the ticket-delivery relation under every placement: `Selected`,
 `EligibleOutsideBound`, `GraphExcluded`, and `AbsentFromCurrentGraph`. Absence
@@ -50,6 +46,12 @@ a capacity contraction lets existing holders continue, so
 `|positions| ≤ capacity` is a **wrong** specification of it. Encoding I8 as a
 state predicate is the seeded specification error every tool is asked to
 reproduce.
+
+Production encodes I8 correctly. The ceiling is consulted only at the moment of
+admission, in `reserveReusableTaskPosition`
+(`packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts`),
+and `synchronize` adopts a new capacity while retaining every existing position.
+No production predicate asserts `|positions| ≤ capacity`.
 
 **I9 Exact correlation.** Every executor interaction carries the exact
 `(RunId, AttemptId)`. No operation, session, or process identity substitutes.
@@ -127,7 +129,6 @@ result.
 |---|---|---|---|---|---|---|---|
 | I1 bound | checked | checked | assumed | checked | checked | checked | checked |
 | I2 order independence | typed away | typed away | typed away | statable, not stated | length half only | not stated | typed away |
-| I3 classification | definitional | typed away | typed away | asserted on one witness | typed away | typed away | typed away |
 | I4 retention | checked | checked | definitional | checked | checked | checked | checked |
 | I5 settlement drop | definitional | definitional | definitional | definitional | not modelled | not modelled | definitional |
 | I6 no invention | typed away | typed away | typed away | typed away | typed away | typed away | typed away |

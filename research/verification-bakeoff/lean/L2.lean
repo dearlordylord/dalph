@@ -59,7 +59,12 @@ structure St where
   head : Nat
   crashed : Bool
   /-- History flags. I8 and I13 are transition properties, so a state
-      predicate cannot express them and the state must carry the evidence. -/
+      predicate cannot express them and the state must carry the evidence.
+
+      TODO: both are dead. No `Step` constructor updates either and no clause
+      of `Inv` reads either, so Lean's I8 and I13 rest on the `beginWork` and
+      `promote` guards alone. Quint maintains the same two flags across every
+      action (`quint/deliveryCore.qnt`); mirror that here. -/
   admissionOk : Bool
   promotedExact : Bool
 

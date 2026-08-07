@@ -126,7 +126,7 @@ That is exactly I18's second disjunct, named by the domain rather than by me.
 
 ### It carries a named reason, not a string
 
-Modelled the way I3 models exclusion: a nonempty reason type, so a reason-free
+Modelled the way L1 models exclusion: a nonempty reason type, so a reason-free
 abandonment cannot be written down. `Abandoned` is retained rather than settled
 precisely *because* it carries a stated reason, and a free-text field would make
 the second disjunct of I18 unfalsifiable.
@@ -185,7 +185,7 @@ sampling test reliably catches it.
 1. **Prefix-totality.** `fold` is defined on every prefix, because a crash
    truncates anywhere. Free in Agda and Lean — the totality checker enforces it
    — a real obligation in Dafny, a live risk in TypeScript. Same
-   invariant-disappears-into-a-type phenomenon as I3.
+   invariant-disappears-into-a-type phenomenon as the L1 exclusion reasons.
 2. **Homomorphism.** `fold (p ++ q) = foldFrom (fold p) q`. This *is*
    crash-recovery correctness: reconstructing from a truncated prefix and
    replaying the rest equals reconstructing from the whole journal.
@@ -194,6 +194,27 @@ sampling test reliably catches it.
    invalid shared history fails the Run closed. The subtlest of the four and the
    likeliest to be wrong under maintenance.
 4. **Determinism.** Above.
+
+## The production surface these propositions govern
+
+Two functions carry the whole of crash recovery for delivery, and both rest on
+the fold being correct:
+
+- `activeAttemptPositions`
+  (`packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts`)
+  rebuilds held task-work positions from reduced journal history. It reads the
+  correlation off the stored planned attempt, so restart continues the exact
+  `(RunId, AttemptId)`, and it surrenders a position only on a SafelySuspended
+  or Terminal report. That is I9, I10 and I16 in one place.
+- `makeDeliveryRuntimeAdmissionController` and `synchronize`
+  (`packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts`)
+  adopt those positions and hold the admission ceiling, which is I8.
+
+Proposition 2, the homomorphism, is the statement that the first of those is
+correct: reconstructing from a truncated prefix and replaying the rest equals
+reconstructing from the whole journal. Propositions 1 and 4 are what make it
+meaningful in TypeScript, where a partial fold or a nondeterministic one fails
+silently. No model in this study reaches either function.
 
 ## Why this is more than a fifth L1 property
 

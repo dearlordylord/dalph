@@ -2,6 +2,15 @@
 // model that still expresses invariants 7-19 of ../INVARIANTS.md.
 //
 // MUTANT selects a seeded defect from ../MUTANTS.md. 0 is the faithful model.
+//
+// TODO: this model is bound to no code. Its actions abstract
+// packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts, and
+// nothing checks that the abstraction is faithful. The four specs under
+// specs/*.qnt reach production through
+// packages/dalph/test/conformance/*.mbt.test.ts; this one does not, so every
+// `checked` cell in the Quint column of ../INVARIANTS.md is a statement about
+// the model alone. I16 is the one that matters most: `crash` and `recover`
+// here have no counterpart in any code-bound spec.
 module deliveryCore {
   const MUTANT: int
 
@@ -82,12 +91,6 @@ module deliveryCore {
   /** 1. Bound: selection never exceeds the configured ceiling. */
   val boundRespected: bool = selected.size() <= capacity
 
-  /** 3. Exhaustive: every task is eligible or has a graph-owned reason not to be. */
-  val exhaustiveClassification: bool =
-    TASKS.forall(id =>
-      eligible.contains(id) != (not(tickets.get(id).present) or not(tickets.get(id).open))
-    )
-
   /** 4. Retention: an exact obligation survives every graph placement. */
   val retentionHolds: bool =
     TASKS.forall(id => not(hasObligation(id)) or deliveries.contains(id))
@@ -135,7 +138,6 @@ module deliveryCore {
 
   val allInvariants: bool = and {
     boundRespected,
-    exhaustiveClassification,
     retentionHolds,
     settlementDropped,
     positionDiscipline,

@@ -76,38 +76,7 @@ Only Alloy reports a counterexample as a structure; Dafny and the proof
 assistants report an unproved goal instead, which tells you less about the
 input and more about the specification.
 
-## Proposition 2 — the exhaustive classification (I3)
-
-*Every excluded task carries at least one graph-owned reason.*
-
-This one is the clearest illustration of an invariant disappearing into a type.
-
-**Quint** — a predicate that has to be stated and checked.
-```quint
-val exhaustiveClassification: bool =
-  TASKS.forall(id =>
-    eligible.contains(id) != (not(tickets.get(id).present) or not(tickets.get(id).open))
-  )
-```
-
-**Agda / Lean** — not a theorem at all. The constructor takes a head reason and
-a tail, so a reason-free exclusion cannot be written down.
-```agda
-data Standing : Set where
-  Eligible : Task -> Standing
-  Excluded : Task -> Reasons -> Standing     -- Reasons has a `first` field
-```
-```lean
-inductive Standing where
-  | eligible (taskId : Nat)
-  | excluded (taskId : Nat) (first : Reason) (rest : List Reason)
-```
-
-Your production code already makes this move: `TicketDelivery.standings` is
-`readonly [TicketDeliveryStanding, ...ReadonlyArray<...>]`, a nonempty tuple.
-That is the same idea in TypeScript.
-
-## Proposition 3 — one attempt per task (I10)
+## Proposition 2 — one attempt per task (I10)
 
 *At most one planned attempt per task is unsettled, including across recovery.*
 
@@ -201,7 +170,7 @@ such bounds — `head`, `attempts`, and `capacity` are unbounded. Neither
 generalizes over the *task set*, though: `TaskId := Bool` everywhere, still two
 tasks.
 
-## Proposition 4 — the vacuity check
+## Proposition 3 — the vacuity check
 
 *Is the thing we just proved about anything at all?*
 
@@ -248,7 +217,7 @@ M6 was undetectable until the model could advance the integration target from
 outside; without that action the compare-and-set guard is unreachable and I13
 holds vacuously in *every* tool.
 
-## Proposition 5 — no silent drop (I18)
+## Proposition 4 — no silent drop (I18)
 
 *Every begun responsibility eventually settles or is retained together with an
 exact stated reason.*

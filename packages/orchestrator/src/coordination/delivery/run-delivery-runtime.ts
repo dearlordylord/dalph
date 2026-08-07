@@ -146,6 +146,18 @@ const makeLease = (
 /**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
  * It owns subscriptions, admission, live actions, completion, and quiescence.
+ *
+ * TODO: this is the largest unmodelled state machine in the system. Every
+ * property the delivery requirements rest on — restart mid-attempt, capacity
+ * changed mid-run, operator pause, tickets added to the graph mid-run — is
+ * decided in the loop below, across `owners`, `probe`, `awaitingEvaluation`,
+ * `deferredCompletions`, the selection semaphore, and forked fibers with
+ * interrupt handlers. No model covers any of it.
+ * `research/verification-bakeoff/quint/deliveryCore.qnt` is an abstraction of
+ * what this loop should do and is bound to no code;
+ * `specs/plannedAttemptExecutor.qnt` binds to code and stops at the executor
+ * boundary. Closing that gap means an MBT driver over this loop, which is the
+ * single highest-value model in the study.
  */
 export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>(
   relation: DeliveryRuntimeRelation<E>

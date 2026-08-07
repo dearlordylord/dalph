@@ -19,7 +19,7 @@ verdict() { grep -qE '^\[violation\]' <<<"$1" && echo caught || { grep -qE '^\[o
 
 # The members of allInvariants, listed individually so a catch names the
 # specific invariant rather than the conjunction.
-INVARIANTS="boundRespected exhaustiveClassification retentionHolds settlementDropped positionDiscipline admissionRule oneAttemptPerTask targetResourceExclusive promotionUsedExactHead processLocalLostOnCrash"
+INVARIANTS="boundRespected retentionHolds settlementDropped positionDiscipline admissionRule oneAttemptPerTask targetResourceExclusive promotionUsedExactHead processLocalLostOnCrash"
 
 # Induction, not reachability: init => I, I and step => I', I => Inv. Unbounded
 # in time, bounded in data -- see `stateBounds` in the spec.

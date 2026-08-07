@@ -93,6 +93,22 @@ const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: 
       event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === attemptId
   )?.event
 
+/**
+ * Rebuilds held task-work positions from journal history after process loss.
+ * The correlation comes from the stored planned attempt, so restart continues
+ * the exact `(RunId, AttemptId)` rather than minting a replacement, and a
+ * position is surrendered only on a SafelySuspended or Terminal report —
+ * process loss is neither.
+ *
+ * TODO: this is the derivation half of crash recovery and no model covers it.
+ * It carries I9, I10 and I16 of research/verification-bakeoff/INVARIANTS.md at
+ * once, and I9 is `not modelled` in all seven tools because no model here
+ * carries a RunId or an AttemptId at all. The adoption half is
+ * `makeDeliveryRuntimeAdmissionController` and `synchronize` in
+ * ./delivery-runtime-admission.ts; a crash/recover model needs both ends.
+ * Correctness of the fold this reads from is I15, which
+ * research/verification-bakeoff/JOURNAL-EVENTS.md designs and nothing builds.
+ */
 const activeAttemptPositions = (
   state: Effect.Success<JournalService["state"]["get"]>
 ): DeliveryRuntimeFacts["taskWork"]["held"] =>
