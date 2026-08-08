@@ -1,6 +1,8 @@
 import { plannedTaskAttemptEquivalence, RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import type { OperationId } from "../../identity.js"
+import { isExactTaskClaim, type TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
 import { attemptChoiceAppliedRecordKey } from "../../../workflow-journal/record-key.js"
 import {
   type JournalAppendError,
@@ -12,7 +14,13 @@ import {
 } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
-import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId, type AttemptChoiceSubject } from "./events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  sameAttemptChoiceRequestId,
+  sameAttemptChoiceSubject,
+  type AttemptChoiceSubject
+} from "./events.js"
 import { ApplyAttemptChoiceRequest } from "./request.js"
 
 /** One request identity was already applied with different exact contents. */
@@ -54,12 +62,49 @@ export class AttemptChoiceOutsidePreIntegrationPhase extends Schema.TaggedErrorC
   { requestId: AttemptChoiceRequestId, runId: RunId }
 ) {}
 
+/** No applied direction exists for this self-bound request identity. */
+export class AttemptChoiceResultNotFound extends Schema.TaggedErrorClass<AttemptChoiceResultNotFound>()(
+  "AttemptChoiceResultNotFound",
+  { requestId: AttemptChoiceRequestId }
+) {}
+
+/** The latest durable phase reached only by an applied Stop direction. */
+export type AttemptChoiceStopStatus =
+  | { readonly _tag: "AwaitingQuiescence" }
+  | { readonly _tag: "ImplementationAbandonedClaimDispositionPending" }
+  | { readonly _tag: "ImplementationAbandonedClaimReleasePending"; readonly operationId: OperationId }
+  | { readonly _tag: "SettledReleased"; readonly operationId: OperationId }
+  | {
+      readonly _tag: "SettledNoRelease"
+      readonly observation: TaskClaimObservation
+      readonly observationOperationId: OperationId
+    }
+
+type AttemptChoiceAppliedRecord<Choice extends "ContinueExistingAttempt" | "StopTaskImplementation"> = Omit<
+  JournalRecord,
+  "event"
+> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
+    readonly choice: Choice
+  }
+}
+
+/** Public application/query result: the winning record plus a choice-valid current phase. */
+export type AttemptChoiceApplicationResult =
+  | { readonly _tag: "ContinueApplied"; readonly application: AttemptChoiceAppliedRecord<"ContinueExistingAttempt"> }
+  | {
+      readonly _tag: "StopApplied"
+      readonly application: AttemptChoiceAppliedRecord<"StopTaskImplementation">
+      readonly status: AttemptChoiceStopStatus
+    }
+
 type AttemptChoiceControlError =
   | AttemptChoiceAlreadyApplied
   | AttemptChoiceNotAvailable
   | AttemptChoiceOutsidePreIntegrationPhase
   | AttemptChoiceRequestIdentityContradiction
   | AttemptChoiceRequestRunMismatch
+  | AttemptChoiceResultNotFound
   | JournalAppendError
   | JournalStoreError
   | Schema.SchemaError
@@ -67,7 +112,8 @@ type AttemptChoiceControlError =
   | WorkflowRunNotBegan
 
 interface AttemptChoiceControlService {
-  readonly apply: (input: unknown) => Effect.Effect<JournalRecord, AttemptChoiceControlError>
+  readonly apply: (input: unknown) => Effect.Effect<AttemptChoiceApplicationResult, AttemptChoiceControlError>
+  readonly read: (input: unknown) => Effect.Effect<AttemptChoiceApplicationResult, AttemptChoiceControlError>
 }
 
 /** Applies one exact pre-integration Continue-or-Stop request. */
@@ -75,15 +121,83 @@ export class AttemptChoiceControl extends Context.Service<AttemptChoiceControl, 
   "@dalph/AttemptChoiceControl"
 ) {}
 
-const sameSubject = (left: AttemptChoiceSubject, right: AttemptChoiceSubject): boolean =>
-  left.observedTaskRevision === right.observedTaskRevision &&
-  plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)
-
-const sameRequestId = (left: AttemptChoiceRequestId, right: AttemptChoiceRequestId): boolean =>
-  left.nonce === right.nonce && left.runId === right.runId
-
 const matchingChoice = (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject) =>
-  records.find((record) => record.event._tag === "AttemptChoiceApplied" && sameSubject(record.event.subject, subject))
+  records.find(
+    (record) =>
+      record.event._tag === "AttemptChoiceApplied" &&
+      (sameAttemptChoiceSubject(record.event.subject, subject) ||
+        (record.event.choice === "StopTaskImplementation" &&
+          plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)))
+  )
+
+const currentResultFor = (
+  records: ReadonlyArray<JournalRecord>,
+  application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
+    readonly choice: "StopTaskImplementation"
+  }
+): AttemptChoiceStopStatus => {
+  const abandonment = records.findLast(
+    ({ event }) =>
+      event._tag === "AttemptImplementationAbandoned" &&
+      sameAttemptChoiceRequestId(event.requestId, application.requestId) &&
+      sameAttemptChoiceSubject(event.subject, application.subject)
+  )
+  if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
+    return { _tag: "AwaitingQuiescence" }
+  }
+  const expectedClaim = abandonment.event.expectedClaim
+  const noRelease = records.findLast(
+    ({ event, position }) =>
+      position > abandonment.position &&
+      event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
+      sameAttemptChoiceRequestId(event.requestId, application.requestId) &&
+      sameAttemptChoiceSubject(event.subject, application.subject)
+  )
+  if (noRelease?.event._tag === "StoppedAttemptClaimNoReleaseObserved") {
+    return {
+      _tag: "SettledNoRelease",
+      observation: noRelease.event.observation,
+      observationOperationId: noRelease.event.observationOperationId
+    }
+  }
+  const released = records.findLast(
+    ({ event, position }) =>
+      position > abandonment.position &&
+      event._tag === "TaskClaimReleased" &&
+      isExactTaskClaim(event.release.claim, expectedClaim)
+  )
+  if (released?.event._tag === "TaskClaimReleased") {
+    return { _tag: "SettledReleased", operationId: released.event.release.operationId }
+  }
+  const releaseIntent = records.findLast(
+    ({ event, position }) =>
+      position > abandonment.position &&
+      event._tag === "TaskClaimReleaseIntended" &&
+      isExactTaskClaim(event.operation.release.claim, expectedClaim)
+  )
+  return releaseIntent?.event._tag === "TaskClaimReleaseIntended"
+    ? {
+        _tag: "ImplementationAbandonedClaimReleasePending",
+        operationId: releaseIntent.event.operation.release.operationId
+      }
+    : { _tag: "ImplementationAbandonedClaimDispositionPending" }
+}
+
+const resultFor = (
+  records: ReadonlyArray<JournalRecord>,
+  application: JournalRecord,
+  event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+): AttemptChoiceApplicationResult =>
+  event.choice === "ContinueExistingAttempt"
+    ? {
+        _tag: "ContinueApplied",
+        application: { ...application, event: { ...event, choice: "ContinueExistingAttempt" } }
+      }
+    : {
+        _tag: "StopApplied",
+        application: { ...application, event: { ...event, choice: "StopTaskImplementation" } },
+        status: currentResultFor(records, { ...event, choice: "StopTaskImplementation" })
+      }
 
 const choiceIsExposed = (
   records: ReadonlyArray<JournalRecord>,
@@ -152,11 +266,15 @@ export const attemptChoiceControlLayer = Layer.effect(
         return yield* new WorkflowRunNotBegan({ runId })
       }
       const redelivered = records.find(
-        ({ event }) => event._tag === "AttemptChoiceApplied" && sameRequestId(event.requestId, request.requestId)
+        ({ event }) =>
+          event._tag === "AttemptChoiceApplied" && sameAttemptChoiceRequestId(event.requestId, request.requestId)
       )
       if (redelivered?.event._tag === "AttemptChoiceApplied") {
-        if (redelivered.event.choice === request.choice && sameSubject(redelivered.event.subject, request.subject)) {
-          return redelivered
+        if (
+          redelivered.event.choice === request.choice &&
+          sameAttemptChoiceSubject(redelivered.event.subject, request.subject)
+        ) {
+          return resultFor(records, redelivered, redelivered.event)
         }
         return yield* new AttemptChoiceRequestIdentityContradiction({
           existingPosition: redelivered.position,
@@ -187,19 +305,31 @@ export const attemptChoiceControlLayer = Layer.effect(
       if (unavailable !== undefined) {
         return yield* new AttemptChoiceNotAvailable({ reason: unavailable, requestId: request.requestId, runId })
       }
-      return yield* journal.append(
-        runId,
-        attemptChoiceAppliedRecordKey(request.requestId),
-        AttemptChoiceAppliedEvent.make({
-          choice: request.choice,
-          initiatedBy: { _tag: "Operator" },
-          occurrenceClassification: "InitiatedAction",
-          requestId: request.requestId,
-          subject: request.subject,
-          version: workflowJournalEventVersion
-        })
-      )
+      const event = AttemptChoiceAppliedEvent.make({
+        choice: request.choice,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: request.requestId,
+        subject: request.subject,
+        version: workflowJournalEventVersion
+      })
+      const application = yield* journal.append(runId, attemptChoiceAppliedRecordKey(request.requestId), event)
+      return resultFor([...records, application], application, event)
     })
-    return AttemptChoiceControl.of({ apply: (input) => applications.withPermit(applyUnserialized(input)) })
+    const read = Effect.fn("AttemptChoiceControl.read")(function* (input: unknown) {
+      const requestId = yield* Schema.decodeUnknownEffect(AttemptChoiceRequestId, { onExcessProperty: "error" })(input)
+      const records = yield* journal.read(requestId.runId)
+      const application = records.find(
+        ({ event }) => event._tag === "AttemptChoiceApplied" && sameAttemptChoiceRequestId(event.requestId, requestId)
+      )
+      if (application?.event._tag !== "AttemptChoiceApplied") {
+        return yield* new AttemptChoiceResultNotFound({ requestId })
+      }
+      return resultFor(records, application, application.event)
+    })
+    return AttemptChoiceControl.of({
+      apply: (input) => applications.withPermit(applyUnserialized(input)),
+      read: (input) => applications.withPermit(read(input))
+    })
   })
 )

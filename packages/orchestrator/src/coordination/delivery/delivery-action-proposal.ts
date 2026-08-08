@@ -212,6 +212,7 @@ export type IdentityFreeWorkflowTransition = Extract<
     readonly _tag:
       | "AcquireStartedIntegrationTarget"
       | "AdvanceAttemptStoppage"
+      | "ObserveAttemptStoppageExecutor"
       | "ContinuePlannedAttemptExecutorWork"
       | "ObservePlannedAttemptContinuationExecutor"
       | "ContinueStartedIntegrationCandidate"

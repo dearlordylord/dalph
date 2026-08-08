@@ -14,6 +14,7 @@ export const transitionRoutePolicy = {
   ContinueFreshWorkflowOperation: "FreshProvenance",
   ContinuePlannedAttemptExecutorWork: "IdentityFree",
   ObservePlannedAttemptContinuationExecutor: "IdentityFree",
+  ObserveAttemptStoppageExecutor: "IdentityFree",
   ContinueStartedIntegrationCandidate: "IdentityFree",
   RunTargetVerification: "IdentityFree",
   RunTargetPromotion: "IdentityFree",

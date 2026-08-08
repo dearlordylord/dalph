@@ -41,7 +41,6 @@ import type {
   CompletionClaimReplacementRequest
 } from "../../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
-import type { ActiveTaskClaim, TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -50,7 +49,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   AdvanceAttemptStoppage: {
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
-    readonly taskWorkPosition: "Existing" | "None"
+    readonly taskWorkPosition: "None" | "ReserveOrReuse"
   }
   CheckTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   CommitFreshTaskClaimIntent: { readonly taskId: TaskId; readonly taskRevision: TaskRevision }
@@ -86,6 +85,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly plannedAttempt: PlannedTaskAttempt
   }
   ObservePlannedAttemptContinuationExecutor: { readonly plannedAttempt: PlannedTaskAttempt }
+  ObserveAttemptStoppageExecutor: { readonly requestId: AttemptChoiceRequestId; readonly subject: AttemptChoiceSubject }
   ObserveResponsibleTaskClaim: {
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
     readonly taskId: TaskId
@@ -96,8 +96,6 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   RecordStoppedAttemptClaimNoRelease: {
-    readonly expectedClaim: ActiveTaskClaim
-    readonly observation: TaskClaimObservation
     readonly observationOperationId: OperationId
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
@@ -155,6 +153,7 @@ export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransi
 
 export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId =>
   transition._tag === "AdvanceAttemptStoppage" ||
+  transition._tag === "ObserveAttemptStoppageExecutor" ||
   transition._tag === "ObserveStoppedAttemptClaim" ||
   transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
   transition._tag === "ReleaseStoppedAttemptClaim"
@@ -192,6 +191,7 @@ const transitionTrackerGraphRequirements = {
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
   DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
+  ObserveAttemptStoppageExecutor: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationExecutor: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
@@ -219,7 +219,7 @@ export const transitionTrackerGraphRequirement = (
 export type FrontierExplanation = Data.TaggedEnum<{
   AttemptStoppageWait: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" | "SuspensionLimitReached"
+    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable"
     readonly taskId: TaskId
     readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
   }
@@ -300,6 +300,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly operationId: OperationId
     readonly taskId: TaskId
     readonly wakeCondition: "TaskClaimReleaseReconciled"
+  }
+  StoppedAttemptClaimPlanningWait: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable"
+    readonly taskId: TaskId
+    readonly wakeCondition: "JournalHistoryRepairedOrTargetAvailable"
   }
   StoppedAttemptSettled: {
     readonly claimDisposition: "NoRelease" | "Released"
@@ -451,6 +457,9 @@ const executorDecisionFor = (
       AttemptStoppageRequired: ({ requestId, subject, taskWorkPosition }) => ({
         transition: RunnableFrontierTransition.AdvanceAttemptStoppage({ requestId, subject, taskWorkPosition })
       }),
+      AttemptStoppageExecutorObservationRequired: ({ requestId, subject }) => ({
+        transition: RunnableFrontierTransition.ObserveAttemptStoppageExecutor({ requestId, subject })
+      }),
       AttemptStoppageWait: ({ reason }) => ({
         explanation: FrontierExplanation.AttemptStoppageWait({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
@@ -491,6 +500,14 @@ const executorDecisionFor = (
           operationId,
           taskId: facts.responsibility.plannedAttempt.taskId,
           wakeCondition: "TaskClaimReleaseReconciled"
+        })
+      }),
+      StoppedAttemptClaimPlanningWait: ({ reason }) => ({
+        explanation: FrontierExplanation.StoppedAttemptClaimPlanningWait({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          reason,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "JournalHistoryRepairedOrTargetAvailable"
         })
       }),
       StoppedAttemptClaimUnreadableWait: ({ observationOperationId }) => ({

@@ -7,6 +7,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
   advanceAttemptStoppage,
+  observeAttemptStoppageExecutor,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
 import { deliveryActionCompleted } from "./delivery-action-adapter-common.js"
@@ -20,6 +21,7 @@ type PlannedAttemptTransition = Extract<
     readonly _tag:
       | "ContinuePlannedAttemptExecutorWork"
       | "AdvanceAttemptStoppage"
+      | "ObserveAttemptStoppageExecutor"
       | "ObservePlannedAttemptContinuationExecutor"
       | "RecordStoppedAttemptClaimNoRelease"
       | "SuspendPlannedAttemptExecutorWork"
@@ -46,9 +48,13 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
   transition: PlannedAttemptTransition,
   lease: DeliveryActionExecutionLease
 ) {
-  if (transition._tag === "AdvanceAttemptStoppage") {
-    const result = yield* advanceAttemptStoppage(transition.requestId, transition.subject)
-    if (transition.taskWorkPosition === "Existing" && result._tag === "AttemptImplementationAbandoned") {
+  if (transition._tag === "AdvanceAttemptStoppage" || transition._tag === "ObserveAttemptStoppageExecutor") {
+    const result = yield* transition._tag === "AdvanceAttemptStoppage"
+      ? advanceAttemptStoppage(transition.requestId, transition.subject)
+      : observeAttemptStoppageExecutor(transition.requestId, transition.subject)
+    const taskWorkPositionWasRequired =
+      transition._tag === "ObserveAttemptStoppageExecutor" || transition.taskWorkPosition === "ReserveOrReuse"
+    if (taskWorkPositionWasRequired && result._tag === "AttemptImplementationAbandoned") {
       yield* lease.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.subject.plannedAttempt))
     }
     return deliveryActionCompleted(action.proposal.id)
@@ -57,8 +63,7 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     yield* recordStoppedAttemptClaimNoRelease(
       transition.requestId,
       transition.subject,
-      transition.observationOperationId,
-      transition.observation
+      transition.observationOperationId
     )
     return deliveryActionCompleted(action.proposal.id)
   }

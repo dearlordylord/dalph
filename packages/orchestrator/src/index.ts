@@ -7,14 +7,20 @@ export {
   AttemptImplementationAbandonedEvent,
   AttemptQuiescenceProof,
   AttemptStoppageIntendedEvent,
+  attemptChoiceSubjectKey,
+  sameAttemptChoiceRequestId,
+  sameAttemptChoiceSubject,
   StoppedAttemptClaimNoReleaseObservedEvent
 } from "./workflow/protocols/attempt-choice/events.js"
 export { ApplyAttemptChoiceRequest } from "./workflow/protocols/attempt-choice/request.js"
 export {
   AttemptChoiceAlreadyApplied,
+  type AttemptChoiceApplicationResult,
   AttemptChoiceControl,
+  type AttemptChoiceStopStatus,
   AttemptChoiceNotAvailable,
   AttemptChoiceOutsidePreIntegrationPhase,
+  AttemptChoiceResultNotFound,
   AttemptChoiceRequestIdentityContradiction,
   AttemptChoiceRequestRunMismatch,
   attemptChoiceControlLayer

@@ -36,6 +36,7 @@ type IntegrationTransition = Exclude<
       | "AdvanceAttemptStoppage"
       | "ContinuePlannedAttemptExecutorWork"
       | "ObservePlannedAttemptContinuationExecutor"
+      | "ObserveAttemptStoppageExecutor"
       | "RecordStoppedAttemptClaimNoRelease"
       | "SuspendPlannedAttemptExecutorWork"
   }

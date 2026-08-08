@@ -1,4 +1,4 @@
-import { PlannedTaskAttempt, RunId, TaskRevision } from "@dalph/contracts"
+import { PlannedTaskAttempt, plannedTaskAttemptEquivalence, RunId, TaskRevision } from "@dalph/contracts"
 import { Schema } from "effect"
 import { ActiveTaskClaim, TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
 import { OperationId } from "../../identity.js"
@@ -32,6 +32,18 @@ export const AttemptChoiceSubject = Schema.Struct({
   )
 )
 export type AttemptChoiceSubject = typeof AttemptChoiceSubject.Type
+
+/** Exact structural equality for one opaque request identity bound to its Run. */
+export const sameAttemptChoiceRequestId = (left: AttemptChoiceRequestId, right: AttemptChoiceRequestId): boolean =>
+  left.nonce === right.nonce && left.runId === right.runId
+
+/** Exact immutable attempt plus observed authored fingerprint governed by one choice. */
+export const sameAttemptChoiceSubject = (left: AttemptChoiceSubject, right: AttemptChoiceSubject): boolean =>
+  left.observedTaskRevision === right.observedTaskRevision &&
+  plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)
+
+/** Stable key for the one winner allowed for an exact changed-task choice. */
+export const attemptChoiceSubjectKey = (subject: AttemptChoiceSubject): string => JSON.stringify(subject)
 
 /** Operator durably chose how one exact pre-integration attempt may proceed. */
 export const AttemptChoiceAppliedEvent = Schema.TaggedStruct("AttemptChoiceApplied", {

@@ -11,7 +11,6 @@ import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/t
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
-import type { ActiveTaskClaim, TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
 import type { OperationId } from "../../workflow/identity.js"
 
 /** Exact accepted executor fact from which one continuation is authorized. */
@@ -25,11 +24,13 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   AttemptStoppageRequired: {
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
-    readonly taskWorkPosition: "Existing" | "None"
+    readonly taskWorkPosition: "None" | "ReserveOrReuse"
   }
-  AttemptStoppageWait: {
-    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" | "SuspensionLimitReached"
+  AttemptStoppageExecutorObservationRequired: {
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
   }
+  AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" }
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -38,8 +39,6 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
   StoppedAttemptClaimNoReleaseRequired: {
-    readonly expectedClaim: ActiveTaskClaim
-    readonly observation: TaskClaimObservation
     readonly observationOperationId: OperationId
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
@@ -55,6 +54,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   StoppedAttemptClaimReleasePending: { readonly operationId: OperationId }
+  StoppedAttemptClaimPlanningWait: { readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable" }
   StoppedAttemptClaimUnreadableWait: { readonly observationOperationId: OperationId }
   StoppedAttemptSettled: { readonly claimDisposition: "NoRelease" | "Released" }
   PlannedAttemptGitConstraint: {
@@ -107,11 +107,13 @@ export type PlannedAttemptExecutorDisposition =
           | "PlannedAttemptExecutorWorkTerminal"
           | "PlannedAttemptExecutorSuspensionRequested"
           | "AttemptStoppageRequired"
+          | "AttemptStoppageExecutorObservationRequired"
           | "AttemptStoppageWait"
           | "StoppedAttemptClaimNoReleaseRequired"
           | "StoppedAttemptClaimObservationRequired"
           | "StoppedAttemptClaimReleaseRequired"
           | "StoppedAttemptClaimReleasePending"
+          | "StoppedAttemptClaimPlanningWait"
           | "StoppedAttemptClaimUnreadableWait"
           | "StoppedAttemptSettled"
           | "PlannedAttemptGitConstraint"
@@ -137,11 +139,13 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
       | "AttemptStoppageRequired"
+      | "AttemptStoppageExecutorObservationRequired"
       | "AttemptStoppageWait"
       | "StoppedAttemptClaimNoReleaseRequired"
       | "StoppedAttemptClaimObservationRequired"
       | "StoppedAttemptClaimReleaseRequired"
       | "StoppedAttemptClaimReleasePending"
+      | "StoppedAttemptClaimPlanningWait"
       | "StoppedAttemptClaimUnreadableWait"
       | "StoppedAttemptSettled"
       | "PlannedAttemptGitConstraint"

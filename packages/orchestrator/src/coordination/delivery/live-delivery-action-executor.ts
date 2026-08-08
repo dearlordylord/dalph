@@ -42,6 +42,7 @@ const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree"
     transition._tag === "AdvanceAttemptStoppage" ||
     transition._tag === "ContinuePlannedAttemptExecutorWork" ||
     transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
+    transition._tag === "ObserveAttemptStoppageExecutor" ||
     transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
     transition._tag === "SuspendPlannedAttemptExecutorWork"
   ) {

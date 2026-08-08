@@ -50,6 +50,7 @@ import type {
 import type { DeliveryRelationSourceError } from "./relations.js"
 import type {
   advanceAttemptStoppage,
+  observeAttemptStoppageExecutor,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
 
@@ -131,6 +132,7 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof advanceAttemptStoppage>
+  | EffectFunctionFailure<typeof observeAttemptStoppageExecutor>
   | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>
   | EffectFunctionFailure<typeof queueAcceptedResultIntegrationResponsibility>
   | EffectFunctionFailure<typeof recoverTaskClaimOperation>

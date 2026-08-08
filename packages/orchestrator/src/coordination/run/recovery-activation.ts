@@ -61,6 +61,7 @@ import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/ta
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -118,18 +119,6 @@ const appliedStopChoiceFor = (records: ReadonlyArray<JournalRecord>, plannedAtte
       plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
   )
 
-const exactAttemptChoiceRequest = (
-  left: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>["requestId"],
-  right: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>["requestId"]
-): boolean => left.nonce === right.nonce && left.runId === right.runId
-
-const exactAttemptChoiceSubject = (
-  left: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>["subject"],
-  right: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>["subject"]
-): boolean =>
-  left.observedTaskRevision === right.observedTaskRevision &&
-  plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)
-
 const stopExecutorEventIsFor = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean =>
   (event._tag === "PlannedAttemptExecutorCommandIntended" ||
     event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
@@ -173,8 +162,8 @@ const stoppedAttemptDisposition = (
   const abandonment = records.findLast(
     ({ event }) =>
       event._tag === "AttemptImplementationAbandoned" &&
-      exactAttemptChoiceRequest(event.requestId, requestId) &&
-      exactAttemptChoiceSubject(event.subject, subject)
+      sameAttemptChoiceRequestId(event.requestId, requestId) &&
+      sameAttemptChoiceSubject(event.subject, subject)
   )
   if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
     const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -199,9 +188,6 @@ const stoppedAttemptDisposition = (
         event.plannedAttempt.runId === plannedAttempt.runId &&
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length
-    if (!quiescenceIsAlreadyProved && suspensionCommandCount >= defaultPlannedAttemptExecutorSuspensionLimit) {
-      return ResponsibilityDisposition.AttemptStoppageWait({ reason: "SuspensionLimitReached" })
-    }
     const latestStopExecutorRecord = records.findLast(
       ({ event, position }) =>
         position > applied.position &&
@@ -219,18 +205,21 @@ const stoppedAttemptDisposition = (
         reason: stopWaitReasonFor(latestStopExecutorRecord.event)
       })
     }
+    if (!quiescenceIsAlreadyProved && suspensionCommandCount >= defaultPlannedAttemptExecutorSuspensionLimit) {
+      return ResponsibilityDisposition.AttemptStoppageExecutorObservationRequired({ requestId, subject })
+    }
     return ResponsibilityDisposition.AttemptStoppageRequired({
       requestId,
       subject,
-      taskWorkPosition: quiescenceIsAlreadyProved ? "None" : "Existing"
+      taskWorkPosition: quiescenceIsAlreadyProved ? "None" : "ReserveOrReuse"
     })
   }
   const expectedClaim = abandonment.event.expectedClaim
   const noRelease = records.some(
     ({ event }) =>
       event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-      exactAttemptChoiceRequest(event.requestId, requestId) &&
-      exactAttemptChoiceSubject(event.subject, subject)
+      sameAttemptChoiceRequestId(event.requestId, requestId) &&
+      sameAttemptChoiceSubject(event.subject, subject)
   )
   if (noRelease) return ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "NoRelease" })
   const released = records.some(
@@ -246,41 +235,38 @@ const stoppedAttemptDisposition = (
       event._tag === "TaskClaimReleaseIntended" &&
       isExactTaskClaim(event.operation.release.claim, expectedClaim)
   )
-  if (releaseIntent?.event._tag === "TaskClaimReleaseIntended") {
-    return ResponsibilityDisposition.StoppedAttemptClaimReleasePending({
-      operationId: releaseIntent.event.operation.release.operationId
-    })
-  }
+  const observationBaseline = releaseIntent?.position ?? abandonment.position
   const claimObservation = records.findLast(
     ({ event, position }) =>
-      position > abandonment.position &&
+      position > observationBaseline &&
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "FocusedTaskClaimFacts" ||
         event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
       event.observation.coverage.taskId === plannedAttempt.taskId
   )
   const target = continuationTarget(records)
-  if (
-    claimObservation === undefined ||
-    (claimObservation.event._tag === "TaskTrackerFactsObserved" &&
-      claimObservation.event.observation._tag === "FocusedTaskClaimFactsUnreadable" &&
-      !positionIsAfter(claimObservation.position, activationBaselinePosition))
-  ) {
-    if (target === undefined) return ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorUnavailable" })
-    const after = claimObservation?.position ?? abandonment.position
+  if (claimObservation === undefined || !positionIsAfter(claimObservation.position, activationBaselinePosition)) {
+    if (target === undefined) {
+      return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "TrackerTargetUnavailable" })
+    }
+    const after = claimObservation?.position ?? observationBaseline
+    const releaseOperationId =
+      releaseIntent?.event._tag === "TaskClaimReleaseIntended"
+        ? releaseIntent.event.operation.release.operationId
+        : undefined
     return ResponsibilityDisposition.StoppedAttemptClaimObservationRequired({
       operation: makeTaskClaimObservationOperation(
         OperationId.make(`attempt-stop:${requestId.nonce}:after:${after}:claim`),
         target,
         plannedAttempt.taskId,
-        [expectedClaim.operationId]
+        releaseOperationId === undefined ? [expectedClaim.operationId] : [expectedClaim.operationId, releaseOperationId]
       ),
       requestId,
       subject
     })
   }
   if (claimObservation.event._tag !== "TaskTrackerFactsObserved") {
-    return ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorUnavailable" })
+    return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
   }
   if (claimObservation.event.observation._tag === "FocusedTaskClaimFactsUnreadable") {
     return ResponsibilityDisposition.StoppedAttemptClaimUnreadableWait({
@@ -288,14 +274,19 @@ const stoppedAttemptDisposition = (
     })
   }
   if (claimObservation.event.observation._tag !== "FocusedTaskClaimFacts") {
-    return ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorUnavailable" })
+    return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
   }
   const observation = claimObservation.event.observation.observation
   if (observation._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observation, expectedClaim)) {
     return ResponsibilityDisposition.StoppedAttemptClaimNoReleaseRequired({
-      expectedClaim,
-      observation,
       observationOperationId: claimObservation.event.operationId,
+      requestId,
+      subject
+    })
+  }
+  if (releaseIntent?.event._tag === "TaskClaimReleaseIntended") {
+    return ResponsibilityDisposition.StoppedAttemptClaimReleaseRequired({
+      operation: releaseIntent.event.operation,
       requestId,
       subject
     })
@@ -479,7 +470,17 @@ const deriveJournalResponsibilityFacts = (
   )
   return runState.responsibility.entries.map((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") {
-      const settled = settledOperationIds.has(workflowResponsibilityOperationId(responsibility))
+      const stoppedNoReleaseSettlesResponsibility =
+        responsibility._tag === "TaskClaimReleaseResponsibility" &&
+        records.some(
+          ({ event, position }) =>
+            position > responsibility.beganAt &&
+            event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
+            isExactTaskClaim(event.expectedClaim, responsibility.operation.release.claim)
+        )
+      const settled =
+        settledOperationIds.has(workflowResponsibilityOperationId(responsibility)) ||
+        stoppedNoReleaseSettlesResponsibility
       const expectedClaim =
         responsibility._tag === "TaskClaimReleaseResponsibility"
           ? responsibility.operation.release.claim
@@ -495,14 +496,24 @@ const deriveJournalResponsibilityFacts = (
               expectedClaim,
               freshnessBaselineForTask(responsibility.taskId)
             )
+      const stoppedAttemptOwnsClaimRelease =
+        responsibility._tag === "TaskClaimReleaseResponsibility" &&
+        records.some(
+          ({ event, position }) =>
+            position < responsibility.beganAt &&
+            event._tag === "AttemptImplementationAbandoned" &&
+            isExactTaskClaim(event.expectedClaim, responsibility.operation.release.claim)
+        )
       return {
         _tag: "WorkflowOperationFreshFacts" as const,
         disposition: !settled
-          ? taskLeftMembership(responsibility.taskId)
-            ? ResponsibilityDisposition.TaskMembershipConstraint()
-            : claimAuthority !== undefined && claimAuthority._tag !== "Exact"
-              ? ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: claimAuthority._tag })
-              : ResponsibilityDisposition.Ready()
+          ? stoppedAttemptOwnsClaimRelease
+            ? ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Unobserved" })
+            : taskLeftMembership(responsibility.taskId)
+              ? ResponsibilityDisposition.TaskMembershipConstraint()
+              : claimAuthority !== undefined && claimAuthority._tag !== "Exact"
+                ? ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: claimAuthority._tag })
+                : ResponsibilityDisposition.Ready()
           : ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
         responsibility
       }
@@ -908,10 +919,15 @@ const continuationRequiresFreshFacts = (
 }
 
 const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_tag"]>([
+  "AdvanceAttemptStoppage",
   "CheckTaskClaim",
+  "ObserveAttemptStoppageExecutor",
+  "ObserveStoppedAttemptClaim",
+  "RecordStoppedAttemptClaimNoRelease",
   "ReconcileTaskClaim",
   "ReconcileTaskClaimRelease",
   "ReconcileTaskWorktree",
+  "ReleaseStoppedAttemptClaim",
   "SuspendPlannedAttemptExecutorWork",
   "ReleaseStartedIntegrationTarget"
 ])
@@ -1367,6 +1383,7 @@ const continuationDecisionFor = (
 }
 
 const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
+  "AttemptStoppageWait",
   "IntegrationDependencyWait",
   "IntegrationConfigurationWait",
   "IntegrationInProgress",
@@ -1380,24 +1397,33 @@ const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
   "PlannedAttemptTaskExternalSuccessConstraint",
   "PlannedAttemptTaskMembershipConstraint",
   "PlannedAttemptTaskSpecificationChangeConstraint",
+  "StoppedAttemptClaimPlanningWait",
+  "StoppedAttemptClaimReleasePending",
+  "StoppedAttemptClaimWait",
+  "StoppedAttemptSettled",
   "WorkflowOperationTaskMembershipConstraint"
 ])
 
 const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
   "AcquireStartedIntegrationTarget",
+  "AdvanceAttemptStoppage",
   "CommitTaskClaimReacquisitionIntent",
   "ContinueStartedIntegrationCandidate",
   "RunTargetVerification",
   "RunTargetPromotion",
   "ObservePlannedAttemptContinuationGraph",
+  "ObserveAttemptStoppageExecutor",
   "ObservePlannedAttemptContinuationClaim",
   "ObservePlannedAttemptContinuationExecutor",
   "ObservePlannedAttemptContinuationSpecification",
   "ObservePlannedAttemptContinuationTargetLineage",
   "ObservePlannedAttemptContinuationWorktree",
   "ObserveResponsibleTaskClaim",
+  "ObserveStoppedAttemptClaim",
   "QueueAcceptedResultIntegrationResponsibility",
   "ReleaseExternallyCompletedTaskClaim",
+  "RecordStoppedAttemptClaimNoRelease",
+  "ReleaseStoppedAttemptClaim",
   "ReleaseStartedIntegrationTarget",
   "SuspendPlannedAttemptExecutorWork",
   "StartQueuedIntegration"

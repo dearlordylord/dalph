@@ -53,15 +53,13 @@ const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPo
   const taskId = runnableTransitionTaskId(transition)
   if (mode === "Existing") {
     /* v8 ignore start -- transitionTaskWorkPosition returns Existing only for executor suspension. */
-    if (transition._tag !== "SuspendPlannedAttemptExecutorWork" && transition._tag !== "AdvanceAttemptStoppage") {
+    if (transition._tag !== "SuspendPlannedAttemptExecutorWork") {
       return { _tag: "NoTaskWorkPosition" }
     }
     /* v8 ignore stop */
     return {
       _tag: "TaskWorkPositionRequired",
-      correlation: plannedAttemptExecutorCorrelation(
-        transition._tag === "AdvanceAttemptStoppage" ? transition.subject.plannedAttempt : transition.plannedAttempt
-      ),
+      correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt),
       mode,
       taskId
     }
@@ -69,10 +67,12 @@ const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPo
   return {
     _tag: "TaskWorkPositionRequired",
     mode,
-    ...(transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-    transition._tag === "StartPlannedAttemptExecutorWork"
-      ? { retainAs: plannedAttemptExecutorCorrelation(transition.plannedAttempt) }
-      : {}),
+    ...(transition._tag === "AdvanceAttemptStoppage" || transition._tag === "ObserveAttemptStoppageExecutor"
+      ? { retainAs: plannedAttemptExecutorCorrelation(transition.subject.plannedAttempt) }
+      : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+          transition._tag === "StartPlannedAttemptExecutorWork"
+        ? { retainAs: plannedAttemptExecutorCorrelation(transition.plannedAttempt) }
+        : {}),
     taskId
   }
 }

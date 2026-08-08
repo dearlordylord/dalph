@@ -166,12 +166,67 @@ it.effect("records both task fingerprints when Alice continues the exact attempt
     const input = request("ContinueExistingAttempt", "continue-D1")
     const applied = yield* (yield* AttemptChoiceControl).apply(input)
 
-    expect(applied.event).toMatchObject({
+    expect(applied.application.event).toMatchObject({
       _tag: "AttemptChoiceApplied",
       choice: "ContinueExistingAttempt",
       requestId: input.requestId,
       subject: { observedTaskRevision: observedRevision, plannedAttempt }
     })
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("coalesces exact Stop redelivery and rejects request identity reuse", () =>
+  Effect.gen(function* () {
+    yield* appendExposedChoice()
+    const control = yield* AttemptChoiceControl
+    const input = request("StopTaskImplementation", "stable-D2")
+    const first = yield* control.apply(input)
+
+    expect(first).toMatchObject({ _tag: "StopApplied", status: { _tag: "AwaitingQuiescence" } })
+    expect(yield* control.apply(input)).toEqual(first)
+    expect(yield* control.read(input.requestId)).toEqual(first)
+    const contradiction = yield* control.apply(request("ContinueExistingAttempt", "stable-D2")).pipe(Effect.flip)
+    expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects every later fingerprint choice after Stop wins the exact attempt", () =>
+  Effect.gen(function* () {
+    yield* appendExposedChoice()
+    const control = yield* AttemptChoiceControl
+    yield* control.apply(request("StopTaskImplementation", "terminal-stop-D2"))
+    const target = FixtureTarget.make("attempt-choice-target")
+    const changedAgain = makeTaskWorkSpecification({ body: "Changed body F3", taskId, title: "Changed title F3" })
+    const operation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("attempt-choice-observe-F3"),
+      target,
+      taskId,
+      []
+    )
+    const journal = yield* JournalStore
+    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(operation, changedAgain)
+      )
+    )
+
+    for (const [choice, nonce] of [
+      ["ContinueExistingAttempt", "after-stop-continue-F3"],
+      ["StopTaskImplementation", "after-stop-stop-F3"]
+    ] as const) {
+      const rejection = yield* control
+        .apply({
+          choice,
+          requestId: AttemptChoiceRequestId.make({ nonce, runId }),
+          subject: { observedTaskRevision: changedAgain.fingerprint, plannedAttempt }
+        })
+        .pipe(Effect.flip)
+      expect(rejection).toBeInstanceOf(AttemptChoiceAlreadyApplied)
+    }
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
