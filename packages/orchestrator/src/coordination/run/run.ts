@@ -24,10 +24,10 @@ import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../d
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
-import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
 import { makeSyntheticDeliveryRelations } from "../delivery/synthetic-delivery-relations.js"
 import { makeSyntheticDeliveryActionExecutorWithAcceptedFacts } from "../delivery/synthetic-delivery-action-executor.js"
 import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
+import { runStabilizedDelivery } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
@@ -151,6 +151,7 @@ const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <
   EExecutor,
   RExecutor
 >(
+  target: TrackerTarget,
   relationsEffect: Effect.Effect<Relations, ERelations, RRelations>,
   executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>
 ) {
@@ -162,7 +163,9 @@ const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <
         const consequences = yield* delivery
         const relation = yield* deliveryRuntimeFrom(consequences)
 
-        return yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, executor))
+        return yield* runStabilizedDelivery(target, relation).pipe(
+          Effect.provideService(DeliveryActionExecutor, executor)
+        )
       }).pipe(Effect.provide(relations))
     })
   )
@@ -180,7 +183,7 @@ export const runWorkflow = (
       target,
       initialControlPolicy,
       runId,
-      runFlatDelivery(makeJournaledDeliveryRelations(runId, target), () =>
+      runFlatDelivery(target, makeJournaledDeliveryRelations(runId, target), () =>
         makeLiveDeliveryActionExecutor(runId, target)
       )
     )
@@ -199,7 +202,7 @@ export const runRecoveredWorkflow = (target: TrackerTarget) =>
           return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         }
         /* v8 ignore stop */
-        return yield* runFlatDelivery(makeJournaledDeliveryRelations(recovery.runId, target), () =>
+        return yield* runFlatDelivery(target, makeJournaledDeliveryRelations(recovery.runId, target), () =>
           makeLiveDeliveryActionExecutor(recovery.runId, target)
         )
       })
@@ -220,7 +223,7 @@ export const runSyntheticWorkflowWithBootstrap = (
       runId,
       Effect.gen(function* () {
         const synthetic = yield* makeSyntheticDeliveryRelations(runId, target, initialControlPolicy)
-        return yield* runFlatDelivery(Effect.succeed(synthetic.layer), () =>
+        return yield* runFlatDelivery(target, Effect.succeed(synthetic.layer), () =>
           makeSyntheticDeliveryActionExecutorWithAcceptedFacts(runId, target, synthetic.acceptedFacts)
         )
       })

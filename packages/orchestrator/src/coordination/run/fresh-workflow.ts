@@ -16,6 +16,7 @@ const claimRank = 1
 const specificationRank = 2
 const otherWorkflowOperationRank = 3
 const executorWorkRank = 4
+const lastElementOffset = -1
 
 export interface FreshWorkflowDecision {
   readonly step: FreshWorkflowStepType
@@ -59,7 +60,6 @@ const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySe
 const journaledStepFor = (
   task: Task,
   records: ReadonlyArray<JournalRecord>,
-  currentGraphOperationId: OperationId,
   recoveredAttemptIds: ReadonlySet<AttemptId>
 ): FreshWorkflowStepType => {
   const executorResponsibility = records.findLast(
@@ -171,7 +171,23 @@ const journaledStepFor = (
   if (currentTaskGraph?._tag === "TaskTrackerReadIntentRecorded") {
     return FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId: currentTaskGraph.operation.operationId, task })
   }
-  return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: currentGraphOperationId, task })
+  // A validated journaled frame has an accepted complete read covering every task it contains.
+  const latestGraphCoveringTask = Option.getOrThrow(
+    Option.fromUndefinedOr(
+      records
+        .flatMap(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          observed.has(event.operation.operationId) &&
+          (event.operation.readShape.explicitlyCoveredTaskIds.length === 0 ||
+            event.operation.readShape.explicitlyCoveredTaskIds.includes(task.id))
+            ? [event.operation]
+            : []
+        )
+        .at(lastElementOffset)
+    )
+  )
+  return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: latestGraphCoveringTask.operationId, task })
 }
 
 // eslint-disable-next-line complexity -- Accepted non-durable facts derive the same next workflow operation families.
@@ -282,7 +298,6 @@ export const deriveFreshWorkflowDecisions = (
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
-      event.operation.predecessorOperationIds.length === 0 &&
       event.operation.readShape.explicitlyCoveredTaskIds.length === 0 &&
       observedOperationIds.has(event.operation.operationId)
   )
@@ -323,7 +338,7 @@ export const deriveFreshWorkflowDecisions = (
       const step =
         frame._tag === "SyntheticCurrentDeliveryFrame"
           ? syntheticStepFor(task, frame.workflowFacts, frame.currentGraphOperationId)
-          : journaledStepFor(task, records, frame.currentGraphOperationId, recoveredAttemptIds)
+          : journaledStepFor(task, records, recoveredAttemptIds)
       return step === undefined ? [] : [decisionFor(step)]
     })
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {

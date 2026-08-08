@@ -26,14 +26,17 @@ export interface CoherentDeliveryActionPlanningInputSignal<E> extends CurrentSig
   readonly [DeliveryConsequences, DeliveryActionPlanningInput],
   E
 > {
-  readonly changesWithinStableRevision: Stream.Stream<readonly [DeliveryConsequences, DeliveryActionPlanningInput], E>
-  readonly getWithinStableRevision: Effect.Effect<readonly [DeliveryConsequences, DeliveryActionPlanningInput], E>
+  readonly changesWithinStablePublication: Stream.Stream<
+    readonly [DeliveryConsequences, DeliveryActionPlanningInput],
+    E
+  >
+  readonly getWithinStablePublication: Effect.Effect<readonly [DeliveryConsequences, DeliveryActionPlanningInput], E>
 }
 
 /** A planned frontier with an ungated read reserved for the existing gated runtime adapter. */
 export interface DeliveryActionPlanningSignal<E> extends CurrentSignal<DeliveryProposalFrontier, E> {
-  readonly changesWithinStableRevision: Stream.Stream<DeliveryProposalFrontier, E>
-  readonly getWithinStableRevision: Effect.Effect<DeliveryProposalFrontier, E>
+  readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E>
+  readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E>
 }
 
 /** Exact proposed-action requirements supplied together by each descriptive owner. */
@@ -54,12 +57,7 @@ const frontierKey = (frontier: DeliveryProposalFrontier): string => JSON.stringi
 const trackerGraphRequirementsFor = (
   graph: TrackerGraphState,
   proposals: ReadonlyArray<TrackerGraphActionProposal>
-): ReadonlyArray<TrackerGraphActionProposal> =>
-  proposals.filter(({ route }) =>
-    graph._tag === "GraphNotEstablished"
-      ? route.purpose === "EstablishCurrentGraph"
-      : route.purpose === "QuiescenceProbe"
-  )
+): ReadonlyArray<TrackerGraphActionProposal> => (graph._tag === "GraphNotEstablished" ? proposals : [])
 
 const frontierOf = (delivery: DeliveryConsequences, input: DeliveryActionPlanningInput): DeliveryProposalFrontier =>
   deliveryProposalFrontierOf(
@@ -84,12 +82,12 @@ export const deliveryActionPlanning = Effect.fn("Delivery.actionPlanning")(funct
   const coherent = inputs.withConsequences(consequences)
   const frontier = mapCurrentSignal(coherent, ([delivery, input]) => frontierOf(delivery, input))
   return {
-    changesWithinStableRevision: coherent.changesWithinStableRevision.pipe(
+    changesWithinStablePublication: coherent.changesWithinStablePublication.pipe(
       Stream.map(([delivery, input]) => frontierOf(delivery, input)),
       Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right))
     ),
     get: frontier.get,
-    getWithinStableRevision: coherent.getWithinStableRevision.pipe(
+    getWithinStablePublication: coherent.getWithinStablePublication.pipe(
       Effect.map(([delivery, input]) => frontierOf(delivery, input))
     ),
     changes: frontier.changes.pipe(Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right)))

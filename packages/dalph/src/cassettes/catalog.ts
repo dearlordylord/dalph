@@ -337,8 +337,6 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decod
       report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: twoEligibleTasksGraph },
     {
       _tag: "ExpectedBehavior",
       orchestration: [
@@ -678,8 +676,6 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.de
       report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
     {
       _tag: "ExpectedBehavior",
       orchestration: [
@@ -780,8 +776,6 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
       report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
     {
       _tag: "ExpectedBehavior",
       orchestration: null,
@@ -917,8 +911,6 @@ const candidateScenarioFrom = (
       return [
         { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
         ...candidateStory,
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-        { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
         {
           ...item,
           /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */

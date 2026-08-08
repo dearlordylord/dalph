@@ -116,6 +116,38 @@ it.effect("begins a fresh Run before exposing only its journal-backed runtime ca
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("accepts recovered bootstrap after an active finality proof", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-incomplete-recovery")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const activations = yield* Ref.make<ReadonlyArray<"Fresh" | "Recovered">>([])
+      const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+
+      expect(
+        yield* bootstrap.fresh(
+          target,
+          initialPolicy,
+          runId,
+          Ref.update(activations, (seen) => [...seen, "Fresh" as const]).pipe(Effect.as(finalityProof(active)))
+        )
+      ).toEqual(active)
+      expect(
+        yield* bootstrap.recovered(
+          target,
+          Ref.update(activations, (seen) => [...seen, "Recovered" as const]).pipe(Effect.as(finalityProof(active)))
+        )
+      ).toEqual(active)
+
+      expect(yield* Ref.get(activations)).toEqual(["Fresh", "Recovered"])
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("rejects a different fresh Run identity before recording its beginning", () =>
   Effect.scoped(
     Effect.gen(function* () {

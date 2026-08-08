@@ -39,6 +39,7 @@ on the issue while later dependent work proceeds.
 |---|---|
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
+| `issue-194-stabilize-each-run.md` | 194 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

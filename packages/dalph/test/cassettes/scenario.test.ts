@@ -987,7 +987,6 @@ it.effect("starts a queued accepted result in the same live coordinator process"
       story: [
         ...source.slice(0, deathAt),
         ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1),
-        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1),
         withoutCandidateExpectation
       ]
     })
@@ -999,7 +998,7 @@ it.effect("starts a queued accepted result in the same live coordinator process"
   })
 )
 
-it.effect("continues the same run with B only after a recorded refresh reports A completed", () =>
+it.effect("resumes actions when G2 introduces eligible B", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
     const executorResponsibilities = run.records.flatMap(({ event }) =>
@@ -1205,7 +1204,6 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           report: { _tag: "Terminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } },
           request: "StartOrContinue"
         },
-        ...read(changedGraph),
         {
           _tag: "ExpectedBehavior",
           orchestration: null,
@@ -1752,8 +1750,6 @@ it.effect(
             report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
             request: "StartOrContinue"
           },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           {
             _tag: "ExpectedBehavior",
             orchestration: [

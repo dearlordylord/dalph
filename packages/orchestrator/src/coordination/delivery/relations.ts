@@ -418,20 +418,13 @@ export interface DeliveryTaskWorkAdmissionBasis {
 
 /** Whether an empty relation may ask for one final graph read or must remain passive. */
 export type DeliveryQuiescenceDisposition =
-  | { readonly _tag: "QuiescenceProbeAllowed" }
-  | { readonly _tag: "QuiescencePassive"; readonly reason: "ProbeNotRequired" | "RunPaused" }
-
-/** Monotonic process-local version of one fully reconciled delivery relation value. */
-export const DeliveryRelationRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
-  Schema.brand("DeliveryRelationRevision")
-)
-export type DeliveryRelationRevision = typeof DeliveryRelationRevision.Type
+  | { readonly _tag: "TrackerReconfirmationAllowed" }
+  | { readonly _tag: "QuiescencePassive"; readonly reason: "RunPaused" }
 
 /** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
 export interface DeliveryRuntimeFacts {
   readonly acceptedAt: JournalPosition | null
   readonly quiescence: DeliveryQuiescenceDisposition
-  readonly revision: DeliveryRelationRevision
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
 }
 
@@ -464,19 +457,9 @@ export interface DeliveryRuntimeEvaluation {
   readonly _tag: "DeliveryRuntimeEvaluation"
   readonly acceptedAt: JournalPosition | null
   readonly current: DeliveryRuntimeSnapshot
-  readonly finality: RunFinalityDecisionType
   readonly proposedActions: DeliveryProposalFrontier
   readonly quiescence: DeliveryQuiescenceDisposition
-  readonly revision: DeliveryRelationRevision
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
-}
-
-export interface DeliveryRuntimeRelation<E = DeliveryReflectionError> {
-  readonly current: CurrentSignal<DeliveryRuntimeSnapshot, E>
-  readonly evaluations: CurrentSignal<DeliveryRuntimeEvaluation, E>
-  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
-  /** Temporary #193 port used only to request the final tracker read; #194 removes it. */
-  readonly requestStabilizationRead: () => Effect.Effect<DeliveryRelationRevision>
 }
 
 const trackerTargetIsSettled = (graph: TrackerGraphState): boolean =>
@@ -506,7 +489,7 @@ export const deliveryFinalityOf = (
   proposedActions: DeliveryProposalFrontier,
   quiescence: DeliveryQuiescenceDisposition
 ): RunFinalityDecisionType => {
-  if (quiescence._tag === "QuiescencePassive" && quiescence.reason === "RunPaused") {
+  if (quiescence._tag === "QuiescencePassive") {
     return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
   if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
@@ -562,42 +545,6 @@ export const deliveryProposalFrontierOf = (
     : { _tag: "DeliveryProposalOwnershipConflict", conflicts: [firstConflict, ...remainingConflicts] }
 }
 
-/** Adapts descriptive delivery and an already-planned frontier to the temporary runtime relation. */
-export const makeDeliveryRuntimeRelation = <E>(input: {
-  /** Canonical descriptive current; runtime snapshots never reconstruct it from action-plan inputs. */
-  readonly delivery: CurrentSignal<DeliveryConsequences, E>
-  readonly facts: CurrentSignal<DeliveryRuntimeFacts, E>
-  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
-  readonly requestStabilizationRead: DeliveryRuntimeRelation<E>["requestStabilizationRead"]
-}): DeliveryRuntimeRelation<E | DeliveryRelationSourceError> => {
-  const snapshot = mapCurrentSignal(input.delivery, (delivery) => ({
-    _tag: "DeliveryRuntimeSnapshot" as const,
-    reflection: delivery.trackerConsequences,
-    settlements: delivery.settlements,
-    ticketDeliveries: delivery.ticketDeliveries,
-    trackerGraph: delivery.graph
-  }))
-  const evaluations = mapCurrentSignal(
-    zipCurrentSignals(zipCurrentSignals(snapshot, input.proposedActions), input.facts),
-    ([[current, frontier], facts]): DeliveryRuntimeEvaluation => ({
-      _tag: "DeliveryRuntimeEvaluation",
-      acceptedAt: facts.acceptedAt,
-      current,
-      finality: deliveryFinalityOf(current, frontier, facts.quiescence),
-      proposedActions: frontier,
-      quiescence: facts.quiescence,
-      revision: facts.revision,
-      taskWork: facts.taskWork
-    })
-  )
-  return {
-    current: snapshot,
-    evaluations,
-    proposedActions: input.proposedActions,
-    requestStabilizationRead: input.requestStabilizationRead
-  }
-}
-
 export interface BoundedParallelTicketsProjectionService {
   readonly of: <E>(
     frontier: CurrentSignal<DeliveryFrontier, E>
@@ -647,11 +594,11 @@ export interface DeliveryRuntimeAssemblyService {
     readonly delivery: CurrentSignal<DeliveryConsequences, E>
     readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError> & {
       /** Ungated current-first planning stream used only while this assembly holds the shared publication gate. */
-      readonly changesWithinStableRevision: Stream.Stream<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
+      readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
       /** Ungated planning read used only while this assembly holds the shared publication gate. */
-      readonly getWithinStableRevision: Effect.Effect<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
+      readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
     }
-  }) => DeliveryRuntimeRelation<E | DeliveryRelationSourceError>
+  }) => CurrentSignal<DeliveryRuntimeEvaluation, E | DeliveryRelationSourceError>
 }
 
 export class DeliveryRuntimeAssembly extends Context.Service<DeliveryRuntimeAssembly, DeliveryRuntimeAssemblyService>()(

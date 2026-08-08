@@ -5,19 +5,22 @@ import { expect, it } from "vitest"
 
 const orchestratorSource = fileURLToPath(new URL("../../../orchestrator/src/", import.meta.url))
 const runSourcePath = `${orchestratorSource}/coordination/run/run.ts`
+const stabilizationSourcePath = `${orchestratorSource}/coordination/run/run-stabilization.ts`
 const deliverySourcePath = `${orchestratorSource}/coordination/delivery/delivery.ts`
 
 /**
  * The flat delivery composition is a shape, not a behavior, so nothing else can
  * check it. One descriptive composition and one runtime consumer is the whole
- * architecture: a second `delivery.pipe(` or a second `runDeliveryRuntime(` is
+ * architecture: a second delivery composition or Run stabilizer connection is
  * an alternate scheduler, which is what the flat cutover removed.
  */
 it("runs every mode through one descriptive delivery and one runtime consumer", () => {
   const runSource = readFileSync(runSourcePath, "utf8")
+  const stabilizationSource = readFileSync(stabilizationSourcePath, "utf8")
 
   expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
-  expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
+  expect(runSource.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
+  expect(stabilizationSource.match(/\brunDeliveryRuntimePhase\(/g)).toHaveLength(2)
   expect(runSource).toContain("makeJournaledDeliveryRelations")
   expect(runSource).toContain("makeSyntheticDeliveryRelations")
 })

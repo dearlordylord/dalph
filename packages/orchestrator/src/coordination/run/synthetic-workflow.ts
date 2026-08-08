@@ -6,6 +6,7 @@ import type { InitialControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { journaledImplicitCoverageTrackerGraphInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
@@ -25,13 +26,17 @@ const syntheticJournaledRunLayer = (runId: RunId) =>
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
+        const implicitCoverageGraphJournaledInterpreter = journaledImplicitCoverageTrackerGraphInterpreterLayer(
+          activeRunId,
+          Layer.succeed(WorkflowInterpreter, interpreter)
+        )
         const controls = Layer.mergeAll(
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
         return validatedStartupRecoveryLayer(activeRunId, undefined, startup).pipe(
-          Layer.provide(Layer.succeed(WorkflowInterpreter, interpreter)),
+          Layer.provide(implicitCoverageGraphJournaledInterpreter),
           Layer.provide(controls),
           Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
           Layer.provide(Layer.succeed(WorkflowTrace, trace))

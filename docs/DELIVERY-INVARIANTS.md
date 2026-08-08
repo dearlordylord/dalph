@@ -264,19 +264,26 @@ eventually settles or is retained together with an exact stated reason.
 a fixed constant in every model)`
 
 **D34 Quiescence is not completion.** With no new tracker facts the run reaches
-quiescence. Quiescence proves no currently executable action — not completion
-and not an empty target. D35 owns what termination requires. Quiescence is never
-inferred from process loss, a timeout, or missing session data.
+quiescence only when the executable proposal frontier is empty and no admitted
+action still has a live owner. Quiescence proves no currently executable action
+— not completion and not an empty target. Only one later accepted complete
+tracker observation may support the activation's next decision. Quiescence is
+never inferred from process loss, a timeout, a boundary result not yet published
+by delivery planning, or missing session data. D35 owns termination.
 → `I19`
 
-**D35 A Run does not terminate while it owes work.** Termination requires no
-outstanding obligation and no executable action. An unsettled retained
-responsibility keeps the Run active.
+**D35 A Run does not terminate while it owes work.** Termination requires a
+later accepted complete tracker observation proving the target settled, no
+outstanding obligation, no executable action, and no live action owner. An
+unsettled retained responsibility keeps the Run active.
 → `statable, not stated` — the safety companion to D33 and D34, and stated by
 no encoding.
 
-**D36 No busy loop on unchanged facts.** Unchanged observations do not produce
-repeated work.
+**D36 No busy loop on unchanged facts.** One activation performs at most one
+post-quiescence tracker reconfirmation. It runs any actions introduced by that
+observation to quiescence and then returns; unchanged observations do not
+produce repeated work or continuous polling. A later activation may perform
+its own one-shot reconfirmation.
 → `—` every model's actions are enabled by state rather than by observation, so
 a repeated identical observation is not a distinguishable event.
 

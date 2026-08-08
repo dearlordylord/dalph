@@ -6,7 +6,7 @@ import {
   PlannedTaskAttemptPlanner
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { RunFinalityProof } from "../frontier/run-finality.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -26,8 +26,10 @@ import {
 import {
   type CurrentSignal,
   type DeliveryProposalFrontier,
-  type DeliveryRelationRevision,
-  type DeliveryRuntimeEvaluation
+  type DeliveryQuiescenceDisposition,
+  type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeSnapshot,
+  type TrackerGraphState
 } from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 
@@ -35,6 +37,15 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedErrorClass<DeliveryRuntimeProposalOwnershipConflict>()(
   "DeliveryRuntimeProposalOwnershipConflict",
   { proposalIds: Schema.Array(DeliveryProposalId) }
+) {}
+
+/** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
+export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErrorClass<DeliveryRuntimeReconfirmationStateInvalid>()(
+  "DeliveryRuntimeReconfirmationStateInvalid",
+  {
+    acceptedAt: Schema.NullOr(JournalPosition),
+    graphState: Schema.Literals(["GraphEstablished", "GraphNotEstablished"])
+  }
 ) {}
 
 interface LiveOwner {
@@ -54,50 +65,12 @@ interface Completion {
 type RuntimeEvent<E> =
   | { readonly _tag: "ActionCompleted"; readonly completion: Completion }
   | { readonly _tag: "EvaluationChanged"; readonly evaluation: DeliveryRuntimeEvaluation }
-  | {
-      readonly _tag: "ProposalsChanged"
-      readonly evaluation: DeliveryRuntimeEvaluation
-      readonly proposals: DeliveryProposalFrontier
-    }
   | { readonly _tag: "RelationFailed"; readonly cause: Cause.Cause<E> }
-
-type QuiescenceProbeState =
-  | { readonly _tag: "NoProbe" }
-  | { readonly _tag: "ProbeCompleted"; readonly startedRevision: DeliveryRelationRevision }
-  | { readonly _tag: "ProbeRequested"; readonly requestedRevision: DeliveryRelationRevision }
-
-const isQuiescenceProbe = (proposal: DeliveryActionProposal): boolean =>
-  proposal.route._tag === "TrackerGraphReadRoute" && proposal.route.purpose === "QuiescenceProbe"
-
-export const proposalFrontiersAgree = (left: DeliveryProposalFrontier, right: DeliveryProposalFrontier): boolean => {
-  if (left._tag !== right._tag) return false
-  if (left._tag === "DeliveryProposalOwnershipConflict") {
-    /* v8 ignore start -- equal frontier tags already prove this narrowing. */
-    if (right._tag !== "DeliveryProposalOwnershipConflict") return false
-    /* v8 ignore stop */
-    return (
-      left.conflicts.length === right.conflicts.length &&
-      left.conflicts.every(({ id }, index) => right.conflicts[index]?.id === id)
-    )
-  }
-  /* v8 ignore start -- equal frontier tags already prove this narrowing. */
-  if (right._tag !== "DeliveryProposalsAvailable") return false
-  /* v8 ignore stop */
-  return (
-    left.proposals.length === right.proposals.length &&
-    left.proposals.every(({ id }, index) => right.proposals[index]?.id === id)
-  )
-}
 
 export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId: DeliveryProposalId): boolean =>
   frontier._tag === "DeliveryProposalsAvailable"
     ? frontier.proposals.some(({ id }) => id === proposalId)
     : frontier.conflicts.some(({ id }) => id === proposalId)
-
-const completedProbeAllowsFinality = (
-  probe: QuiescenceProbeState,
-  currentRevision: DeliveryRelationRevision
-): boolean => probe._tag === "ProbeCompleted" && currentRevision > probe.startedRevision
 
 const proposalTaskId = (proposal: DeliveryActionProposal) => {
   const requirement = proposal.admission.taskWorkPosition
@@ -123,16 +96,35 @@ const makeLease = (
 })
 
 /**
- * The runtime consumes the ordinary evaluation and proposal signals directly.
- * The proposal signal is deliberately separate: an authority fact may remove
- * a proposal before the interpreter has returned its in-memory action result.
- * Only the stabilization port is allowed to request a new read.
+ * The runtime consumes one coherent current-first evaluation signal. Authority
+ * facts may remove a proposal before its admitted interpreter has returned;
+ * live ownership remains process-local until that exact action settles.
  */
-export interface DeliveryRuntimeInput<E = never> {
-  readonly evaluations: CurrentSignal<DeliveryRuntimeEvaluation, E>
-  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
-  readonly requestStabilizationRead: () => Effect.Effect<DeliveryRelationRevision>
+export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
+
+type AvailableProposalFrontier = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
+type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
+type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
+type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> & {
+  readonly trackerGraph: EstablishedTrackerGraph
 }
+
+/** The exact descriptive state observed after no executable or admitted action remains. */
+export type DeliveryRuntimeQuiescence =
+  | {
+      readonly _tag: "PassiveRuntimeQuiescence"
+      readonly acceptedAt: DeliveryRuntimeEvaluation["acceptedAt"]
+      readonly current: DeliveryRuntimeSnapshot
+      readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "QuiescencePassive" }>
+      readonly proposedActions: EmptyProposalFrontier
+    }
+  | {
+      readonly _tag: "TrackerReconfirmationQuiescence"
+      readonly acceptedAt: JournalPosition
+      readonly current: EstablishedRuntimeSnapshot
+      readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "TrackerReconfirmationAllowed" }>
+      readonly proposedActions: EmptyProposalFrontier
+    }
 
 /**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
@@ -141,20 +133,23 @@ export interface DeliveryRuntimeInput<E = never> {
  * TODO: this is the largest unmodelled state machine in the system. Every
  * property the delivery requirements rest on — restart mid-attempt, capacity
  * changed mid-run, operator pause, tickets added to the graph mid-run — is
- * decided in the loop below, across `owners`, `probe`, the selection semaphore,
- * and forked fibers with
- * interrupt handlers. No model covers any of it.
+ * decided in the loop below, across `owners`, the selection semaphore, and
+ * forked fibers with interrupt handlers. No model covers any of it.
  * `research/verification-bakeoff/quint/deliveryCore.qnt` is an abstraction of
  * what this loop should do and is bound to no code;
  * `specs/plannedAttemptExecutor.qnt` binds to code and stops at the executor
  * boundary. Closing that gap means an MBT driver over this loop, which is the
  * single highest-value model in the study.
  */
-export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>(
+export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
   relation: DeliveryRuntimeInput<E>
 ): Effect.fn.Return<
-  RunFinalityProof,
-  E | DeliveryActionExecutionError | DeliveryRuntimeProposalOwnershipConflict | PlannedTaskAttemptError,
+  DeliveryRuntimeQuiescence,
+  | E
+  | DeliveryActionExecutionError
+  | DeliveryRuntimeProposalOwnershipConflict
+  | DeliveryRuntimeReconfirmationStateInvalid
+  | PlannedTaskAttemptError,
   DeliveryActionExecutor | DeliveryRuntimeResources | OperationIdAllocator | PlannedTaskAttemptPlanner
 > {
   return yield* Effect.scoped(
@@ -171,45 +166,24 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
-      const latestProposals = yield* Ref.make<Option.Option<DeliveryProposalFrontier>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
-      const probe = yield* Ref.make<QuiescenceProbeState>({ _tag: "NoProbe" })
-      const first = yield* relation.evaluations.get
-      const firstProposals = yield* relation.proposedActions.get
+      const first = yield* relation.get
       yield* Ref.set(latest, Option.some(first))
-      yield* Ref.set(latestProposals, Option.some(firstProposals))
       const admission = yield* makeDeliveryRuntimeAdmissionController(first.taskWork, integrationTargets)
       const evaluationsSubscribed = yield* Deferred.make<void>()
-      const proposalsSubscribed = yield* Deferred.make<void>()
 
-      yield* relation.evaluations.changes.pipe(
+      yield* relation.changes.pipe(
         Stream.tap(() => Deferred.succeed(evaluationsSubscribed, undefined)),
         Stream.drop(1),
         Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
         Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
         Effect.forkIn(scope)
       )
-      yield* relation.proposedActions.changes.pipe(
-        Stream.tap(() => Deferred.succeed(proposalsSubscribed, undefined)),
-        Stream.drop(1),
-        Stream.runForEach((proposals) =>
-          relation.evaluations.get.pipe(
-            Effect.flatMap((evaluation) => Queue.offer(events, { _tag: "ProposalsChanged", evaluation, proposals }))
-          )
-        ),
-        Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
-        Effect.forkIn(scope)
-      )
       yield* Deferred.await(evaluationsSubscribed)
-      yield* Deferred.await(proposalsSubscribed)
-      // Close the interval between the initial sample and both subscriptions.
-      // A fact accepted in that interval is already the streams' dropped
-      // current value, so sample once more after both subscriptions are live.
-      const subscribedCurrent = yield* relation.evaluations.get
-      const subscribedProposals = yield* relation.proposedActions.get
+      // Close the interval between the initial sample and the live subscription.
+      const subscribedCurrent = yield* relation.get
       yield* Ref.set(latest, Option.some(subscribedCurrent))
-      yield* Ref.set(latestProposals, Option.some(subscribedProposals))
       yield* admission.synchronize(subscribedCurrent.taskWork)
 
       const start = Effect.fn("DeliveryRuntime.startProposal")(function* (
@@ -289,7 +263,7 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
             yield* admission.synchronize(current.taskWork)
-            const proposedActions = Option.getOrThrow(yield* Ref.get(latestProposals))
+            const proposedActions = current.proposedActions
             if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
               return yield* new DeliveryRuntimeProposalOwnershipConflict({
                 proposalIds: proposedActions.conflicts.map(({ id }) => id)
@@ -339,24 +313,9 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
-        const prior = yield* Ref.get(latest)
-        if (Option.isSome(prior) && evaluation.revision < prior.value.revision) return false
         yield* Ref.set(latest, Option.some(evaluation))
         yield* admission.synchronize(evaluation.taskWork)
-        return true
-      })
-
-      const applyProposals = Effect.fn("DeliveryRuntime.applyProposals")(function* (
-        proposedActions: DeliveryProposalFrontier
-      ) {
-        yield* Ref.set(latestProposals, Option.some(proposedActions))
-        if (
-          proposedActions._tag === "DeliveryProposalsAvailable" &&
-          proposedActions.proposals.some((proposal) => !isQuiescenceProbe(proposal))
-        ) {
-          yield* Ref.set(probe, { _tag: "NoProbe" })
-        }
-        yield* selectionGate.withPermit(pruneSettledOwners(proposedActions))
+        yield* selectionGate.withPermit(pruneSettledOwners(evaluation.proposedActions))
       })
 
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
@@ -378,22 +337,12 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
                 outcome: completion.exit.value._tag,
                 proposalId: completion.proposalId
               })
-              if (isQuiescenceProbe(owner.proposal)) {
-                yield* Ref.update(probe, (current) =>
-                  current._tag === "ProbeRequested"
-                    ? ({
-                        _tag: "ProbeCompleted",
-                        startedRevision: current.requestedRevision
-                      } satisfies QuiescenceProbeState)
-                    : current
-                )
-              }
               yield* Ref.set(owner.settled, true)
-              const frontier = Option.getOrThrow(yield* Ref.get(latestProposals))
-              if (!proposalIsPresent(frontier, owner.proposal.id)) {
+              const current = Option.getOrThrow(yield* Ref.get(latest))
+              if (!proposalIsPresent(current.proposedActions, completion.proposalId)) {
                 yield* Ref.update(
                   owners,
-                  (current) => new Map([...current].filter(([id]) => id !== completion.proposalId))
+                  (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
               }
             }
@@ -404,44 +353,50 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
         return result
       })
 
-      const finalityAtQuiescence = Effect.fn("DeliveryRuntime.finalityAtQuiescence")(function* (
+      const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* (
         current: DeliveryRuntimeEvaluation,
-        proposedActions: DeliveryProposalFrontier,
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>
       ) {
+        const proposedActions = current.proposedActions
         /* v8 ignore start -- admitPass rejects a conflicting frontier before finality is evaluated. */
-        if (proposedActions._tag === "DeliveryProposalOwnershipConflict") return Option.none<RunFinalityProof>()
+        if (proposedActions._tag === "DeliveryProposalOwnershipConflict")
+          return Option.none<DeliveryRuntimeQuiescence>()
         /* v8 ignore stop */
         if (live.size !== 0 || proposedActions.proposals.length !== 0) {
-          return Option.none<RunFinalityProof>()
+          return Option.none<DeliveryRuntimeQuiescence>()
         }
-        if (!proposalFrontiersAgree(current.proposedActions, proposedActions)) {
-          return Option.none<RunFinalityProof>()
-        }
+        const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
         if (current.quiescence._tag === "QuiescencePassive") {
-          return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
+          const quiescence: DeliveryRuntimeQuiescence = {
+            _tag: "PassiveRuntimeQuiescence",
+            acceptedAt: current.acceptedAt,
+            current: current.current,
+            disposition: current.quiescence,
+            proposedActions: empty
+          }
+          return Option.some(quiescence)
         }
-        const currentProbe = yield* Ref.get(probe)
-        if (completedProbeAllowsFinality(currentProbe, current.revision)) {
-          return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
+        const graph = current.current.trackerGraph
+        if (graph._tag !== "GraphEstablished" || current.acceptedAt === null) {
+          return yield* new DeliveryRuntimeReconfirmationStateInvalid({
+            acceptedAt: current.acceptedAt,
+            graphState: graph._tag
+          })
         }
-        if (currentProbe._tag === "NoProbe") {
-          const requestedRevision = yield* relation.requestStabilizationRead()
-          yield* Ref.set(probe, { _tag: "ProbeRequested", requestedRevision })
+        const quiescence: DeliveryRuntimeQuiescence = {
+          _tag: "TrackerReconfirmationQuiescence",
+          acceptedAt: current.acceptedAt,
+          current: { ...current.current, trackerGraph: graph },
+          disposition: current.quiescence,
+          proposedActions: empty
         }
-        return Option.none<RunFinalityProof>()
+        return Option.some(quiescence)
       })
 
       const applyRuntimeEvent = Effect.fn("DeliveryRuntime.applyEvent")(function* (event: RuntimeEvent<E>) {
         if (event._tag === "RelationFailed") return yield* Effect.failCause(event.cause)
         if (event._tag === "EvaluationChanged") {
           yield* applyEvaluation(event.evaluation)
-          return
-        }
-        if (event._tag === "ProposalsChanged") {
-          if (!proposalFrontiersAgree(event.evaluation.proposedActions, event.proposals)) return
-          if (!(yield* applyEvaluation(event.evaluation))) return
-          yield* applyProposals(event.proposals)
           return
         }
         const exit = yield* applyCompletion(event.completion)
@@ -452,15 +407,18 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
         while (yield* admitPass()) yield* Effect.yieldNow
 
         const current = Option.getOrThrow(yield* Ref.get(latest))
-        const proposedActions = Option.getOrThrow(yield* Ref.get(latestProposals))
         const live = yield* Ref.get(owners)
-        const finality = yield* finalityAtQuiescence(current, proposedActions, live)
-        if (Option.isSome(finality)) return finality.value
+        const quiescence = yield* runtimeQuiescence(current, live)
+        if (Option.isSome(quiescence)) return quiescence.value
 
         yield* applyRuntimeEvent(yield* Queue.take(events))
       }
     })
-  ).pipe(
-    Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))
   )
 })
+
+/** Runs one standalone runtime phase and releases its process-local resources at the phase boundary. */
+export const runDeliveryRuntime = <E>(relation: DeliveryRuntimeInput<E>) =>
+  runDeliveryRuntimePhase(relation).pipe(
+    Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))
+  )

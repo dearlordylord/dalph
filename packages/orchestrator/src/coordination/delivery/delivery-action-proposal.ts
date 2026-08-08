@@ -159,7 +159,7 @@ export type FreshOperationOnlyRoute =
   | { readonly _tag: "RecoveredNewActionRoute"; readonly action: NewRecoveredWorkflowAction }
   | {
       readonly _tag: "TrackerGraphReadRoute"
-      readonly purpose: "EstablishCurrentGraph" | "QuiescenceProbe"
+      readonly purpose: "EstablishCurrentGraph"
       readonly target: TrackerTarget
     }
 
@@ -307,7 +307,7 @@ export interface DeliveryProposalsInput {
 
 export interface TrackerGraphReadProposalInput {
   readonly acceptedAt: JournalPosition | null
-  readonly purpose: "EstablishCurrentGraph" | "QuiescenceProbe"
+  readonly purpose: "EstablishCurrentGraph"
   readonly runId: RunId
   readonly target: TrackerTarget
 }

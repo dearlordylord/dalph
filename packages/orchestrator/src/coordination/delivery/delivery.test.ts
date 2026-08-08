@@ -32,7 +32,6 @@ import {
   boundedParallelTickets,
   currentSignalOf,
   deliveryFinalityOf,
-  DeliveryRelationRevision,
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
@@ -82,7 +81,7 @@ const deliveryConsequencesKeyContract: ExactKeys<
 const makeDeliveryRelationsLayer = (
   input: Omit<
     Parameters<typeof makeDeliveryRelationsLayerWithRuntime>[0],
-    "evaluationConsistency" | "requestStabilizationRead" | "runtimeFacts" | "coherent"
+    "publicationConsistency" | "runtimeFacts" | "coherent"
   > & {
     readonly graph: CurrentSignal<TrackerGraphState>
     readonly exactEvidence: CurrentSignal<ReadonlyArray<TicketDeliveryEvidence>>
@@ -97,8 +96,7 @@ const makeDeliveryRelationsLayer = (
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
-          quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-          revision: DeliveryRelationRevision.make(0),
+          quiescence: { _tag: "TrackerReconfirmationAllowed" },
           taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
         },
         trackerGraphProposals: []
@@ -167,8 +165,8 @@ it.effect("assembles the literal delivery relation with honestly empty settlemen
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
-    const first = Array.from(yield* Stream.runCollect(relation.current.changes))
-    const second = Array.from(yield* Stream.runCollect(relation.current.changes))
+    const first = Array.from(yield* Stream.runCollect(relation.changes)).map(({ current }) => current)
+    const second = Array.from(yield* Stream.runCollect(relation.changes)).map(({ current }) => current)
 
     expect(first).toHaveLength(1)
     expect(second).toEqual(first)
@@ -255,7 +253,12 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
             policy: currentSignalOf(policy)
           })
         ),
-        Effect.flatMap((relation) => relation.current.changes.pipe(Stream.runHead))
+        Effect.flatMap((relation) =>
+          relation.changes.pipe(
+            Stream.map(({ current }) => current),
+            Stream.runHead
+          )
+        )
       )
     )
     const correlation = { attemptId: AttemptId.make("synthetic-finality-attempt"), runId: RunId.make("synthetic") }
@@ -284,7 +287,7 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
           }
         },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
-        { _tag: "QuiescencePassive", reason: "ProbeNotRequired" }
+        { _tag: "TrackerReconfirmationAllowed" }
       )
 
     expect(finalityFor(PlannedAttemptExecutorResult.cases.Completed.make({}))).toEqual({
@@ -309,7 +312,12 @@ it.effect("keeps a settled journaled graph active while the Run is paused", () =
       policy: currentSignalOf(policy)
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-    const current = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current }) => current),
+        Stream.runHead
+      )
+    )
 
     expect(
       deliveryFinalityOf(
@@ -327,7 +335,7 @@ it.effect("keeps a settled journaled graph active while the Run is paused", () =
             { id: DeliveryProposalId.make("finality-owner-conflict"), owners: ["TrackerGraph", "TicketDelivery"] }
           ]
         },
-        { _tag: "QuiescencePassive", reason: "ProbeNotRequired" }
+        { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
@@ -342,8 +350,8 @@ it.effect("keeps every descriptive subscription action-free", () =>
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
-    const first = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
-    const second = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
+    const first = Array.from(yield* Stream.runCollect(relation.changes)).map(({ proposedActions }) => proposedActions)
+    const second = Array.from(yield* Stream.runCollect(relation.changes)).map(({ proposedActions }) => proposedActions)
     expect(first).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
     expect(second).toEqual(first)
   })
@@ -392,7 +400,8 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
       )
 
       const firstObserved = yield* Deferred.make<void>()
-      const collected = yield* relation.proposedActions.changes.pipe(
+      const collected = yield* relation.changes.pipe(
+        Stream.map(({ proposedActions }) => proposedActions),
         Stream.tap(() => Deferred.succeed(firstObserved, undefined)),
         Stream.take(2),
         Stream.runCollect,
@@ -432,18 +441,12 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
       transitions: [transition]
     }).ticketDelivery[0]
     if (lowerProposal === undefined) return yield* Effect.die("fixture must derive a lower proposal")
-    const probe = trackerGraphReadProposalOf({
-      acceptedAt: JournalPosition.make(2),
-      purpose: "QuiescenceProbe",
-      runId: RunId.make("legacy-action-run"),
-      target: FixtureTarget.make("legacy-action-target")
-    })
     const layer = makeDeliveryRelationsLayer({
       exactEvidence: currentSignalOf([]),
       graph: currentSignalOf(journaledGraphState(journaledGraph("canonical-delivery-current"))),
       policy: currentSignalOf(policy),
       proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [lowerProposal] }),
-      trackerGraphProposals: currentSignalOf([probe])
+      trackerGraphProposals: currentSignalOf([])
     })
     const { current, first, second, trackerProposals } = yield* Effect.gen(function* () {
       const consequences = yield* delivery
@@ -465,7 +468,6 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
     expect(first).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
     expect(trackerProposals).toEqual([])
     expect(lowerProposal.actionIdentity._tag).toBe("FreshOperationIdRequired")
-    expect(yield* deterministicDeliveryRuntimeSupport(policy).requestStabilizationRead()).toBe(0)
   })
 )
 
@@ -492,7 +494,7 @@ it.effect("fails closed when two owners claim one proposal identity", () =>
       const consequences = yield* delivery
       const proposals = yield* deliveryActionPlanning(consequences)
       const runtime = yield* deliveryRuntime
-      return { frontier: yield* proposals.get, runtimeFrontier: yield* runtime.proposedActions.get }
+      return { frontier: yield* proposals.get, runtimeFrontier: (yield* runtime.get).proposedActions }
     }).pipe(Effect.provide(layer))
 
     expect(frontier).toEqual({
@@ -512,7 +514,7 @@ it.effect("combines every proposal owner in accepted order", () =>
     ) => ({
       ...trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(ordinal + 2),
-        purpose: "QuiescenceProbe",
+        purpose: "EstablishCurrentGraph",
         runId: RunId.make("proposal-composition"),
         target: FixtureTarget.make(`proposal-composition-target-${ordinal}`)
       }),
@@ -626,7 +628,7 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
           Stream.runCollect,
           Effect.forkChild
         )
-        const stableCollected = yield* proposals.changesWithinStableRevision.pipe(
+        const stableCollected = yield* proposals.changesWithinStablePublication.pipe(
           Stream.take(2),
           Stream.runCollect,
           Effect.forkChild
@@ -659,8 +661,8 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
     const evaluate = Effect.gen(function* () {
       const relation = yield* deliveryRuntime.pipe(Effect.provide(makeDeliveryRelationsLayer(input)))
       return {
-        actions: Array.from(yield* Stream.runCollect(relation.proposedActions.changes)),
-        current: Array.from(yield* Stream.runCollect(relation.current.changes))
+        actions: Array.from(yield* Stream.runCollect(relation.changes)).map(({ proposedActions }) => proposedActions),
+        current: Array.from(yield* Stream.runCollect(relation.changes)).map(({ current }) => current)
       }
     })
 
@@ -682,11 +684,11 @@ it.effect("preserves each causal graph revision through final reflection", () =>
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+    const relation = yield* delivery.pipe(Effect.provide(layer))
 
-    const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
+    const reflections = Array.from(yield* Stream.runCollect(relation.changes))
 
-    expect(reflections.map(({ trackerGraph }) => trackerGraph)).toEqual([graphOne, graphTwo])
+    expect(reflections.map(({ graph }) => graph)).toEqual([graphOne, graphTwo])
   })
 )
 
@@ -703,9 +705,9 @@ it.effect("recomputes the same flat relation when the current policy changes", (
       exactEvidence: currentSignalOf([]),
       policy: { get: Effect.succeed(policy), changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
     })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+    const relation = yield* delivery.pipe(Effect.provide(layer))
 
-    const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
+    const reflections = Array.from(yield* Stream.runCollect(relation.changes))
 
     expect(reflections.map(({ ticketDeliveries }) => ticketDeliveries.deliveries.map(({ taskId }) => taskId))).toEqual([
       [taskA],
@@ -726,9 +728,9 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
       },
       policy: currentSignalOf(policy)
     })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+    const relation = yield* delivery.pipe(Effect.provide(layer))
 
-    const reflections = Array.from(yield* Stream.runCollect(relation.current.changes))
+    const reflections = Array.from(yield* Stream.runCollect(relation.changes))
 
     expect(reflections.map(({ ticketDeliveries }) => ticketDeliveries.deliveries.map(({ taskId }) => taskId))).toEqual([
       [taskA],
@@ -740,7 +742,7 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
   })
 )
 
-it("keeps the production delivery Effect flat and free of runtime-coloured coordination", () => {
+it("keeps quiescence probes out of action planning and compatibility runtime code", () => {
   const deliverySource = readFileSync(fileURLToPath(new URL("./delivery.ts", import.meta.url)), "utf8")
   const planningSource = readFileSync(fileURLToPath(new URL("./delivery-action-planning.ts", import.meta.url)), "utf8")
   const runtimeAdapterSource = readFileSync(
@@ -766,6 +768,12 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
     "utf8"
   )
   const runSource = readFileSync(fileURLToPath(new URL("../run/run.ts", import.meta.url)), "utf8")
+  const inMemorySource = readFileSync(fileURLToPath(new URL("./in-memory-relations.ts", import.meta.url)), "utf8")
+  const reactiveSource = readFileSync(
+    fileURLToPath(new URL("./reactive-delivery-relations.ts", import.meta.url)),
+    "utf8"
+  )
+  const runtimeSource = readFileSync(fileURLToPath(new URL("./run-delivery-runtime.ts", import.meta.url)), "utf8")
 
   const outerEffect = deliverySource.slice(deliverySource.indexOf("export const delivery"))
   expect(outerEffect).toBe(`export const delivery = Effect.gen(function* () {
@@ -799,8 +807,14 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   )
   expect(runtimeAdapterSource).toContain("const proposedActions = yield* deliveryActionPlanning(consequences)")
   expect(runtimeAdapterSource).toContain("return assembly.of({ delivery: consequences, proposedActions })")
+  expect(
+    `${planningSource}\n${proposalModelSource}\n${runtimeAdapterSource}\n${relationSource}\n${inMemorySource}\n${reactiveSource}\n${runtimeSource}`
+  ).not.toContain("QuiescenceProbe")
+  expect(relationSource).not.toContain("DeliveryRuntimeRelation")
+  expect(relationSource).not.toContain("DeliveryRelationRevision")
+  expect(inMemorySource).not.toContain("hasNonProbeWork")
   expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
-  expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
+  expect(runSource.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
 })
 
 it("keeps the live action dispatcher free of workflow protocol implementations", () => {

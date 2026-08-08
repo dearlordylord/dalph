@@ -12,15 +12,12 @@ import {
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
   makeDeliveryReflection,
-  makeDeliveryRuntimeRelation,
   makeDeliverySettlements,
   mapCurrentSignal,
   TicketDeliveryProjection,
   TrackerGraphRelation,
   type CurrentSignal,
   type DeliveryActionProposal,
-  deliveryFinalityOf,
-  DeliveryRelationRevision,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
   type DeliveryRelationInputBundle,
@@ -34,12 +31,9 @@ import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
-  readonly evaluationConsistency: {
-    readonly currentRevision: Effect.Effect<DeliveryRelationRevision>
-    readonly withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly publicationConsistency: {
+    readonly withStablePublication: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   }
-  readonly requestStabilizationRead: Parameters<typeof makeDeliveryRuntimeRelation>[0]["requestStabilizationRead"]
-  readonly runtimeFacts: CurrentSignal<DeliveryRuntimeFacts, DeliveryRelationSourceError>
   /** Legacy action-plan contributions are consumed only by the outer runtime adapter. */
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
   readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
@@ -91,18 +85,8 @@ const deduplicatedPublicationSignal = (
 })
 
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
-export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) => ({
-  evaluationConsistency: {
-    currentRevision: Effect.succeed(DeliveryRelationRevision.make(0)),
-    withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
-  },
-  requestStabilizationRead: () => Effect.succeed(DeliveryRelationRevision.make(0)),
-  runtimeFacts: currentSignalOf<DeliveryRuntimeFacts>({
-    acceptedAt: null,
-    quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-    revision: DeliveryRelationRevision.make(0),
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
-  })
+export const deterministicDeliveryRuntimeSupport = (_policy: RunControlPolicy) => ({
+  publicationConsistency: { withStablePublication: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect }
 })
 
 /** Deterministic, action-free Layers used to evaluate the complete relation spine. */
@@ -121,22 +105,12 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     lowerContributions: DeliveryProposalContributions,
     deliveryReflection: ReadonlyArray<DeliveryActionProposal>
   ): DeliveryActionPlanningInput => {
-    const hasNonProbeWork = [
-      lowerContributions.ticketDelivery,
-      lowerContributions.deliverySettlement,
-      deliveryReflection
-    ].some((proposals) =>
-      proposals.some(({ route }) => route._tag !== "TrackerGraphReadRoute" || route.purpose !== "QuiescenceProbe")
-    )
-    const trackerGraph = hasNonProbeWork
-      ? trackerProposals.filter(({ route }) => route.purpose !== "QuiescenceProbe")
-      : trackerProposals
     return {
       deliveryReflection,
       deliverySettlement: lowerContributions.deliverySettlement,
       isolatedIssues: lowerContributions.issues,
       ticketDelivery: lowerContributions.ticketDelivery,
-      trackerGraph
+      trackerGraph: trackerProposals
     }
   }
   const hasPlanningOverrides =
@@ -163,12 +137,6 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     : mapCurrentSignal(input.coherent, ({ legacy }) =>
         planningInputOf(legacy.trackerGraphProposals, legacy.proposalContributions, legacy.reflectionProposals)
       )
-  /**
-   * The old action planner did not expose an idle probe while a lower owner
-   * already had real work. Keep that timing at this compatibility seam only;
-   * the canonical delivery relation below remains a complete descriptive
-   * snapshot and never consults this scheduling choice.
-   */
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
   const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ publication }) => publication))
   const trackerGraphService = TrackerGraphRelation.of({
@@ -219,14 +187,14 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliveryActionPlanningInputs,
     DeliveryActionPlanningInputs.of({
       withConsequences: <E>(consequences: CurrentSignal<DeliveryConsequences, E>) => {
-        const getWithinStableRevision = Effect.all([consequences.get, planningInputs.get])
-        const get = input.evaluationConsistency.withStableRevision(getWithinStableRevision)
+        const getWithinStablePublication = Effect.all([consequences.get, planningInputs.get])
+        const get = input.publicationConsistency.withStablePublication(getWithinStablePublication)
         const changes = Stream.merge(
           consequences.changes.pipe(Stream.map(() => undefined)),
           planningInputs.changes.pipe(Stream.map(() => undefined))
         ).pipe(Stream.mapEffect(() => get))
-        const changesWithinStableRevision = zipCurrentSignals(consequences, planningInputs).changes
-        return { changes, changesWithinStableRevision, get, getWithinStableRevision }
+        const changesWithinStablePublication = zipCurrentSignals(consequences, planningInputs).changes
+        return { changes, changesWithinStablePublication, get, getWithinStablePublication }
       }
     })
   )
@@ -240,13 +208,14 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly delivery: CurrentSignal<DeliveryConsequences, E>
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
-        const facts = input.runtimeFacts
-        const relation = makeDeliveryRuntimeRelation<E | DeliveryRelationSourceError>({
-          delivery,
-          facts,
-          proposedActions,
-          requestStabilizationRead: input.requestStabilizationRead
-        })
+        const facts = mapCurrentSignal(input.coherent, ({ legacy }) => legacy.runtimeFacts)
+        const current = mapCurrentSignal(delivery, (delivery) => ({
+          _tag: "DeliveryRuntimeSnapshot" as const,
+          reflection: delivery.trackerConsequences,
+          settlements: delivery.settlements,
+          ticketDeliveries: delivery.ticketDeliveries,
+          trackerGraph: delivery.graph
+        }))
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,
           current: Effect.Effect<DeliveryRuntimeEvaluation["current"], E | DeliveryRelationSourceError>,
@@ -258,10 +227,8 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
                 current,
-                finality: deliveryFinalityOf(current, proposedActions, facts.quiescence),
                 proposedActions,
                 quiescence: facts.quiescence,
-                revision: facts.revision,
                 taskWork: facts.taskWork
               })
             )
@@ -269,43 +236,23 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
           makeEvaluation(
             facts,
-            relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            proposedActions.changesWithinStableRevision.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+            current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
+            proposedActions.changesWithinStablePublication.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
           )
         const readCurrentEvaluation = (facts: DeliveryRuntimeFacts) =>
-          makeEvaluation(facts, relation.current.get, proposedActions.getWithinStableRevision)
+          makeEvaluation(facts, current.get, proposedActions.getWithinStablePublication)
         const readStableEvaluation = Effect.fn("DeliveryRelations.readStableEvaluation")(function* () {
-          for (;;) {
-            const evaluation = yield* input.evaluationConsistency.withStableRevision(
-              Effect.gen(function* () {
-                const currentFacts = yield* facts.get
-                const revision = yield* input.evaluationConsistency.currentRevision
-                if (revision !== currentFacts.revision) return undefined
-                return yield* readCurrentEvaluation(currentFacts)
-              })
-            )
-            if (evaluation !== undefined) return evaluation
-            yield* Effect.yieldNow
-          }
+          return yield* input.publicationConsistency.withStablePublication(
+            facts.get.pipe(Effect.flatMap(readCurrentEvaluation))
+          )
         })
         const evaluations = {
           get: readStableEvaluation(),
           changes: facts.changes.pipe(
-            Stream.mapEffect((facts) =>
-              input.evaluationConsistency.withStableRevision(
-                input.evaluationConsistency.currentRevision.pipe(
-                  Effect.flatMap((revision) =>
-                    revision === facts.revision
-                      ? sampleEvaluation(facts).pipe(Effect.map((evaluation) => [evaluation]))
-                      : Effect.succeed([])
-                  )
-                )
-              )
-            ),
-            Stream.flatMap(Stream.fromIterable)
+            Stream.mapEffect((facts) => input.publicationConsistency.withStablePublication(sampleEvaluation(facts)))
           )
         }
-        return { ...relation, evaluations }
+        return evaluations
       }
     })
   )

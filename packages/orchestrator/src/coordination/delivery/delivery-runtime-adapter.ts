@@ -4,9 +4,8 @@ import { DeliveryRuntimeAssembly, type CurrentSignal, type DeliveryConsequences 
 import { delivery } from "./delivery.js"
 
 /**
- * Adapts the descriptive delivery projections to the pre-existing runtime
- * controller. Runtime evaluation, action proposals, and process-local facts
- * remain outside the public `delivery` Effect.
+ * Adapts descriptive delivery and planned actions to one coherent runtime
+ * evaluation signal. Process-local admission facts remain outside `delivery`.
  */
 export const deliveryRuntimeFrom = <E>(consequences: CurrentSignal<DeliveryConsequences, E>) =>
   Effect.gen(function* () {

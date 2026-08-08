@@ -72,6 +72,7 @@ import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate
 import { executeFreshAttemptPlanning, executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 
 const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
@@ -811,13 +812,26 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing accepted live-dispatch proposal")
       }
       const acceptedAction = { _tag: "AcceptedOperationAction" as const, proposal: acceptedProposal }
-      const directExecutor = yield* withAdapterServices(makeLiveDeliveryActionExecutor(runId, target))
+      const directExecutor = yield* withAdapterServices(
+        makeLiveDeliveryActionExecutor(runId, target).pipe(
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({ awaitCurrent: Effect.void })
+          )
+        )
+      )
       expect(yield* directExecutor.execute(acceptedAction, inertLease)).toMatchObject({
         _tag: "ActionCompleted",
         proposalId: acceptedProposal.id
       })
       const layeredExecutor = yield* withAdapterServices(
-        DeliveryActionExecutor.pipe(Effect.provide(liveDeliveryActionExecutorLayer(runId, target)))
+        DeliveryActionExecutor.pipe(
+          Effect.provide(liveDeliveryActionExecutorLayer(runId, target)),
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({ awaitCurrent: Effect.void })
+          )
+        )
       )
       expect(yield* layeredExecutor.execute(acceptedAction, inertLease)).toMatchObject({
         _tag: "ActionCompleted",

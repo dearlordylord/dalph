@@ -49,6 +49,7 @@ import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
+import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryControlPolicyMissing,
@@ -111,44 +112,6 @@ const makeReactiveDeliveryRelationsLayer = (
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     return yield* makeProductionReactiveDeliveryRelationsLayer(runId, target, journal, recovery, integrationTargets)
   })
-
-it.effect("keeps one pending reactive stabilization proposal until its graph fact is accepted", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const journal = yield* makeJournalService
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("pending-stabilization-graph"), target)
-      const projected = projectTrackerSnapshot({ revision: "pending-stabilization", tasks: [] })
-      if (projected._tag === "Invalid") return yield* Effect.die("stabilization graph must be valid")
-      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-      yield* journal.append(
-        runId,
-        outcomeRecordKey(operation.operationId),
-        taskTrackerFactsObservedEvent(
-          operation.operationId,
-          makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
-        )
-      )
-      const layer = yield* makeReactiveDeliveryRelationsLayer(
-        runId,
-        target,
-        journal,
-        currentProjection(journal.state.get.pipe(Effect.orDie))
-      )
-      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-
-      yield* relation.requestStabilizationRead()
-      const first = yield* relation.proposedActions.get
-      yield* relation.requestStabilizationRead()
-      const second = yield* relation.proposedActions.get
-
-      expect(second).toEqual(first)
-      expect(first).toMatchObject({
-        _tag: "DeliveryProposalsAvailable",
-        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "QuiescenceProbe" } }]
-      })
-    }).pipe(Effect.provide(memoryJournalStoreLayer))
-  )
-)
 
 it.effect("publishes journaled G1 and equal-content G2 through one reactive delivery", () =>
   Effect.scoped(
@@ -222,6 +185,42 @@ it.effect("publishes journaled G1 and equal-content G2 through one reactive deli
   )
 )
 
+it.effect("waits for the accepted journal position to reach delivery planning before returning", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const projectionBlocked = yield* Deferred.make<void>()
+      const refreshStarted = yield* Deferred.make<void>()
+      const projectionReads = yield* Ref.make(0)
+      const baseProjection = currentProjection(journal.state.get.pipe(Effect.orDie))
+      const recovery = {
+        ...baseProjection,
+        readDeliveryProjection: Ref.getAndUpdate(projectionReads, (count) => count + 1).pipe(
+          Effect.flatMap((read) =>
+            read === 0
+              ? baseProjection.readDeliveryProjection
+              : Deferred.succeed(refreshStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(projectionBlocked)),
+                  Effect.andThen(baseProjection.readDeliveryProjection)
+                )
+          )
+        )
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("publication-handshake"), target)
+
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* Deferred.await(refreshStarted)
+      const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(waiting.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(projectionBlocked, undefined)
+      yield* Fiber.join(waiting)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
 it.effect("keeps a recovered paused Run passive before its first current graph", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -246,7 +245,7 @@ it.effect("keeps a recovered paused Run passive before its first current graph",
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      const evaluation = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
 
       expect(evaluation.current.trackerGraph._tag).toBe("GraphNotEstablished")
       expect(evaluation.proposedActions).toEqual({
@@ -316,7 +315,7 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
 
       const layer = yield* Fiber.join(layerFiber)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      const evaluation = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
 
       expect(journalOutcome.position).toBeGreaterThan(journalBefore.position)
       expect(evaluation.acceptedAt).toBe(journalOutcome.position)
@@ -355,7 +354,7 @@ it.effect("does not propose the initial graph read while recovered boundary work
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      const initial = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
       expect(initial.proposedActions).toMatchObject({
         _tag: "DeliveryProposalsAvailable",
         proposals: [
@@ -407,7 +406,7 @@ it.effect("establishes the current graph before proposing an external-success cl
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const initial = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      const initial = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
 
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
       expect(initial.proposedActions).toMatchObject({
@@ -464,14 +463,19 @@ it.effect("publishes a typed relation failure when a later recovery projection f
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
 
       yield* Ref.set(failProjection, true)
-      yield* relation.requestStabilizationRead()
-      const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
-      const currentFailure = yield* relation.current.get.pipe(Effect.flip)
+      const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
+      const trigger = makeTrackerGraphObservationOperation(OperationId.make("projection-failure-trigger"), target)
+      yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
+      const failure = yield* Fiber.join(failed)
+      const currentFailure = yield* relation.get.pipe(Effect.flip)
+      const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
       expect(currentFailure).toEqual(failure)
+      expect(publicationFailure).toEqual(failure)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
       expect(Cause.squash(failure.cause)).toEqual(recoveryFailure)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -484,7 +488,7 @@ it.effect("derives safely when recovery evidence is unavailable before and after
       const journal = yield* makeJournalService
       const initialLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, unavailableProjection)
       const initialRelation = yield* deliveryRuntime.pipe(Effect.provide(initialLayer))
-      const initial = Option.getOrThrow(yield* initialRelation.evaluations.changes.pipe(Stream.runHead))
+      const initial = Option.getOrThrow(yield* initialRelation.changes.pipe(Stream.runHead))
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
 
       const operation = makeTrackerGraphObservationOperation(OperationId.make("unavailable-evidence-graph"), target)
@@ -502,13 +506,13 @@ it.effect("derives safely when recovery evidence is unavailable before and after
 
       const establishedLayer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, unavailableProjection)
       const establishedRelation = yield* deliveryRuntime.pipe(Effect.provide(establishedLayer))
-      const established = Option.getOrThrow(yield* establishedRelation.evaluations.changes.pipe(Stream.runHead))
+      const established = Option.getOrThrow(yield* establishedRelation.changes.pipe(Stream.runHead))
       expect(established.current.trackerGraph._tag).toBe("GraphEstablished")
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
 
-it.effect("publishes a typed failure when a quiescence probe cannot read journal state", () =>
+it.effect("publishes a typed failure when journal-triggered reconciliation cannot read journal state", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* makeJournalService
@@ -535,11 +539,20 @@ it.effect("publishes a typed failure when a quiescence probe cannot read journal
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
       yield* Ref.set(failRead, true)
-      yield* relation.requestStabilizationRead()
-      const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
+      const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
+      const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
+      const trigger = makeTrackerGraphObservationOperation(OperationId.make("journal-read-failure-trigger"), target)
+      yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
+      const failure = yield* Fiber.join(failed)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
+      expect(publicationFailure).toBeInstanceOf(DeliveryRelationReconciliationError)
+      if (!(publicationFailure instanceof DeliveryRelationReconciliationError)) {
+        return expect.fail("expected publication failure")
+      }
+      expect(Cause.squash(publicationFailure.cause)).toEqual(journalFailure)
       if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected relation failure")
       expect(Cause.squash(failure.cause)).toEqual(journalFailure)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -570,8 +583,8 @@ it.effect("publishes a typed failure when the journal signal closes with failure
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const failure = yield* relation.current.changes.pipe(
-        Stream.dropWhile((current) => current.trackerGraph._tag === "GraphNotEstablished"),
+      const failure = yield* relation.changes.pipe(
+        Stream.dropWhile(({ current }) => current.trackerGraph._tag === "GraphNotEstablished"),
         Stream.runHead,
         Effect.flip
       )

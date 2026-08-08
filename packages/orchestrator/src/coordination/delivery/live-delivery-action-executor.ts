@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deliveryActionCompleted, executeFreshTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionAdapterEnvironment } from "./delivery-action-adapter-environment.js"
+import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -89,8 +90,13 @@ export const makeLiveDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.
   target: TrackerTarget
 ) {
   const dependencies = yield* Effect.context<DeliveryActionAdapterEnvironment>()
+  const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
   return DeliveryActionExecutor.of({
-    execute: (action, lease) => executeLiveAction(action, lease, runId, target).pipe(Effect.provide(dependencies))
+    execute: (action, lease) =>
+      executeLiveAction(action, lease, runId, target).pipe(
+        Effect.provide(dependencies),
+        Effect.tap(() => acceptedFactPublication.awaitCurrent)
+      )
   })
 })
 

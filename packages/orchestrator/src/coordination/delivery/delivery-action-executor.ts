@@ -35,6 +35,7 @@ import type {
   FreshIdentityDeliveryProposal,
   IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
+import type { DeliveryRelationSourceError } from "./relations.js"
 
 type FreshOperationProposal = Extract<
   FreshIdentityDeliveryProposal,
@@ -118,6 +119,7 @@ export type DeliveryActionExecutionError =
   | IntegrationCandidateBoundaryUnavailable
   | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCorrelationMismatch
+  | DeliveryRelationSourceError
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>
   | ServiceFailure<TaskClaimAcquisitionPlannerService>

@@ -1,380 +1,84 @@
+/* eslint-disable import/no-nodejs-modules -- This test also guards the deleted process-revision seam. */
+import { RunId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { RunId, TaskId } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Fiber, Stream, SubscriptionRef } from "effect"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
-import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { deliveryRuntime } from "./delivery-runtime-adapter.js"
-import { delivery } from "./delivery.js"
-import { deliveryActionPlanning } from "./delivery-action-planning.js"
-import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
-import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import {
-  DeliveryRelationRevision,
-  currentSignalOf,
-  mapCurrentSignal,
-  type DeliveryRelationInputBundle,
-  type DeliveryRuntimeFacts,
-  TrackerGraphState
-} from "./relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
+import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { type DeliveryRelationInputBundle, TrackerGraphState } from "./relations.js"
+import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 
-const graph = (revision: string, taskId: TaskId) => {
-  const projected = TaskDagSnapshot.project(
-    TrackerSnapshot.make({
-      revision: TrackerRevision.make(revision),
-      tasks: [{ id: taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }]
-    })
-  )
-  if (projected._tag === "Invalid") return expect.fail("test graph must be valid")
-  const operationId = OperationId.make(`fixture:${revision}`)
-  return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeTestJournaledTrackerGraphObservation({
-      snapshot: projected.snapshot,
-      operationId,
-      recordedAt: JournalPosition.make(1)
-    })
-  })
-}
+const policy = RunControlPolicy.make({
+  revision: initialRunPolicyRevision,
+  taskExecutionCapacity: TaskWorkCapacity.make(1)
+})
+const runId = RunId.make("coherent-runtime-evaluation")
+const target = FixtureTarget.make("coherent-runtime-evaluation-target")
+const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
 
-const policy = (capacity: number) =>
-  RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
+const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
+  legacy: {
+    proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+    reflectionProposals: [],
+    runtimeFacts: {
+      acceptedAt: graph._tag === "GraphEstablished" ? graph.observation.recordedAt : null,
+      quiescence: { _tag: "TrackerReconfirmationAllowed" },
+      taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+    },
+    trackerGraphProposals: graph._tag === "GraphNotEstablished" ? [proposal] : []
+  },
+  publication: { exactEvidence: [], graph, policy }
+})
 
-it.effect("does not mix delivery consequences and proposal owners across a refresh", () =>
+it.effect("publishes graph and planned frontier as one coherent runtime evaluation", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const firstRevision = DeliveryRelationRevision.make(1)
-      const secondRevision = DeliveryRelationRevision.make(2)
-      const proposal = (purpose: "EstablishCurrentGraph" | "QuiescenceProbe", acceptedAt: number) =>
-        trackerGraphReadProposalOf({
-          acceptedAt: JournalPosition.make(acceptedAt),
-          purpose,
-          runId: RunId.make("planning-coherence"),
-          target: FixtureTarget.make("planning-coherence-target")
+      const projected = projectTrackerSnapshot({ revision: "accepted-G1", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("fixture graph must be valid")
+      const established = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("accepted-G1-read"),
+          recordedAt: JournalPosition.make(2),
+          snapshot: projected.snapshot
         })
-      const bundle = (
-        revision: DeliveryRelationRevision,
-        graphState: TrackerGraphState,
-        trackerGraphProposals: Array<ReturnType<typeof proposal>>
-      ): DeliveryRelationInputBundle => ({
-        legacy: {
-          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-          reflectionProposals: [],
-          runtimeFacts: {
-            acceptedAt: JournalPosition.make(revision),
-            quiescence: { _tag: "QuiescenceProbeAllowed" },
-            revision,
-            taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
-          },
-          trackerGraphProposals
-        },
-        publication: { exactEvidence: [], graph: graphState, policy: policy(1) }
       })
-      const first = bundle(firstRevision, TrackerGraphState.cases.GraphNotEstablished.make({}), [
-        proposal("EstablishCurrentGraph", 1)
-      ])
-      const second = bundle(secondRevision, graph("graph-2", TaskId.make("B")), [proposal("QuiescenceProbe", 2)])
-      const state = yield* SubscriptionRef.make(first)
-      const gate = yield* Semaphore.make(1)
-      const revision = yield* Ref.make(firstRevision)
-      const sampleEntered = yield* Deferred.make<void>()
-      const permitSample = yield* Deferred.make<void>()
-      const coherent = {
-        get: SubscriptionRef.get(state).pipe(
-          Effect.tap(() => Deferred.succeed(sampleEntered, undefined)),
-          Effect.tap(() => Deferred.await(permitSample))
-        ),
-        changes: SubscriptionRef.changes(state)
-      }
+      const state = yield* SubscriptionRef.make(bundle(TrackerGraphState.cases.GraphNotEstablished.make({})))
       const layer = makeDeliveryRelationsLayer({
-        evaluationConsistency: {
-          currentRevision: Ref.get(revision),
-          withStableRevision: (effect) => gate.withPermit(effect)
-        },
-        coherent,
-        requestStabilizationRead: () => Ref.get(revision),
-        runtimeFacts: mapCurrentSignal(coherent, ({ legacy }) => legacy.runtimeFacts)
+        ...deterministicDeliveryRuntimeSupport(policy),
+        coherent: { get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) }
       })
-      const proposals = yield* Effect.gen(function* () {
-        const consequences = yield* delivery
-        return yield* deliveryActionPlanning(consequences)
-      }).pipe(Effect.provide(layer))
-      const firstRead = yield* proposals.get.pipe(Effect.forkChild)
-      yield* Deferred.await(sampleEntered)
-      const publishSecond = yield* gate
-        .withPermit(Ref.set(revision, secondRevision).pipe(Effect.andThen(SubscriptionRef.set(state, second))))
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(publishSecond.pollUnsafe()).toBeUndefined()
-      yield* Deferred.succeed(permitSample, undefined)
+      const evaluations = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const firstSeen = yield* Deferred.make<void>()
+      const collected = yield* evaluations.changes.pipe(
+        Stream.tap(() => Deferred.succeed(firstSeen, undefined)),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      yield* Deferred.await(firstSeen)
+      yield* SubscriptionRef.set(state, bundle(established))
+      const [before, after] = Array.from(yield* Fiber.join(collected))
 
-      expect(yield* Fiber.join(firstRead)).toMatchObject({
-        _tag: "DeliveryProposalsAvailable",
-        proposals: [{ route: { purpose: "EstablishCurrentGraph" } }]
-      })
-      yield* Fiber.join(publishSecond)
-      expect(yield* proposals.get).toMatchObject({
-        _tag: "DeliveryProposalsAvailable",
-        proposals: [{ route: { purpose: "QuiescenceProbe" } }]
-      })
+      expect(before?.current.trackerGraph._tag).toBe("GraphNotEstablished")
+      expect(before?.proposedActions).toMatchObject({ proposals: [{ id: proposal.id }] })
+      expect(after?.current.trackerGraph).toEqual(established)
+      expect(after?.proposedActions).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
     })
   )
 )
 
-interface CoherentInput {
-  readonly facts: DeliveryRuntimeFacts
-  readonly graph: TrackerGraphState
-  readonly policy: RunControlPolicy
-}
-
-it.effect("never combines runtime facts from one accepted revision with another graph revision", () =>
-  Effect.gen(function* () {
-    const taskA = TaskId.make("A")
-    const taskB = TaskId.make("B")
-    const firstRevision = DeliveryRelationRevision.make(1)
-    const secondRevision = DeliveryRelationRevision.make(2)
-    const input = yield* SubscriptionRef.make<CoherentInput>({
-      facts: {
-        acceptedAt: JournalPosition.make(1),
-        quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-        revision: firstRevision,
-        taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
-      },
-      graph: graph("graph-1", taskA),
-      policy: policy(1)
-    })
-    const gate = yield* Semaphore.make(1)
-    const revision = yield* Ref.make(firstRevision)
-    const firstSamplingEntered = yield* Deferred.make<void>()
-    const permitSampling = yield* Deferred.make<void>()
-    const sampleCount = yield* Ref.make(0)
-    const signal = { get: SubscriptionRef.get(input), changes: SubscriptionRef.changes(input) }
-    const coherent = mapCurrentSignal(
-      signal,
-      ({ facts, graph, policy }): DeliveryRelationInputBundle => ({
-        legacy: {
-          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-          reflectionProposals: [],
-          runtimeFacts: facts,
-          trackerGraphProposals: []
-        },
-        publication: { exactEvidence: [], graph, policy }
-      })
-    )
-    const layer = makeDeliveryRelationsLayer({
-      evaluationConsistency: {
-        currentRevision: Ref.get(revision),
-        withStableRevision: (effect) =>
-          gate.withPermit(
-            Ref.updateAndGet(sampleCount, (count) => count + 1).pipe(
-              Effect.tap((count) =>
-                count === 1
-                  ? Deferred.succeed(firstSamplingEntered, undefined).pipe(
-                      Effect.andThen(Deferred.await(permitSampling))
-                    )
-                  : Effect.void
-              ),
-              Effect.andThen(effect)
-            )
-          )
-      },
-      coherent,
-      requestStabilizationRead: () => Ref.get(revision),
-      runtimeFacts: mapCurrentSignal(signal, ({ facts }) => facts)
-    })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-    const collected = yield* relation.evaluations.changes.pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
-    yield* Deferred.await(firstSamplingEntered)
-
-    const publishSecond = yield* gate
-      .withPermit(
-        Ref.set(revision, secondRevision).pipe(
-          Effect.andThen(
-            SubscriptionRef.set(input, {
-              facts: {
-                acceptedAt: JournalPosition.make(2),
-                quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-                revision: secondRevision,
-                taskWork: { capacity: TaskWorkCapacity.make(2), held: [] }
-              },
-              graph: graph("graph-2", taskB),
-              policy: policy(2)
-            })
-          )
-        )
-      )
-      .pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(publishSecond.pollUnsafe()).toBeUndefined()
-    yield* Deferred.succeed(permitSampling, undefined)
-    yield* Fiber.join(publishSecond)
-
-    const evaluations = Array.from(yield* Fiber.join(collected))
-    expect(
-      evaluations.map((evaluation) => ({
-        acceptedAt: evaluation.acceptedAt,
-        capacity: evaluation.taskWork.capacity,
-        graphRevision:
-          evaluation.current.trackerGraph._tag === "GraphEstablished"
-            ? evaluation.current.trackerGraph.observation.snapshot.toWire().revision
-            : "missing",
-        revision: evaluation.revision
-      }))
-    ).toEqual([
-      {
-        acceptedAt: JournalPosition.make(1),
-        capacity: TaskWorkCapacity.make(1),
-        graphRevision: TrackerRevision.make("graph-1"),
-        revision: firstRevision
-      },
-      {
-        acceptedAt: JournalPosition.make(2),
-        capacity: TaskWorkCapacity.make(2),
-        graphRevision: TrackerRevision.make("graph-2"),
-        revision: secondRevision
-      }
-    ])
-  }).pipe(Effect.scoped)
-)
-
-it.effect("does not mix facts with a refresh interleaving during a get", () =>
-  Effect.gen(function* () {
-    const taskA = TaskId.make("A")
-    const taskB = TaskId.make("B")
-    const firstRevision = DeliveryRelationRevision.make(1)
-    const secondRevision = DeliveryRelationRevision.make(2)
-    const input = yield* SubscriptionRef.make<CoherentInput>({
-      facts: {
-        acceptedAt: JournalPosition.make(1),
-        quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-        revision: firstRevision,
-        taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
-      },
-      graph: graph("graph-1", taskA),
-      policy: policy(1)
-    })
-    const gate = yield* Semaphore.make(1)
-    const revision = yield* Ref.make(firstRevision)
-    const factsRead = yield* Deferred.make<void>()
-    const permitFactsRead = yield* Deferred.make<void>()
-    const signal = { get: SubscriptionRef.get(input), changes: SubscriptionRef.changes(input) }
-    const coherent = mapCurrentSignal(
-      signal,
-      ({ facts, graph, policy }): DeliveryRelationInputBundle => ({
-        legacy: {
-          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-          reflectionProposals: [],
-          runtimeFacts: facts,
-          trackerGraphProposals: []
-        },
-        publication: { exactEvidence: [], graph, policy }
-      })
-    )
-    const runtimeFacts = {
-      get: signal.get.pipe(
-        Effect.map(({ facts }) => facts),
-        Effect.tap(() => Deferred.succeed(factsRead, undefined)),
-        Effect.tap(() => Deferred.await(permitFactsRead))
-      ),
-      changes: signal.changes.pipe(Stream.map(({ facts }) => facts))
-    }
-    const layer = makeDeliveryRelationsLayer({
-      evaluationConsistency: {
-        currentRevision: Ref.get(revision),
-        withStableRevision: (effect) => gate.withPermit(effect)
-      },
-      coherent,
-      requestStabilizationRead: () => Ref.get(revision),
-      runtimeFacts
-    })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-    const evaluationFiber = yield* relation.evaluations.get.pipe(Effect.forkChild)
-    yield* Deferred.await(factsRead)
-
-    const publishSecond = yield* gate
-      .withPermit(
-        Ref.set(revision, secondRevision).pipe(
-          Effect.andThen(
-            SubscriptionRef.set(input, {
-              facts: {
-                acceptedAt: JournalPosition.make(2),
-                quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
-                revision: secondRevision,
-                taskWork: { capacity: TaskWorkCapacity.make(2), held: [] }
-              },
-              graph: graph("graph-2", taskB),
-              policy: policy(2)
-            })
-          )
-        )
-      )
-      .pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(publishSecond.pollUnsafe()).toBeUndefined()
-    yield* Deferred.succeed(permitFactsRead, undefined)
-
-    const evaluation = yield* Fiber.join(evaluationFiber)
-    yield* Fiber.join(publishSecond)
-    expect({
-      acceptedAt: evaluation.acceptedAt,
-      capacity: evaluation.taskWork.capacity,
-      graphRevision:
-        evaluation.current.trackerGraph._tag === "GraphEstablished"
-          ? evaluation.current.trackerGraph.observation.snapshot.toWire().revision
-          : "missing",
-      revision: evaluation.revision
-    }).toEqual({
-      acceptedAt: JournalPosition.make(1),
-      capacity: TaskWorkCapacity.make(1),
-      graphRevision: TrackerRevision.make("graph-1"),
-      revision: firstRevision
-    })
-  }).pipe(Effect.scoped)
-)
-
-it.effect("retries a get whose facts are behind the current relation revision", () =>
-  Effect.gen(function* () {
-    const taskA = TaskId.make("A")
-    const firstRevision = DeliveryRelationRevision.make(1)
-    const secondRevision = DeliveryRelationRevision.make(2)
-    const firstRead = yield* Ref.make(true)
-    const facts = {
-      acceptedAt: JournalPosition.make(1),
-      quiescence: { _tag: "QuiescencePassive" as const, reason: "ProbeNotRequired" as const },
-      revision: firstRevision,
-      taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
-    }
-    const currentRevision = Ref.modify(firstRead, (isFirstRead) => [
-      isFirstRead ? secondRevision : firstRevision,
-      false
-    ])
-    const layer = makeDeliveryRelationsLayer({
-      evaluationConsistency: { currentRevision, withStableRevision: (effect) => effect },
-      coherent: currentSignalOf({
-        legacy: {
-          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-          reflectionProposals: [],
-          runtimeFacts: facts,
-          trackerGraphProposals: []
-        },
-        publication: { exactEvidence: [], graph: graph("graph-1", taskA), policy: policy(1) }
-      }),
-      requestStabilizationRead: () => Effect.succeed(firstRevision),
-      runtimeFacts: currentSignalOf(facts)
-    })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-    const evaluation = yield* relation.evaluations.get
-
-    expect(evaluation.revision).toBe(firstRevision)
-    expect(
-      evaluation.current.trackerGraph._tag === "GraphEstablished"
-        ? evaluation.current.trackerGraph.observation.snapshot.toWire().revision
-        : "missing"
-    ).toBe(TrackerRevision.make("graph-1"))
-  }).pipe(Effect.scoped)
-)
+it("removes process revisions and general invalidation from runtime assembly", () => {
+  const sources = ["./relations.ts", "./in-memory-relations.ts", "./delivery-runtime-adapter.ts"].map((path) =>
+    readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8")
+  )
+  expect(sources.join("\n")).not.toMatch(/DeliveryRelationRevision|currentRevision|withStableRevision|invalidate/)
+})

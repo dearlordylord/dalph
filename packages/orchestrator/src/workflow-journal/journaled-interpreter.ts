@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
-import { InRunJournal } from "./store.js"
+import { InRunJournal, type InRunJournalService } from "./store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -37,7 +37,8 @@ import {
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
-  WorkflowInterpreter
+  WorkflowInterpreter,
+  type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
@@ -53,6 +54,67 @@ const requireTaskTrackerKnowledge = <A>(
     onSome: Effect.succeed
   })
 
+const journaledTrackerGraphRead = (
+  runId: RunId,
+  interpreter: WorkflowInterpreterService,
+  journal: InRunJournalService
+) =>
+  Effect.fn("WorkflowInterpreter.Journaled.readTrackerGraph")(function* (
+    operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+  ) {
+    const key = intentRecordKey(operation.operationId)
+    yield* journal.append(runId, key, taskTrackerReadIntent(operation))
+    const records = yield* journal.read(runId)
+    const existingObservationIndex = records.findIndex(
+      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+    )
+    if (existingObservationIndex >= 0) {
+      return yield* requireTaskTrackerKnowledge(
+        reconstructedTaskGraphFromEvents(
+          records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
+          operation.target
+        ),
+        operation.operationId,
+        "TaskGraph"
+      )
+    }
+    const snapshot = yield* interpreter.readTrackerGraph(operation)
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(operation.operationId),
+      makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
+    )
+    const recorded = yield* journal.read(runId)
+    return yield* requireTaskTrackerKnowledge(
+      reconstructedTaskGraphFromEvents(
+        recorded.map(({ event }) => event),
+        operation.target
+      ),
+      operation.operationId,
+      "TaskGraph"
+    )
+  })
+
+/** Journals graph reads with no explicit decision-sensitive task subjects; preserves explicitly covered synthetic reads. */
+export const journaledImplicitCoverageTrackerGraphInterpreterLayer = <E, R>(
+  runId: RunId,
+  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>
+) =>
+  Layer.effect(
+    WorkflowInterpreter,
+    Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      const journal = yield* InRunJournal
+      return WorkflowInterpreter.of({
+        ...interpreter,
+        readTrackerGraph: (operation) =>
+          operation.readShape.explicitlyCoveredTaskIds.length === 0
+            ? journaledTrackerGraphRead(runId, interpreter, journal)(operation)
+            : interpreter.readTrackerGraph(operation)
+      })
+    })
+  ).pipe(Layer.provide(interpreterLayer))
+
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
@@ -64,41 +126,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
       const interpreter = yield* WorkflowInterpreter
       const journal = yield* InRunJournal
 
-      const readTrackerGraph = Effect.fn("WorkflowInterpreter.Journaled.readTrackerGraph")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
-      ) {
-        const key = intentRecordKey(operation.operationId)
-        yield* journal.append(runId, key, taskTrackerReadIntent(operation))
-        const records = yield* journal.read(runId)
-        const existingObservationIndex = records.findIndex(
-          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
-        )
-        if (existingObservationIndex >= 0) {
-          return yield* requireTaskTrackerKnowledge(
-            reconstructedTaskGraphFromEvents(
-              records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
-              operation.target
-            ),
-            operation.operationId,
-            "TaskGraph"
-          )
-        }
-        const snapshot = yield* interpreter.readTrackerGraph(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
-        )
-        const recorded = yield* journal.read(runId)
-        return yield* requireTaskTrackerKnowledge(
-          reconstructedTaskGraphFromEvents(
-            recorded.map(({ event }) => event),
-            operation.target
-          ),
-          operation.operationId,
-          "TaskGraph"
-        )
-      })
+      const readTrackerGraph = journaledTrackerGraphRead(runId, interpreter, journal)
 
       const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* (
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,

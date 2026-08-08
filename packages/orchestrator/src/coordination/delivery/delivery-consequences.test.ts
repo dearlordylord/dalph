@@ -23,11 +23,9 @@ import {
   currentSignalOf,
   boundedParallelTickets,
   DeliveryReflectionProjection,
-  DeliveryRelationRevision,
   deliverySettlements,
   executorResponsibilities,
   mapCurrentSignal,
-  makeDeliveryRuntimeRelation,
   reflectDeliverySettlements,
   TrackerGraphState,
   TrackerGraphRelation,
@@ -119,8 +117,7 @@ const coherentBundle = (
     reflectionProposals: [],
     runtimeFacts: {
       acceptedAt: null,
-      quiescence: { _tag: "QuiescenceProbeAllowed" },
-      revision: DeliveryRelationRevision.make(0),
+      quiescence: { _tag: "TrackerReconfirmationAllowed" },
       taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
     },
     trackerGraphProposals: []
@@ -292,18 +289,7 @@ it.effect("evaluates every coherent projection owner from the shared publication
       yield* reflectDeliverySettlements(settlements).pipe(
         Effect.flatMap((signal) => signal.changes.pipe(Stream.runCollect))
       )
-      const directRuntime = makeDeliveryRuntimeRelation({
-        delivery: consequences,
-        facts: currentSignalOf({
-          acceptedAt: null,
-          quiescence: { _tag: "QuiescenceProbeAllowed" as const },
-          revision: DeliveryRelationRevision.make(0),
-          taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
-        }),
-        proposedActions: currentSignalOf({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }),
-        requestStabilizationRead: () => Effect.succeed(DeliveryRelationRevision.make(0))
-      })
-      yield* directRuntime.evaluations.changes.pipe(Stream.runCollect)
+      yield* consequences.changes.pipe(Stream.runCollect)
     }).pipe(Effect.provide(layer))
   })
 )

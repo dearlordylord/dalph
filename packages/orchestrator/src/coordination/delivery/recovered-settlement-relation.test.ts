@@ -210,7 +210,7 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
     integrationResources
   )
   const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-  return Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+  return Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
 })
 
 it.effect("restart after terminal append advances settlement proposals without repeating executor work", () =>

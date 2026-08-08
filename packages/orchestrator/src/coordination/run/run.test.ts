@@ -149,12 +149,18 @@ it.effect("lets the public synthetic workflow terminate from its settled current
     const projected = projectTrackerSnapshot({ revision: "synthetic-settled", tasks: [] })
     if (projected._tag === "Invalid") return yield* Effect.die("the empty synthetic graph must be valid")
     const target = FixtureTarget.make("synthetic-settled-target")
+    const operationOrdinal = yield* Ref.make(0)
     const finality = yield* runSyntheticWorkflow(target, policy, RunId.make("synthetic-settled-run")).pipe(
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(
             OperationIdAllocator,
-            OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("synthetic-graph-read")) })
+            OperationIdAllocator.of({
+              allocate: () =>
+                Ref.updateAndGet(operationOrdinal, (ordinal) => ordinal + 1).pipe(
+                  Effect.map((ordinal) => OperationId.make(`synthetic-graph-read:${ordinal}`))
+                )
+            })
           ),
           Layer.mock(PlannedTaskAttemptPlanner, {}),
           Layer.mock(TaskClaimAcquisitionPlanner, {}),
@@ -262,7 +268,7 @@ it("contains one literal flat-delivery runtime connection and no former schedule
   const source = readFileSync(fileURLToPath(new URL("./run.ts", import.meta.url)), "utf8")
 
   expect(source.match(/\byield\* delivery\b/g)).toHaveLength(1)
-  expect(source.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
+  expect(source.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
   expect(source).not.toMatch(
     /runDeliveryActivation|readDeliveryActivationTurn|checkedTurn|makeActivationCoordinator|runFreshWorkflowStep|deriveFreshWorkflowDecisions/
   )

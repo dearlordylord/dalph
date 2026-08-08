@@ -348,6 +348,7 @@ export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
+export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
   DeliveryControlPolicyMissing,
   makeReactiveDeliveryRelationsLayer
@@ -367,8 +368,10 @@ export {
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryRuntimeProposalOwnershipConflict,
+  DeliveryRuntimeReconfirmationStateInvalid,
   runDeliveryRuntime
 } from "./coordination/delivery/run-delivery-runtime.js"
+export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,

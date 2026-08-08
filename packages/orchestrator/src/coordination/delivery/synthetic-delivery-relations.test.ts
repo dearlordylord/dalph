@@ -9,7 +9,7 @@ import type { IntegrationCandidateConstructionState } from "../../workflow/proto
 import { OperationId } from "../../workflow/identity.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
-import { DeliveryRelationReconciliationError, DeliveryRelationRevision } from "./relations.js"
+import { DeliveryRelationReconciliationError } from "./relations.js"
 import { makeSyntheticDeliveryRelationsLayer, SyntheticDeliveryAcceptedFacts } from "./synthetic-delivery-relations.js"
 import { Journal, makeJournal } from "./journal.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
@@ -31,12 +31,11 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
         Effect.provideService(Journal, journal)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const current = yield* relation.current.get
+      const current = (yield* relation.get).current
       expect(current.trackerGraph._tag).toBe("GraphNotEstablished")
       const proposalId = DeliveryProposalId.make("synthetic-invalidation-proposal")
 
       const acceptedFacts = yield* SyntheticDeliveryAcceptedFacts.pipe(Effect.provide(layer))
-      const revisions = [yield* relation.requestStabilizationRead(), yield* relation.requestStabilizationRead()]
       yield* acceptedFacts.publish({ _tag: "ActionCompleted", proposalId })
       yield* acceptedFacts.publish({
         _tag: "IntegrationCandidateAdvanced",
@@ -44,8 +43,7 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
         resourceDisposition: "Retain",
         state: {} as IntegrationCandidateConstructionState
       })
-
-      expect(revisions).toEqual([1, 2].map((revision) => DeliveryRelationRevision.make(revision)))
+      expect((yield* relation.get).current).toEqual(current)
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
 )
@@ -92,8 +90,8 @@ it.effect("publishes a typed failure when journal state cannot be reread after a
 
       yield* Ref.set(failRead, true)
       yield* acceptedFacts.publish(graphResult)
-      const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
-      const currentFailure = yield* relation.current.get.pipe(Effect.flip)
+      const failure = yield* relation.changes.pipe(Stream.runHead, Effect.flip)
+      const currentFailure = yield* relation.get.pipe(Effect.flip)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
       expect(currentFailure).toEqual(failure)
@@ -101,14 +99,13 @@ it.effect("publishes a typed failure when journal state cannot be reread after a
       expect(Cause.hasDies(failure.cause)).toBe(false)
       expect(Cause.squash(failure.cause)).toEqual(journalFailure)
 
-      yield* relation.requestStabilizationRead()
-      const stickyFailure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
+      const stickyFailure = yield* relation.changes.pipe(Stream.runHead, Effect.flip)
       expect(stickyFailure).toBeInstanceOf(DeliveryRelationReconciliationError)
 
       yield* Ref.set(failRead, false)
       yield* acceptedFacts.publish(graphResult)
-      const recovered = yield* relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
-      expect(recovered.trackerGraph._tag).toBe("GraphNotEstablished")
+      const recovered = yield* relation.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+      expect(recovered.current.trackerGraph._tag).toBe("GraphNotEstablished")
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
 )

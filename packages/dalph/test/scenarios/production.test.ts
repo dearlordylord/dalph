@@ -28,6 +28,7 @@ import {
   GitCommonDirectoryTarget,
   intentRecordKey,
   JournalDatabaseLocator,
+  JournalPosition,
   JournaledRunBootstrap,
   JournalStore,
   InitialControlPolicy,
@@ -568,7 +569,7 @@ it.effect("records an Operator capacity change through the production compositio
   )
 )
 
-it.effect("performs one final tracker read before rejecting a second fresh start without another read", () =>
+it.effect("terminates once only after G2 proves the target complete and responsibilities settled", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -578,7 +579,17 @@ it.effect("performs one final tracker read before rejecting a second fresh start
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
       const target = FixtureTarget.make("production-single-start-target")
       const runId = yield* freshWorkflowRunId(target)
-      const projected = projectTrackerSnapshot({ revision: "production-single-start-snapshot", tasks: [] })
+      const projected = projectTrackerSnapshot({
+        revision: "production-single-start-snapshot",
+        tasks: [
+          {
+            id: TaskId.make("A"),
+            lifecycle: { _tag: "CompletedSuccessfully" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
+      })
       const snapshot = Option.getOrThrow(
         Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
       )
@@ -588,7 +599,7 @@ it.effect("performs one final tracker read before rejecting a second fresh start
         TrackerGraphReader,
         TrackerGraphReader.of({
           read: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
-          readTaskWorkSpecification: () => Effect.die("empty tracker has no task-work specification")
+          readTaskWorkSpecification: () => Effect.die("completed tracker task needs no task-work specification")
         })
       )
       const application = productionWorkflowInterpreterLayer(
@@ -616,11 +627,11 @@ it.effect("performs one final tracker read before rejecting a second fresh start
         ),
         Effect.provideService(
           TaskClaimAcquisitionPlanner,
-          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("empty tracker has no claim") })
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("completed tracker task has no claim") })
         ),
         Effect.provideService(
           PlannedTaskAttemptPlanner,
-          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("empty tracker has no attempt") })
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("completed tracker task has no attempt") })
         ),
         Effect.provide(application),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
@@ -642,7 +653,87 @@ it.effect("performs one final tracker read before rejecting a second fresh start
   )
 )
 
-it.effect("continues after each accepted Running report and stops after Terminal", () =>
+it.effect("accepts a later recovered invocation after quiescent incomplete return", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-incomplete-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const target = FixtureTarget.make("production-incomplete-target")
+      const runId = yield* freshWorkflowRunId(target)
+      const projected = projectTrackerSnapshot({
+        revision: "production-incomplete-snapshot",
+        tasks: [
+          {
+            id: TaskId.make("A"),
+            lifecycle: { _tag: "TerminalWithoutSuccess" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          { id: TaskId.make("B"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [TaskId.make("A")] }
+        ]
+      })
+      const snapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
+      const trackerReads = yield* Ref.make(0)
+      const nextOperation = yield* Ref.make(0)
+      const trackerReaderLayer = Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("incomplete tracker has no selected task")
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
+        controlledTrackerMutationLayer
+      ).pipe(
+        Layer.provide(trackerReaderLayer),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const operationAllocator = OperationIdAllocator.of({
+        allocate: () =>
+          Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+            Effect.map((value) => OperationId.make(`production-incomplete-operation-${value}`))
+          )
+      })
+      const claimPlanner = TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("incomplete tracker has no claim") })
+      const attemptPlanner = PlannedTaskAttemptPlanner.of({
+        plan: () => Effect.die("incomplete tracker has no attempt")
+      })
+      const provideRunEnvironment = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.provideService(OperationIdAllocator, operationAllocator),
+          Effect.provideService(TaskClaimAcquisitionPlanner, claimPlanner),
+          Effect.provideService(PlannedTaskAttemptPlanner, attemptPlanner),
+          Effect.provide(application),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+        )
+
+      const fresh = yield* runWorkflow(
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        runId
+      ).pipe(provideRunEnvironment)
+      const recovered = yield* runRecoveredWorkflow(target).pipe(provideRunEnvironment)
+      const records = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+
+      expect(fresh).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      expect(recovered).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      expect(yield* Ref.get(trackerReads)).toBe(4)
+      expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("publishes each accepted executor report before continuing and stops after Terminal", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -877,6 +968,13 @@ it.effect("continues after each accepted Running report and stops after Terminal
         { ordinal: 2, report: "Running" },
         { ordinal: 3, report: "Terminal" }
       ])
+      const terminal = records.findLast(
+        ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+      )
+      const stabilizationRead = records.findLast(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
+      expect(terminal).toBeDefined()
+      expect(stabilizationRead).toBeDefined()
+      expect(terminal?.position).toBeLessThan(stabilizationRead?.position ?? JournalPosition.make(0))
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
