@@ -10,6 +10,7 @@ import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
+import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -73,7 +74,15 @@ const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
   )
 )
 
+/** Durable provenance distinguishing ordinary cleanup from one exact stopped-attempt claim disposition. */
+export const TaskClaimReleaseAuthority = Schema.TaggedUnion({
+  StoppedAttemptClaimReleaseAuthority: { observationOperationId: OperationId, requestId: AttemptChoiceRequestId },
+  WorkflowClaimReleaseAuthority: {}
+})
+export type TaskClaimReleaseAuthority = typeof TaskClaimReleaseAuthority.Type
+
 const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
+  authority: TaskClaimReleaseAuthority,
   predecessorOperationIds: CausalPredecessorOperationIds,
   release: TaskClaimRelease
 }).check(
@@ -83,9 +92,22 @@ const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
       predecessorOperationIds: operation.predecessorOperationIds
     })
     if (selfPredecessor !== undefined) return selfPredecessor
-    return operation.predecessorOperationIds.includes(operation.release.claim.operationId)
-      ? undefined
-      : { issue: "a claim release must causally name the exact claim acquisition", path: ["predecessorOperationIds"] }
+    if (!operation.predecessorOperationIds.includes(operation.release.claim.operationId)) {
+      return {
+        issue: "a claim release must causally name the exact claim acquisition",
+        path: ["predecessorOperationIds"]
+      }
+    }
+    if (
+      operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
+      !operation.predecessorOperationIds.includes(operation.authority.observationOperationId)
+    ) {
+      return {
+        issue: "a stopped-attempt claim release must causally name its exact focused claim observation",
+        path: ["predecessorOperationIds"]
+      }
+    }
+    return undefined
   })
 )
 
@@ -232,6 +254,7 @@ export const makeTaskClaimAcquisitionOperation = (fields: {
   })
 
 export const makeTaskClaimReleaseOperation = (fields: {
+  readonly authority: TaskClaimReleaseAuthority
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
   readonly release: TaskClaimRelease
 }): typeof WorkflowOperation.cases.ReleaseTaskClaim.Type =>

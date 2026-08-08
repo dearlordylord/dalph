@@ -71,6 +71,10 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
 // eslint-disable-next-line complexity -- Every closed protocol-evidence variant owns one maintainer-readable sentence.
 const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
   switch (evidence._tag) {
+    case "AttemptChoiceApplied":
+      return `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`
+    case "AttemptImplementationAbandoned":
+      return `The story expects Dalph to abandon implementation responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "AttemptWorktreeLost":
       return `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "CompatibleTargetAdvance":
@@ -95,6 +99,8 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
       return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
     case "TaskWorktreeReady":
       return `The story expects the worktree for task ${evidence.taskId}, attempt ${evidence.attemptId}, to become ready.`
+    case "StoppedAttemptClaimNoReleaseObserved":
+      return `The story expects Dalph to preserve the ${evidence.claimState.toLowerCase()} claim state for stopped task ${evidence.taskId}.`
   }
 }
 
@@ -157,7 +163,9 @@ type OperatorStoryItem = Extract<
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
+      | "OperatorContinuesAttempt"
       | "OperatorDirectsTaskClaimReacquisition"
+      | "OperatorStopsAttempt"
       | "SetTaskExecutionCapacity"
   }
 >
@@ -166,7 +174,9 @@ const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is Opera
   item._tag === "OperatorAppliesControlDirection" ||
   item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
   item._tag === "OperatorControlDirectionFailed" ||
+  item._tag === "OperatorContinuesAttempt" ||
   item._tag === "OperatorDirectsTaskClaimReacquisition" ||
+  item._tag === "OperatorStopsAttempt" ||
   item._tag === "SetTaskExecutionCapacity"
 
 const operatorLyric = (item: OperatorStoryItem): string => {
@@ -175,6 +185,16 @@ const operatorLyric = (item: OperatorStoryItem): string => {
   }
   if (item._tag === "OperatorControlDirectionFailed") {
     return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
+  }
+  if (item._tag === "OperatorContinuesAttempt" || item._tag === "OperatorStopsAttempt") {
+    const direction = item._tag === "OperatorContinuesAttempt" ? "Continue" : "Stop"
+    const result =
+      item.expected._tag === "Rejected"
+        ? `rejection ${item.expected.reason}`
+        : item._tag === "OperatorStopsAttempt"
+          ? `status ${item.expected.status}`
+          : "ContinueApplied"
+    return `Operator applies ${direction} request ${item.requestNonce} to task ${item.taskId}, attempt ${item.attemptId}, and observes ${result}.`
   }
   if (
     item._tag === "OperatorAppliesControlDirection" ||

@@ -4,6 +4,13 @@ import {
   type AuthoredCassetteStoryItem as StoryItem,
   AuthoredTrackerGraphReadResult
 } from "./authored-domain.js"
+import {
+  AuthoredAttemptChoiceItem,
+  AuthoredTaskClaimReadItem,
+  isAuthoredAttemptChoiceItem,
+  isTaskClaimReadItem,
+  type AuthoredAttemptChoiceItem as AttemptChoiceItem
+} from "./authored-cursor-items.js"
 
 export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteInteractionMismatch>()(
   "AuthoredCassetteInteractionMismatch",
@@ -29,22 +36,6 @@ type CursorFailure = AuthoredCassetteInteractionMismatch
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
-type AuthoredTaskClaimReadItem =
-  | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
-  | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
-  | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
-
-const AuthoredTaskClaimReadItem = Schema.Union([
-  AuthoredCassetteStoryItem.cases.TaskClaimReadFailed,
-  AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned,
-  AuthoredCassetteStoryItem.cases.TaskClaimReadReturned
-])
-
-const isTaskClaimReadItem = (item: StoryItem | undefined): item is AuthoredTaskClaimReadItem =>
-  item?._tag === "TaskClaimReadFailed" ||
-  item?._tag === "TaskClaimCurrentReadReturned" ||
-  item?._tag === "TaskClaimReadReturned"
-
 export interface StoryCursor {
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
@@ -54,6 +45,7 @@ export interface StoryCursor {
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
+  readonly consumeAttemptChoice: Effect.Effect<Option.Option<AttemptChoiceItem>>
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
   readonly consumeExecutorReport: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.Type,
@@ -292,6 +284,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   })
+  const consumeAttemptChoice = Effect.gen(function* () {
+    const claimed = yield* claimNext(isAuthoredAttemptChoiceItem)
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(yield* Schema.decodeUnknownEffect(AuthoredAttemptChoiceItem)(claimed.item).pipe(Effect.orDie))
+  })
   const consumeControlDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type =>
@@ -411,6 +408,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     atTerminalAssertions,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
+    consumeAttemptChoice,
     consumeCapacityChange,
     consumeControlDirection,
     consumeControlDirectionFailure,

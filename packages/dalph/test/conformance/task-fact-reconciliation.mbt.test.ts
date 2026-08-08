@@ -21,7 +21,8 @@ import {
   makeTaskClaimReleaseOperation,
   OperationId,
   ResponsibilityDisposition,
-  TaskClaimReacquisitionRequestId
+  TaskClaimReacquisitionRequestId,
+  TaskClaimReleaseAuthority
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
 
@@ -52,6 +53,7 @@ const exactClaim = ActiveTaskClaim.make({
   token: ClaimToken.make("task-facts-token")
 })
 const exactRelease = makeTaskClaimReleaseOperation({
+  authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
   predecessorOperationIds: [exactClaim.operationId],
   release: { claim: exactClaim, operationId: OperationId.make("release-task-facts-claim") }
 })

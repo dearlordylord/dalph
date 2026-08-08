@@ -130,6 +130,7 @@ export type NewRecoveredWorkflowAction =
       readonly _tag: "ReleaseExternallyCompletedTaskClaim"
       readonly operation: {
         readonly _tag: "ReleaseTaskClaim"
+        readonly authority: TaskClaimReleaseOperation["authority"]
         readonly predecessorOperationIds: TaskClaimReleaseOperation["predecessorOperationIds"]
         readonly release: Omit<TaskClaimReleaseOperation["release"], "operationId">
       }
@@ -139,6 +140,7 @@ export type NewRecoveredWorkflowAction =
       readonly _tag: "ReleaseStoppedAttemptClaim"
       readonly operation: {
         readonly _tag: "ReleaseTaskClaim"
+        readonly authority: TaskClaimReleaseOperation["authority"]
         readonly predecessorOperationIds: TaskClaimReleaseOperation["predecessorOperationIds"]
         readonly release: Omit<TaskClaimReleaseOperation["release"], "operationId">
       }

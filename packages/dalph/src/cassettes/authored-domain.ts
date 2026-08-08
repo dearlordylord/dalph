@@ -6,6 +6,7 @@ import {
   PlannedAttemptExecutorResult,
   TaskExecutorLocator,
   TaskId,
+  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -29,6 +30,9 @@ import {
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
+import { AuthoredContinueAttemptResult, AuthoredStopAttemptResult } from "./authored-attempt-choice.js"
+import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
+export { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 
 const AuthoredTrackerTask = Schema.Struct({
   id: TaskId,
@@ -144,25 +148,6 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
   PlannedAttemptExecutorWorkResponsibilityBegan: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence.Type
-
-/** Optional evidence from the claim, attempt-planning, and worktree protocol. */
-export const AuthoredProtocolEvidence = Schema.TaggedUnion({
-  AttemptWorktreeLost: { attemptId: AttemptId, taskId: TaskId },
-  CompatibleTargetAdvance: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
-  ControlDirectionApplied: {
-    direction: ControlDirection,
-    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
-  },
-  IncompatibleTargetRewrite: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
-  TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
-  TaskClaimAcquired: { taskId: TaskId },
-  TaskClaimReleased: { taskId: TaskId },
-  TaskClaimObserved: { claimState: Schema.Literals(["Exact", "Foreign", "Missing"]), taskId: TaskId },
-  TaskClaimReadExhausted: { taskId: TaskId },
-  TaskClaimReacquisitionDirected: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
-  TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
-})
-export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
 
 const AuthoredExpectedBehaviorShape = Schema.Struct({
   orchestration: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
@@ -286,7 +271,23 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     reason: Schema.Literals(["IncompleteSnapshot", "OutsideCurrentTargetClosure"]),
     subject: Schema.TaggedUnion({ Task: { taskId: TaskId } })
   },
+  /** Alice applies Continue for one immutable attempt and observes the typed public result. */
+  OperatorContinuesAttempt: {
+    attemptId: AttemptId,
+    expected: AuthoredContinueAttemptResult,
+    observedTaskRevision: TaskRevision,
+    requestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
   OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
+  /** Alice applies Stop for one immutable attempt and observes its current durable phase. */
+  OperatorStopsAttempt: {
+    attemptId: AttemptId,
+    expected: AuthoredStopAttemptResult,
+    observedTaskRevision: TaskRevision,
+    requestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
@@ -318,7 +319,9 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
     "OperatorControlDirectionFailed",
+    "OperatorContinuesAttempt",
     "OperatorDirectsTaskClaimReacquisition",
+    "OperatorStopsAttempt",
     "RunCoordinator",
     "SetTaskExecutionCapacity"
   ],

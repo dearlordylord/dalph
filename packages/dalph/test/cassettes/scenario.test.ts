@@ -62,6 +62,7 @@ import {
   TrackerRevision,
   TaskWorkCapacity,
   TaskClaimReacquisitionRequestId,
+  TaskClaimReleaseAuthority,
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
@@ -3462,6 +3463,7 @@ it.effect(
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const claimReleaseOperation = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
         predecessorOperationIds: [acquiredClaimEntry.claim.operationId],
         release: { claim: acquiredClaimEntry.claim, operationId: OperationId.make(`cassette-release:${run.runId}`) }
       })

@@ -37,6 +37,7 @@ import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
+import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
@@ -65,6 +66,7 @@ const defaultTrackerGraphReader = TrackerGraphReader.of({
 const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader) =>
   Layer.mergeAll(
     Layer.effect(InRunJournal, InRunJournal),
+    attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
     Layer.mock(PlannedAttemptExecutor, {}),
     Layer.mock(RunRecoveryProjection, {

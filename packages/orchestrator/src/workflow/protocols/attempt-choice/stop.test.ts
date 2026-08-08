@@ -33,9 +33,11 @@ import {
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  stoppedAttemptClaimNoReleaseRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -43,13 +45,17 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
+  TaskClaimReleasedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
-  makeTaskWorkSpecificationObservationOperation
+  makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../../registry/operation.js"
 import {
   makeFocusedTaskClaimFactsObserved,
@@ -65,7 +71,7 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
 import { AttemptChoiceControl, attemptChoiceControlLayer } from "./control.js"
-import { AttemptChoiceRequestId } from "./events.js"
+import { AttemptChoiceRequestId, StoppedAttemptClaimNoReleaseObservedEvent } from "./events.js"
 import { AuthoritativeTaskClaimObserved, WorkflowInterpreter } from "../../interpretation/interpreter.js"
 import { AuthoritativeTaskClaimReleased } from "../task-claim-release/protocol.js"
 import { advanceAttemptStoppage, observeAttemptStoppageExecutor, recordStoppedAttemptClaimNoRelease } from "./stop.js"
@@ -128,6 +134,19 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
     plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
   const safeOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(
     runId,
@@ -155,6 +174,14 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
   yield* (yield* AttemptChoiceControl).apply({ choice: "StopTaskImplementation", requestId, subject })
 })
 
+const recordsWithRows = (
+  records: ReadonlyArray<JournalRecord>,
+  rows: ReadonlyArray<Pick<JournalRecord, "event" | "key">>
+): ReadonlyArray<JournalRecord> => [
+  ...records,
+  ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(records.length + index + 1), runId }))
+]
+
 it.effect("proves the exact executor stopped before abandoning implementation responsibility", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
@@ -177,11 +204,49 @@ it.effect("proves the exact executor stopped before abandoning implementation re
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("rejects executor work that reopens an abandoned attempt", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("unused projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const records = yield* (yield* JournalStore).read(runId)
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const forged = recordsWithRows(records, [
+      {
+        event: PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "StartOrContinue",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal)
+      }
+    ])
+
+    expect(reduceWorkflowJournalHistory(runId, forged)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("follows abandonment") })
+      ])
+    })
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("rechecks the executor after restart before repeating Stop", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
     const journal = yield* JournalStore
-    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
     yield* journal.append(
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
@@ -216,7 +281,7 @@ it.effect("rechecks the executor after restart before repeating Stop", () =>
 
     expect(yield* Ref.get(projectionCalls)).toBe(1)
     expect(yield* Ref.get(suspensionCalls)).toBe(0)
-    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(1)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(2)
     expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
@@ -226,7 +291,7 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
   Effect.gen(function* () {
     yield* appendExposedStop()
     const journal = yield* JournalStore
-    const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
     yield* journal.append(
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, startOrdinal),
@@ -344,6 +409,289 @@ it.effect("derives a no-release result only from the exact journaled focused cla
       observationOperationId: claimRead.operationId
     })
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects a stale no-release observation after a newer exact claim read", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("unused projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const journal = yield* JournalStore
+    const staleRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-stale-no-release"),
+      target,
+      taskId,
+      [exactClaim.operationId]
+    )
+    yield* journal.append(runId, intentRecordKey(staleRead.operationId), taskTrackerReadIntent(staleRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(staleRead.operationId),
+      taskTrackerFactsObservedEvent(
+        staleRead.operationId,
+        makeFocusedTaskClaimFactsObserved(staleRead, UnclaimedTask.make({ taskId }))
+      )
+    )
+    const currentRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-newer-exact-claim"),
+      target,
+      taskId,
+      [exactClaim.operationId, staleRead.operationId]
+    )
+    yield* journal.append(runId, intentRecordKey(currentRead.operationId), taskTrackerReadIntent(currentRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(currentRead.operationId),
+      taskTrackerFactsObservedEvent(currentRead.operationId, makeFocusedTaskClaimFactsObserved(currentRead, exactClaim))
+    )
+
+    const contradiction = yield* recordStoppedAttemptClaimNoRelease(requestId, subject, staleRead.operationId).pipe(
+      Effect.flip
+    )
+    expect(contradiction._tag).toBe("StoppedAttemptClaimObservationContradiction")
+    const records = yield* journal.read(runId)
+    expect(records.some(({ event }) => event._tag === "StoppedAttemptClaimNoReleaseObserved")).toBe(false)
+    const forged = recordsWithRows(records, [
+      {
+        event: StoppedAttemptClaimNoReleaseObservedEvent.make({
+          expectedClaim: exactClaim,
+          observation: UnclaimedTask.make({ taskId }),
+          observationOperationId: staleRead.operationId,
+          occurrenceClassification: "NonActionOccurrence",
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        }),
+        key: stoppedAttemptClaimNoReleaseRecordKey(requestId)
+      }
+    ])
+    expect(reduceWorkflowJournalHistory(runId, forged)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("latest exact post-baseline claim read") })
+      ])
+    })
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("requires one exact stopped-claim release operation after its current claim read", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("unused projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const journal = yield* JournalStore
+    const exactRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-release-authority-read"),
+      target,
+      taskId,
+      [exactClaim.operationId]
+    )
+    yield* journal.append(runId, intentRecordKey(exactRead.operationId), taskTrackerReadIntent(exactRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(exactRead.operationId),
+      taskTrackerFactsObservedEvent(exactRead.operationId, makeFocusedTaskClaimFactsObserved(exactRead, exactClaim))
+    )
+    const records = yield* journal.read(runId)
+    const releaseOperation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId: exactRead.operationId,
+        requestId
+      }),
+      predecessorOperationIds: [exactClaim.operationId, exactRead.operationId],
+      release: { claim: exactClaim, operationId: OperationId.make("attempt-stop-authorized-release") }
+    })
+    const releaseIntentRow = {
+      event: TaskClaimReleaseIntendedEvent.make({ operation: releaseOperation, version: workflowJournalEventVersion }),
+      key: intentRecordKey(releaseOperation.release.operationId)
+    }
+    const intended = recordsWithRows(records, [releaseIntentRow])
+    expect(reduceWorkflowJournalHistory(runId, intended)._tag).toBe("ValidWorkflowJournalHistory")
+
+    const duplicateOperation = makeTaskClaimReleaseOperation({
+      authority: releaseOperation.authority,
+      predecessorOperationIds: releaseOperation.predecessorOperationIds,
+      release: { claim: exactClaim, operationId: OperationId.make("attempt-stop-duplicate-release") }
+    })
+    const duplicate = recordsWithRows(intended, [
+      {
+        event: TaskClaimReleaseIntendedEvent.make({
+          operation: duplicateOperation,
+          version: workflowJournalEventVersion
+        }),
+        key: intentRecordKey(duplicateOperation.release.operationId)
+      }
+    ])
+    expect(reduceWorkflowJournalHistory(runId, duplicate)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("already has one durable intent") })
+      ])
+    })
+
+    const wrongOutcomeOperationId = OperationId.make("attempt-stop-wrong-release-outcome")
+    const wrongOutcome = recordsWithRows(intended, [
+      {
+        event: TaskClaimReleasedEvent.make({
+          release: { ...releaseOperation.release, operationId: wrongOutcomeOperationId },
+          version: workflowJournalEventVersion
+        }),
+        key: outcomeRecordKey(wrongOutcomeOperationId)
+      }
+    ])
+    expect(reduceWorkflowJournalHistory(runId, wrongOutcome)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("contradicts operation") })
+      ])
+    })
+
+    const predatedRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-predated-release-read"),
+      target,
+      taskId,
+      [exactClaim.operationId]
+    )
+    const abandonmentIndex = records.findIndex(({ event }) => event._tag === "AttemptImplementationAbandoned")
+    const predatedRows: Array<Pick<JournalRecord, "event" | "key">> = records.map(({ event, key }) => ({ event, key }))
+    predatedRows.splice(abandonmentIndex, 0, {
+      event: taskTrackerReadIntent(predatedRead),
+      key: intentRecordKey(predatedRead.operationId)
+    })
+    const predatedPrefix = recordsWithRows([], predatedRows)
+    const predatedObservation = {
+      event: taskTrackerFactsObservedEvent(
+        predatedRead.operationId,
+        makeFocusedTaskClaimFactsObserved(predatedRead, exactClaim)
+      ),
+      key: outcomeRecordKey(predatedRead.operationId)
+    }
+    const predatedRelease = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId: predatedRead.operationId,
+        requestId
+      }),
+      predecessorOperationIds: [exactClaim.operationId, predatedRead.operationId],
+      release: { claim: exactClaim, operationId: OperationId.make("attempt-stop-predated-release") }
+    })
+    const predated = recordsWithRows(predatedPrefix, [
+      predatedObservation,
+      {
+        event: TaskClaimReleaseIntendedEvent.make({ operation: predatedRelease, version: workflowJournalEventVersion }),
+        key: intentRecordKey(predatedRelease.release.operationId)
+      }
+    ])
+    expect(reduceWorkflowJournalHistory(runId, predated)).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("latest exact post-abandonment claim read") })
+      ])
+    })
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("makes released and no-release stopped-claim dispositions mutually exclusive", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("unused projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const journal = yield* JournalStore
+    const exactRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-terminal-exact-read"),
+      target,
+      taskId,
+      [exactClaim.operationId]
+    )
+    yield* journal.append(runId, intentRecordKey(exactRead.operationId), taskTrackerReadIntent(exactRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(exactRead.operationId),
+      taskTrackerFactsObservedEvent(exactRead.operationId, makeFocusedTaskClaimFactsObserved(exactRead, exactClaim))
+    )
+    const releaseOperation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId: exactRead.operationId,
+        requestId
+      }),
+      predecessorOperationIds: [exactClaim.operationId, exactRead.operationId],
+      release: { claim: exactClaim, operationId: OperationId.make("attempt-stop-terminal-release") }
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(releaseOperation.release.operationId),
+      TaskClaimReleaseIntendedEvent.make({ operation: releaseOperation, version: workflowJournalEventVersion })
+    )
+    const intended = yield* journal.read(runId)
+    const missingRead = makeTaskClaimObservationOperation(
+      OperationId.make("attempt-stop-terminal-missing-read"),
+      target,
+      taskId,
+      [exactClaim.operationId, releaseOperation.release.operationId]
+    )
+    const missingObservation = UnclaimedTask.make({ taskId })
+    const readRows = [
+      { event: taskTrackerReadIntent(missingRead), key: intentRecordKey(missingRead.operationId) },
+      {
+        event: taskTrackerFactsObservedEvent(
+          missingRead.operationId,
+          makeFocusedTaskClaimFactsObserved(missingRead, missingObservation)
+        ),
+        key: outcomeRecordKey(missingRead.operationId)
+      }
+    ] as const
+    const releasedRow = {
+      event: TaskClaimReleasedEvent.make({ release: releaseOperation.release, version: workflowJournalEventVersion }),
+      key: outcomeRecordKey(releaseOperation.release.operationId)
+    }
+    const noReleaseRow = {
+      event: StoppedAttemptClaimNoReleaseObservedEvent.make({
+        expectedClaim: exactClaim,
+        observation: missingObservation,
+        observationOperationId: missingRead.operationId,
+        occurrenceClassification: "NonActionOccurrence",
+        requestId,
+        subject,
+        version: workflowJournalEventVersion
+      }),
+      key: stoppedAttemptClaimNoReleaseRecordKey(requestId)
+    }
+
+    for (const forged of [
+      recordsWithRows(intended, [releasedRow, ...readRows, noReleaseRow]),
+      recordsWithRows(intended, [...readRows, noReleaseRow, releasedRow])
+    ]) {
+      expect(reduceWorkflowJournalHistory(runId, forged)).toMatchObject({
+        _tag: "InvalidWorkflowJournalHistory",
+        issues: expect.arrayContaining([
+          expect.objectContaining({ detail: "stopped-attempt claim disposition is already terminal" })
+        ])
+      })
+    }
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

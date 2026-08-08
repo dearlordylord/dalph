@@ -23,7 +23,8 @@ import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import {
   makeTaskClaimReleaseOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -377,6 +378,7 @@ it.effect("establishes the current graph before proposing an external-success cl
         token: ClaimToken.make("stale-external-success-token")
       })
       const release = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
         predecessorOperationIds: [claimOperationId],
         release: { claim, operationId: OperationId.make("stale-external-success-release-placeholder") }
       })

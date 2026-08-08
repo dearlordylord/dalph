@@ -5,7 +5,7 @@ import { TaskId } from "@dalph/contracts"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { OperationId } from "../identity.js"
-import { WorkflowOperation } from "./operation.js"
+import { TaskClaimReleaseAuthority, WorkflowOperation } from "./operation.js"
 
 const claim = ActiveTaskClaim.make({
   operationId: OperationId.make("operation-test-acquisition"),
@@ -14,6 +14,7 @@ const claim = ActiveTaskClaim.make({
   token: ClaimToken.make("operation-test-token")
 })
 const release = TaskClaimRelease.make({ claim, operationId: OperationId.make("operation-test-release") })
+const authority = TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({})
 
 it.effect("requires a claim release to follow its acquisition without naming itself", () =>
   Effect.gen(function* () {
@@ -21,17 +22,17 @@ it.effect("requires a claim release to follow its acquisition without naming its
     expect(
       (yield* decode({
         _tag: "ReleaseTaskClaim",
+        authority,
         predecessorOperationIds: [release.operationId, claim.operationId],
         release
       }).pipe(Effect.flip))._tag
     ).toBe("SchemaError")
     expect(
-      (yield* decode({ _tag: "ReleaseTaskClaim", predecessorOperationIds: [], release }).pipe(Effect.flip))._tag
+      (yield* decode({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [], release }).pipe(Effect.flip))
+        ._tag
     ).toBe("SchemaError")
-    expect(yield* decode({ _tag: "ReleaseTaskClaim", predecessorOperationIds: [claim.operationId], release })).toEqual({
-      _tag: "ReleaseTaskClaim",
-      predecessorOperationIds: [claim.operationId],
-      release
-    })
+    expect(
+      yield* decode({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [claim.operationId], release })
+    ).toEqual({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [claim.operationId], release })
   })
 )

@@ -27,7 +27,8 @@ import {
 import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   makeTaskClaimReleaseOperation,
-  makeTaskWorktreeReconciliationOperation
+  makeTaskWorktreeReconciliationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 
 const taskA = TaskId.make("task-A")
@@ -103,6 +104,7 @@ it("reconciles an already-intended exact claim release as its own responsibility
     token: ClaimToken.make("frontier-release-token")
   })
   const operation = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
     predecessorOperationIds: [claim.operationId],
     release: { claim, operationId: OperationId.make("frontier-release") }
   })

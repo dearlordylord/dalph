@@ -387,6 +387,54 @@ it.effect("does not manufacture executor-work responsibility from a read-only ob
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("requires exact command reconciliation before a generic executor-state observation", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const projectionCalls = yield* Ref.make(0)
+    const failure = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "PlannedAttemptExecutorCommandReconciliationRequired",
+      commandOrdinal,
+      correlation
+    })
+    expect(yield* Ref.get(projectionCalls)).toBe(0)
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorStateObserved"
+      )
+    ).toHaveLength(0)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("rejects a divergent immutable plan before recording another executor command", () =>
   Effect.gen(function* () {
     const firstReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })

@@ -65,6 +65,7 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
   }
   if (action._tag === "ReleaseExternallyCompletedTaskClaim" || action._tag === "ReleaseStoppedAttemptClaim") {
     const operation = makeTaskClaimReleaseOperation({
+      authority: action.operation.authority,
       predecessorOperationIds: action.operation.predecessorOperationIds,
       release: { ...action.operation.release, operationId }
     })

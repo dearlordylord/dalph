@@ -16,7 +16,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { InRunJournal } from "../../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -60,6 +60,12 @@ export class PlannedAttemptExecutorProjectionUnavailable extends Schema.TaggedEr
   { commandOrdinal: PlannedAttemptExecutorCommandOrdinal, correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
+/** A generic current-state read cannot bypass reconciliation of an ambiguous executor command. */
+export class PlannedAttemptExecutorCommandReconciliationRequired extends Schema.TaggedErrorClass<PlannedAttemptExecutorCommandReconciliationRequired>()(
+  "PlannedAttemptExecutorCommandReconciliationRequired",
+  { commandOrdinal: PlannedAttemptExecutorCommandOrdinal, correlation: PlannedAttemptExecutorCorrelation }
+) {}
+
 /** A current-state read found no authoritative executor state for the exact attempt. */
 export class PlannedAttemptExecutorStateUnavailable extends Schema.TaggedErrorClass<PlannedAttemptExecutorStateUnavailable>()(
   "PlannedAttemptExecutorStateUnavailable",
@@ -81,7 +87,30 @@ export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedEr
 const sameCorrelation = (left: PlannedAttemptExecutorCorrelation, right: PlannedAttemptExecutorCorrelation): boolean =>
   left.attemptId === right.attemptId && left.runId === right.runId
 
-const latestElementOffset = -1
+const latestUnsettledExecutorCommand = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) => {
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  const command = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === plannedAttempt.runId &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )
+  if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
+  const commandEvent = command.event
+  const settled = records.some(({ event, position }) => {
+    if (position <= command.position) return false
+    if (event._tag === "PlannedAttemptExecutorWorkReported") {
+      return sameCorrelation(correlation, event.report.correlation)
+    }
+    return (
+      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+      event.commandOrdinal === commandEvent.ordinal &&
+      event.observation._tag === "ExactExecutorReport" &&
+      sameCorrelation(correlation, event.observation.report.correlation)
+    )
+  })
+  return settled ? undefined : commandEvent
+}
 
 /** Records ownership before any adapter records a command intent or crosses the executor boundary. */
 export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
@@ -163,33 +192,9 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
         event.plannedAttempt.runId === plannedAttempt.runId &&
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length
-  const latestCommandIntent = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-  const latestCommandIntentEvent =
-    latestCommandIntent?.event._tag === "PlannedAttemptExecutorCommandIntended" ? latestCommandIntent.event : undefined
-  const latestAcceptedReport = acceptedReportRecords.at(latestElementOffset)
-  const latestExactCommandProjection =
-    latestCommandIntent !== undefined && latestCommandIntentEvent !== undefined
-      ? records.findLast(
-          ({ event, position }) =>
-            position > latestCommandIntent.position &&
-            event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-            event.commandOrdinal === latestCommandIntentEvent.ordinal &&
-            event.observation._tag === "ExactExecutorReport" &&
-            sameCorrelation(correlation, event.observation.report.correlation)
-        )
-      : undefined
-  if (
-    latestCommandIntent !== undefined &&
-    latestCommandIntentEvent !== undefined &&
-    (latestAcceptedReport === undefined || latestCommandIntent.position > latestAcceptedReport.position) &&
-    latestExactCommandProjection === undefined
-  ) {
-    const intent = latestCommandIntentEvent
+  const unsettledCommand = latestUnsettledExecutorCommand(records, plannedAttempt)
+  if (unsettledCommand !== undefined) {
+    const intent = unsettledCommand
     const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
       records.filter(
         ({ event }) =>
@@ -333,6 +338,13 @@ export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecu
     return yield* new PlannedAttemptExecutorResponsibilityContradiction({
       accepted: responsibility.event.plannedAttempt,
       requested: plannedAttempt
+    })
+  }
+  const unsettledCommand = latestUnsettledExecutorCommand(records, plannedAttempt)
+  if (unsettledCommand !== undefined) {
+    return yield* new PlannedAttemptExecutorCommandReconciliationRequired({
+      commandOrdinal: unsettledCommand.ordinal,
+      correlation
     })
   }
   const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(

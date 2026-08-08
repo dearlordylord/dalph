@@ -69,7 +69,8 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
@@ -293,6 +294,10 @@ const stoppedAttemptDisposition = (
   }
   return ResponsibilityDisposition.StoppedAttemptClaimReleaseRequired({
     operation: makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId: claimObservation.event.operationId,
+        requestId
+      }),
       predecessorOperationIds: [expectedClaim.operationId, claimObservation.event.operationId],
       release: { claim: expectedClaim, operationId: OperationId.make(`attempt-stop:${requestId.nonce}:claim-release`) }
     }),
@@ -692,6 +697,7 @@ const deriveJournalResponsibilityFacts = (
     const externalSuccessRelease =
       acquiredClaim?._tag === "TaskClaimAcquired"
         ? makeTaskClaimReleaseOperation({
+            authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
             predecessorOperationIds: [acquiredClaim.claim.operationId],
             release: {
               claim: acquiredClaim.claim,

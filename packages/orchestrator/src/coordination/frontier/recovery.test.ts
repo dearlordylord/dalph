@@ -25,6 +25,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -55,7 +56,8 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
-  makeTaskWorktreeReconciliationOperation
+  makeTaskWorktreeReconciliationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import {
   AuthoritativeTaskClaimObserved,
@@ -68,6 +70,8 @@ import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/t
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -100,6 +104,7 @@ it.effect("replays only the exact recorded claim-release intent", () => {
       token: ClaimToken.make("runnable-transition-token")
     })
     const release = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [claim.operationId],
       release: { claim, operationId: OperationId.make("runnable-transition-release") }
     })
@@ -223,7 +228,6 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
-
     const recovery = yield* makeRunRecoveryProjection(runId)
     expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
       explanations: [
@@ -468,6 +472,19 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
+    const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, startOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: startOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     yield* journal.append(
       runId,
       plannedAttemptExecutorWorkReportedRecordKey(
@@ -690,6 +707,19 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       transitions: [{ _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }]
     })
     const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    const suspensionOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: suspensionOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     yield* journal.append(
       runId,
       plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
@@ -852,6 +882,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       )
     )
     const externalRelease = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [claim.acquisition.operationId],
       release: {
         claim: { _tag: "ActiveTaskClaim", ...claim.acquisition },

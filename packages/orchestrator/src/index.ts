@@ -242,6 +242,7 @@ export {
   continuePlannedAttemptExecutorWork,
   observePlannedAttemptExecutorState,
   plannedAttemptExecutorContinuationDisposition,
+  PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
   PlannedAttemptExecutorProjectionUnavailable,
@@ -520,6 +521,7 @@ export {
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimAcquisitionAuthority,
+  TaskClaimReleaseAuthority,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

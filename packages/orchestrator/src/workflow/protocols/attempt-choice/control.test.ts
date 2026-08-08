@@ -94,6 +94,19 @@ const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(f
     plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
   const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(
     runId,
@@ -266,7 +279,7 @@ it.effect("does not expose a choice from a safe report older than a later execut
   Effect.gen(function* () {
     yield* appendExposedChoice()
     const journal = yield* JournalStore
-    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(2)
     yield* journal.append(
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),

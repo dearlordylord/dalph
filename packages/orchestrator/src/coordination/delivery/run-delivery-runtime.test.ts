@@ -30,7 +30,7 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
+import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../workflow/registry/operation.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -859,6 +859,7 @@ it.effect("materializes accepted and source-derived operation identities only af
       token: ClaimToken.make("runtime-external-token")
     })
     const releaseOperation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [claimOperationId],
       release: { claim, operationId: OperationId.make("runtime-release-placeholder") }
     })

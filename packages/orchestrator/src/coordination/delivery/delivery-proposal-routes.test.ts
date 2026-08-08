@@ -36,7 +36,8 @@ import {
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import {
   QueuedIntegrationResponsibility,
@@ -323,6 +324,7 @@ describe("delivery proposal route matrix", () => {
 
   it("keeps new recovery actions identity-free until admission", () => {
     const release = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [activeClaim.operationId],
       release: { claim: activeClaim, operationId: OperationId.make("release-placeholder") }
     })
@@ -943,6 +945,7 @@ describe("delivery proposal route matrix", () => {
       })
 
       const release = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
         predecessorOperationIds: [activeClaim.operationId],
         release: { claim: activeClaim, operationId: OperationId.make("adapter-release-placeholder") }
       })

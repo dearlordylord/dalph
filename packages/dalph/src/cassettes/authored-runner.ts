@@ -3,6 +3,8 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Str
 import { GitCommitSha, type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
+  attemptChoiceControlLayer,
+  AttemptChoiceRequestId,
   controlDirectionApplicationLayer,
   taskClaimReacquisitionControlLayer,
   TaskControlSubjectOutsideRun,
@@ -102,6 +104,24 @@ const operatorControlFailureMatches = (
   if (!Schema.is(TrackerAdapterReadError)(failure)) return false
   /* v8 ignore next -- @preserve The authored failure schema cannot name another tracker-read reason. */
   return failure.reason._tag === "IncompleteSnapshot"
+}
+
+const attemptChoiceFailureReason = (
+  failure: unknown
+): "AlreadyApplied" | "IdentityContradiction" | "NotAvailable" | "OutsidePreIntegrationPhase" | undefined => {
+  if (typeof failure !== "object" || failure === null || !("_tag" in failure)) return undefined
+  switch (failure._tag) {
+    case "AttemptChoiceAlreadyApplied":
+      return "AlreadyApplied"
+    case "AttemptChoiceRequestIdentityContradiction":
+      return "IdentityContradiction"
+    case "AttemptChoiceNotAvailable":
+      return "NotAvailable"
+    case "AttemptChoiceOutsidePreIntegrationPhase":
+      return "OutsidePreIntegrationPhase"
+    default:
+      return undefined
+  }
 }
 
 type TargetVerificationStoryResult = Extract<
@@ -355,7 +375,11 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         })
       ).pipe(Layer.provide(ordinaryInterpreterLayer), Layer.provide(gitWorktreeLayer))
       const baseControlPolicyLayer = taskWorkCapacityControlLayer
-      const operatorControlLayer = Layer.merge(controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
+      const operatorControlLayer = Layer.mergeAll(
+        attemptChoiceControlLayer,
+        controlDirectionApplicationLayer,
+        taskClaimReacquisitionControlLayer
+      )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
       const planningLayer = (phase: "fresh" | "recovery") =>
@@ -500,6 +524,58 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                 runId
               })
             }).pipe(Effect.orDie)
+            const driveAttemptChoice = Effect.gen(function* () {
+              const authored = yield* cursor.consumeAttemptChoice
+              if (Option.isNone(authored)) return
+              const item = authored.value
+              const planned = (yield* sharedJournal.read(runId)).findLast(
+                ({ event }) =>
+                  event._tag === "TaskAttemptPlanned" &&
+                  event.operation.plannedAttempt.attemptId === item.attemptId &&
+                  event.operation.plannedAttempt.taskId === item.taskId
+              )?.event
+              if (planned?._tag !== "TaskAttemptPlanned") {
+                return yield* Effect.die(
+                  new Error(`authored attempt choice cannot find planned attempt ${item.attemptId}`)
+                )
+              }
+              const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
+              const result = yield* Effect.result(
+                bootstrap.operatorControl.applyAttemptChoice({
+                  choice:
+                    item._tag === "OperatorContinuesAttempt" ? "ContinueExistingAttempt" : "StopTaskImplementation",
+                  requestId,
+                  subject: {
+                    observedTaskRevision: item.observedTaskRevision,
+                    plannedAttempt: planned.operation.plannedAttempt
+                  }
+                })
+              )
+              if (item.expected._tag === "Rejected") {
+                if (result._tag !== "Failure" || attemptChoiceFailureReason(result.failure) !== item.expected.reason) {
+                  return yield* Effect.die(
+                    new Error(`authored attempt-choice rejection mismatch for ${item.requestNonce}`)
+                  )
+                }
+                return
+              }
+              if (result._tag !== "Success") {
+                return yield* Effect.die(
+                  new Error(`authored attempt choice ${item.requestNonce} failed with ${result.failure._tag}`)
+                )
+              }
+              if (
+                (item._tag === "OperatorContinuesAttempt" && result.success._tag !== "ContinueApplied") ||
+                (item._tag === "OperatorStopsAttempt" &&
+                  (result.success._tag !== "StopApplied" || result.success.status._tag !== item.expected.status))
+              ) {
+                return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
+              }
+              const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
+              if (queried._tag !== result.success._tag) {
+                return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
+              }
+            }).pipe(Effect.orDie)
             const driveControlDirection = Effect.gen(function* () {
               const direction = yield* cursor.consumeControlDirection
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
@@ -550,8 +626,10 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             }).pipe(Effect.orDie)
             const drivers: Partial<Record<AuthoredCassetteStoryItem["_tag"], Effect.Effect<void>>> = {
               CoordinatorProcessDies: cursor.pauseAtCoordinatorProcessDeath,
+              OperatorContinuesAttempt: driveAttemptChoice,
               OperatorAppliesControlDirection: driveControlDirection,
               OperatorDirectsTaskClaimReacquisition: driveClaimReacquisition,
+              OperatorStopsAttempt: driveAttemptChoice,
               SetTaskExecutionCapacity: driveCapacityChange
             }
             const driveAuthoredOperatorItem = (item: AuthoredCassetteStoryItem | undefined) => {

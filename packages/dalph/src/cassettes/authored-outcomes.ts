@@ -106,6 +106,35 @@ const protocolEvidenceFor = (
     Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
   >
 ): ReadonlyArray<ProtocolEvidence> => {
+  if (event._tag === "AttemptChoiceApplied") {
+    return [
+      {
+        _tag: "AttemptChoiceApplied",
+        attemptId: event.subject.plannedAttempt.attemptId,
+        choice: event.choice,
+        observedTaskRevision: event.subject.observedTaskRevision,
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "AttemptImplementationAbandoned") {
+    return [
+      {
+        _tag: "AttemptImplementationAbandoned",
+        attemptId: event.subject.plannedAttempt.attemptId,
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "StoppedAttemptClaimNoReleaseObserved") {
+    return [
+      {
+        _tag: "StoppedAttemptClaimNoReleaseObserved",
+        claimState: event.observation._tag === "UnclaimedTask" ? "Missing" : "Foreign",
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
   if (event._tag === "ControlDirectionApplied") {
     return [
       {

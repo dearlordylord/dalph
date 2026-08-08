@@ -149,6 +149,7 @@ export const newRecoveredActionOf = (
       _tag: "ReleaseExternallyCompletedTaskClaim",
       operation: {
         _tag: "ReleaseTaskClaim",
+        authority: transition.operation.authority,
         predecessorOperationIds: transition.operation.predecessorOperationIds,
         release
       },
@@ -161,6 +162,7 @@ export const newRecoveredActionOf = (
       _tag: "ReleaseStoppedAttemptClaim",
       operation: {
         _tag: "ReleaseTaskClaim",
+        authority: transition.operation.authority,
         predecessorOperationIds: transition.operation.predecessorOperationIds,
         release
       },

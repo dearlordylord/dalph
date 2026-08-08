@@ -6,6 +6,7 @@ import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.j
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import type { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
 import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
   JournalError,
@@ -35,6 +36,7 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
 export type JournaledRunServices =
   | Journal
+  | AttemptChoiceControl
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal
@@ -87,6 +89,12 @@ export interface JournaledRunBootstrapService {
     program: Effect.Effect<RunFinalityProof, E, R>
   ) => Effect.Effect<RunFinalityDecision, E | JournaledRunBootstrapError, Exclude<R, JournaledRunServices>>
   readonly operatorControl: {
+    readonly applyAttemptChoice: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<AttemptChoiceControl["Service"]["apply"]>>,
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
     readonly applyControlDirection: (
       input: unknown
     ) => Effect.Effect<
@@ -102,6 +110,12 @@ export interface JournaledRunBootstrapService {
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>>,
       Effect.Error<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
+    readonly readAttemptChoice: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<AttemptChoiceControl["Service"]["read"]>>,
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["read"]>> | JournaledRunNotActive
     >
     readonly readTaskWorkCapacity: (
       runId: RunId

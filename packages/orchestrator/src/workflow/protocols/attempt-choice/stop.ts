@@ -229,23 +229,42 @@ export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordC
     return yield* new AttemptStopChoiceContradiction({ requestId, subject })
   }
   const abandonmentPosition = abandonmentRecord.position
-  const observationRecord = records.findLast(
+  const latestReleaseIntent = records.findLast(
     ({ event, position }) =>
       position > abandonmentPosition &&
+      event._tag === "TaskClaimReleaseIntended" &&
+      event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
+      sameAttemptChoiceRequestId(event.operation.authority.requestId, requestId)
+  )
+  const observationBaseline = latestReleaseIntent?.position ?? abandonmentPosition
+  const observationRecord = records.findLast(
+    ({ event, position }) =>
+      position > observationBaseline &&
       event._tag === "TaskTrackerFactsObserved" &&
-      event.operationId === observationOperationId &&
       event.observation._tag === "FocusedTaskClaimFacts" &&
       event.observation.coverage.taskId === subject.plannedAttempt.taskId
   )
-  if (
-    observationRecord?.event._tag !== "TaskTrackerFactsObserved" ||
-    observationRecord.event.observation._tag !== "FocusedTaskClaimFacts"
-  ) {
+  if (observationRecord?.event._tag !== "TaskTrackerFactsObserved") {
     return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
   }
-  const observation = observationRecord.event.observation.observation
+  const observationEvent = observationRecord.event
+  if (observationEvent.observation._tag !== "FocusedTaskClaimFacts") {
+    return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
+  }
+  const observation = observationEvent.observation.observation
+  const observationIntent = records.find(
+    ({ event, position }) =>
+      position > observationBaseline &&
+      position < observationRecord.position &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTaskClaim" &&
+      event.operation.operationId === observationEvent.operationId &&
+      event.operation.taskId === subject.plannedAttempt.taskId
+  )
   const observationIsForTask = observation.taskId === subject.plannedAttempt.taskId
   if (
+    observationEvent.operationId !== observationOperationId ||
+    observationIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
     !observationIsForTask ||
     (observation._tag === "ActiveTaskClaim" && isExactTaskClaim(observation, abandonment.expectedClaim))
   ) {
