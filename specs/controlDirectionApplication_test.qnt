@@ -1,7 +1,7 @@
 module controlDirectionApplicationTest {
   import controlDirectionApplication.* from "./controlDirectionApplication"
 
-  run crashBeforeApplicationLosesOnlyTheRequest = {
+  run crashBeforeApplicationLosesOnlyTheRequestTest = {
     init
       .then(receiveTaskAPause)
       .then(crashAndRestart)
@@ -12,7 +12,7 @@ module controlDirectionApplicationTest {
       )
   }
 
-  run crashAfterApplicationReconstructsTheExactDirection = {
+  run crashAfterApplicationReconstructsTheExactDirectionTest = {
     init
       .then(receiveTaskAPause)
       .then(applyPending)
@@ -25,7 +25,7 @@ module controlDirectionApplicationTest {
       )
   }
 
-  run laterDirectionReplacesOnlyItsExactSubject = {
+  run laterDirectionReplacesOnlyItsExactSubjectTest = {
     init
       .then(receiveTaskAPause)
       .then(applyPending)
@@ -41,7 +41,7 @@ module controlDirectionApplicationTest {
       )
   }
 
-  run appliedDirectionClaimsNoLaterEffects = {
+  run appliedDirectionClaimsNoLaterEffectsTest = {
     init
       .then(receiveRunPause)
       .then(applyPending)

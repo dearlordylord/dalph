@@ -1,13 +1,13 @@
 module gitReconciliationTest {
   import gitReconciliation.* from "./gitReconciliation"
 
-  run compatibleAdvanceContinues = {
+  run compatibleAdvanceContinuesTest = {
     init
       .then(observeCompatibleTargetAdvance)
       .expect(compatibleTargetAdvanceDoesNotConstrainAttempt and state.decision == ContinueAttempt)
   }
 
-  run incompatibleRewriteSuspendsOnlyAffectedAttempt = {
+  run incompatibleRewriteSuspendsOnlyAffectedAttemptTest = {
     init
       .then(observeIncompatibleTargetRewrite)
       .then(reportSafelySuspended)
@@ -21,7 +21,7 @@ module gitReconciliationTest {
       )
   }
 
-  run lostWorktreePreservesEvidenceAndNeverRepairs = {
+  run lostWorktreePreservesEvidenceAndNeverRepairsTest = {
     init
       .then(observeLostWorktree)
       .then(reportSafelySuspended)
@@ -36,7 +36,7 @@ module gitReconciliationTest {
       )
   }
 
-  run registrationConflictRemainsDistinctAndNeverRepairs = {
+  run registrationConflictRemainsDistinctAndNeverRepairsTest = {
     init
       .then(observeRegistrationConflict)
       .then(reportSafelySuspended)
@@ -47,40 +47,40 @@ module gitReconciliationTest {
       )
   }
 
-  run missingResultIsRejectedWithWorktreePreserved = {
+  run missingResultIsRejectedWithWorktreePreservedTest = {
     init
       .then(observeMissingResultCommit)
       .expect(missingResultRejectedReached and rejectedResultPreservesWorktree)
   }
 
-  run nonDescendantResultIsRejectedWithWorktreePreserved = {
+  run nonDescendantResultIsRejectedWithWorktreePreservedTest = {
     init
       .then(observeNonDescendantResultCommit)
       .expect(nonDescendantResultRejectedReached and rejectedResultPreservesWorktree)
   }
 
-  run exactVerifiedPromotionUsesCompareAndSet = {
+  run exactVerifiedPromotionUsesCompareAndSetTest = {
     init
       .then(observeEligibleResultCommit)
       .then(observeExactExpectedTargetWithVerifiedCandidate)
       .expect(exactCompareAndSetReached and promotionRequiresExactExpectedHead)
   }
 
-  run staleTargetReconcilesWithoutOverwrite = {
+  run staleTargetReconcilesWithoutOverwriteTest = {
     init
       .then(observeEligibleResultCommit)
       .then(observeStaleTargetAfterVerification)
       .expect(staleTargetReconciliationReached and staleTargetNeverOverwrites)
   }
 
-  run ambiguousTargetRequiresReread = {
+  run ambiguousTargetRequiresRereadTest = {
     init
       .then(observeEligibleResultCommit)
       .then(observeAmbiguousTargetAfterVerification)
       .expect(ambiguousTargetRereadReached and ambiguousTargetNeverPromotes)
   }
 
-  run unverifiedCandidateCannotPromote = {
+  run unverifiedCandidateCannotPromoteTest = {
     init
       .then(observeEligibleResultCommit)
       .then(observeExactTargetWithUnverifiedCandidate)

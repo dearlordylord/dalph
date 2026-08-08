@@ -1,7 +1,7 @@
 module acceptedResultIntegrationTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
-  run journalOrderSurvivesRestart = {
+  run journalOrderSurvivesRestartTest = {
     init
       .then(acceptResult(1))
       .then(acceptResult(2))
@@ -18,7 +18,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run acceptedTerminalReconcilesAfterRestart = {
+  run acceptedTerminalReconcilesAfterRestartTest = {
     init
       .then(acceptResult(1))
       .then(recoverCoordinator)
@@ -31,7 +31,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run restartRequiresFreshTrackerFactsBeforeStart = {
+  run restartRequiresFreshTrackerFactsBeforeStartTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -48,7 +48,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run startConsumesCancellationCapability = {
+  run startConsumesCancellationCapabilityTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -61,7 +61,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run blockerReleasesTargetWithoutDiscardingResult = {
+  run blockerReleasesTargetWithoutDiscardingResultTest = {
     init
       .then(acceptResult(1))
       .then(acceptResult(2))
@@ -78,7 +78,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run explicitExactCandidateFixesOrderedParents = {
+  run explicitExactCandidateFixesOrderedParentsTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -93,7 +93,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run unreadableGitPreservesExplicitSubmissionAcrossRestart = {
+  run unreadableGitPreservesExplicitSubmissionAcrossRestartTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -110,7 +110,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run correctionReusesSessionAndAcceptsFirstCorrectedSubmission = {
+  run correctionReusesSessionAndAcceptsFirstCorrectedSubmissionTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -127,7 +127,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run correctionExhaustionPreservesWorkAndReleasesTarget = {
+  run correctionExhaustionPreservesWorkAndReleasesTargetTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
@@ -144,7 +144,7 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run automaticContinuationExhaustionPreservesWorkAndReleasesTarget = {
+  run automaticContinuationExhaustionPreservesWorkAndReleasesTargetTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))

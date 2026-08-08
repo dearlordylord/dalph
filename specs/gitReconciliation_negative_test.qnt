@@ -18,21 +18,21 @@ module gitReconciliationNegativeTest {
     state' = { ...state, overwriteAuthorized: true },
   }
 
-  run unsafeRepairIsDetected = {
+  run unsafeRepairIsDetectedTest = {
     init
       .then(observeLostWorktree)
       .then(authorizeForbiddenWorktreeRepair)
       .expect(not(lostWorktreeNeverAuthorizesRepair))
   }
 
-  run rejectedResultDiscardIsDetected = {
+  run rejectedResultDiscardIsDetectedTest = {
     init
       .then(observeMissingResultCommit)
       .then(discardRejectedResultEvidence)
       .expect(not(rejectedResultPreservesWorktree))
   }
 
-  run staleOverwriteIsDetected = {
+  run staleOverwriteIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
       .then(observeStaleTargetAfterVerification)

@@ -1,14 +1,14 @@
 module taskFactReconciliationTest {
   import taskFactReconciliation.* from "./taskFactReconciliation"
 
-  run changedInstructionsExposeChoicesAfterSafeSuspension = {
+  run changedInstructionsExposeChoicesAfterSafeSuspensionTest = {
     init
       .then(observeSpecificationChange)
       .then(reportSafelySuspended)
       .expect(specificationChoicesReached and changedFactsPreserveWip)
   }
 
-  run lifecycleCloseReopenPreservesAttempt = {
+  run lifecycleCloseReopenPreservesAttemptTest = {
     init
       .then(observeLifecycleClosure)
       .then(reportSafelySuspended)
@@ -16,20 +16,20 @@ module taskFactReconciliationTest {
       .expect(state.decision == ContinueWork and changedFactsPreserveWip)
   }
 
-  run membershipLossWaitsAfterSafeSuspension = {
+  run membershipLossWaitsAfterSafeSuspensionTest = {
     init
       .then(observeMembershipLoss)
       .then(reportSafelySuspended)
       .expect(membershipWaitReached and changedFactsPreserveWip)
   }
 
-  run incompleteReadCannotProveMembershipLoss = {
+  run incompleteReadCannotProveMembershipLossTest = {
     init
       .then(observeIncompleteMembershipRead)
       .expect(state.decision == ContinueWork and state.constraint == NoConstraint)
   }
 
-  run externalSuccessIsFinalWithoutDuplicateDelivery = {
+  run externalSuccessIsFinalWithoutDuplicateDeliveryTest = {
     init
       .then(observeExternalSuccess)
       .then(reportSafelySuspended)
@@ -41,7 +41,7 @@ module taskFactReconciliationTest {
       )
   }
 
-  run foreignClaimStopsOnlyA = {
+  run foreignClaimStopsOnlyATest = {
     init
       .then(observeForeignClaim)
       .then(reportSafelySuspended)
@@ -56,7 +56,7 @@ module taskFactReconciliationTest {
       )
   }
 
-  run missingClaimRequiresAppliedDirection = {
+  run missingClaimRequiresAppliedDirectionTest = {
     init
       .then(observeMissingClaim)
       .then(reportSafelySuspended)
@@ -77,7 +77,7 @@ module taskFactReconciliationTest {
       )
   }
 
-  run unreadableClaimCannotAuthorizeProgressOrLoss = {
+  run unreadableClaimCannotAuthorizeProgressOrLossTest = {
     init
       .then(observeUnreadableClaim)
       .then(reportSafelySuspended)
