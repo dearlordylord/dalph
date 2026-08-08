@@ -40,7 +40,7 @@ const SPECS = [
     name: "plannedAttemptExecutor",
     file: "specs/plannedAttemptExecutor.qnt",
     invariants: [
-      "everyStatusUsesExactPlannedAttempt",
+      "everyReportCarriesPlannedAttempt",
       "positionHeldUntilSuspensionResult",
       "safeSuspensionReleasesPosition",
       "suspensionRequestRetainsPosition",

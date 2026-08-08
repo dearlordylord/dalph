@@ -69,15 +69,29 @@ const continuationProposal = {
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
-    correlationAttemptId: ITFBigInt,
-    correlationRunId: ITFBigInt,
     positionHeld: Schema.Boolean,
-    status: Schema.Unknown
+    status: Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
   })
 })
 
-const variantTag = (value: unknown): string =>
-  typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
+/** The claimed correlation the payload of a report variant carries. */
+const SpecCorrelation = Schema.Struct({ attemptId: ITFBigInt, runId: ITFBigInt })
+
+type ObservedCorrelation = { readonly attemptId: bigint; readonly runId: bigint }
+
+/**
+ * Only executor reports carry a correlation. The two phases before one arrives
+ * are Dalph's own, and the spec gives their variants no payload, so nothing
+ * here may invent an identity for them.
+ */
+const reportTags: ReadonlySet<string> = new Set(["Running", "SuspensionRequested", "SafelySuspended", "Terminal"])
+
+const claimedOf = (status: { readonly tag: string; readonly value: unknown }) =>
+  reportTags.has(status.tag)
+    ? Schema.decodeUnknownEffect(SpecCorrelation)(status.value).pipe(
+        Effect.map((claimed): ObservedCorrelation | undefined => claimed)
+      )
+    : Effect.succeed(undefined)
 
 const executorConformanceDriver = defineDriver(
   {
@@ -95,7 +109,7 @@ const executorConformanceDriver = defineDriver(
     let pendingStart: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
     let controller: DeliveryRuntimeAdmissionController | undefined
     let records: ReadonlyArray<JournalRecord> = []
-    let status = "NoReport"
+    let status = "ResponsibilityNotBegun"
     let responsibilityRecorded = Deferred.makeUnsafe<void>()
     let startResponse: Deferred.Deferred<PlannedAttemptExecutorReport> | undefined
     let suspensionResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
@@ -238,12 +252,14 @@ const executorConformanceDriver = defineDriver(
       getState: () =>
         Effect.gen(function* () {
           const snapshot = yield* (yield* requireController()).snapshot
-          return {
-            correlationAttemptId: 1n,
-            correlationRunId: 158n,
-            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
-            status
-          }
+          // Read off the report the executor actually made rather than
+          // restating the planned identity, which would compare a constant
+          // against itself.
+          const claimed: ObservedCorrelation | undefined =
+            latestReport === undefined
+              ? undefined
+              : { attemptId: BigInt(latestReport.correlation.attemptId), runId: BigInt(latestReport.correlation.runId) }
+          return { claimed, positionHeld: snapshot.positions.has(plannedAttempt.taskId), status }
         }),
       init: () =>
         Effect.gen(function* () {
@@ -261,7 +277,7 @@ const executorConformanceDriver = defineDriver(
           pendingSuspension = undefined
           pendingStart = undefined
           records = []
-          status = "NoReport"
+          status = "ResponsibilityNotBegun"
           responsibilityRecorded = Deferred.makeUnsafe()
           startResponse = undefined
           suspensionResponse = Deferred.makeUnsafe()
@@ -292,14 +308,18 @@ quintIt(
     stateCheck: stateCheck(
       (raw) =>
         Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.map(({ state }) => ({ ...state, status: variantTag(state.status) })),
+          Effect.flatMap(({ state }) =>
+            claimedOf(state.status).pipe(
+              Effect.map((claimed) => ({ claimed, positionHeld: state.positionHeld, status: state.status.tag }))
+            )
+          ),
           Effect.orDie
         ),
       (spec, implementation) =>
         spec.positionHeld === implementation.positionHeld &&
-        spec.correlationAttemptId === implementation.correlationAttemptId &&
-        spec.correlationRunId === implementation.correlationRunId &&
-        spec.status === implementation.status
+        spec.status === implementation.status &&
+        spec.claimed?.runId === implementation.claimed?.runId &&
+        spec.claimed?.attemptId === implementation.claimed?.attemptId
     )
   },
   30_000

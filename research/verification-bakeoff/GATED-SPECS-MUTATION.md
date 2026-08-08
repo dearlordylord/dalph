@@ -31,11 +31,11 @@ itself, which is not the question.
 
 ## Results
 
-20 000 samples, 20 steps, Quint 0.31.0.
+20 000 samples, 20 steps, Quint 0.32.0.
 
 | Spec | Mutants | Killed by an invariant | By a witness only | Survive |
 |---|---|---|---|---|
-| `plannedAttemptExecutor.qnt` | 21 | 8 | 3 | 10 |
+| `plannedAttemptExecutor.qnt` | 23 | 9 | 4 | 10 |
 | `controlDirectionApplication.qnt` | 17 | 6 | 0 | 11 |
 | `taskFactReconciliation.qnt` | 71 | 25 | 0 | 46 |
 | `gitReconciliation.qnt` | 62 | 19 | 0 | 43 |
@@ -137,7 +137,7 @@ And across the full generated mutant set, the invariant moved from **0 kills to
 
 ## Repair 2: one attempt cannot be mis-correlated with another
 
-`everyStatusUsesExactPlannedAttempt` asserts that every recorded status carries
+`everyReportCarriesPlannedAttempt` asserts that every executor report carries
 `RUN_ID` and `ATTEMPT_ID`. Every action assigned exactly those two constants, so
 the invariant restated the assignment, and mutating `RUN_ID` moved the
 assignment and the invariant's reference together — an equivalent mutant rather
@@ -156,15 +156,22 @@ to every report action:
 pure val OTHER_RUN_ID = 159
 pure val OTHER_ATTEMPT_ID = 2
 
-pure def isExactPlannedAttempt(runId: int, attemptId: int): bool =
-  runId == RUN_ID and attemptId == ATTEMPT_ID
+pure def isPlannedAttempt(claimed: Correlation): bool =
+  claimed.runId == RUN_ID and claimed.attemptId == ATTEMPT_ID
 ```
 
-`beginResponsibility` and `requestSafeSuspension` keep the constants, because
-those are Dalph-initiated actions rather than executor reports.
+The correlation is the payload of those three variants, so the phases before an
+executor speaks carry none: `ResponsibilityNotBegun` and `ResponsibilityBegan`
+have nothing to check, and `SuspensionRequested` carries forward the correlation
+the executor last claimed rather than minting one.
+
+The invariant states the comparison itself instead of calling `isPlannedAttempt`,
+which the report actions guard with. Sharing that definition would move the
+guard and the requirement together, and a weakened guard would stop being
+detectable — the same equivalent-mutant shape this repair removes.
 
 The exactness guard rejects every foreign report, so behaviour is unchanged.
-The invariant moved from **0 kills to 2**.
+The invariant moved from **0 kills to 3**.
 
 ## Repair 3: a replacement claim identity that could be reused
 

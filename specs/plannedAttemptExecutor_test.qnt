@@ -1,7 +1,7 @@
 module plannedAttemptExecutorTest {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
-  run runningThenTerminal = {
+  run runningThenTerminalTest = {
     init
       .then(beginResponsibility)
       .then(startOrContinueRunning)
@@ -9,17 +9,17 @@ module plannedAttemptExecutorTest {
       .expect(terminalReached and terminalReleasesPosition)
   }
 
-  run safelySuspendAndResumeSameAttempt = {
+  run safelySuspendAndResumeSameAttemptTest = {
     init
       .then(beginResponsibility)
       .then(startOrContinueRunning)
       .then(requestSafeSuspension)
       .then(reportSafelySuspended)
       .then(startOrContinueRunning)
-      .expect(runningReached and everyStatusUsesExactPlannedAttempt)
+      .expect(runningReached and everyReportCarriesPlannedAttempt)
   }
 
-  run suspensionRequestKeepsPosition = {
+  run suspensionRequestKeepsPositionTest = {
     init
       .then(beginResponsibility)
       .then(startOrContinueRunning)
@@ -27,7 +27,7 @@ module plannedAttemptExecutorTest {
       .expect(suspensionRequestedReached and suspensionRequestRetainsPosition)
   }
 
-  run responsibilityPrecedesFirstExecutorReport = {
+  run responsibilityPrecedesFirstExecutorReportTest = {
     init
       .then(beginResponsibility)
       .expect(responsibilityBeganReached and positionHeldUntilSuspensionResult)
