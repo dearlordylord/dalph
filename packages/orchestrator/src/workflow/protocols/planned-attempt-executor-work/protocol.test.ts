@@ -29,6 +29,7 @@ import { OperationId } from "../../identity.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   attemptPlanRecordKey,
   intentRecordKey,
@@ -42,8 +43,16 @@ import {
 } from "../../registry/event.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./events.js"
-import { continuePlannedAttemptExecutorWork, requestPlannedAttemptExecutorSuspension } from "./protocol.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "./events.js"
+import {
+  continuePlannedAttemptExecutorWork,
+  observePlannedAttemptExecutorState,
+  requestPlannedAttemptExecutorSuspension
+} from "./protocol.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { deriveRunnableFrontier, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
@@ -299,6 +308,119 @@ it.effect("continues an exact planned attempt through the executor protocol", ()
   )
 )
 
+it.effect("projects one unmatched command without duplicating it and sends the next command on a later call", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const commandCalls = yield* Ref.make(0)
+    const firstCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, firstCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: firstCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const projected = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    const nextResponse = PlannedAttemptExecutorReport.cases.Terminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.some(projected)),
+      requestSuspension: () => Effect.die("unused suspension"),
+      startOrContinue: () => Ref.update(commandCalls, (count) => count + 1).pipe(Effect.as(nextResponse))
+    })
+
+    expect(
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+    ).toEqual(projected)
+    expect(yield* Ref.get(commandCalls)).toBe(0)
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+      )
+    ).toHaveLength(1)
+
+    expect(
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+    ).toEqual(nextResponse)
+    expect(yield* Ref.get(commandCalls)).toBe(1)
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+      )
+    ).toHaveLength(2)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("does not manufacture executor-work responsibility from a read-only observation", () =>
+  Effect.gen(function* () {
+    const projectionCalls = yield* Ref.make(0)
+    const missing = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(missing._tag).toBe("PlannedAttemptExecutorResponsibilityMissing")
+    expect(yield* Ref.get(projectionCalls)).toBe(0)
+    expect(yield* (yield* JournalStore).read(plannedAttempt.runId)).toEqual([])
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects a divergent immutable plan before recording another executor command", () =>
+  Effect.gen(function* () {
+    const firstReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(Option.none()),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.succeed(firstReport)
+        })
+      )
+    )
+    const divergent = PlannedTaskAttempt.make({ ...plannedAttempt, baseSha: GitCommitSha.make("2".repeat(40)) })
+    const contradiction = yield* continuePlannedAttemptExecutorWork(divergent).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("must reject before projection"),
+          requestSuspension: () => Effect.die("must reject before suspension"),
+          startOrContinue: () => Effect.die("must reject before continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(contradiction._tag).toBe("PlannedAttemptExecutorResponsibilityContradiction")
+    expect(
+      (yield* (yield* JournalStore).read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+      )
+    ).toHaveLength(1)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("stops an always-Running executor at the durable continuation limit", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
@@ -331,6 +453,74 @@ it.effect("stops an always-Running executor at the durable continuation limit", 
     expect(
       (yield* (yield* JournalStore).read(plannedAttempt.runId)).filter(
         ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+      )
+    ).toHaveLength(3)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("counts lost start responses reconciled as Running against the durable continuation limit", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const lostResponseExecutor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
+      requestSuspension: () => Effect.die("unused suspension"),
+      startOrContinue: () => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(Effect.die("response lost")))
+    })
+
+    for (let command = 0; command < 3; command += 1) {
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, lostResponseExecutor),
+        Effect.exit
+      )
+      expect(
+        yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, lostResponseExecutor)
+        )
+      ).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    }
+
+    const exhausted = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(PlannedAttemptExecutor, lostResponseExecutor),
+      Effect.flip
+    )
+    const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
+    expect(exhausted).toMatchObject({ _tag: "PlannedAttemptExecutorContinuationLimitReached", correlation, limit: 3 })
+    expect(yield* Ref.get(calls)).toBe(3)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(3)
+    expect(
+      records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+    ).toHaveLength(3)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(0)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("never issues a fourth durable suspension command without quiescence", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const alwaysRunning = PlannedAttemptExecutor.of({
+      project: () => Effect.die("no unmatched command"),
+      requestSuspension: () =>
+        Ref.update(calls, (count) => count + 1).pipe(
+          Effect.as(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+        ),
+      startOrContinue: () => Effect.die("unused continuation")
+    })
+
+    yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+      Effect.andThen(requestPlannedAttemptExecutorSuspension(plannedAttempt)),
+      Effect.andThen(requestPlannedAttemptExecutorSuspension(plannedAttempt)),
+      Effect.provideService(PlannedAttemptExecutor, alwaysRunning)
+    )
+    const exhausted = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+      Effect.provideService(PlannedAttemptExecutor, alwaysRunning),
+      Effect.flip
+    )
+    const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
+    expect(exhausted).toMatchObject({ _tag: "PlannedAttemptExecutorSuspensionLimitReached", correlation, limit: 3 })
+    expect(yield* Ref.get(calls)).toBe(3)
+    expect(
+      records.filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
       )
     ).toHaveLength(3)
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
@@ -382,7 +572,9 @@ it.effect("recreates the fake executor and continues the same attempt after shar
     const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
       "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported",
+      "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported"
     ])
     expect(

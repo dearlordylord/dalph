@@ -39,7 +39,7 @@ it("round-trips every generated applied attempt choice through the journal codec
           choice,
           initiatedBy: { _tag: "Operator" },
           occurrenceClassification: "InitiatedAction",
-          requestId: AttemptChoiceRequestId.make(`request-${requestIdentity}`),
+          requestId: AttemptChoiceRequestId.make({ nonce: `request-${requestIdentity}`, runId: plannedAttempt.runId }),
           subject: { observedTaskRevision: TaskRevision.make(`observed-${subjectIdentity}`), plannedAttempt },
           version: workflowJournalEventVersion
         })

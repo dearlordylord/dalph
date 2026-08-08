@@ -2,6 +2,9 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -13,6 +16,7 @@ import {
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
+import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
@@ -28,6 +32,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -37,6 +42,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -49,6 +55,9 @@ import {
 } from "../../registry/operation.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
@@ -63,6 +72,10 @@ import { AttemptChoiceRequestId } from "./events.js"
 const runId = RunId.make("attempt-choice-recovery-run")
 const taskId = TaskId.make("attempt-choice-recovery-task")
 const target = FixtureTarget.make("attempt-choice-recovery-target")
+const integrationTarget = IntegrationTarget.make({
+  repository: GitRepositoryLocator.make("/repositories/attempt-choice-recovery.git"),
+  ref: IntegrationTargetRef.make("refs/heads/main")
+})
 const plannedRevision = TaskRevision.make("attempt-choice-recovery-F1")
 const observedSpecification = makeTaskWorkSpecification({ body: "Changed body F2", taskId, title: "Changed title F2" })
 const observedRevision = observedSpecification.fingerprint
@@ -148,17 +161,17 @@ const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest
     )
     yield* (yield* AttemptChoiceControl).apply({
       choice: "ContinueExistingAttempt",
-      requestId: AttemptChoiceRequestId.make("attempt-choice-recovery-continue"),
+      requestId: AttemptChoiceRequestId.make({ nonce: "attempt-choice-recovery-continue", runId }),
       subject: { observedTaskRevision: observedRevision, plannedAttempt }
     })
   }
 )
 
-it.effect("reopens Continue and performs fresh reads before admitting the same attempt", () =>
+it.effect("never claims the executor incorporated changed instructions", () =>
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
     const journal = yield* JournalStore
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId, integrationTarget)
 
     const first = (yield* recovery.readDeliveryProjection).frontier
     const graph = first.transitions.find(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
@@ -241,11 +254,64 @@ it.effect("reopens Continue and performs fresh reads before admitting the same a
       })
     )
 
+    const targetLineage = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    if (targetLineage?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+      return yield* Effect.die("missing target-lineage read")
+    }
+    yield* journal.append(
+      runId,
+      intentRecordKey(targetLineage.operation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: targetLineage.operation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(targetLineage.operation.operationId),
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: plannedAttempt.baseSha,
+          targetHeadSha: GitCommitSha.make("2".repeat(40))
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: targetLineage.operation.operationId,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
+      _tag: "ObservePlannedAttemptContinuationExecutor",
+      plannedAttempt
+    })
+    const executorObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+    const executorObservation = yield* journal.append(
+      runId,
+      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, executorObservationOrdinal),
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          })
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: executorObservationOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual(
       expect.arrayContaining([
         {
           _tag: "ContinuePlannedAttemptExecutorWork",
-          acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 1 },
+          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: executorObservation.position },
           plannedAttempt
         }
       ])

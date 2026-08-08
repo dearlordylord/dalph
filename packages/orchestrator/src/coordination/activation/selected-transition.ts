@@ -17,6 +17,7 @@ export type SelectedTransitionIdentity = typeof SelectedTransitionIdentity.Type
 
 const fingerprintInput = (runId: RunId, transition: RunnableFrontierTransition) =>
   transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+  transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
   transition._tag === "ObservePlannedAttemptContinuationGraph" ||
   transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
   transition._tag === "StartPlannedAttemptExecutorWork" ||

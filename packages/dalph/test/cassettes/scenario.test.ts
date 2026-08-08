@@ -3666,6 +3666,8 @@ it.effect(
       ]
       const entryVariants = {
         AttemptChoiceApplied: true,
+        AttemptImplementationAbandoned: true,
+        AttemptStoppageIntended: true,
         ControlDirectionApplied: true,
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
@@ -3693,6 +3695,9 @@ it.effect(
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
         PlannedAttemptExecutorWorkReported: true,
+        PlannedAttemptExecutorCommandIntended: true,
+        PlannedAttemptExecutorCommandProjectionObserved: true,
+        PlannedAttemptExecutorStateObserved: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
         TargetLineageObserved: true,
@@ -3703,6 +3708,7 @@ it.effect(
         TaskClaimReleaseIntended: true,
         TaskClaimReleased: true,
         TaskClaimReacquisitionDirected: true,
+        StoppedAttemptClaimNoReleaseObserved: true,
         TaskTrackerFactsObserved: true,
         TaskTrackerReadInitiated: true,
         TaskWorktreeReady: true,

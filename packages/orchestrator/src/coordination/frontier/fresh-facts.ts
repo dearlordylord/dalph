@@ -10,14 +10,26 @@ import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type { ActiveTaskClaim, TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
+import type { OperationId } from "../../workflow/identity.js"
 
 /** Exact accepted executor fact from which one continuation is authorized. */
 export type AcceptedPlannedAttemptExecutorProgress =
   | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
   | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
+  | { readonly _tag: "ExecutorProjectionAccepted"; readonly observedAt: JournalPosition }
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
+  AttemptStoppageRequired: {
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+    readonly taskWorkPosition: "Existing" | "None"
+  }
+  AttemptStoppageWait: {
+    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" | "SuspensionLimitReached"
+  }
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -25,6 +37,26 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
+  StoppedAttemptClaimNoReleaseRequired: {
+    readonly expectedClaim: ActiveTaskClaim
+    readonly observation: TaskClaimObservation
+    readonly observationOperationId: OperationId
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimObservationRequired: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimReleaseRequired: {
+    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimReleasePending: { readonly operationId: OperationId }
+  StoppedAttemptClaimUnreadableWait: { readonly observationOperationId: OperationId }
+  StoppedAttemptSettled: { readonly claimDisposition: "NoRelease" | "Released" }
   PlannedAttemptGitConstraint: {
     readonly gitState:
       | "CompetingWorktreeRegistrations"
@@ -74,6 +106,14 @@ export type PlannedAttemptExecutorDisposition =
           | "PlannedAttemptExecutorWorkSafelySuspended"
           | "PlannedAttemptExecutorWorkTerminal"
           | "PlannedAttemptExecutorSuspensionRequested"
+          | "AttemptStoppageRequired"
+          | "AttemptStoppageWait"
+          | "StoppedAttemptClaimNoReleaseRequired"
+          | "StoppedAttemptClaimObservationRequired"
+          | "StoppedAttemptClaimReleaseRequired"
+          | "StoppedAttemptClaimReleasePending"
+          | "StoppedAttemptClaimUnreadableWait"
+          | "StoppedAttemptSettled"
           | "PlannedAttemptGitConstraint"
           | "TaskExternalSuccessConstraint"
           | "TaskExternalSuccessReleaseNeeded"
@@ -96,6 +136,14 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "AttemptStoppageRequired"
+      | "AttemptStoppageWait"
+      | "StoppedAttemptClaimNoReleaseRequired"
+      | "StoppedAttemptClaimObservationRequired"
+      | "StoppedAttemptClaimReleaseRequired"
+      | "StoppedAttemptClaimReleasePending"
+      | "StoppedAttemptClaimUnreadableWait"
+      | "StoppedAttemptSettled"
       | "PlannedAttemptGitConstraint"
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"

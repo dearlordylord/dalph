@@ -7,11 +7,13 @@ type TransitionRoutePolicy = "AcceptedOperation" | "FreshProvenance" | "Identity
 /** Closed route policy: tags sharing a spelling may still be distinguished by accepted evidence and provenance. */
 export const transitionRoutePolicy = {
   AcquireStartedIntegrationTarget: "IdentityFree",
+  AdvanceAttemptStoppage: "IdentityFree",
   CheckTaskClaim: "AcceptedOperation",
   CommitFreshTaskClaimIntent: "FreshProvenance",
   CommitTaskClaimReacquisitionIntent: "NewOperation",
   ContinueFreshWorkflowOperation: "FreshProvenance",
   ContinuePlannedAttemptExecutorWork: "IdentityFree",
+  ObservePlannedAttemptContinuationExecutor: "IdentityFree",
   ContinueStartedIntegrationCandidate: "IdentityFree",
   RunTargetVerification: "IdentityFree",
   RunTargetPromotion: "IdentityFree",
@@ -23,11 +25,14 @@ export const transitionRoutePolicy = {
   ObservePlannedAttemptContinuationTargetLineage: "Observation",
   ObservePlannedAttemptContinuationWorktree: "Observation",
   ObserveResponsibleTaskClaim: "Observation",
+  ObserveStoppedAttemptClaim: "Observation",
   QueueAcceptedResultIntegrationResponsibility: "IdentityFree",
   ReconcileTaskClaim: "AcceptedOperation",
   ReconcileTaskClaimRelease: "AcceptedOperation",
   ReconcileTaskWorktree: "AcceptedOperation",
+  RecordStoppedAttemptClaimNoRelease: "IdentityFree",
   ReleaseExternallyCompletedTaskClaim: "NewOperation",
+  ReleaseStoppedAttemptClaim: "NewOperation",
   ReleaseStartedIntegrationTarget: "IdentityFree",
   StartPlannedAttemptExecutorWork: "FreshProvenance",
   StartQueuedIntegration: "IdentityFree",
@@ -66,6 +71,7 @@ type ObservationTransition = Extract<
       | "ObservePlannedAttemptContinuationTargetLineage"
       | "ObservePlannedAttemptContinuationWorktree"
       | "ObserveResponsibleTaskClaim"
+      | "ObserveStoppedAttemptClaim"
   }
 >
 
@@ -96,6 +102,13 @@ const recoveredObservationActionOf = (
         operation: withoutOperationId(transition.operation),
         plannedAttempt: null,
         taskId: transition.taskId
+      }
+    case "ObserveStoppedAttemptClaim":
+      return {
+        _tag: "ReadTaskClaim",
+        operation: withoutOperationId(transition.operation),
+        plannedAttempt: transition.subject.plannedAttempt,
+        taskId: transition.subject.plannedAttempt.taskId
       }
     case "ObservePlannedAttemptContinuationSpecification":
       return {
@@ -139,6 +152,19 @@ export const newRecoveredActionOf = (
         release
       },
       plannedAttempt: transition.plannedAttempt
+    }
+  }
+  if (transition._tag === "ReleaseStoppedAttemptClaim") {
+    const { operationId: _operationId, ...release } = transition.operation.release
+    return {
+      _tag: "ReleaseStoppedAttemptClaim",
+      operation: {
+        _tag: "ReleaseTaskClaim",
+        predecessorOperationIds: transition.operation.predecessorOperationIds,
+        release
+      },
+      plannedAttempt: transition.subject.plannedAttempt,
+      requestId: transition.requestId
     }
   }
   return recoveredObservationActionOf(transition)

@@ -136,6 +136,19 @@ export type NewRecoveredWorkflowAction =
       readonly plannedAttempt: PlannedTaskAttempt
     }
   | {
+      readonly _tag: "ReleaseStoppedAttemptClaim"
+      readonly operation: {
+        readonly _tag: "ReleaseTaskClaim"
+        readonly predecessorOperationIds: TaskClaimReleaseOperation["predecessorOperationIds"]
+        readonly release: Omit<TaskClaimReleaseOperation["release"], "operationId">
+      }
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly requestId: Extract<
+        RunnableFrontierTransition,
+        { readonly _tag: "ReleaseStoppedAttemptClaim" }
+      >["requestId"]
+    }
+  | {
       readonly _tag: "TaskClaimReacquisition"
       readonly plannedAttempt: PlannedTaskAttempt
       readonly requestId: Extract<
@@ -184,6 +197,7 @@ export type AcceptedWorkflowTransition = Extract<
       | "ObservePlannedAttemptContinuationTargetLineage"
       | "ObservePlannedAttemptContinuationWorktree"
       | "ObserveResponsibleTaskClaim"
+      | "ObserveStoppedAttemptClaim"
   }
 >
 
@@ -197,13 +211,16 @@ export type IdentityFreeWorkflowTransition = Extract<
   {
     readonly _tag:
       | "AcquireStartedIntegrationTarget"
+      | "AdvanceAttemptStoppage"
       | "ContinuePlannedAttemptExecutorWork"
+      | "ObservePlannedAttemptContinuationExecutor"
       | "ContinueStartedIntegrationCandidate"
       | "RunTargetVerification"
       | "RunTargetPromotion"
       | "ReplacePromotedTaskClaim"
       | "DeleteCompletedTaskCompletionClaim"
       | "QueueAcceptedResultIntegrationResponsibility"
+      | "RecordStoppedAttemptClaimNoRelease"
       | "ReleaseStartedIntegrationTarget"
       | "StartQueuedIntegration"
       | "SuspendPlannedAttemptExecutorWork"

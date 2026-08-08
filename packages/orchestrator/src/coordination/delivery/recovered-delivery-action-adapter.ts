@@ -63,7 +63,7 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
     })
     return
   }
-  if (action._tag === "ReleaseExternallyCompletedTaskClaim") {
+  if (action._tag === "ReleaseExternallyCompletedTaskClaim" || action._tag === "ReleaseStoppedAttemptClaim") {
     const operation = makeTaskClaimReleaseOperation({
       predecessorOperationIds: action.operation.predecessorOperationIds,
       release: { ...action.operation.release, operationId }
@@ -117,6 +117,7 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
   switch (transition._tag) {
     case "ObservePlannedAttemptContinuationClaim":
     case "ObserveResponsibleTaskClaim":
+    case "ObserveStoppedAttemptClaim":
       yield* interpreter.readTaskClaim(transition.operation)
       return
     case "ObservePlannedAttemptContinuationGraph":

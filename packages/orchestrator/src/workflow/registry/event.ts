@@ -6,6 +6,9 @@ import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../protocols/planned-attempt-executor-work/events.js"
@@ -26,9 +29,17 @@ import { IntegrationCandidateConstructionJournalEvent } from "../protocols/integ
 import { TargetVerificationJournalEvent } from "../protocols/target-verification/events.js"
 import { TargetPromotionJournalEvent } from "../protocols/target-promotion/events.js"
 import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
-import { AttemptChoiceAppliedEvent } from "../protocols/attempt-choice/events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptImplementationAbandonedEvent,
+  AttemptStoppageIntendedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "../protocols/attempt-choice/events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   IntegrationResponsibilityBeganEvent,
@@ -161,6 +172,9 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
   AttemptChoiceAppliedEvent,
+  AttemptStoppageIntendedEvent,
+  AttemptImplementationAbandonedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent,
   TaskClaimReacquisitionDirectedEvent,
   TaskTrackerReadIntentRecorded,
   TaskTrackerFactsObservedEvent,

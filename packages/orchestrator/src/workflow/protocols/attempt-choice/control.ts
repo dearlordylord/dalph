@@ -11,6 +11,7 @@ import {
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId, type AttemptChoiceSubject } from "./events.js"
 import { ApplyAttemptChoiceRequest } from "./request.js"
 
@@ -18,6 +19,12 @@ import { ApplyAttemptChoiceRequest } from "./request.js"
 export class AttemptChoiceRequestIdentityContradiction extends Schema.TaggedErrorClass<AttemptChoiceRequestIdentityContradiction>()(
   "AttemptChoiceRequestIdentityContradiction",
   { existingPosition: JournalPosition, requestId: AttemptChoiceRequestId, runId: RunId }
+) {}
+
+/** A self-bound request identity names a different Run than its requested attempt. */
+export class AttemptChoiceRequestRunMismatch extends Schema.TaggedErrorClass<AttemptChoiceRequestRunMismatch>()(
+  "AttemptChoiceRequestRunMismatch",
+  { boundRunId: RunId, requestId: AttemptChoiceRequestId, subjectRunId: RunId }
 ) {}
 
 /** Another valid Continue-or-Stop request already won this exact changed-task choice. */
@@ -52,6 +59,7 @@ type AttemptChoiceControlError =
   | AttemptChoiceNotAvailable
   | AttemptChoiceOutsidePreIntegrationPhase
   | AttemptChoiceRequestIdentityContradiction
+  | AttemptChoiceRequestRunMismatch
   | JournalAppendError
   | JournalStoreError
   | Schema.SchemaError
@@ -71,6 +79,9 @@ const sameSubject = (left: AttemptChoiceSubject, right: AttemptChoiceSubject): b
   left.observedTaskRevision === right.observedTaskRevision &&
   plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)
 
+const sameRequestId = (left: AttemptChoiceRequestId, right: AttemptChoiceRequestId): boolean =>
+  left.nonce === right.nonce && left.runId === right.runId
+
 const matchingChoice = (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject) =>
   records.find((record) => record.event._tag === "AttemptChoiceApplied" && sameSubject(record.event.subject, subject))
 
@@ -84,13 +95,28 @@ const choiceIsExposed = (
       plannedTaskAttemptEquivalence(event.operation.plannedAttempt, request.subject.plannedAttempt)
   )
   if (!planned) return "AttemptNotPlanned"
-  const latestReport = records.findLast(
+  const latestReport = latestPlannedAttemptExecutorEvidence(records, request.subject.plannedAttempt)
+  const latestCommand = records.findLast(
     ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.runId === request.subject.plannedAttempt.runId &&
-      event.report.correlation.attemptId === request.subject.plannedAttempt.attemptId
-  )?.event
-  if (latestReport?._tag !== "PlannedAttemptExecutorWorkReported" || latestReport.report._tag !== "SafelySuspended") {
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === request.subject.plannedAttempt.runId &&
+      event.plannedAttempt.attemptId === request.subject.plannedAttempt.attemptId
+  )
+  const latestCommandOrdinal =
+    latestCommand?.event._tag === "PlannedAttemptExecutorCommandIntended" ? latestCommand.event.ordinal : undefined
+  const latestCommandWasSettled =
+    latestCommand === undefined ||
+    records.some(
+      ({ event, position }) =>
+        position > latestCommand.position &&
+        ((event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.runId === request.subject.plannedAttempt.runId &&
+          event.report.correlation.attemptId === request.subject.plannedAttempt.attemptId) ||
+          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+            event.commandOrdinal === latestCommandOrdinal &&
+            event.observation._tag === "ExactExecutorReport"))
+    )
+  if (latestReport?.report._tag !== "SafelySuspended" || !latestCommandWasSettled) {
     return "ExecutorNotSafelySuspended"
   }
   const latestSpecification = records.findLast(
@@ -114,12 +140,19 @@ export const attemptChoiceControlLayer = Layer.effect(
     const applyUnserialized = Effect.fn("AttemptChoiceControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyAttemptChoiceRequest, { onExcessProperty: "error" })(input)
       const runId = request.subject.plannedAttempt.runId
+      if (request.requestId.runId !== runId) {
+        return yield* new AttemptChoiceRequestRunMismatch({
+          boundRunId: request.requestId.runId,
+          requestId: request.requestId,
+          subjectRunId: runId
+        })
+      }
       const records = yield* journal.read(runId)
       if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
         return yield* new WorkflowRunNotBegan({ runId })
       }
       const redelivered = records.find(
-        ({ event }) => event._tag === "AttemptChoiceApplied" && event.requestId === request.requestId
+        ({ event }) => event._tag === "AttemptChoiceApplied" && sameRequestId(event.requestId, request.requestId)
       )
       if (redelivered?.event._tag === "AttemptChoiceApplied") {
         if (redelivered.event.choice === request.choice && sameSubject(redelivered.event.subject, request.subject)) {

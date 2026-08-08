@@ -3,7 +3,11 @@ export {
   AttemptChoice,
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
-  AttemptChoiceSubject
+  AttemptChoiceSubject,
+  AttemptImplementationAbandonedEvent,
+  AttemptQuiescenceProof,
+  AttemptStoppageIntendedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
 } from "./workflow/protocols/attempt-choice/events.js"
 export { ApplyAttemptChoiceRequest } from "./workflow/protocols/attempt-choice/request.js"
 export {
@@ -12,8 +16,10 @@ export {
   AttemptChoiceNotAvailable,
   AttemptChoiceOutsidePreIntegrationPhase,
   AttemptChoiceRequestIdentityContradiction,
+  AttemptChoiceRequestRunMismatch,
   attemptChoiceControlLayer
 } from "./workflow/protocols/attempt-choice/control.js"
+export * from "./workflow/protocols/attempt-choice/stop.js"
 export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
@@ -226,10 +232,17 @@ export {
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
+  beginPlannedAttemptExecutorResponsibility,
   continuePlannedAttemptExecutorWork,
+  observePlannedAttemptExecutorState,
   plannedAttemptExecutorContinuationDisposition,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorStateUnavailable,
+  PlannedAttemptExecutorSuspensionLimitReached,
   requestPlannedAttemptExecutorSuspension
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"

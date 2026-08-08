@@ -10,7 +10,11 @@ import type { WorkflowInterpreterService, WorkflowTraceService } from "../../wor
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import type {
   PlannedAttemptExecutorContinuationLimitReached,
-  PlannedAttemptExecutorCorrelationMismatch
+  PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorStateUnavailable
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import type {
   queueAcceptedResultIntegrationResponsibility,
@@ -44,6 +48,10 @@ import type {
   IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
 import type { DeliveryRelationSourceError } from "./relations.js"
+import type {
+  advanceAttemptStoppage,
+  recordStoppedAttemptClaimNoRelease
+} from "../../workflow/protocols/attempt-choice/stop.js"
 
 type FreshOperationProposal = Extract<
   FreshIdentityDeliveryProposal,
@@ -122,6 +130,8 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
+  | EffectFunctionFailure<typeof advanceAttemptStoppage>
+  | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>
   | EffectFunctionFailure<typeof queueAcceptedResultIntegrationResponsibility>
   | EffectFunctionFailure<typeof recoverTaskClaimOperation>
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
@@ -139,6 +149,10 @@ export type DeliveryActionExecutionError =
   | IntegrationFinalityRuntimeUnavailable
   | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCorrelationMismatch
+  | PlannedAttemptExecutorProjectionUnavailable
+  | PlannedAttemptExecutorResponsibilityContradiction
+  | PlannedAttemptExecutorResponsibilityMissing
+  | PlannedAttemptExecutorStateUnavailable
   | DeliveryRelationSourceError
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>

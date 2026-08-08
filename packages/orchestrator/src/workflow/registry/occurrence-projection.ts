@@ -393,6 +393,8 @@ type ProjectedJournalEvent = Extract<
 type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
 
 const nonProjectedJournalEventKinds = {
+  AttemptImplementationAbandoned: true,
+  AttemptStoppageIntended: true,
   IntegrationCandidateAgentReported: true,
   IntegrationCandidateConstructed: true,
   IntegrationCandidateConstructionIntended: true,
@@ -415,12 +417,16 @@ const nonProjectedJournalEventKinds = {
   CompletionClaimDeletionAttemptIntended: true,
   CompletionClaimDeleted: true,
   IntegrationFinalitySettled: true,
+  PlannedAttemptExecutorCommandIntended: true,
+  PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorStateObserved: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
   TaskClaimAcquisitionRejected: true,
   TaskClaimReleaseIntended: true,
   TaskClaimReleased: true,
+  StoppedAttemptClaimNoReleaseObserved: true,
   TaskWorktreeReady: true,
   TaskWorktreeReconciliationIntended: true,
   WorkflowRunBegan: true,

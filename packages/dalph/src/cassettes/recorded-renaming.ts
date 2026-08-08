@@ -20,7 +20,7 @@ import {
   ContradictoryWorktreeState,
   type ClaimOwner,
   type ClaimToken,
-  type AttemptChoiceRequestId,
+  AttemptChoiceRequestId,
   type ControlDirectionApplicationOrdinal,
   type FixtureTarget,
   ForeignWorktreeRegistration,
@@ -28,8 +28,15 @@ import {
   type GithubRepositoryName,
   type GithubRepositoryOwner,
   type OperationId,
+  type ActiveTaskClaim,
+  type TaskClaimObservation,
   type PlannedAttemptWorktreeObservation,
+  type PlannedAttemptExecutorCommandOrdinal,
+  type PlannedAttemptExecutorCommandProjectionObservation,
+  type PlannedAttemptExecutorCommandProjectionOrdinal,
   type PlannedAttemptExecutorReportOrdinal,
+  type PlannedAttemptExecutorStateObservation,
+  type PlannedAttemptExecutorStateObservationOrdinal,
   type RunPolicyRevision,
   type TaskWorkCapacity,
   type TaskClaimReacquisitionRequestId,
@@ -110,7 +117,6 @@ type GeneratedCassetteIdentity =
  */
 type PreservedCassetteBrand =
   | ClaimOwner
-  | AttemptChoiceRequestId
   | ControlDirectionApplicationOrdinal
   | FixtureTarget
   | GitCommitSha
@@ -119,6 +125,9 @@ type PreservedCassetteBrand =
   | GithubRepositoryName
   | GithubRepositoryOwner
   | PlannedAttemptExecutorReportOrdinal
+  | PlannedAttemptExecutorCommandOrdinal
+  | PlannedAttemptExecutorCommandProjectionOrdinal
+  | PlannedAttemptExecutorStateObservationOrdinal
   | IntegrationTargetRef
   | IntegrationCandidateAgentReportOrdinal
   | IntegrationCandidateGitValidationAttemptOrdinal
@@ -187,6 +196,52 @@ const renameExecutorReport = (
       })
   }
 }
+
+const renameExecutorCommandProjectionObservation = (
+  observation: PlannedAttemptExecutorCommandProjectionObservation,
+  maps: IdentityRenamingMaps
+): PlannedAttemptExecutorCommandProjectionObservation => {
+  switch (observation._tag) {
+    case "ExactExecutorReport":
+      return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
+    case "ExecutorReportContradiction":
+      return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
+    case "ExecutorStateUnavailable":
+      return preserveCassetteValue(observation)
+  }
+}
+
+const renameExecutorStateObservation = (
+  observation: PlannedAttemptExecutorStateObservation,
+  maps: IdentityRenamingMaps
+): PlannedAttemptExecutorStateObservation => {
+  switch (observation._tag) {
+    case "ExactExecutorReport":
+      return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
+    case "ExecutorReportContradiction":
+      return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
+    case "ExecutorStateUnavailable":
+      return preserveCassetteValue(observation)
+  }
+}
+
+const renameActiveTaskClaim = (claim: ActiveTaskClaim, maps: IdentityRenamingMaps): ActiveTaskClaim => ({
+  ...claim,
+  operationId: renamed(claim.operationId, maps.operationIds),
+  token: renamed(claim.token, maps.claimTokens)
+})
+
+const renameTaskClaimObservation = (
+  observation: TaskClaimObservation,
+  maps: IdentityRenamingMaps
+): TaskClaimObservation =>
+  observation._tag === "ActiveTaskClaim" ? renameActiveTaskClaim(observation, maps) : preserveCassetteValue(observation)
+
+const renameAttemptChoiceRequestId = (
+  requestId: AttemptChoiceRequestId,
+  maps: IdentityRenamingMaps
+): AttemptChoiceRequestId =>
+  AttemptChoiceRequestId.make({ nonce: requestId.nonce, runId: renamed(requestId.runId, maps.runIds) })
 
 const renameCandidateCorrelation = (
   correlation: IntegrationCandidateCorrelation,
@@ -674,10 +729,47 @@ const renameRecordedCassetteEntry = (
           choice: preserveCassetteValue(choiceEntry.choice),
           initiatedBy: preserveCassetteValue(choiceEntry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(choiceEntry.occurrenceClassification),
-          requestId: preserveCassetteValue(choiceEntry.requestId),
+          requestId: renameAttemptChoiceRequestId(choiceEntry.requestId, maps),
           subject: completeFields<typeof choiceEntry.subject>({
             observedTaskRevision: preserveCassetteValue(choiceEntry.subject.observedTaskRevision),
             plannedAttempt: renamePlannedAttempt(choiceEntry.subject.plannedAttempt, maps)
+          })
+        }),
+      AttemptStoppageIntended: (intentEntry) =>
+        completeFields<typeof intentEntry>({
+          _tag: "AttemptStoppageIntended",
+          initiatedBy: preserveCassetteValue(intentEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(intentEntry.occurrenceClassification),
+          requestId: renameAttemptChoiceRequestId(intentEntry.requestId, maps),
+          subject: completeFields<typeof intentEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(intentEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(intentEntry.subject.plannedAttempt, maps)
+          })
+        }),
+      AttemptImplementationAbandoned: (abandonedEntry) =>
+        completeFields<typeof abandonedEntry>({
+          _tag: "AttemptImplementationAbandoned",
+          expectedClaim: renameActiveTaskClaim(abandonedEntry.expectedClaim, maps),
+          initiatedBy: preserveCassetteValue(abandonedEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(abandonedEntry.occurrenceClassification),
+          proof: preserveCassetteValue(abandonedEntry.proof),
+          requestId: renameAttemptChoiceRequestId(abandonedEntry.requestId, maps),
+          subject: completeFields<typeof abandonedEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(abandonedEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(abandonedEntry.subject.plannedAttempt, maps)
+          })
+        }),
+      StoppedAttemptClaimNoReleaseObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "StoppedAttemptClaimNoReleaseObserved",
+          expectedClaim: renameActiveTaskClaim(observationEntry.expectedClaim, maps),
+          observation: renameTaskClaimObservation(observationEntry.observation, maps),
+          observationOperationId: renamed(observationEntry.observationOperationId, maps.operationIds),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          requestId: renameAttemptChoiceRequestId(observationEntry.requestId, maps),
+          subject: completeFields<typeof observationEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(observationEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(observationEntry.subject.plannedAttempt, maps)
           })
         }),
       ControlDirectionApplied: (directionEntry) =>
@@ -710,6 +802,32 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(reportEntry.occurrenceClassification),
           ordinal: preserveCassetteValue(reportEntry.ordinal),
           report: renameExecutorReport(reportEntry.report, maps)
+        }),
+      PlannedAttemptExecutorCommandIntended: (intentEntry) =>
+        completeFields<typeof intentEntry>({
+          _tag: "PlannedAttemptExecutorCommandIntended",
+          command: preserveCassetteValue(intentEntry.command),
+          initiatedBy: preserveCassetteValue(intentEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(intentEntry.occurrenceClassification),
+          ordinal: preserveCassetteValue(intentEntry.ordinal),
+          plannedAttempt: renamePlannedAttempt(intentEntry.plannedAttempt, maps)
+        }),
+      PlannedAttemptExecutorCommandProjectionObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+          commandOrdinal: preserveCassetteValue(observationEntry.commandOrdinal),
+          observation: renameExecutorCommandProjectionObservation(observationEntry.observation, maps),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps),
+          projectionOrdinal: preserveCassetteValue(observationEntry.projectionOrdinal)
+        }),
+      PlannedAttemptExecutorStateObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "PlannedAttemptExecutorStateObserved",
+          observation: renameExecutorStateObservation(observationEntry.observation, maps),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          ordinal: preserveCassetteValue(observationEntry.ordinal),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps)
         }),
       PlannedAttemptExecutorWorkResponsibilityBegan: (responsibilityEntry) =>
         completeFields<typeof responsibilityEntry>({

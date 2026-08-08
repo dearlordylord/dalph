@@ -31,7 +31,14 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
   IdentityFreeWorkflowTransition,
-  { readonly _tag: "ContinuePlannedAttemptExecutorWork" | "SuspendPlannedAttemptExecutorWork" }
+  {
+    readonly _tag:
+      | "AdvanceAttemptStoppage"
+      | "ContinuePlannedAttemptExecutorWork"
+      | "ObservePlannedAttemptContinuationExecutor"
+      | "RecordStoppedAttemptClaimNoRelease"
+      | "SuspendPlannedAttemptExecutorWork"
+  }
 >
 type ContinueIntegrationCandidate = Extract<
   IntegrationTransition,

@@ -14,6 +14,7 @@ import {
 import {
   ActiveTaskClaim,
   AttemptChoice,
+  AttemptQuiescenceProof,
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
   ClaimToken,
@@ -22,13 +23,19 @@ import {
   ControlDirectionSubject,
   InitialControlPolicy,
   OperationId,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptWorktreeObservation,
   PlannedWorktreeReady,
   TrackerTarget,
   RunPolicyRevision,
   TaskWorkCapacity,
   TaskClaimRelease,
+  TaskClaimObservation,
   TargetLineageObservation,
   TaskTrackerFactsObservation,
   WorkflowActor,
@@ -76,6 +83,26 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     choice: AttemptChoice,
     initiatedBy: WorkflowActor.cases.Operator,
     occurrenceClassification: Schema.Literal("InitiatedAction"),
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject
+  },
+  AttemptStoppageIntended: {
+    ...initiatedByCoordinator,
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject
+  },
+  AttemptImplementationAbandoned: {
+    expectedClaim: ActiveTaskClaim,
+    ...initiatedByCoordinator,
+    proof: AttemptQuiescenceProof,
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject
+  },
+  StoppedAttemptClaimNoReleaseObserved: {
+    expectedClaim: ActiveTaskClaim,
+    ...nonActionOccurrence,
+    observation: TaskClaimObservation,
+    observationOperationId: OperationId,
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
   },
@@ -225,6 +252,25 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...nonActionOccurrence,
     ordinal: PlannedAttemptExecutorReportOrdinal,
     report: PlannedAttemptExecutorReport
+  },
+  PlannedAttemptExecutorCommandIntended: {
+    command: Schema.Literals(["StartOrContinue", "Suspend"]),
+    ...initiatedByCoordinator,
+    ordinal: PlannedAttemptExecutorCommandOrdinal,
+    plannedAttempt: PlannedTaskAttempt
+  },
+  PlannedAttemptExecutorCommandProjectionObserved: {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    ...nonActionOccurrence,
+    observation: PlannedAttemptExecutorCommandProjectionObservation,
+    plannedAttempt: PlannedTaskAttempt,
+    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+  },
+  PlannedAttemptExecutorStateObserved: {
+    ...nonActionOccurrence,
+    observation: PlannedAttemptExecutorStateObservation,
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal,
+    plannedAttempt: PlannedTaskAttempt
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { ...initiatedByCoordinator, plannedAttempt: PlannedTaskAttempt },
   PlannedAttemptWorktreeObserved: {

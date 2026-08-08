@@ -26,6 +26,7 @@ import {
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -33,6 +34,8 @@ import { JournalStore } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -123,7 +126,7 @@ const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(f
 
 const request = (choice: "ContinueExistingAttempt" | "StopTaskImplementation", requestId: string) => ({
   choice,
-  requestId: AttemptChoiceRequestId.make(requestId),
+  requestId: AttemptChoiceRequestId.make({ nonce: requestId, runId }),
   subject: { observedTaskRevision: observedRevision, plannedAttempt }
 })
 
@@ -160,12 +163,13 @@ const appendIntegrationCutoff = Effect.fn("AttemptChoiceTest.appendIntegrationCu
 it.effect("records both task fingerprints when Alice continues the exact attempt", () =>
   Effect.gen(function* () {
     yield* appendExposedChoice()
-    const applied = yield* (yield* AttemptChoiceControl).apply(request("ContinueExistingAttempt", "continue-D1"))
+    const input = request("ContinueExistingAttempt", "continue-D1")
+    const applied = yield* (yield* AttemptChoiceControl).apply(input)
 
     expect(applied.event).toMatchObject({
       _tag: "AttemptChoiceApplied",
       choice: "ContinueExistingAttempt",
-      requestId: "continue-D1",
+      requestId: input.requestId,
       subject: { observedTaskRevision: observedRevision, plannedAttempt }
     })
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
@@ -180,6 +184,51 @@ it.effect("coalesces exact Continue redelivery and rejects request identity reus
 
     const contradiction = yield* control.apply(request("StopTaskImplementation", "stable-D1")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects an attempt-choice request identity bound to another Run", () =>
+  Effect.gen(function* () {
+    const foreignRunId = RunId.make("attempt-choice-foreign-run")
+    const foreignAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
+    const contradiction = yield* (yield* AttemptChoiceControl)
+      .apply({
+        choice: "ContinueExistingAttempt",
+        requestId: AttemptChoiceRequestId.make({ nonce: "run-bound-direction", runId }),
+        subject: { observedTaskRevision: observedRevision, plannedAttempt: foreignAttempt }
+      })
+      .pipe(Effect.flip)
+
+    expect(contradiction).toMatchObject({
+      _tag: "AttemptChoiceRequestRunMismatch",
+      boundRunId: runId,
+      subjectRunId: foreignRunId
+    })
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("does not expose a choice from a safe report older than a later executor request", () =>
+  Effect.gen(function* () {
+    yield* appendExposedChoice()
+    const journal = yield* JournalStore
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const unavailable = yield* (yield* AttemptChoiceControl)
+      .apply(request("StopTaskImplementation", "stale-safe-stop"))
+      .pipe(Effect.flip)
+    expect(unavailable).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "ExecutorNotSafelySuspended" })
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

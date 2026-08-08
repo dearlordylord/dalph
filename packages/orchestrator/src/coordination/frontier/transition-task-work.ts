@@ -5,10 +5,14 @@ export type TransitionTaskWorkPosition = "Existing" | "ReserveOrReuse" | null
 
 /** Pure domain requirement shared by proposal construction and runtime admission. */
 export const transitionTaskWorkPosition = (transition: RunnableFrontierTransition): TransitionTaskWorkPosition =>
-  transition._tag === "SuspendPlannedAttemptExecutorWork"
-    ? "Existing"
-    : transition._tag === "CommitFreshTaskClaimIntent" ||
-        transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-        transition._tag === "StartPlannedAttemptExecutorWork"
-      ? "ReserveOrReuse"
+  transition._tag === "AdvanceAttemptStoppage"
+    ? transition.taskWorkPosition === "Existing"
+      ? "Existing"
       : null
+    : transition._tag === "SuspendPlannedAttemptExecutorWork"
+      ? "Existing"
+      : transition._tag === "CommitFreshTaskClaimIntent" ||
+          transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+          transition._tag === "StartPlannedAttemptExecutorWork"
+        ? "ReserveOrReuse"
+        : null

@@ -33,6 +33,7 @@ import {
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import {
   makeIntegrationFinalityHistoryIndexes,
   validateIntegrationFinalityHistoryRecord,
@@ -63,7 +64,10 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
   readonly attemptChoiceSubjects: Set<string>
   latestControlDirectionOrdinal: number
+  readonly executorCommandOrdinals: Map<AttemptId, number>
+  readonly executorCommandProjectionOrdinals: Map<string, number>
   readonly executorReportOrdinals: Map<AttemptId, number>
+  readonly executorStateObservationOrdinals: Map<AttemptId, number>
   readonly executorResponsibilitiesBegan: Map<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
@@ -78,13 +82,17 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly seenKeys: Set<JournalRecordKey>
   readonly seenOperationIds: Set<OperationId>
   readonly terminalExecutorAttempts: Set<AttemptId>
+  readonly unsettledExecutorCommands: Map<AttemptId, number>
   readonly trackerReconfirmations: TaskTrackerReconfirmationIndex
 }
 
 const emptyIndexes = (): FoldIndexes => ({
   acceptedExecutorResults: new Map(),
   attemptChoiceSubjects: new Set(),
+  executorCommandOrdinals: new Map(),
+  executorCommandProjectionOrdinals: new Map(),
   executorReportOrdinals: new Map(),
+  executorStateObservationOrdinals: new Map(),
   executorResponsibilitiesBegan: new Map(),
   integrationResponsibilitiesBegan: new Map(),
   integrationStarted: new Map(),
@@ -105,6 +113,7 @@ const emptyIndexes = (): FoldIndexes => ({
   seenKeys: new Set(),
   seenOperationIds: new Set(),
   terminalExecutorAttempts: new Set(),
+  unsettledExecutorCommands: new Map(),
   trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
 })
 
@@ -208,7 +217,7 @@ const validateAttemptChoice = (
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} binds run ${subject.plannedAttempt.runId}`
+      `attempt-choice request ${record.event.requestId.nonce} binds run ${subject.plannedAttempt.runId}`
     )
   }
   const prior = records.filter(({ position }) => position < record.position)
@@ -225,21 +234,36 @@ const validateAttemptChoice = (
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} has no prior matching planned attempt`
+      `attempt-choice request ${record.event.requestId.nonce} has no prior matching planned attempt`
     )
   }
-  const latestReport = prior.findLast(
+  const latestReport = latestPlannedAttemptExecutorEvidence(prior, subject.plannedAttempt)
+  const latestCommand = prior.findLast(
     ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.runId === subject.plannedAttempt.runId &&
-      event.report.correlation.attemptId === subject.plannedAttempt.attemptId
-  )?.event
-  if (latestReport?._tag !== "PlannedAttemptExecutorWorkReported" || latestReport.report._tag !== "SafelySuspended") {
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === subject.plannedAttempt.runId &&
+      event.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
+  )
+  const latestCommandOrdinal =
+    latestCommand?.event._tag === "PlannedAttemptExecutorCommandIntended" ? latestCommand.event.ordinal : undefined
+  const latestCommandWasSettled =
+    latestCommand === undefined ||
+    prior.some(
+      ({ event, position }) =>
+        position > latestCommand.position &&
+        ((event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.runId === subject.plannedAttempt.runId &&
+          event.report.correlation.attemptId === subject.plannedAttempt.attemptId) ||
+          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+            event.commandOrdinal === latestCommandOrdinal &&
+            event.observation._tag === "ExactExecutorReport"))
+    )
+  if (latestReport?.report._tag !== "SafelySuspended" || !latestCommandWasSettled) {
     semanticIssue(
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} requires a latest exact safely-suspended executor report`
+      `attempt-choice request ${record.event.requestId.nonce} requires a latest exact safely-suspended executor report`
     )
   }
   const latestSpecification = prior.findLast(
@@ -257,7 +281,7 @@ const validateAttemptChoice = (
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} does not name the latest observed task fingerprint`
+      `attempt-choice request ${record.event.requestId.nonce} does not name the latest observed task fingerprint`
     )
   }
   if (
@@ -272,7 +296,7 @@ const validateAttemptChoice = (
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} follows the exact integration-start cutoff`
+      `attempt-choice request ${record.event.requestId.nonce} follows the exact integration-start cutoff`
     )
   }
   const subjectKey = attemptChoiceSubjectKey(subject.plannedAttempt, subject.observedTaskRevision)
@@ -281,7 +305,7 @@ const validateAttemptChoice = (
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId} follows the winning direction for the same fingerprint pair`
+      `attempt-choice request ${record.event.requestId.nonce} follows the winning direction for the same fingerprint pair`
     )
   }
   indexes.attemptChoiceSubjects.add(subjectKey)
@@ -560,6 +584,123 @@ const validateExecutorEvent = (
     }
     return
   }
+  if (event._tag === "PlannedAttemptExecutorCommandIntended") {
+    const attemptId = event.plannedAttempt.attemptId
+    const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+    if (
+      responsibility === undefined ||
+      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+    ) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
+      )
+    }
+    const expectedOrdinal = (indexes.executorCommandOrdinals.get(attemptId) ?? 0) + 1
+    if (event.ordinal !== expectedOrdinal) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+      )
+    }
+    indexes.executorCommandOrdinals.set(attemptId, event.ordinal)
+    if (indexes.unsettledExecutorCommands.has(attemptId)) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command for attempt ${attemptId} follows an unmatched prior command intent`
+      )
+    }
+    indexes.unsettledExecutorCommands.set(attemptId, event.ordinal)
+    if (indexes.terminalExecutorAttempts.has(attemptId)) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command follows the terminal result for attempt ${attemptId}`
+      )
+    }
+    return
+  }
+  if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+    const attemptId = event.plannedAttempt.attemptId
+    if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor projection for attempt ${attemptId} does not name its unmatched command intent`
+      )
+    }
+    const projectionKey = `${attemptId}:${event.commandOrdinal}`
+    const expectedOrdinal = (indexes.executorCommandProjectionOrdinals.get(projectionKey) ?? 0) + 1
+    if (event.projectionOrdinal !== expectedOrdinal) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor projection for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.projectionOrdinal}`
+      )
+    }
+    indexes.executorCommandProjectionOrdinals.set(projectionKey, event.projectionOrdinal)
+    if (event.observation._tag === "ExactExecutorReport") {
+      const correlation = event.observation.report.correlation
+      if (correlation.runId !== event.plannedAttempt.runId || correlation.attemptId !== attemptId) {
+        identityIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command projection for attempt ${attemptId} returned a contradictory correlation`
+        )
+      } else {
+        indexes.unsettledExecutorCommands.delete(attemptId)
+      }
+    }
+    return
+  }
+  if (event._tag === "PlannedAttemptExecutorStateObserved") {
+    const attemptId = event.plannedAttempt.attemptId
+    const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+    if (
+      responsibility === undefined ||
+      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+    ) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor state observation for attempt ${attemptId} has no prior matching executor-work responsibility`
+      )
+    }
+    const expectedOrdinal = (indexes.executorStateObservationOrdinals.get(attemptId) ?? 0) + 1
+    if (event.ordinal !== expectedOrdinal) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor state observation for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+      )
+    }
+    indexes.executorStateObservationOrdinals.set(attemptId, event.ordinal)
+    if (
+      event.observation._tag === "ExactExecutorReport" &&
+      (event.observation.report.correlation.runId !== event.plannedAttempt.runId ||
+        event.observation.report.correlation.attemptId !== attemptId)
+    ) {
+      identityIssue(
+        issues,
+        runId,
+        record.position,
+        `executor state observation for attempt ${attemptId} returned a contradictory correlation`
+      )
+    }
+    return
+  }
   if (event._tag !== "PlannedAttemptExecutorWorkReported") return
   const attemptId = event.report.correlation.attemptId
   const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
@@ -581,6 +722,7 @@ const validateExecutorEvent = (
     )
   }
   indexes.executorReportOrdinals.set(attemptId, event.ordinal)
+  indexes.unsettledExecutorCommands.delete(attemptId)
   if (indexes.terminalExecutorAttempts.has(attemptId)) {
     semanticIssue(
       issues,

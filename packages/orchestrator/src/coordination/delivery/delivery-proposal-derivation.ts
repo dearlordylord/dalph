@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The closed proposal relation keeps every transition-to-admission mapping exhaustive. */
 import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
@@ -52,13 +53,15 @@ const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPo
   const taskId = runnableTransitionTaskId(transition)
   if (mode === "Existing") {
     /* v8 ignore start -- transitionTaskWorkPosition returns Existing only for executor suspension. */
-    if (transition._tag !== "SuspendPlannedAttemptExecutorWork") {
+    if (transition._tag !== "SuspendPlannedAttemptExecutorWork" && transition._tag !== "AdvanceAttemptStoppage") {
       return { _tag: "NoTaskWorkPosition" }
     }
     /* v8 ignore stop */
     return {
       _tag: "TaskWorkPositionRequired",
-      correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt),
+      correlation: plannedAttemptExecutorCorrelation(
+        transition._tag === "AdvanceAttemptStoppage" ? transition.subject.plannedAttempt : transition.plannedAttempt
+      ),
       mode,
       taskId
     }
@@ -315,6 +318,7 @@ type IdentityFreeTransition = Extract<
     readonly _tag:
       | "AcquireStartedIntegrationTarget"
       | "ContinuePlannedAttemptExecutorWork"
+      | "ObservePlannedAttemptContinuationExecutor"
       | "ContinueStartedIntegrationCandidate"
       | "RunTargetVerification"
       | "RunTargetPromotion"

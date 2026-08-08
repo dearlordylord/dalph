@@ -799,6 +799,8 @@ describe("delivery proposal route matrix", () => {
         )
       )
 
+      expect(result._tag).toBe("ExecutorReportPublished")
+      if (result._tag !== "ExecutorReportPublished") return yield* Effect.die("executor report was not published")
       expect(result.report).toEqual(report)
       expect(yield* Ref.get(releases)).toBe(0)
     })
