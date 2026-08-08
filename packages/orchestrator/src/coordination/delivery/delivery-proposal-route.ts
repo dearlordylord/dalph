@@ -15,6 +15,8 @@ export const transitionRoutePolicy = {
   ContinueStartedIntegrationCandidate: "IdentityFree",
   RunTargetVerification: "IdentityFree",
   RunTargetPromotion: "IdentityFree",
+  ReplacePromotedTaskClaim: "IdentityFree",
+  DeleteCompletedTaskCompletionClaim: "IdentityFree",
   ObservePlannedAttemptContinuationClaim: "Observation",
   ObservePlannedAttemptContinuationGraph: "Observation",
   ObservePlannedAttemptContinuationSpecification: "Observation",

@@ -1022,3 +1022,50 @@ it.effect("fails closed when a later evaluation introduces conflicting ownership
     expect(failure.proposalIds).toEqual([conflictedId])
   }).pipe(Effect.scoped)
 )
+
+it.effect("releases a deferred owner, runs unrelated work, and retries only after a newer accepted fact", () =>
+  Effect.gen(function* () {
+    const deferredProposal = proposal(0, TaskId.make("deferred-finality-task"))
+    const unrelatedProposal = proposal(1, TaskId.make("unrelated-runnable-task"))
+    const initial = withProposals(yield* baseEvaluation, [deferredProposal, unrelatedProposal], 2)
+    const dynamic = yield* dynamicEvaluationSignal(initial)
+    const firstDeferred = yield* Deferred.make<void>()
+    const secondDeferred = yield* Deferred.make<void>()
+    const unrelatedCompleted = yield* Deferred.make<void>()
+    const deferredCalls = yield* Ref.make(0)
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) => {
+        if (action.proposal.id === deferredProposal.id) {
+          return Ref.updateAndGet(deferredCalls, (count) => count + 1).pipe(
+            Effect.tap((count) => Deferred.succeed(count === 1 ? firstDeferred : secondDeferred, undefined)),
+            Effect.as({
+              _tag: "ActionDeferred",
+              proposalId: action.proposal.id,
+              reason: "CompletionClaimConflict"
+            } satisfies DeliveryActionResult)
+          )
+        }
+        return dynamic
+          .publish(withProposals(initial, [deferredProposal], 2))
+          .pipe(
+            Effect.andThen(Deferred.succeed(unrelatedCompleted, undefined)),
+            Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+          )
+      }
+    })
+    const runtime = yield* runDeliveryRuntimeDecision(dynamic).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(firstDeferred)
+    yield* Deferred.await(unrelatedCompleted)
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(deferredCalls)).toBe(1)
+
+    yield* dynamic.publish({ ...withProposals(initial, [deferredProposal], 2), acceptedAt: JournalPosition.make(100) })
+    yield* Deferred.await(secondDeferred)
+    expect(yield* Ref.get(deferredCalls)).toBe(2)
+    yield* Fiber.interrupt(runtime)
+  }).pipe(Effect.scoped)
+)

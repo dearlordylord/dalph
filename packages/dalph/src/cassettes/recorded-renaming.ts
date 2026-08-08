@@ -47,6 +47,9 @@ import {
   type TargetVerificationPlanId,
   type TargetVerificationCorrelation,
   type TargetPromotionCorrelation,
+  type CompletionTaskClaim,
+  type CompletionClaimRequestOrdinal,
+  type FreshCompletedTaskObservation,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
   targetPromotionRequestIdForCandidate,
@@ -125,6 +128,7 @@ type PreservedCassetteBrand =
   | TargetVerificationPlanId
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
+  | CompletionClaimRequestOrdinal
   | RunPolicyRevision
   | TaskWorkCapacity
   | TaskClaimReacquisitionRequestId
@@ -230,6 +234,32 @@ const renameTargetPromotionCorrelation = (
     verificationManifest: preserveCassetteValue(correlation.verificationManifest)
   })
 }
+
+const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRenamingMaps): CompletionTaskClaim =>
+  completeFields<CompletionTaskClaim>({
+    _tag: "CompletionTaskClaim",
+    originalClaim: completeFields<typeof claim.originalClaim>({
+      _tag: "ActiveTaskClaim",
+      operationId: renamed(claim.originalClaim.operationId, maps.operationIds),
+      owner: preserveCassetteValue(claim.originalClaim.owner),
+      taskId: preserveCassetteValue(claim.originalClaim.taskId),
+      token: renamed(claim.originalClaim.token, maps.claimTokens)
+    }),
+    plannedAttempt: renamePlannedAttempt(claim.plannedAttempt, maps),
+    promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps)
+  })
+
+const renameFreshCompletedTaskObservation = (
+  observation: FreshCompletedTaskObservation,
+  maps: IdentityRenamingMaps
+): FreshCompletedTaskObservation =>
+  completeFields<FreshCompletedTaskObservation>({
+    lifecycle: "CompletedSuccessfully",
+    observedAt: preserveCassetteValue(observation.observedAt),
+    operationId: renamed(observation.operationId, maps.operationIds),
+    taskId: preserveCassetteValue(observation.taskId),
+    trackerRevision: preserveCassetteValue(observation.trackerRevision)
+  })
 
 const renameCandidateAgentReport = (
   report: IntegrationCandidateAgentReport,
@@ -575,6 +605,66 @@ const renameRecordedCassetteEntry = (
           correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
           lastObservation: preserveCassetteValue(entry.lastObservation),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      CompletionClaimReplacementIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimReplacementIntended",
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds)
+        }),
+      CompletionClaimReplacementAttemptIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimReplacementAttemptIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds)
+        }),
+      CompletionClaimReplaced: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimReplaced",
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds)
+        }),
+      CompletionClaimDeletionIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimDeletionIntended",
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+        }),
+      CompletionClaimDeletionAttemptIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimDeletionAttemptIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+        }),
+      CompletionClaimDeleted: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimDeleted",
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+        }),
+      IntegrationFinalitySettled: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegrationFinalitySettled",
+          claim: renameCompletionTaskClaim(entry.claim, maps),
+          deletionOperationId: renamed(entry.deletionOperationId, maps.operationIds),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          replacementOperationId: renamed(entry.replacementOperationId, maps.operationIds),
+          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
         }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({

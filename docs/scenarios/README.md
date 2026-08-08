@@ -40,6 +40,7 @@ on the issue while later dependent work proceeds.
 | `issue-57-build-two-parent-integration-candidate.md` | 57 |
 | `issue-59-run-target-verification.md` | 59 |
 | `issue-60-promote-or-reconcile.md` | 60 |
+| `issue-141-integration-finality.md` | 141 |
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |

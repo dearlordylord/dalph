@@ -10,6 +10,11 @@ export const deliveryActionCompleted = (
   proposalId: MaterializedDeliveryAction["proposal"]["id"]
 ): DeliveryActionResult => ({ _tag: "ActionCompleted", proposalId })
 
+export const deliveryActionDeferred = (
+  proposalId: MaterializedDeliveryAction["proposal"]["id"],
+  reason: Extract<DeliveryActionResult, { readonly _tag: "ActionDeferred" }>["reason"]
+): DeliveryActionResult => ({ _tag: "ActionDeferred", proposalId, reason })
+
 export const executeTrackerGraphRead = Effect.fn("DeliveryAction.readGraph")(function* (
   operation: ReturnType<typeof makeTrackerGraphObservationOperation>
 ) {

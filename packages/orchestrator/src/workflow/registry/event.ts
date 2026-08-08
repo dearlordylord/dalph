@@ -25,6 +25,7 @@ import { TargetLineageObservation } from "../../authorities/git/target-lineage.j
 import { IntegrationCandidateConstructionJournalEvent } from "../protocols/integration-candidate-construction/events.js"
 import { TargetVerificationJournalEvent } from "../protocols/target-verification/events.js"
 import { TargetPromotionJournalEvent } from "../protocols/target-promotion/events.js"
+import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -33,7 +34,8 @@ const ResponsibilityJournalEvent = Schema.Union([
   IntegrationStartedEvent,
   IntegrationCandidateConstructionJournalEvent,
   TargetVerificationJournalEvent,
-  TargetPromotionJournalEvent
+  TargetPromotionJournalEvent,
+  IntegrationFinalityJournalEvent
 ])
 
 /**

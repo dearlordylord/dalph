@@ -29,9 +29,11 @@ it rather than in a delivery invariant list.
 the seven tools are bound to no Dalph code at all, so `→ I10` means a model
 states the invariant, never that the shipped code is checked against it. What
 checks production is indexed per function under "Coverage per production
-surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the four
-models under `specs/` that reach production do so through
-`packages/dalph/test/conformance/*.mbt.test.ts`.
+surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the six
+subject-scoped models under `specs/` that reach production do so through
+`packages/dalph/test/conformance/*.mbt.test.ts`. `integrationFinality` covers
+post-promotion claim cleanup and task-local settlement without claiming Run
+termination.
 
 ## Identity
 
@@ -42,7 +44,8 @@ identity is not an attempt identity, and an operation name is not a
 classification. Executor-internal structure is invisible outside the executor
 boundary: generic orchestration neither allocates a second executor identity nor
 exposes an executor-internal step.
-→ `I9 (weakened: correlation only, and only in the fast-check journal arm — the six L1/L2 models carry no identity at all)`
+→ `integrationFinality` carries exact Run/task/attempt/claim/proof bindings;
+`I9` remains weakened to correlation in the benchmark's fast-check journal arm.
 
 **D2 Attempt immutability.** A planned attempt's recorded facts — task revision
 fingerprint, Base SHA, branch, worktree, executor locator — never change after
@@ -60,12 +63,14 @@ and authorizes no replacement.
 **D4 Exclusive claim.** At most one active claim per task. A release or
 replacement names the exact current owner and token. A token from an earlier
 claim authorizes nothing.
-→ `I11` (Alloy only)
+→ `integrationFinality` exact active/completion/foreign claim identity; `I11`
+(Alloy only) remains the broader benchmark projection.
 
 **D5 Foreign ownership is never mutated.** A claim Dalph does not currently own
 is preserved and reported as a typed conflict. Dalph never edits, removes, or
 reacquires it, and never infers who created it.
-→ `—` requires claim ownership, which only Alloy models.
+→ `integrationFinality` foreign-claim isolation; the broader benchmark
+projection remains unwriteable outside Alloy.
 
 ## Graph and selection
 
@@ -170,27 +175,31 @@ cancellation, and unpause is not cancellation.
 outcome may become ambiguous, Dalph records the exact intent and waits for the
 append acknowledgement, then calls the owning system, then records the exact
 observed result.
-→ `—` in the six L1/L2 models. The fast-check journal arm has the intent/outcome
-split for claim, worktree and promotion, so D21's shape is encoded there.
+→ `integrationFinality` records replacement and deletion intents before their
+bounded requests; the fast-check journal arm also has the intent/outcome split
+for claim, worktree and promotion.
 
 **D22 Reconcile before retry.** After an ambiguous outcome, Dalph rereads the
 owning system before acting again. A lost response never proves the effect did
 not happen, and never authorizes a duplicate request, a second override, or a
 second release.
-→ `—` no model represents an ambiguous outcome; every boundary call in every
-encoding either succeeds or fails observably.
+→ `integrationFinality` models lost replacement/deletion responses and requires
+a fresh claim read before a second request; other encodings still do not model
+ambiguous outcomes.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or
 claim is absent. Unreadable, invalid, and absent are distinct results and are
 never collapsed.
-→ `—` no model represents observation quality.
+→ `integrationFinality` distinguishes foreign and unreadable claim reads after
+an ambiguous request; neither authorizes mutation or absence.
 
 **D24 No inferred completion across boundaries.** Success at one boundary never
 implies success at another. An executor terminal report is not tracker
 completion, claim removal is not completion, and terminal-without-success is not
 successful completion. D28 owns the Git-side form of this.
-→ `I5 (weakened: settlement-drop only)`
+→ `I5 (weakened: settlement-drop only)` and `integrationFinality`'s fresh
+tracker-success-before-cleanup invariant.
 
 **D25 Dalph never invents an actor.** An initiated action names its actor. A
 non-action occurrence — a tracker read, an executor report — carries no actor,
@@ -203,8 +212,9 @@ and Dalph does not attribute an unauthenticated outside edit to a person.
 explicit submission, exact ordered parents, fixed session, lineage gate, and
 preservation paths, issue 59's sealed verification evidence, and issue 60's
 exact compare-and-set/reconciliation paths are checked against production,
-maintained cassettes, and the accepted-result integration model. Tracker
-completion and final integration settlement remain separate later protocols.
+maintained cassettes, and the accepted-result integration model. The
+`integrationFinality` model separately covers the post-promotion claim and
+task-settlement protocol; tracker completion remains owned by issue #61.
 
 **D26 Candidate shape.** An integration candidate has exactly two ordered direct
 parents: the fixed expected target head first, the immutable accepted result
@@ -216,12 +226,14 @@ head selects reconciliation and an ambiguous head requires a reread. Neither
 authorizes a force update, a reset, or a rewrite. A candidate is rebuilt and
 reverified rather than reused against a different head.
 → `acceptedResultIntegration` promotion safety, stale-head, bounded-attempt,
-and non-convergence invariants
+and non-convergence invariants; `integrationFinality` consumes the exact
+promotion proof and never reintegrates it.
 
 **D28 Verification precedes promotion.** Only a verified candidate is offered.
 Process success, the newest worktree commit, or a clean tree do not classify a
 candidate as verified.
-→ `acceptedResultIntegration` sealed-evidence promotion premise and ordering
+→ `acceptedResultIntegration` sealed-evidence promotion premise and ordering;
+`integrationFinality` requires that exact proof before replacement intent.
 
 ## Process and durability
 
@@ -234,7 +246,9 @@ every process-local resource and no durable one.
 **D30 Crash is absence, not an event.** Dalph never journals a synthetic crash
 occurrence. Recovery accepts every retained journal prefix, trusts no pre-crash
 volatile state, and infers nothing from abandoned process memory.
-→ `—` crash is an action in every model, which is the opposite encoding.
+→ `integrationFinality` models the post-crash ambiguity as a lost response
+followed by a fresh authority read; older models still encode crash as an
+action.
 
 **D31 Recovery continues the same work.** After process loss, restart
 reconstructs the existing responsibility and continues that exact attempt. D3
@@ -264,7 +278,8 @@ reduction function, which is why it is separate from D32.
 capacity, and receives no further tracker facts, every begun responsibility
 eventually settles or is retained together with an exact stated reason.
 → `I18 (weakened: the no-new-facts hypothesis is inexpressible — the task set is
-a fixed constant in every model)`
+a fixed constant in every model)`; `integrationFinality` retains cleanup waits
+after failed or ambiguous deletion.
 
 **D34 Quiescence is not completion.** With no new tracker facts the run reaches
 quiescence only when the executable proposal frontier is empty and no admitted
@@ -273,14 +288,16 @@ action still has a live owner. Quiescence proves no currently executable action
 tracker observation may support the activation's next decision. Quiescence is
 never inferred from process loss, a timeout, a boundary result not yet published
 by delivery planning, or missing session data. D35 owns termination.
-→ `I19`
+→ `I19` and `integrationFinality`'s empty-frontier witness with a retained
+unrelated responsibility.
 
 **D35 A Run does not terminate while it owes work.** Termination requires a
 later accepted complete tracker observation proving the target settled, no
 outstanding obligation, no executable action, and no live action owner. An
 unsettled retained responsibility keeps the Run active.
-→ `statable, not stated` — the safety companion to D33 and D34, and stated by
-no encoding.
+→ `integrationFinality` proves that an empty frontier cannot settle its
+retained task responsibility; whole-Run termination remains owned by issue
+#102 and is outside this subject model.
 
 **D36 No busy loop on unchanged facts.** One activation performs at most one
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
@@ -432,7 +449,3 @@ Items below are unresolved and must not be read as settled behavior.
    value that production always leaves empty, while settlement actions are
    separately proposed and executed. Whether the empty value is future work or
    dead design is undecided.
-2. **Post-promotion settlement.** D26–D28 are checked through exact promotion
-   or preserved reconciliation. Tracker completion, fresh confirmation,
-   candidate cleanup, and final integration settlement remain owned by issues
-   #61 and #141; a promoted Git proof alone does not establish them.

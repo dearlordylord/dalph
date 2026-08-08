@@ -13,6 +13,7 @@ import {
   RunId,
   TaskBranchRef,
   TaskId,
+  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -26,8 +27,13 @@ import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
   ContradictoryWorktreeState,
+  CompletionClaimReplacedEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionTaskClaim,
+  completionClaimReplacementOperationIdFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
+  deriveRunnableFrontier,
   describeJournalEvent,
   ForeignWorktreeRegistration,
   JournalPosition,
@@ -38,20 +44,27 @@ import {
   IntegrationCandidateGitValidationAttemptOrdinal,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
+  makeCompleteTaskTrackerFactsObserved,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTargetLineageObservationOperation,
+  makeTrackerGraphObservationOperation,
   makeTaskWorktreeObservationOperation,
   OperationId,
   originatingActionForTargetLineageObservation,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
   projectWorkflowOccurrences,
+  projectTrackerSnapshot,
+  reduceWorkflowJournalHistory,
   RunPolicyRevision,
   TrackerRevision,
   TaskWorkCapacity,
   TaskClaimReacquisitionRequestId,
+  TaskLifecycle,
+  TaskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
   UntrackedWorktreePath,
   UnclaimedTask,
   WorktreeBaseMismatch,
@@ -74,6 +87,8 @@ import {
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
   incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
+  maintainedIntegrationFinalityProtocolCassetteCatalog,
+  IntegrationFinalityProtocolCassette,
   lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   maintainedAuthoredCassetteCatalog,
   measureTrackerObservationEncoding,
@@ -86,6 +101,8 @@ import {
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
   runTargetPromotionProtocolCassette,
+  runIntegrationFinalityProtocolCassette,
+  runIntegrationFinalityProtocolCassetteFromPromotedRecords,
   runPauseRestartsPassivelyAuthoredCassette,
   runPauseSafelySuspendsAuthoredCassette,
   runUnpauseAfterSafeSuspensionAuthoredCassette,
@@ -1067,6 +1084,206 @@ it.effect("promotes verified M by exact compare-and-set and records exact ancest
     expect(renamed.entries.find(({ _tag }) => _tag === "TargetPromotionObservedSuccess")).toMatchObject({
       correlation: { candidateCorrelation: { candidateId: "renamed-promotion-candidate" } }
     })
+  })
+)
+
+it.effect("records completion finality after valid candidate verification and promotion history", () =>
+  Effect.gen(function* () {
+    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess,
+      promoted.records
+    )
+    expect(finalized.records.map(({ event }) => event._tag)).toContain("IntegrationFinalitySettled")
+    const recorded = yield* projectRecordedCassette(finalized.records)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(
+      verifyRecordedCassetteRoundTrip(finalized.records, recorded).every(
+        ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
+      )
+    ).toBe(true)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("completion claim")
+    const renamed = yield* renameRecordedCassette(
+      recorded,
+      CassetteIdentityRenaming.make({
+        attemptIds: [],
+        claimTokens: [],
+        integrationCandidateIds: [],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
+        operationIds: [],
+        runIds: [],
+        taskBranchRefs: [],
+        worktreeLocators: []
+      })
+    )
+    expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+  })
+)
+
+it.effect("preserves promoted M across a post-promotion blocker and resumes its same finality proof after clear", () =>
+  Effect.gen(function* () {
+    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    const promotion = promoted.records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
+    const graph = promoted.records.findLast(
+      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
+    )?.event
+    if (
+      promotion?._tag !== "TargetPromotionObservedSuccess" ||
+      graph?._tag !== "TaskTrackerFactsObserved" ||
+      graph.observation._tag !== "CompleteTaskTrackerFacts"
+    ) {
+      return yield* Effect.die("promotion blocker cassette requires exact promotion and tracker history")
+    }
+    const plannedAttempt = promoted.records.findLast(
+      ({ event }) =>
+        event._tag === "TaskAttemptPlanned" &&
+        event.operation.plannedAttempt.attemptId === promotion.correlation.candidateCorrelation.attemptId
+    )?.event
+    if (plannedAttempt?._tag !== "TaskAttemptPlanned") return yield* Effect.die("missing promoted attempt")
+    const activeClaim = promoted.records.findLast(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquired" && event.claim.taskId === plannedAttempt.operation.plannedAttempt.taskId
+    )?.event
+    if (activeClaim?._tag !== "TaskClaimAcquired") return yield* Effect.die("missing promoted task claim")
+    const taskId = plannedAttempt.operation.plannedAttempt.taskId
+    const blockerId = TaskId.make("post-promotion-blocker")
+    const unrelatedTaskId = TaskId.make("post-promotion-unrelated-B")
+    const appendGraph = (
+      records: ReadonlyArray<JournalRecord>,
+      revision: string,
+      blockerLifecycle: "Open" | "CompletedSuccessfully"
+    ) => {
+      const operation = makeTrackerGraphObservationOperation(
+        OperationId.make(`post-promotion-blocker:${revision}`),
+        graph.observation.target,
+        [],
+        [taskId, blockerId, unrelatedTaskId]
+      )
+      const projected = projectTrackerSnapshot({
+        revision: TrackerRevision.make(revision),
+        tasks: [
+          {
+            id: taskId,
+            lifecycle: TaskLifecycle.cases.Open.make({}),
+            parentTaskId: null,
+            prerequisiteIds: [blockerId]
+          },
+          {
+            id: blockerId,
+            lifecycle:
+              blockerLifecycle === "Open"
+                ? TaskLifecycle.cases.Open.make({})
+                : TaskLifecycle.cases.CompletedSuccessfully.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          { id: unrelatedTaskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (projected._tag !== "Valid") throw new Error("post-promotion blocker graph must be valid")
+      const intent = taskTrackerReadIntent(operation)
+      const outcome = TaskTrackerFactsObservedEvent.make({
+        observation: makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot),
+        operationId: operation.operationId,
+        version: workflowJournalEventVersion
+      })
+      return [intent, outcome].reduce<ReadonlyArray<JournalRecord>>(
+        (current, event) => [
+          ...current,
+          {
+            event,
+            key: describeJournalEvent(event).expectedKey,
+            position: JournalPosition.make(current.length + 1),
+            runId: plannedAttempt.operation.plannedAttempt.runId
+          }
+        ],
+        records
+      )
+    }
+    const blockedRecords = appendGraph(promoted.records, "post-promotion-blocked", "Open")
+    const blockedHistory = reduceWorkflowJournalHistory(plannedAttempt.operation.plannedAttempt.runId, blockedRecords)
+    if (blockedHistory._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(blockedHistory)
+    const facts = {
+      activeClaimByAttemptId: new Map([[plannedAttempt.operation.plannedAttempt.attemptId, activeClaim.claim]]),
+      currentTrackerTaskIds: new Set([taskId, blockerId, unrelatedTaskId]),
+      heldResponsibilityPositions: new Set<JournalPosition>(),
+      integrationFinalityConfigured: true,
+      integrationTarget: Option.none(),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(plannedAttempt.operation.plannedAttempt.attemptId)
+    }
+    expect(deriveIntegrationFrontier(blockedHistory.runState, facts).transitions).toEqual([])
+    expect(
+      deriveRunnableFrontier({
+        freshEligibleTasks: [
+          { taskId: unrelatedTaskId, taskRevision: TaskRevision.make("post-promotion-unrelated-revision") }
+        ],
+        responsibility: { entries: [] },
+        responsibilityFacts: []
+      }).transitions
+    ).toContainEqual(expect.objectContaining({ _tag: "CommitFreshTaskClaimIntent", taskId: unrelatedTaskId }))
+
+    const clearRecords = appendGraph(blockedRecords, "post-promotion-clear", "CompletedSuccessfully")
+    const clearHistory = reduceWorkflowJournalHistory(plannedAttempt.operation.plannedAttempt.runId, clearRecords)
+    if (clearHistory._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(clearHistory)
+    expect(deriveIntegrationFrontier(clearHistory.runState, facts).transitions).toContainEqual(
+      expect.objectContaining({
+        _tag: "ReplacePromotedTaskClaim",
+        request: expect.objectContaining({
+          claim: expect.objectContaining({ promotionCorrelation: promotion.correlation })
+        })
+      })
+    )
+    expect(clearRecords.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(clearRecords.filter(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")).toHaveLength(
+      1
+    )
+
+    const claim = CompletionTaskClaim.make({
+      originalClaim: activeClaim.claim,
+      plannedAttempt: plannedAttempt.operation.plannedAttempt,
+      promotionCorrelation: promotion.correlation
+    })
+    const replacementOperationId = completionClaimReplacementOperationIdFor(claim)
+    const withReplacement = [
+      CompletionClaimReplacementIntendedEvent.make({
+        claim,
+        operationId: replacementOperationId,
+        version: workflowJournalEventVersion
+      }),
+      CompletionClaimReplacedEvent.make({
+        claim,
+        operationId: replacementOperationId,
+        version: workflowJournalEventVersion
+      })
+    ].reduce<ReadonlyArray<JournalRecord>>(
+      (records, event) => [
+        ...records,
+        {
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(records.length + 1),
+          runId: plannedAttempt.operation.plannedAttempt.runId
+        }
+      ],
+      clearRecords
+    )
+    const blockedWithCompletionClaim = appendGraph(
+      withReplacement,
+      "post-promotion-blocked-with-completion-claim",
+      "Open"
+    )
+    const completionClaimBlockedHistory = reduceWorkflowJournalHistory(
+      plannedAttempt.operation.plannedAttempt.runId,
+      blockedWithCompletionClaim
+    )
+    if (completionClaimBlockedHistory._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die(completionClaimBlockedHistory)
+    }
+    expect(deriveIntegrationFrontier(completionClaimBlockedHistory.runState, facts).transitions).toEqual([])
+    expect(
+      completionClaimBlockedHistory.records.filter(({ event }) => event._tag === "CompletionClaimReplaced")
+    ).toHaveLength(1)
   })
 )
 
@@ -3467,6 +3684,13 @@ it.effect(
         TargetPromotionObservedSuccess: true,
         TargetPromotionStale: true,
         TargetPromotionNonConvergence: true,
+        CompletionClaimReplacementIntended: true,
+        CompletionClaimReplacementAttemptIntended: true,
+        CompletionClaimReplaced: true,
+        CompletionClaimDeletionIntended: true,
+        CompletionClaimDeletionAttemptIntended: true,
+        CompletionClaimDeleted: true,
+        IntegrationFinalitySettled: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
@@ -3516,7 +3740,9 @@ it.effect(
             (tag) =>
               !tag.startsWith("IntegrationCandidate") &&
               !tag.startsWith("TargetVerification") &&
-              !tag.startsWith("TargetPromotion")
+              !tag.startsWith("TargetPromotion") &&
+              !tag.startsWith("CompletionClaim") &&
+              tag !== "IntegrationFinalitySettled"
           )
         )
       )
@@ -3776,5 +4002,369 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
     expect(measurement.changedGraphObservations.occurrenceCount).toBe(1)
     expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(3)
     expect(measurement.changedGraphObservations.journalBytes).toBeGreaterThan(0)
+  })
+)
+
+const replayIntegrationFinalityCassette = (
+  cassette: (typeof maintainedIntegrationFinalityProtocolCassetteCatalog)[keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog]
+) =>
+  Effect.gen(function* () {
+    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    const first = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+    const second = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+    expect(second).toEqual(first)
+    return first
+  })
+
+it("rejects unclosed, unbounded, and misordered integration-finality protocol stories", () => {
+  const valid =
+    maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
+  const terminal = valid.story.find(({ _tag }) => _tag === "AwaitSettlement")
+  if (terminal?._tag !== "AwaitSettlement") return expect.fail("maintained cassette must declare terminal evidence")
+  expect(Schema.is(IntegrationFinalityProtocolCassette)({ ...valid, story: [] })).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({ ...valid, story: [...valid.story, { _tag: "RunReplacement" }] })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...valid,
+      boundaryResults: [
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReplacementUnknown" }
+      ]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({ ...valid, boundaryResults: [{ _tag: "ReadActiveClaim" }] })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess,
+      boundaryResults: [{ _tag: "ReadCompletionClaim" }, { _tag: "ReadCompletionClaim" }]
+    })
+  ).toBe(false)
+  const deletion =
+    maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...deletion,
+      story: deletion.story.filter(({ _tag }) => _tag !== "RecordFreshSuccess")
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...deletion,
+      boundaryResults: [{ _tag: "ReadCompletionClaim" }, { _tag: "DeletionApplied" }],
+      story: [{ _tag: "RecordFreshSuccess" }, { _tag: "RunDeletion" }, terminal]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({ ...valid, boundaryResults: [...valid.boundaryResults].reverse() })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...valid,
+      boundaryResults: [...valid.boundaryResults, { _tag: "ReadCompletionClaim" }]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...valid,
+      boundaryResults: [{ _tag: "ReadActiveClaim" }, { _tag: "ReplacementUnknown" }]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...deletion,
+      story: [
+        { _tag: "RunReplacement" },
+        { _tag: "RecordFreshSuccess" },
+        { _tag: "RecordFreshSuccess" },
+        { _tag: "RunDeletion" },
+        terminal
+      ]
+    })
+  ).toBe(false)
+})
+
+it.effect("rejects promoted finality replay without each exact causal premise", () =>
+  Effect.gen(function* () {
+    const cassette =
+      maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
+    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    for (const omittedTag of [
+      "TargetPromotionObservedSuccess",
+      "TaskAttemptPlanned",
+      "TaskClaimAcquired",
+      "TaskTrackerFactsObserved"
+    ] as const) {
+      const exit = yield* Effect.exit(
+        runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+          cassette,
+          promoted.records.filter(({ event }) => event._tag !== omittedTag)
+        )
+      )
+      expect(exit._tag).toBe("Failure")
+    }
+  })
+)
+
+it.effect("keeps an empty frontier active while claim replacement is non-convergent", () =>
+  Effect.gen(function* () {
+    const expected = {
+      deletionCalls: 0,
+      failureTag: "IntegrationFinality.CompletionClaimDidNotConverge",
+      journalTags: [
+        "CompletionClaimReplacementIntended",
+        "CompletionClaimReplacementAttemptIntended",
+        "CompletionClaimReplacementAttemptIntended",
+        "CompletionClaimReplacementAttemptIntended"
+      ],
+      readCalls: 4,
+      replacementCalls: 3
+    }
+    const cassette = IntegrationFinalityProtocolCassette.make({
+      boundaryResults: [
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" }
+      ],
+      initialClaim: "Active",
+      name: "replacement remains pending at an empty frontier",
+      story: [{ _tag: "RunReplacement" }, { _tag: "ObserveEmptyFrontier" }, { _tag: "AwaitSettlement", expected }]
+    })
+    const run = yield* runIntegrationFinalityProtocolCassette(cassette)
+    expect(run.sawEmptyFrontierWhilePending).toBe(true)
+  })
+)
+
+it.effect("replays definite completion-claim boundary rejections as terminal typed failures", () =>
+  Effect.gen(function* () {
+    const replacement = IntegrationFinalityProtocolCassette.make({
+      boundaryResults: [
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementDefinitelyNotApplied", detail: "tracker rejected replacement" }
+      ],
+      initialClaim: "Active",
+      name: "definite replacement rejection",
+      story: [
+        { _tag: "RunReplacement" },
+        {
+          _tag: "AwaitSettlement",
+          expected: {
+            deletionCalls: 0,
+            failureTag: "IntegrationFinality.CompletionClaimReplacementFailure",
+            journalTags: ["CompletionClaimReplacementIntended", "CompletionClaimReplacementAttemptIntended"],
+            readCalls: 1,
+            replacementCalls: 1
+          }
+        }
+      ]
+    })
+    const deletion = IntegrationFinalityProtocolCassette.make({
+      boundaryResults: [
+        { _tag: "ReadCompletionClaim" },
+        { _tag: "ReadCompletionClaim" },
+        { _tag: "DeletionDefinitelyNotApplied", detail: "tracker rejected deletion" }
+      ],
+      initialClaim: "Completion",
+      name: "definite deletion rejection",
+      story: [
+        { _tag: "RunReplacement" },
+        { _tag: "RecordFreshSuccess" },
+        { _tag: "RunDeletion" },
+        {
+          _tag: "AwaitSettlement",
+          expected: {
+            deletionCalls: 1,
+            failureTag: "IntegrationFinality.CompletionClaimDeletionFailure",
+            journalTags: [
+              "CompletionClaimReplacementIntended",
+              "CompletionClaimReplaced",
+              "TaskTrackerReadIntentRecorded",
+              "TaskTrackerFactsObserved",
+              "CompletionClaimDeletionIntended",
+              "CompletionClaimDeletionAttemptIntended"
+            ],
+            readCalls: 2,
+            replacementCalls: 0
+          }
+        }
+      ]
+    })
+    const ambiguousReplacement = IntegrationFinalityProtocolCassette.make({
+      boundaryResults: [
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" },
+        { _tag: "ReplacementUnknown" },
+        { _tag: "ReadActiveClaim" }
+      ],
+      initialClaim: "Active",
+      name: "ambiguous replacement exhaustion",
+      story: [
+        { _tag: "RunReplacement" },
+        {
+          _tag: "AwaitSettlement",
+          expected: {
+            deletionCalls: 0,
+            failureTag: "IntegrationFinality.CompletionClaimDidNotConverge",
+            journalTags: [
+              "CompletionClaimReplacementIntended",
+              "CompletionClaimReplacementAttemptIntended",
+              "CompletionClaimReplacementAttemptIntended",
+              "CompletionClaimReplacementAttemptIntended"
+            ],
+            readCalls: 4,
+            replacementCalls: 3
+          }
+        }
+      ]
+    })
+    expect((yield* runIntegrationFinalityProtocolCassette(replacement)).failureTag).toBe(
+      "IntegrationFinality.CompletionClaimReplacementFailure"
+    )
+    expect((yield* runIntegrationFinalityProtocolCassette(deletion)).failureTag).toBe(
+      "IntegrationFinality.CompletionClaimDeletionFailure"
+    )
+    expect((yield* runIntegrationFinalityProtocolCassette(ambiguousReplacement)).failureTag).toBe(
+      "IntegrationFinality.CompletionClaimDidNotConverge"
+    )
+  })
+)
+
+it.effect("replaces the exact active claim with a promotion-bound completion claim", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
+    )
+    expect(run.replacementCalls).toBe(1)
+    expect(run.deletionCalls).toBe(0)
+    expect(run.journalTags.slice(-3)).toEqual([
+      "CompletionClaimReplacementIntended",
+      "CompletionClaimReplacementAttemptIntended",
+      "CompletionClaimReplaced"
+    ])
+  })
+)
+
+it.effect("restart after promotion resumes completion settlement without another integration agent", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.restartAfterPromotionResumesCompletionSettlementWithoutAnotherIntegrationAgent
+    )
+    expect(run.replacementCalls).toBe(0)
+    expect(run.journalTags).toContain("CompletionClaimReplaced")
+    const promotionAt = run.journalTags.lastIndexOf("TargetPromotionObservedSuccess")
+    expect(promotionAt).toBeGreaterThan(0)
+    expect(run.journalTags.slice(promotionAt + 1)).not.toContain("IntegrationCandidateAgentReported")
+  })
+)
+
+it.effect("reconciles a lost completion-claim replacement without allocating another claim", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.reconcilesALostCompletionClaimReplacementWithoutAllocatingAnotherClaim
+    )
+    expect(run.replacementCalls).toBe(1)
+    expect(run.journalTags.filter((tag) => tag === "CompletionClaimReplacementIntended")).toHaveLength(1)
+    expect(run.journalTags.filter((tag) => tag === "CompletionClaimReplaced")).toHaveLength(1)
+  })
+)
+
+it.effect("does not mutate a foreign claim while settling a promoted task", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.doesNotMutateAForeignClaimWhileSettlingAPromotedTask
+    )
+    expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimOwnershipConflict")
+    expect(run.replacementCalls).toBe(0)
+    expect(run.deletionCalls).toBe(0)
+    expect(run.journalTags).not.toContain("CompletionClaimReplacementAttemptIntended")
+  })
+)
+
+it.effect("deletes only the exact completion claim after fresh tracker success", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess
+    )
+    const replaced = run.records.find(({ event }) => event._tag === "CompletionClaimReplaced")?.event
+    const deleted = run.records.find(({ event }) => event._tag === "CompletionClaimDeleted")?.event
+    if (replaced?._tag !== "CompletionClaimReplaced" || deleted?._tag !== "CompletionClaimDeleted") {
+      return yield* Effect.die("expected exact replacement and deletion outcomes")
+    }
+    expect(deleted.claim).toEqual(replaced.claim)
+    expect(run.deletionCalls).toBe(1)
+    expect(run.journalTags).toContain("IntegrationFinalitySettled")
+  })
+)
+
+it.effect("reconciles a lost completion-claim deletion without reopening success", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess
+    )
+    expect(run.deletionCalls).toBe(1)
+    expect(run.journalTags).toContain("CompletionClaimDeleted")
+    expect(run.journalTags).toContain("IntegrationFinalitySettled")
+    expect(run.journalTags.filter((tag) => tag === "CompletionClaimReplacementIntended")).toHaveLength(1)
+  })
+)
+
+it.effect("waits without replacing when the current completion claim cannot be read", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.waitsWithoutReplacingWhenTheCurrentCompletionClaimCannotBeRead
+    )
+    expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimReadFailure")
+    expect(run.replacementCalls).toBe(0)
+    expect(run.deletionCalls).toBe(0)
+    expect(run.boundaryCalls).toEqual(["readTaskClaim"])
+  })
+)
+
+it.effect("keeps successful work final when the completion claim cannot be read before deletion", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.keepsSuccessfulWorkFinalWhenTheCompletionClaimCannotBeReadBeforeDeletion
+    )
+    expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimReadFailure")
+    expect(run.replacementCalls).toBe(0)
+    expect(run.deletionCalls).toBe(0)
+    expect(run.journalTags).toContain("TaskTrackerFactsObserved")
+    expect(run.journalTags).not.toContain("CompletionClaimDeleted")
+  })
+)
+
+it.effect("keeps successful work final when completion-claim deletion cannot converge", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.keepsSuccessfulWorkFinalWhenCompletionClaimDeletionCannotConverge
+    )
+    expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimDidNotConverge")
+    expect(run.deletionCalls).toBe(3)
+    expect(run.journalTags).toContain("TaskTrackerFactsObserved")
+    expect(run.journalTags).not.toContain("CompletionClaimDeleted")
+    expect(run.journalTags).not.toContain("IntegrationFinalitySettled")
+  })
+)
+
+it.effect("does not terminate an empty frontier while completion settlement is pending", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.doesNotTerminateAnEmptyFrontierWhileCompletionSettlementIsPending
+    )
+    expect(run.sawEmptyFrontierWhilePending).toBe(true)
+    expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimDidNotConverge")
+    expect(run.journalTags).not.toContain("WorkflowRunTerminated")
   })
 )

@@ -33,6 +33,11 @@ import {
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import {
+  makeIntegrationFinalityHistoryIndexes,
+  validateIntegrationFinalityHistoryRecord,
+  type IntegrationFinalityHistoryIndexes
+} from "../../workflow/protocols/integration-finality/history.js"
 
 const finalArrayElementOffset = -1
 
@@ -55,6 +60,7 @@ const semanticIssue = (
 }
 
 interface FoldIndexes extends IntegrationHistoryIndexes {
+  readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
   latestControlDirectionOrdinal: number
   readonly executorReportOrdinals: Map<AttemptId, number>
   readonly executorResponsibilitiesBegan: Map<
@@ -87,6 +93,7 @@ const emptyIndexes = (): FoldIndexes => ({
   targetVerificationTerminals: new Set(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   integrationCandidateSubmissions: new Map(),
+  integrationFinalityHistory: makeIntegrationFinalityHistoryIndexes(),
   integrationCandidateGitObservations: new Map(),
   latestControlDirectionOrdinal: 0,
   plans: new Map(),
@@ -578,6 +585,14 @@ export const reduceWorkflowJournalHistory = (
       record,
       runId,
       indexes,
+      (detail) => identityIssue(issues, runId, record.position, detail),
+      (detail) => semanticIssue(issues, runId, record.position, detail)
+    )
+    validateIntegrationFinalityHistoryRecord(
+      record,
+      runId,
+      records,
+      indexes.integrationFinalityHistory,
       (detail) => identityIssue(issues, runId, record.position, detail),
       (detail) => semanticIssue(issues, runId, record.position, detail)
     )
