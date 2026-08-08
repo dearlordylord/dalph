@@ -53,6 +53,8 @@ Quint 0.32.0 on Linux aarch64:
 
 ```sh
 node research/verification-bakeoff/quint/run-evolution.mjs
+research/verification-bakeoff/alloy/run-three.sh
+TIMEOUT=30 research/verification-bakeoff/tlaplus/run-liveness.sh --three
 ```
 
 The harness treats a timeout, missing verdict marker, unexpectedly passing
@@ -99,3 +101,50 @@ Quint 0.32.0 / TLC on Linux aarch64:
   fail-closed harness);
 - weak-fairness control: counterexample in about 2.1 seconds checker time;
 - two-task I18: no verdict within the explicit 120-second timeout.
+
+## #199 — three-task scaling
+
+Planned Base SHA: `7f99511c0bed1fbafcf44fb6a98cca431a12a274`.
+
+### Scope and engine applicability
+
+The cardinality experiment runs in the engines whose L2 encodings expose task
+scope as model-checker data: Quint/Rust sampling, Quint/TLC, hand-authored
+TLA+/TLC, and Alloy. Lean's journal theorem already quantifies over arbitrary
+natural task identifiers, so rerunning it at three adds no theorem strength.
+The historical Lean/Agda L2 encodings use a two-constructor task type, and the
+Dafny L2 class hard-codes `{0, 1}`; this ticket does not silently report those
+unchanged proofs as three-task evidence.
+
+The focused Quint model adds two checker-sensitive defects:
+
+- mutant 5 selects the two highest-ranked eligible tasks instead of the two
+  lowest;
+- mutant 6 turns A's local contradiction into failures in all three regions.
+
+### Scenario-to-test mapping
+
+| Accepted scenario | Concrete result | Executable evidence |
+|---|---|---|
+| A, B, C are open under capacity 2 | exactly A and B are selected; C waits behind their lower ranks | `threeTaskSelectionRespectsRankAndCapacityTest`; rank-reversal mutant 5 is rejected |
+| A records a local contradiction while B continues | only A is failed, B advances work, C remains selected under rank/capacity, and the shared run state is unchanged | `failedAIsContainedWhileBContinuesTest`; failure-leak mutant 6 is rejected |
+| Strengthened safety invariant must be inductive before reachability/liveness claims | Alloy finds no counterexample to the one-step induction check at exactly three tasks | `check invIsInductiveThree` in `alloy/DeliveryThree.als` is UNSAT |
+| Attempt I17–I19 at three tasks | every timeout or checker failure is reported as no verdict | `tlaplus/run-liveness.sh --three`; the three temporal checks in `alloy/DeliveryThree.als` |
+
+### Measurements
+
+- Quint/Rust: 10,000 traces at 25 steps, seed 199, no invariant
+  counterexample; three-task selection reached 8,184 traces and three-region
+  containment reached 1,868.
+- Quint/TLC safety: 13,342,513 generated states, 635,797 distinct states,
+  complete graph depth 28, 15 seconds; no invariant violation.
+- Quint/Apalache induction: no verdict because expanding the explicit set of
+  task maps would blow up the solver. This is why Alloy is the prerequisite
+  induction instrument here.
+- Alloy induction: UNSAT in under one second. Reachable safety had no verdict
+  in 60 seconds. I17, I18, I19, and the fair-trace witness each had no verdict
+  in 30 seconds under exactly three tasks.
+- Hand-authored TLA+/TLC I17–I19: no verdict. TLC 2.19 throws
+  `NegativeArraySizeException` while constructing the three-task liveness
+  checker, before it can enumerate a state. The harness reports that error as
+  no verdict rather than pass.

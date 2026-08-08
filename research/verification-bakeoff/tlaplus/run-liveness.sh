@@ -4,6 +4,7 @@
 #   ./run-liveness.sh          two tasks, the same size the safety run uses
 #   ./run-liveness.sh --small  one task, which is the only size that finishes
 #                              EveryBegunSettles in a usable time
+#   ./run-liveness.sh --three  three tasks, for #199 scaling measurements
 #   ./run-liveness.sh --lasso  the suspend/resume experiment, one task: is the
 #                              lasso a fairness defect or a missing hypothesis?
 #   ./run-liveness.sh --arrival  I19 over a model where new work keeps arriving.
@@ -109,6 +110,9 @@ LABEL="2 tasks"
 if [[ ${1:-} == --small ]]; then
   SIZE_LINE="CONSTANT Tasks <- OneTask"
   LABEL="1 task"
+elif [[ ${1:-} == --three ]]; then
+  SIZE_LINE="CONSTANT Tasks <- ThreeTasks"
+  LABEL="3 tasks"
 fi
 
 echo "Liveness, $LABEL, ${TIMEOUT}s budget per property."
@@ -139,7 +143,7 @@ EOF
   elif grep -q 'Temporal properties were violated' <<<"$out"; then
     verdict="**violated**"
   else
-    verdict="error: $(grep -m1 -E '^Error' <<<"$out")"
+    verdict="**no verdict: $(grep -m1 -E '^Error' <<<"$out")**"
   fi
   echo "| $P | $verdict | ${states:--} | $secs |"
 done

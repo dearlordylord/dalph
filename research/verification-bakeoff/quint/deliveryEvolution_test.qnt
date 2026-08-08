@@ -165,6 +165,80 @@ module deliveryEvolutionResetOnSuspendTest {
       .expect(suspendedWithPreservedWorkReached)
 }
 
+module deliveryEvolutionThreeTaskTest {
+  import deliveryEvolutionCore(
+    MUTANT = 0,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
+  ).* from "./deliveryEvolution"
+
+  run threeTaskSelectionRespectsRankAndCapacityTest =
+    init
+      .then(observeArrival(0, Set()))
+      .then(observeArrival(1, Set()))
+      .then(observeArrival(2, Set()))
+      .expect(and {
+        selected == Set(0, 1),
+        selectionRespectsCapacity,
+        selectionUsesLowestRanks,
+      })
+
+  run failedAIsContainedWhileBContinuesTest =
+    init
+      .then(observeArrival(0, Set()))
+      .then(observeArrival(1, Set()))
+      .then(observeArrival(2, Set()))
+      .then(acquireClaim(0))
+      .then(acquireClaim(1))
+      .then(recordLocalContradiction(0))
+      .then(beginWork(1))
+      .then(doWork(1))
+      .expect(and {
+        state.tickets.get(0).failed,
+        not(state.tickets.get(1).failed),
+        not(state.tickets.get(2).failed),
+        state.tickets.get(1).work == 1,
+        selected == Set(1, 2),
+        failureIsRegional,
+      })
+}
+
+module deliveryEvolutionRankReversalTest {
+  import deliveryEvolutionCore(
+    MUTANT = 5,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
+  ).* from "./deliveryEvolution"
+
+  run rankReversalMutationMustFailTest =
+    init
+      .then(observeArrival(0, Set()))
+      .then(observeArrival(1, Set()))
+      .then(observeArrival(2, Set()))
+      .expect(selected == Set(0, 1))
+}
+
+module deliveryEvolutionFailureLeakTest {
+  import deliveryEvolutionCore(
+    MUTANT = 6,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
+  ).* from "./deliveryEvolution"
+
+  run failureLeakMutationMustFailTest =
+    init
+      .then(observeArrival(0, Set()))
+      .then(observeArrival(1, Set()))
+      .then(observeArrival(2, Set()))
+      .then(acquireClaim(0))
+      .then(recordLocalContradiction(0))
+      .expect(and {
+        not(state.tickets.get(1).failed),
+        not(state.tickets.get(2).failed),
+        failureIsRegional,
+      })
+}
+
 module deliveryEvolutionIgnoreBlockersTest {
   import deliveryEvolutionCore(
     MUTANT = 1,

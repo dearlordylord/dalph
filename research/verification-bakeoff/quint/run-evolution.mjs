@@ -40,6 +40,41 @@ const checks = [
     accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
   },
   {
+    name: "#199 three-task scenarios",
+    args: ["test", tests, "--main", "deliveryEvolutionThreeTaskTest"],
+    accepts: (result) => result.status === 0 && result.output.includes("2 passing")
+  },
+  {
+    name: "#199 rank-reversal mutant",
+    args: ["test", tests, "--main", "deliveryEvolutionRankReversalTest"],
+    accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
+  },
+  {
+    name: "#199 failure-leak mutant",
+    args: ["test", tests, "--main", "deliveryEvolutionFailureLeakTest"],
+    accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
+  },
+  {
+    name: "#199 three-task sampled safety",
+    args: [
+      "run", spec, "--main", "deliveryEvolution3", "--invariants", "allInvariants",
+      "--witnesses", "threeTaskSelectionReached", "threeRegionContainmentReached",
+      "--max-steps", "25", "--max-samples", "10000", "--seed", "199",
+      "--verbosity", "1"
+    ],
+    accepts: (result) =>
+      result.status === 0 && result.output.includes("[ok]") &&
+      !result.output.includes("was witnessed in 0 trace")
+  },
+  {
+    name: "#199 three-task exhaustive safety",
+    args: [
+      "verify", spec, "--main", "deliveryEvolution3", "--backend", "tlc",
+      "--invariants", "allInvariants", "--verbosity", "1"
+    ],
+    accepts: (result) => result.status === 0 && result.output.includes("[ok]")
+  },
+  {
     name: "#197 sampled invariants/witnesses",
     args: [
       "run", spec, "--main", "deliveryEvolution2",

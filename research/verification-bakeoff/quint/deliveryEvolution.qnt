@@ -21,15 +21,17 @@ module deliveryEvolutionCore {
     present: bool,
     open: bool,
     blockers: Set[int],
-    retainedForBlocker: bool,
+    retainedWithReason: bool,
     attemptId: int,
     work: int,
+    failed: bool,
   }
 
   type State = {
     tickets: int -> Ticket,
     capacity: int,
     arrivalsRemaining: int,
+    contradicted: Set[int],
   }
 
   var state: State
@@ -39,23 +41,27 @@ module deliveryEvolutionCore {
     present: false,
     open: false,
     blockers: Set(),
-    retainedForBlocker: false,
+    retainedWithReason: false,
     attemptId: 0,
     work: 0,
+    failed: false,
   }
 
   pure def isBlocked(ticket: Ticket): bool =
     if (MUTANT == 1) false else ticket.blockers.size() > 0
 
   pure def isEligible(ticket: Ticket): bool =
-    ticket.present and ticket.open and not(isBlocked(ticket))
+    ticket.present and ticket.open and not(ticket.failed) and not(isBlocked(ticket))
 
   val eligible: Set[int] = TASKS.filter(id => isEligible(state.tickets.get(id)))
 
   def rankOf(id: int): int = eligible.filter(other => other < id).size()
 
   val selected: Set[int] =
-    eligible.filter(id => rankOf(id) < state.capacity)
+    if (MUTANT == 5)
+      eligible.filter(id => rankOf(id) >= eligible.size() - state.capacity)
+    else
+      eligible.filter(id => rankOf(id) < state.capacity)
 
   pure def hasObligation(ticket: Ticket): bool =
     ticket.phase != NoObligation and ticket.phase != Settled
@@ -73,12 +79,15 @@ module deliveryEvolutionCore {
 
   val selectionRespectsCapacity: bool = selected.size() <= state.capacity
 
+  val selectionUsesLowestRanks: bool =
+    selected.forall(id => rankOf(id) < state.capacity)
+
   val obligationsSurviveGraphChanges: bool = TASKS.forall(id =>
     not(hasObligation(state.tickets.get(id))) or deliveries.contains(id))
 
   val retainedTicketsStateAReason: bool = TASKS.forall(id =>
     state.tickets.get(id).phase != Retained
-      or state.tickets.get(id).retainedForBlocker)
+      or state.tickets.get(id).retainedWithReason)
 
   val arrivalBudgetIsBounded: bool =
     state.arrivalsRemaining >= 0 and state.arrivalsRemaining <= INITIAL_ARRIVAL_BUDGET
@@ -99,17 +108,52 @@ module deliveryEvolutionCore {
     else ticket.attemptId == 1
   })
 
+  val failureIsRegional: bool = TASKS.forall(id =>
+    state.tickets.get(id).failed == state.contradicted.contains(id))
+
   val allInvariants: bool = and {
     blockersWellFormed,
     selectionRespectsBlockers,
     selectionRespectsCapacity,
+    selectionUsesLowestRanks,
     obligationsSurviveGraphChanges,
     retainedTicketsStateAReason,
     arrivalBudgetIsBounded,
     workIsBounded,
     settlementRequiresCompleteWork,
     oneAttemptIdentityPerObligation,
+    failureIsRegional,
   }
+
+  // Finite data domain used only by the induction check. Reachability/TLC do
+  // not need it. Apalache starts an induction step from an arbitrary state,
+  // so the single record variable must first be assigned an explicit domain.
+  pure val PHASES: Set[Phase] = Set(
+    NoObligation, Claimed, Executing, SuspensionRequested, Suspended, Settled, Retained)
+  pure val BOOLS: Set[bool] = Set(false, true)
+  pure val TICKET_VALUES: Set[Ticket] =
+    tuples(PHASES, BOOLS, BOOLS, TASKS.powerset(), BOOLS, 0.to(1), 0.to(2), BOOLS)
+      .map(((phase, present, open, blockers, retained, attemptId, work, failed)) => {
+        phase: phase,
+        present: present,
+        open: open,
+        blockers: blockers,
+        retainedWithReason: retained,
+        attemptId: attemptId,
+        work: work,
+        failed: failed,
+      })
+  pure val STATE_VALUES: Set[State] =
+    tuples(setOfMaps(TASKS, TICKET_VALUES), Set(2), 0.to(INITIAL_ARRIVAL_BUDGET), TASKS.powerset())
+      .map(((tickets, capacity, arrivalsRemaining, contradicted)) => {
+        tickets: tickets,
+        capacity: capacity,
+        arrivalsRemaining: arrivalsRemaining,
+        contradicted: contradicted,
+      })
+
+  val stateBounds: bool = state.in(STATE_VALUES)
+  val inductiveInvariant: bool = stateBounds and allInvariants
 
   val blockedTaskReached: bool =
     TASKS.exists(id => state.tickets.get(id).blockers.size() > 0)
@@ -136,11 +180,22 @@ module deliveryEvolutionCore {
     ticket.phase == Suspended and ticket.work == 1 and ticket.attemptId == 1
   })
 
+  val threeTaskSelectionReached: bool =
+    TASKS.size() == 3 and selected == Set(0, 1)
+
+  val threeRegionContainmentReached: bool = and {
+    state.contradicted.size() == 1,
+    TASKS.exists(id => state.tickets.get(id).failed),
+    TASKS.exists(id => not(state.tickets.get(id).failed)
+      and state.tickets.get(id).work > 0),
+  }
+
   action init: bool = all {
     state' = {
       tickets: TASKS.mapBy(_ => freshTicket),
       capacity: 2,
       arrivalsRemaining: INITIAL_ARRIVAL_BUDGET,
+      contradicted: Set(),
     }
   }
 
@@ -156,6 +211,7 @@ module deliveryEvolutionCore {
       or { MUTANT == 2, state.arrivalsRemaining > 0 },
       state' = {
         ...state,
+        contradicted: state.contradicted.exclude(Set(id)),
         tickets: state.tickets.set(id, {
           ...current,
           present: true,
@@ -201,6 +257,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == Claimed,
+      not(current.failed),
       current.blockers.size() == 0,
       state' = {
         ...state,
@@ -213,6 +270,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == Executing,
+      not(current.failed),
       current.blockers.size() == 0,
       current.work < 2,
       state' = {
@@ -226,6 +284,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == Executing,
+      not(current.failed),
       state' = {
         ...state,
         tickets: state.tickets.set(id, {...current, phase: SuspensionRequested}),
@@ -237,6 +296,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == SuspensionRequested,
+      not(current.failed),
       state' = {
         ...state,
         tickets: state.tickets.set(id, {
@@ -252,6 +312,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == Suspended,
+      not(current.failed),
       current.blockers.size() == 0,
       state' = {
         ...state,
@@ -264,6 +325,7 @@ module deliveryEvolutionCore {
     val current = state.tickets.get(id)
     all {
       current.phase == Executing,
+      not(current.failed),
       current.blockers.size() == 0,
       or { MUTANT == 3, current.work == 2 },
       state' = {
@@ -284,8 +346,34 @@ module deliveryEvolutionCore {
         tickets: state.tickets.set(id, {
           ...current,
           phase: Retained,
-          retainedForBlocker: true,
+          retainedWithReason: true,
         }),
+      },
+    }
+  }
+
+  action recordLocalContradiction(id: int): bool = {
+    val current = state.tickets.get(id)
+    all {
+      hasObligation(current),
+      not(current.failed),
+      state' = {
+        ...state,
+        contradicted: state.contradicted.union(Set(id)),
+        tickets:
+          if (MUTANT == 6)
+            TASKS.mapBy(task =>
+              if (task == id)
+                {...state.tickets.get(task), phase: Retained, retainedWithReason: true, failed: true}
+              else
+                {...state.tickets.get(task), failed: true})
+          else
+            state.tickets.set(id, {
+              ...current,
+              phase: Retained,
+              retainedWithReason: true,
+              failed: true,
+            }),
       },
     }
   }
@@ -300,6 +388,7 @@ module deliveryEvolutionCore {
       or { MUTANT == 2, state.arrivalsRemaining > 0 },
       state' = {
         ...state,
+        contradicted: state.contradicted.exclude(Set(id)),
         tickets: state.tickets.set(id, {
           ...freshTicket,
           present: true,
@@ -334,6 +423,7 @@ module deliveryEvolutionCore {
       observeBlockers(id, Set()),
       observeBlockers(id, Set(blocker)),
       requestSuspension(id),
+      recordLocalContradiction(id),
       progress(id),
     }
   }
@@ -459,5 +549,29 @@ module deliveryEvolution2ResetOnSuspend {
     MUTANT = 4,
     TASKS = Set(0, 1),
     INITIAL_ARRIVAL_BUDGET = 2,
+  ).*
+}
+
+module deliveryEvolution3 {
+  import deliveryEvolutionCore(
+    MUTANT = 0,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
+  ).*
+}
+
+module deliveryEvolution3RankReversal {
+  import deliveryEvolutionCore(
+    MUTANT = 5,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
+  ).*
+}
+
+module deliveryEvolution3FailureLeak {
+  import deliveryEvolutionCore(
+    MUTANT = 6,
+    TASKS = Set(0, 1, 2),
+    INITIAL_ARRIVAL_BUDGET = 3,
   ).*
 }
