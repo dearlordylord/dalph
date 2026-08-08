@@ -117,6 +117,7 @@ module plannedAttemptExecutor {
     commandResponseSettlementCount: int,
     reconciliationProjectionsThisActivation: int,
     recoveryCount: int,
+    postSuspendLimitReadOnlyRecoveryAvailable: bool,
     responseAmbiguous: bool,
     lastSettlement: LastSettlement,
     lastAction: ActionTag,
@@ -129,8 +130,9 @@ module plannedAttemptExecutor {
   pure val CONTINUATION_LIMIT = 3
   pure val SUSPEND_COMMAND_LIMIT = 3
   // Finite exploration bound, not production retry policy. Initial activation
-  // plus two recoveries is enough to consume either three-command budget.
-  pure val RECOVERY_LIMIT = 2
+  // plus three recoveries consumes the three-command budget and still leaves
+  // one later read-only activation able to prove quiescence.
+  pure val RECOVERY_LIMIT = 3
 
   pure val PLANNED_CORRELATION: Correlation = {
     runId: RUN_ID,
@@ -466,6 +468,19 @@ module plannedAttemptExecutor {
     state.reconciliationProjectionsThisActivation <= 1,
   }
 
+  // Three exact Running settlements exhaust the effectful Suspend budget, not
+  // the later read-only activation that can still observe Safe or Terminal.
+  val suspendLimitPreservesReadOnlyRecovery: bool =
+    state.suspendIntentsSinceRunning != SUSPEND_COMMAND_LIMIT
+      or match state.status {
+        | Running(_) => false
+        | _ => true
+      }
+      or not(isNoCommand(state.commandState))
+      or state.evidence != NoEvidence
+      or state.reconciliationProjectionsThisActivation != 1
+      or state.postSuspendLimitReadOnlyRecoveryAvailable
+
   // Running or unavailable current-state evidence cannot prove quiescence.
   // Safe suspension and terminal status are the only active-responsibility
   // states in which the task-work position may be absent.
@@ -561,6 +576,7 @@ module plannedAttemptExecutor {
       commandResponseSettlementCount: 0,
       reconciliationProjectionsThisActivation: 0,
       recoveryCount: 0,
+      postSuspendLimitReadOnlyRecoveryAvailable: true,
       responseAmbiguous: false,
       lastSettlement: NoSettlement,
       lastAction: InitializedAction,
@@ -752,19 +768,31 @@ module plannedAttemptExecutor {
     }
   }
 
-  // Recovery starts a new activation with one projection allowance. Any
-  // unaccepted projection result is process-local and is reread; the durable
-  // called command and ordinal remain unmatched.
+  // Recovery starts a new activation with one projection allowance. An
+  // unmatched command remains durable; after an exact Running settlement, a
+  // later activation may instead use a read-only fresh-state projection.
   action recoverActivation: bool = all {
-    isCalled(state.commandState),
-    state.responseAmbiguous,
+    (isCalled(state.commandState) and state.responseAmbiguous)
+      or isNoCommand(state.commandState),
     state.reconciliationProjectionsThisActivation == 1,
-    state.recoveryCount < RECOVERY_LIMIT,
+    state.recoveryCount < RECOVERY_LIMIT
+      or and {
+        state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
+        isNoCommand(state.commandState),
+        state.evidence == NoEvidence,
+        state.postSuspendLimitReadOnlyRecoveryAvailable,
+      },
     state' = {
       ...state,
       evidence: NoEvidence,
       reconciliationProjectionsThisActivation: 0,
-      recoveryCount: state.recoveryCount + 1,
+      recoveryCount:
+        if (state.recoveryCount < RECOVERY_LIMIT) state.recoveryCount + 1
+        else state.recoveryCount,
+      postSuspendLimitReadOnlyRecoveryAvailable:
+        if (state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT
+          and isNoCommand(state.commandState)) false
+        else state.postSuspendLimitReadOnlyRecoveryAvailable,
       lastAction: RecoveryActivatedAction,
     },
   }
