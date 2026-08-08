@@ -17,7 +17,43 @@ const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string => {
   }
 }
 
+type AuthoredTargetPromotionEvidence = Extract<
+  AuthoredOrchestrationEvidence,
+  { readonly _tag: "TargetPromotionSucceeded" | "TargetPromotionNonConvergent" | "TargetPromotionStale" }
+>
+
+const isTargetPromotionEvidence = (
+  evidence: AuthoredOrchestrationEvidence
+): evidence is AuthoredTargetPromotionEvidence => evidence._tag.startsWith("TargetPromotion")
+
+const targetPromotionEvidenceLyric = (evidence: AuthoredTargetPromotionEvidence): string => {
+  switch (evidence._tag) {
+    case "TargetPromotionSucceeded":
+      return `The story expects ${evidence.basis._tag} to establish candidate ${evidence.candidateCommit} on target head ${evidence.observedTargetHead} by ${evidence.observation}.`
+    case "TargetPromotionNonConvergent":
+      return `The story expects candidate ${evidence.candidateCommit} to stop after attempt ${evidence.attemptOrdinal} with ${evidence.lastObservation}.`
+    case "TargetPromotionStale":
+      return `The story expects Git to preserve head ${evidence.observedTargetHead} instead of replacing it with stale candidate ${evidence.candidateCommit}.`
+  }
+}
+
+type AuthoredTargetVerificationEvidence = Extract<
+  AuthoredOrchestrationEvidence,
+  { readonly _tag: "TargetVerificationPassed" | "TargetVerificationStopped" }
+>
+
+const isTargetVerificationEvidence = (
+  evidence: AuthoredOrchestrationEvidence
+): evidence is AuthoredTargetVerificationEvidence => evidence._tag.startsWith("TargetVerification")
+
+const targetVerificationEvidenceLyric = (evidence: AuthoredTargetVerificationEvidence): string =>
+  evidence._tag === "TargetVerificationPassed"
+    ? `The story expects public verification plan ${evidence.planId} to pass candidate ${evidence.candidateCommit} for task ${evidence.taskId}.`
+    : `The story expects public verification plan ${evidence.planId} to stop candidate ${evidence.candidateCommit} with ${evidence.outcome} for task ${evidence.taskId}.`
+
 const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string => {
+  if (isTargetPromotionEvidence(evidence)) return targetPromotionEvidenceLyric(evidence)
+  if (isTargetVerificationEvidence(evidence)) return targetVerificationEvidenceLyric(evidence)
   switch (evidence._tag) {
     case "AcceptedResultIntegrationResponsibilityBegan":
       return `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
@@ -25,10 +61,6 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
       return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
     case "IntegrationCandidateConstructed":
       return `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
-    case "TargetVerificationPassed":
-      return `The story expects public verification plan ${evidence.planId} to pass candidate ${evidence.candidateCommit} for task ${evidence.taskId}.`
-    case "TargetVerificationStopped":
-      return `The story expects public verification plan ${evidence.planId} to stop candidate ${evidence.candidateCommit} with ${evidence.outcome} for task ${evidence.taskId}.`
     case "PlannedAttemptExecutorWorkResponsibilityBegan":
       return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "PlannedAttemptExecutorWorkReported":
@@ -171,6 +203,14 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       return `Git returns ${item.observation._tag} for the explicitly submitted candidate.`
     case "TargetVerificationReturned":
       return `The target repository's public verification wrapper returns ${item.result._tag}.`
+    case "TargetPromotionCompareAndSetReturned":
+      return `Git returns ${item.result._tag} for the exact expected-head compare-and-set.`
+    case "TargetPromotionCompareAndSetResponseLost":
+      return `Git may have applied the exact compare-and-set, but its response is lost: ${item.detail}`
+    case "TargetPromotionGitReadReturned":
+      return `Git returns ${item.observation._tag} from the current-head candidate-ancestry read.`
+    case "TargetPromotionGitReadFailed":
+      return `Git cannot complete the current-head candidate-ancestry read: ${item.detail}`
     case "TaskWorkSpecificationReadReturned":
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":

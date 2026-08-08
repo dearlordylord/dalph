@@ -1018,12 +1018,14 @@ const candidateVerificationEvidenceFrom = (
     verificationResult._tag === "Passed"
       ? {
           _tag: "TargetVerificationPassed" as const,
+          /* v8 ignore next -- @preserve A Passed verification cassette is constructed only after its candidate commit has been authored. */
           candidateCommit: constructedCommit ?? "",
           planId: "public-checks-v1",
           taskId: "A"
         }
       : {
           _tag: "TargetVerificationStopped" as const,
+          /* v8 ignore next -- @preserve A stopped verification cassette is constructed only after its candidate commit has been authored. */
           candidateCommit: constructedCommit ?? "",
           outcome: verificationResult._tag,
           planId: "public-checks-v1",
@@ -1202,6 +1204,126 @@ export const candidateVerificationContradictionAuthoredCassette = candidateScena
   { _tag: "CorrelationContradiction" }
 )
 
+const promotionCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
+const promotionExpectedHead = "1111111111111111111111111111111111111111"
+
+const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unknown>, promotionEvidence: unknown) =>
+  Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    name,
+    story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item) =>
+      item._tag !== "ExpectedBehavior"
+        ? [item]
+        : [
+            ...promotionStory,
+            {
+              ...item,
+              /* v8 ignore next -- @preserve Promotion scenarios extend the maintained candidate cassette, whose assertion lens is non-null by construction. */
+              orchestration: item.orchestration === null ? null : [...item.orchestration, promotionEvidence]
+            }
+          ]
+    )
+  })
+
+/** Git accepts the one exact H -> M update after the verified candidate is sealed. */
+export const targetPromotionSuccessAuthoredCassette = promotionScenarioFrom(
+  "promotes verified M by exact compare-and-set and records exact ancestry",
+  [
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    },
+    { _tag: "TargetPromotionCompareAndSetReturned", result: { _tag: "Applied" } }
+  ],
+  {
+    _tag: "TargetPromotionSucceeded",
+    basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+    candidateCommit: promotionCandidateCommit,
+    expectedTargetHead: promotionExpectedHead,
+    observedTargetHead: promotionCandidateCommit,
+    observation: "CompareAndSetApplied",
+    taskId: "A"
+  }
+)
+
+/** Three lost mutation responses are each reconciled against H; exhaustion sends no fourth request. */
+export const targetPromotionAmbiguityExhaustionAuthoredCassette = promotionScenarioFrom(
+  "reconciles a lost promotion response and never sends a fourth request",
+  [
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    },
+    { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "attempt 1 response lost" },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    },
+    { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "attempt 2 response lost" },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    },
+    { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "attempt 3 response lost" },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    }
+  ],
+  {
+    _tag: "TargetPromotionNonConvergent",
+    attemptOrdinal: 3,
+    candidateCommit: promotionCandidateCommit,
+    lastObservation: "ExpectedHeadStillObserved",
+    taskId: "A"
+  }
+)
+
+/** The post-intent Git read sees H2, records stale evidence, and sends no compare-and-set. */
+export const targetPromotionStaleBeforeCompareAndSetAuthoredCassette = promotionScenarioFrom(
+  "records stale H2 and never overwrites it",
+  [
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: "2222222222222222222222222222222222222222" }
+    }
+  ],
+  {
+    _tag: "TargetPromotionStale",
+    basis: { _tag: "BeforeFirstAttempt" },
+    candidateCommit: promotionCandidateCommit,
+    expectedTargetHead: promotionExpectedHead,
+    observedTargetHead: "2222222222222222222222222222222222222222",
+    observation: "ReconciledCandidateNotInAncestry",
+    taskId: "A"
+  }
+)
+
+/** Git applied M but lost the response; the required read discovers M and sends no retry. */
+export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette = promotionScenarioFrom(
+  "discovers M in current target ancestry after losing the promotion response",
+  [
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+    },
+    { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "Git applied M but the response was lost" },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateCurrent", currentHeadSha: promotionCandidateCommit }
+    }
+  ],
+  {
+    _tag: "TargetPromotionSucceeded",
+    basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+    candidateCommit: promotionCandidateCommit,
+    expectedTargetHead: promotionExpectedHead,
+    observedTargetHead: promotionCandidateCommit,
+    observation: "ReconciledCandidateCurrent",
+    taskId: "A"
+  }
+)
+
 /** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
 export const candidateCorrectionExhaustionAuthoredCassette = candidateScenarioFrom(
   "candidate correction exhaustion preserves non-convergent work",
@@ -1237,6 +1359,11 @@ export const maintainedAuthoredCassetteCatalog = {
   candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
   candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
   candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+  targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
+  targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,
+  targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
+  targetPromotionLostResponseDiscoversCurrentCandidate:
+    targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

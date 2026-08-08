@@ -63,6 +63,21 @@ import {
   targetVerificationCorrelationFor,
   targetVerificationIntentRecordKey,
   targetVerificationRequestIdForCandidate,
+  TargetPromotionCompareAndSetFailure,
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
+  type TargetPromotionCompareAndSetResult,
+  TargetPromotionGit,
+  TargetPromotionGitReadFailure,
+  TargetPromotionGitReadObservation,
+  TargetPromotionIntendedEvent,
+  TargetPromotionVerification,
+  deriveTargetPromotionState,
+  runTargetPromotion,
+  targetPromotionAttemptIntentRecordKey,
+  targetPromotionIntentRecordKey,
+  targetPromotionRequestFor,
   workflowJournalEventVersion,
   type IntegrationCandidateAgentReport as CandidateReport,
   type IntegrationCandidateGitObservation as CandidateGitObservation,
@@ -70,13 +85,18 @@ import {
   type IntegrationTargetResourceController,
   type JournalRecord,
   type QueuedIntegrationResponsibility,
-  type StartedIntegrationResponsibility
+  type StartedIntegrationResponsibility,
+  type TargetPromotionRequest
 } from "@dalph/orchestrator"
 import { Effect, Layer, Schema } from "effect"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/accepted-result-integration.git"),
+  ref: IntegrationTargetRef.make("refs/heads/master")
+})
+const independentTarget = IntegrationTarget.make({
+  repository: GitRepositoryLocator.make("/repositories/accepted-result-integration-independent.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
 const correctionLimit = CandidateCorrectionLimit.make(1)
@@ -111,6 +131,7 @@ const SpecResult = Schema.Struct({
   continuationCount: ITFBigInt,
   correctionCount: ITFBigInt,
   expectedTargetHead: ITFBigInt,
+  integrationTarget: ITFBigInt,
   integrationSession: ITFBigInt,
   observedFirstParent: ITFBigInt,
   observedSecondParent: ITFBigInt,
@@ -135,7 +156,22 @@ const SpecResult = Schema.Struct({
   wrapperInvocationCount: ITFBigInt,
   reconciliationCount: ITFBigInt,
   promotionAuthorized: Schema.Boolean,
-  verificationReplacementCount: ITFBigInt
+  verificationReplacementCount: ITFBigInt,
+  promotionIntentRecorded: Schema.Boolean,
+  promotionAttemptCount: ITFBigInt,
+  promotionLastAttempt: ITFBigInt,
+  promotionFreshExactHeadReads: ITFBigInt,
+  promotionFreshExactHeadObservation: Schema.Boolean,
+  promotionTargetFactsCurrent: Schema.Boolean,
+  promotionExpectedHeadVerified: Schema.Boolean,
+  promotionGitObservation: Schema.Unknown,
+  promotionObservedTargetHead: ITFBigInt,
+  promotionCandidateAncestryProven: Schema.Boolean,
+  promotionResultRecorded: Schema.Boolean,
+  promotionResponseAmbiguous: Schema.Boolean,
+  promotionCompareAndSetRequested: Schema.Boolean,
+  promotionForceRequested: Schema.Boolean,
+  promotionEquivalentContentAccepted: Schema.Boolean
 })
 
 const SpecProjection = Schema.Struct({
@@ -187,6 +223,24 @@ type Phase =
   | "VerificationCorrelationContradiction"
   | "VerificationEvidenceFailure"
   | "PromotionPremise"
+  | "PromotionIntent"
+  | "PromotionAttemptIntended"
+  | "PromotionInFlight"
+  | "PromotionResponseLost"
+  | "PromotionReconciliation"
+  | "PromotionRetryReady"
+  | "PromotionReadPending"
+  | "PromotionSucceeded"
+  | "PromotionStale"
+  | "PromotionExhausted"
+
+type PromotionGitObservation =
+  | "NoPromotionGitObservation"
+  | "PromotionExactExpectedHead"
+  | "PromotionCandidateCurrent"
+  | "PromotionCandidateAncestor"
+  | "PromotionOtherHead"
+  | "PromotionUnreadableHead"
 
 type VerificationOutcome = "NoVerificationOutcome" | "Passed" | "Failed" | "Killed" | "TimedOut" | "Partial"
 
@@ -209,6 +263,7 @@ type ModelResult = {
   submittedCandidate: bigint
   candidateJournalPosition: bigint
   expectedTargetHead: bigint
+  integrationTarget: bigint
   acceptedResultCommit: bigint
   observedFirstParent: bigint
   observedSecondParent: bigint
@@ -223,6 +278,21 @@ type ModelResult = {
   verificationManifestSealed: boolean
   promotionAuthorized: boolean
   verificationReplacementCount: bigint
+  promotionIntentRecorded: boolean
+  promotionAttemptCount: bigint
+  promotionLastAttempt: bigint
+  promotionFreshExactHeadReads: bigint
+  promotionFreshExactHeadObservation: boolean
+  promotionTargetFactsCurrent: boolean
+  promotionExpectedHeadVerified: boolean
+  promotionGitObservation: PromotionGitObservation
+  promotionObservedTargetHead: bigint
+  promotionCandidateAncestryProven: boolean
+  promotionResultRecorded: boolean
+  promotionResponseAmbiguous: boolean
+  promotionCompareAndSetRequested: boolean
+  promotionForceRequested: boolean
+  promotionEquivalentContentAccepted: boolean
 }
 
 const initialModelResult = (id: bigint): ModelResult => ({
@@ -234,6 +304,7 @@ const initialModelResult = (id: bigint): ModelResult => ({
   submittedCandidate: 0n,
   candidateJournalPosition: 0n,
   expectedTargetHead: 0n,
+  integrationTarget: 1n,
   acceptedResultCommit: id + 20n,
   observedFirstParent: 0n,
   observedSecondParent: 0n,
@@ -255,7 +326,22 @@ const initialModelResult = (id: bigint): ModelResult => ({
   verificationEvidenceReread: false,
   verificationManifestSealed: false,
   promotionAuthorized: false,
-  verificationReplacementCount: 0n
+  verificationReplacementCount: 0n,
+  promotionIntentRecorded: false,
+  promotionAttemptCount: 0n,
+  promotionLastAttempt: 0n,
+  promotionFreshExactHeadReads: 0n,
+  promotionFreshExactHeadObservation: false,
+  promotionTargetFactsCurrent: false,
+  promotionExpectedHeadVerified: false,
+  promotionGitObservation: "NoPromotionGitObservation",
+  promotionObservedTargetHead: 0n,
+  promotionCandidateAncestryProven: false,
+  promotionResultRecorded: false,
+  promotionResponseAmbiguous: false,
+  promotionCompareAndSetRequested: false,
+  promotionForceRequested: false,
+  promotionEquivalentContentAccepted: false
 })
 
 const phaseFor = (
@@ -289,6 +375,17 @@ const phaseFor = (
   }
 }
 
+type PromotionCasStep = TargetPromotionCompareAndSetResult | TargetPromotionCompareAndSetFailure
+type PromotionReadStep = TargetPromotionGitReadObservation | TargetPromotionGitReadFailure
+
+type PromotionBoundaryObservation =
+  | { readonly _tag: "NoPromotionGitObservation" }
+  | { readonly _tag: "PromotionExactExpectedHead"; readonly head: bigint }
+  | { readonly _tag: "PromotionCandidateCurrent"; readonly head: bigint }
+  | { readonly _tag: "PromotionCandidateAncestor"; readonly head: bigint }
+  | { readonly _tag: "PromotionOtherHead"; readonly head: bigint }
+  | { readonly _tag: "PromotionUnreadableHead" }
+
 const acceptedResultIntegrationDriver = defineDriver(
   {
     acceptResultOne: {},
@@ -307,7 +404,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     queueAcceptedResultTwo: {},
     reacquireIntegrationTargetOne: {},
     reacquireIntegrationTargetTwo: {},
-    recoverCoordinator: {},
+    recoverCoordinatorStep: {},
     releaseForeignCorrelationTargetOne: {},
     releaseForeignCorrelationTargetTwo: {},
     reportForeignCorrelationOne: {},
@@ -325,6 +422,17 @@ const acceptedResultIntegrationDriver = defineDriver(
     reportVerificationCorrelationContradictionOne: {},
     reportVerificationEvidenceFailureOne: {},
     offerPromotionPremiseOne: {},
+    recordPromotionIntentOne: {},
+    recordPromotionAttemptIntentOne: {},
+    sendPromotionAttemptOne: {},
+    losePromotionAttemptResponseOne: {},
+    reconcilePromotionOne: {},
+    observePromotionCandidateCurrentOne: {},
+    observePromotionCandidateAncestorOne: {},
+    observePromotionExactExpectedHeadOne: {},
+    observePromotionOtherHeadOne: {},
+    observePromotionGitUnreadableOne: {},
+    assignResultTwoIndependentTargetOne: {},
     reportWithoutCandidateOne: {},
     reportWithoutCandidateTwo: {},
     startIntegrationOne: {},
@@ -363,6 +471,13 @@ const acceptedResultIntegrationDriver = defineDriver(
     let verificationRequestsSeen: ReadonlyArray<TargetVerificationCorrelation> = []
     let verificationReconciliations = new Map<bigint, bigint>()
     let failVerificationEvidenceRead = false
+    let promotionCasSteps: ReadonlyArray<PromotionCasStep> = []
+    let promotionReadSteps: ReadonlyArray<PromotionReadStep> = []
+    let promotionFreshExactHeadReads = new Map<bigint, bigint>()
+    let promotionLatestObservation = new Map<bigint, PromotionBoundaryObservation>()
+    let promotionTargetFacts = new Map<bigint, boolean>()
+    let promotionReadAccounting: "Count" | "Skip" = "Count"
+    let independentTargetTwo = false
 
     const modelResultFor = (id: bigint): ModelResult => {
       const result = modelResults.get(id)
@@ -406,7 +521,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         expectedTargetHead
       }))
       modelTargetHeadProof = expectedTargetHead
-      modelTargetReacquisitionRequired = false
+      modelTargetReacquisitionRequired = anotherResultRequiresTargetReacquisition(id)
     }
     const modelSubmitCandidate = (id: bigint, candidate: bigint): void => {
       updateModelResult(id, (result) => ({
@@ -466,17 +581,36 @@ const acceptedResultIntegrationDriver = defineDriver(
       updateModelResult(id, (result) => ({ ...result, phase: "DependencyWait", targetHeld: false }))
     }
     const modelRecoverCoordinator = (): void => {
+      const terminalPromotionPhases = new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"])
+      const requiresFreshAuthorityFacts = [...modelResults.values()].some(
+        (result) => result.phase !== "NoAcceptedResult" && !terminalPromotionPhases.has(result.phase)
+      )
       updateModelResults((result) => ({
         ...result,
-        phase: result.phase === "CorrelationContradictionReleased" ? "CorrelationContradiction" : result.phase,
+        phase:
+          result.phase === "CorrelationContradictionReleased"
+            ? "CorrelationContradiction"
+            : result.phase === "PromotionAttemptIntended" ||
+                result.phase === "PromotionInFlight" ||
+                result.phase === "PromotionReconciliation" ||
+                result.phase === "PromotionRetryReady"
+              ? "PromotionResponseLost"
+              : result.phase === "PromotionReadPending"
+                ? result.promotionAttemptCount === 0n
+                  ? "PromotionIntent"
+                  : "PromotionResponseLost"
+                : result.phase,
+        promotionTargetFactsCurrent: result.phase.startsWith("Promotion") ? false : result.promotionTargetFactsCurrent,
         targetHeld: false
       }))
       recovered = true
       modelRestartCount += 1n
-      trackerFactsCurrent = false
-      modelTargetFactsCurrent = false
-      modelTargetHeadProof = 0n
-      modelTargetReacquisitionRequired = true
+      if (requiresFreshAuthorityFacts) {
+        trackerFactsCurrent = false
+        modelTargetFactsCurrent = false
+        modelTargetHeadProof = 0n
+      }
+      modelTargetReacquisitionRequired = requiresFreshAuthorityFacts
     }
     const modelObserveTrackerFacts = (): void => {
       trackerFactsCurrent = true
@@ -485,10 +619,31 @@ const acceptedResultIntegrationDriver = defineDriver(
       const result = modelResultFor(id)
       modelTargetFactsCurrent = true
       modelTargetHeadProof = result.expectedTargetHead === 0n ? id + 10n : result.expectedTargetHead
+      if (result.phase.startsWith("Promotion")) {
+        updateModelResult(id, (current) => ({ ...current, promotionTargetFactsCurrent: true }))
+      }
     }
+    const anotherResultRequiresTargetReacquisition = (id: bigint): boolean =>
+      [...modelResults].some(
+        ([other, result]) =>
+          other !== id &&
+          !result.targetHeld &&
+          [
+            "Started",
+            "CandidatePending",
+            "CorrectionRequired",
+            "CandidateReady",
+            "VerificationIntent",
+            "VerificationInvoked",
+            "VerificationResponseLost",
+            "VerificationReconciling",
+            "VerificationPassedPendingSeal",
+            "PromotionIntent"
+          ].includes(result.phase)
+      )
     const modelReacquireIntegrationTarget = (id: bigint): void => {
       updateModelResult(id, (result) => ({ ...result, targetHeld: true }))
-      modelTargetReacquisitionRequired = false
+      modelTargetReacquisitionRequired = anotherResultRequiresTargetReacquisition(id)
     }
     const modelRecordVerificationIntent = (id: bigint): void => {
       updateModelResult(id, (result) => ({
@@ -570,6 +725,144 @@ const acceptedResultIntegrationDriver = defineDriver(
     const modelOfferPromotionPremise = (id: bigint): void => {
       updateModelResult(id, (result) => ({ ...result, phase: "PromotionPremise" }))
     }
+    const modelRecordPromotionIntent = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionIntent",
+        targetHeld: true,
+        promotionIntentRecorded: true,
+        promotionAttemptCount: 0n,
+        promotionLastAttempt: 0n,
+        promotionFreshExactHeadReads: 0n,
+        promotionFreshExactHeadObservation: false,
+        promotionTargetFactsCurrent: false,
+        promotionExpectedHeadVerified: true,
+        promotionGitObservation: "NoPromotionGitObservation",
+        promotionObservedTargetHead: 0n,
+        promotionCandidateAncestryProven: false,
+        promotionResultRecorded: false,
+        promotionResponseAmbiguous: false,
+        promotionCompareAndSetRequested: false,
+        promotionForceRequested: false,
+        promotionEquivalentContentAccepted: false
+      }))
+    }
+    const modelRecordPromotionAttemptIntent = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionAttemptIntended",
+        promotionAttemptCount: result.promotionAttemptCount + 1n,
+        promotionLastAttempt: result.promotionLastAttempt + 1n,
+        promotionFreshExactHeadObservation: false,
+        promotionGitObservation: "NoPromotionGitObservation",
+        promotionObservedTargetHead: 0n,
+        promotionResponseAmbiguous: false,
+        promotionCompareAndSetRequested: false,
+        promotionForceRequested: false,
+        promotionEquivalentContentAccepted: false
+      }))
+    }
+    const modelSendPromotionAttempt = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionInFlight",
+        promotionCompareAndSetRequested: true
+      }))
+    }
+    const modelLosePromotionResponse = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionResponseLost",
+        targetHeld: false,
+        promotionFreshExactHeadObservation: false,
+        promotionTargetFactsCurrent: false,
+        promotionGitObservation: "NoPromotionGitObservation",
+        promotionObservedTargetHead: 0n,
+        promotionResponseAmbiguous: true
+      }))
+    }
+    const modelReconcilePromotion = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionReconciliation",
+        targetHeld: true,
+        promotionFreshExactHeadObservation: false,
+        promotionTargetFactsCurrent: false,
+        promotionGitObservation: "NoPromotionGitObservation",
+        promotionObservedTargetHead: 0n
+      }))
+    }
+    const modelObservePromotionCandidateCurrent = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionSucceeded",
+        targetHeld: false,
+        promotionGitObservation: "PromotionCandidateCurrent",
+        promotionObservedTargetHead: result.submittedCandidate,
+        promotionCandidateAncestryProven: true,
+        promotionResultRecorded: true,
+        promotionResponseAmbiguous: false
+      }))
+    }
+    const modelObservePromotionCandidateAncestor = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionSucceeded",
+        targetHeld: false,
+        promotionGitObservation: "PromotionCandidateAncestor",
+        promotionObservedTargetHead: result.submittedCandidate + 100n,
+        promotionCandidateAncestryProven: true,
+        promotionResultRecorded: true,
+        promotionResponseAmbiguous: false
+      }))
+    }
+    const modelObservePromotionExactExpectedHead = (id: bigint): void => {
+      updateModelResult(id, (result) => {
+        const reads = result.promotionFreshExactHeadReads + 1n
+        const exhausted = result.promotionAttemptCount >= 3n
+        return {
+          ...result,
+          phase: exhausted ? "PromotionExhausted" : "PromotionRetryReady",
+          targetHeld: !exhausted,
+          promotionFreshExactHeadReads: reads,
+          promotionFreshExactHeadObservation: true,
+          promotionTargetFactsCurrent: true,
+          promotionExpectedHeadVerified: true,
+          promotionGitObservation: "PromotionExactExpectedHead",
+          promotionObservedTargetHead: result.expectedTargetHead,
+          promotionResultRecorded: false,
+          promotionResponseAmbiguous: false
+        }
+      })
+    }
+    const modelObservePromotionOtherHead = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionStale",
+        targetHeld: false,
+        promotionGitObservation: "PromotionOtherHead",
+        promotionObservedTargetHead: result.expectedTargetHead + 1n,
+        promotionCandidateAncestryProven: false,
+        promotionResultRecorded: true,
+        promotionResponseAmbiguous: false
+      }))
+    }
+    const modelObservePromotionGitUnreadable = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: result.promotionAttemptCount >= 3n ? "PromotionExhausted" : "PromotionReadPending",
+        targetHeld: false,
+        promotionTargetFactsCurrent: false,
+        promotionGitObservation: "PromotionUnreadableHead",
+        promotionObservedTargetHead: 0n,
+        promotionCandidateAncestryProven: false,
+        promotionResultRecorded: false
+      }))
+    }
+    const modelAssignResultTwoIndependentTarget = (): void => {
+      independentTargetTwo = true
+      updateModelResult(2n, (result) => ({ ...result, integrationTarget: 2n }))
+    }
 
     const append = InRunJournal.of({
       append: (_requestedRunId, key, event) =>
@@ -606,6 +899,61 @@ const acceptedResultIntegrationDriver = defineDriver(
       Layer.succeed(IntegrationCandidateGit, candidateGit)
     )
     const journalLayer = Layer.succeed(InRunJournal, append)
+    const promotionIdForRequest = (request: TargetPromotionRequest): bigint =>
+      numericCommit(request.candidateCorrelation.acceptedResultCommit) - 20n
+    const recordPromotionReadObservation = (request: TargetPromotionRequest, step: PromotionReadStep): void => {
+      if (promotionReadAccounting === "Skip") {
+        promotionReadAccounting = "Count"
+        return
+      }
+      const id = promotionIdForRequest(request)
+      const observation: PromotionBoundaryObservation =
+        step._tag === "TargetPromotionGitReadFailure"
+          ? { _tag: "PromotionUnreadableHead" }
+          : step._tag === "CandidateCurrent"
+            ? { _tag: "PromotionCandidateCurrent", head: numericCommit(step.currentHeadSha) }
+            : step._tag === "CandidateAncestor"
+              ? { _tag: "PromotionCandidateAncestor", head: numericCommit(step.currentHeadSha) }
+              : step.currentHeadSha === request.expectedTargetHead
+                ? { _tag: "PromotionExactExpectedHead", head: numericCommit(step.currentHeadSha) }
+                : { _tag: "PromotionOtherHead", head: numericCommit(step.currentHeadSha) }
+      promotionLatestObservation = new Map(promotionLatestObservation).set(id, observation)
+      if (observation._tag === "PromotionExactExpectedHead") {
+        promotionFreshExactHeadReads = new Map(promotionFreshExactHeadReads).set(
+          id,
+          (promotionFreshExactHeadReads.get(id) ?? 0n) + 1n
+        )
+      }
+      promotionReadAccounting = "Count"
+    }
+    const targetPromotionGit = TargetPromotionGit.of({
+      compareAndSet: (request) =>
+        Effect.suspend(() => {
+          const step = promotionCasSteps[0]
+          promotionCasSteps = promotionCasSteps.slice(1)
+          if (step === undefined) return Effect.die("model action did not provide a promotion compare-and-set response")
+          const id = promotionIdForRequest(request)
+          if (
+            request.expectedTargetHead !== commitOf(id + 10n) ||
+            request.candidateCorrelation.expectedTargetHead !== request.expectedTargetHead ||
+            (request.candidateCommit !== commitOf(id + 30n) &&
+              request.candidateCommit !== commitOf(id + 31n) &&
+              request.candidateCommit !== commitOf(id + 32n)) ||
+            request.verificationManifest.byteLength <= 0
+          ) {
+            return Effect.die("promotion compare-and-set request was not bound to the exact sealed candidate")
+          }
+          return step._tag === "TargetPromotionCompareAndSetFailure" ? Effect.fail(step) : Effect.succeed(step)
+        }),
+      read: (request) =>
+        Effect.suspend(() => {
+          const step = promotionReadSteps[0]
+          promotionReadSteps = promotionReadSteps.slice(1)
+          if (step === undefined) return Effect.die("model action did not provide a promotion Git observation")
+          recordPromotionReadObservation(request, step)
+          return step._tag === "TargetPromotionGitReadFailure" ? Effect.fail(step) : Effect.succeed(step)
+        })
+    })
     const requireResources = (): Effect.Effect<IntegrationTargetResourceController> =>
       resources === undefined ? Effect.die("integration resources must be initialized") : Effect.succeed(resources)
     const admission = () => deriveIntegrationAdmission(records)
@@ -619,6 +967,13 @@ const acceptedResultIntegrationDriver = defineDriver(
       }
       return responsibility
     }
+    const physicalResponsibilityFor = <A extends QueuedIntegrationResponsibility | StartedIntegrationResponsibility>(
+      id: bigint,
+      responsibility: A
+    ): A =>
+      id === 2n && independentTargetTwo
+        ? ({ ...responsibility, integrationTarget: independentTarget } as A)
+        : responsibility
     const lineageFor = (id: bigint) =>
       TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -742,6 +1097,50 @@ const acceptedResultIntegrationDriver = defineDriver(
         TargetVerificationIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
       )
     }
+    const promotionCandidateFor = (id: bigint) => verificationCandidateFor(id)
+    const promotionRequestFor = (id: bigint): TargetPromotionRequest => {
+      const candidate = promotionCandidateFor(id)
+      const verification = deriveTargetVerificationState(records, candidate)
+      if (verification?._tag !== "VerificationPassed") {
+        return Effect.runSync(Effect.die(`result ${id} has no sealed passing verification for promotion`))
+      }
+      return targetPromotionRequestFor(
+        candidate,
+        TargetPromotionVerification.make({ correlation: verification.correlation, manifest: verification.manifest })
+      )
+    }
+    const runConcretePromotion = (id: bigint) => {
+      const candidate = promotionCandidateFor(id)
+      const verification = deriveTargetVerificationState(records, candidate)
+      if (verification?._tag !== "VerificationPassed") {
+        return Effect.die(`result ${id} has no sealed passing verification for promotion`)
+      }
+      return runTargetPromotion(candidate, verification).pipe(
+        Effect.provideService(InRunJournal, append),
+        Effect.provideService(TargetPromotionGit, targetPromotionGit)
+      )
+    }
+    const readConcretePromotion = (id: bigint) => {
+      const request = promotionRequestFor(id)
+      return Effect.gen(function* () {
+        const git = yield* TargetPromotionGit
+        return yield* git.read(request)
+      }).pipe(Effect.provideService(TargetPromotionGit, targetPromotionGit))
+    }
+    const stagePromotionRead = (step: PromotionReadStep): void => {
+      promotionReadSteps = [step]
+    }
+    const stagePromotionCasFailure = (id: bigint): void => {
+      const request = promotionRequestFor(id)
+      promotionCasSteps = [
+        new TargetPromotionCompareAndSetFailure({
+          candidateCommit: request.candidateCommit,
+          detail: "controlled compare-and-set response was lost",
+          expectedHead: request.expectedTargetHead,
+          target: request.integrationTarget
+        })
+      ]
+    }
     const submit = (id: bigint, candidate: bigint) =>
       Effect.gen(function* () {
         const correlation = correlationFor(id)
@@ -767,7 +1166,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         })
         const state = yield* continueCandidate(id)
         if (state._tag === "CandidateCorrectionLimitReached") {
-          yield* (yield* requireResources()).release(responsibilityFor(id))
+          yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
         }
         if (exact) modelObserveExactCandidate(id)
         else modelObserveInvalidCandidate(id)
@@ -786,7 +1185,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (reports >= continuationLimit) {
           const state = yield* continueCandidate(id)
           if (state._tag === "CandidateContinuationLimitReached") {
-            yield* (yield* requireResources()).release(responsibilityFor(id))
+            yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
           }
         }
         modelReportWithoutCandidate(id)
@@ -833,7 +1232,11 @@ const acceptedResultIntegrationDriver = defineDriver(
         modelGitReadFails()
       })
     const queueAcceptedResult = (id: bigint) =>
-      queueAcceptedResultIntegrationResponsibility(idFor(id), acceptedResultOf(id), target).pipe(
+      queueAcceptedResultIntegrationResponsibility(
+        idFor(id),
+        acceptedResultOf(id),
+        id === 2n && independentTargetTwo ? independentTarget : target
+      ).pipe(
         Effect.provide(journalLayer),
         Effect.orDie,
         Effect.tap(() => Effect.sync(() => modelQueueAcceptedResult(id)))
@@ -841,7 +1244,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     const releaseForeignCorrelationTarget = (id: bigint) =>
       Effect.gen(function* () {
         const responsibility = responsibilityFor(id)
-        yield* (yield* requireResources()).release(responsibility)
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibility))
         releasedContradictions = new Set(releasedContradictions).add(id)
         modelReleaseForeignCorrelationTarget(id)
       })
@@ -849,8 +1252,9 @@ const acceptedResultIntegrationDriver = defineDriver(
       Effect.gen(function* () {
         const responsibility = responsibilityFor(id)
         const controller = yield* requireResources()
-        yield* controller.acquire(responsibility).pipe(Effect.orDie)
-        yield* controller.publishAcceptedOwnership(responsibility)
+        const physicalResponsibility = physicalResponsibilityFor(id, responsibility)
+        yield* controller.acquire(physicalResponsibility).pipe(Effect.orDie)
+        yield* controller.publishAcceptedOwnership(physicalResponsibility)
         modelReacquireIntegrationTarget(id)
       })
     const reportForeignCorrelation = (id: bigint) =>
@@ -874,25 +1278,40 @@ const acceptedResultIntegrationDriver = defineDriver(
         // start. Current resource facts remove settled starts before applying
         // the production FIFO selector, as the delivery frontier does.
         const currentAdmission = {
-          responsibilities: admission().responsibilities.filter(
-            (responsibility) =>
-              responsibility._tag === "QueuedIntegrationResponsibility" ||
-              snapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
-          )
+          responsibilities: admission()
+            .responsibilities.map((responsibility) =>
+              responsibility.plannedAttempt.attemptId === idFor(2n).attemptId
+                ? physicalResponsibilityFor(2n, responsibility)
+                : responsibility
+            )
+            .filter(
+              (responsibility) =>
+                responsibility._tag === "QueuedIntegrationResponsibility" ||
+                snapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
+            )
         }
-        const queued = selectStartableIntegrationResponsibilities(currentAdmission).find(
-          (responsibility) => responsibility.plannedAttempt.attemptId === attempt.attemptId
-        )
+        const queued =
+          selectStartableIntegrationResponsibilities(currentAdmission).find(
+            (responsibility) => responsibility.plannedAttempt.attemptId === attempt.attemptId
+          ) ??
+          (id === 2n && independentTargetTwo
+            ? currentAdmission.responsibilities.find(
+                (responsibility): responsibility is QueuedIntegrationResponsibility =>
+                  responsibility._tag === "QueuedIntegrationResponsibility" &&
+                  responsibility.plannedAttempt.attemptId === attempt.attemptId
+              )
+            : undefined)
         if (queued === undefined) return yield* Effect.die(`result ${id} is not startable`)
-        yield* controller.acquire(queued).pipe(Effect.orDie)
-        yield* controller.publishAcceptedOwnership(queued)
+        const physicalQueued = physicalResponsibilityFor(id, queued)
+        yield* controller.acquire(physicalQueued).pipe(Effect.orDie)
+        yield* controller.publishAcceptedOwnership(physicalQueued)
         yield* startQueuedIntegration(queued).pipe(Effect.provide(journalLayer), Effect.orDie)
         modelStartIntegration(id)
       })
     const waitOnDependency = (id: bigint) =>
       Effect.gen(function* () {
         const responsibility = responsibilityFor(id)
-        yield* (yield* requireResources()).release(responsibility)
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibility))
         dependencyWaits = new Set(dependencyWaits).add(id)
         modelWaitOnDependency(id)
       })
@@ -927,7 +1346,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       Effect.gen(function* () {
         const state = yield* runConcreteVerification(id)
         if (state._tag !== "VerificationPassed") return yield* Effect.die("passing evidence was not sealed")
-        yield* (yield* requireResources()).release(responsibilityFor(id))
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
         modelRereadAndSealPassedVerification(id)
       })
     const reportDiagnostic = (id: bigint, outcome: "Failed" | "Killed" | "TimedOut" | "Partial", phase: Phase) =>
@@ -938,7 +1357,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (state._tag !== "VerificationStopped" || state.outcome !== outcome) {
           return yield* Effect.die(`diagnostic ${outcome} was not sealed`)
         }
-        yield* (yield* requireResources()).release(responsibilityFor(id))
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
         modelReportDiagnostic(id, phase, outcome)
       })
     const reportVerificationFailed = (id: bigint) => reportDiagnostic(id, "Failed", "VerificationFailed")
@@ -953,7 +1372,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (state._tag !== "VerificationContradicted") {
           return yield* Effect.die("foreign verification correlation was not stopped")
         }
-        yield* (yield* requireResources()).release(responsibilityFor(id))
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
         modelReportVerificationBoundaryFailure(id, "VerificationCorrelationContradiction")
       })
     const reportVerificationEvidenceFailure = (id: bigint) =>
@@ -966,11 +1385,194 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (!(failure instanceof EvidenceStoreFailure)) {
           return yield* Effect.die("incomplete verification evidence did not fail closed")
         }
-        yield* (yield* requireResources()).release(responsibilityFor(id))
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
         modelReportVerificationBoundaryFailure(id, "VerificationEvidenceFailure")
       })
     const offerPromotionPremise = (id: bigint) => Effect.sync(() => modelOfferPromotionPremise(id))
-    const observeTargetFacts = (id: bigint) => Effect.sync(() => modelObserveTargetFacts(id))
+    const recordPromotionIntent = (id: bigint) =>
+      Effect.gen(function* () {
+        const controller = yield* requireResources()
+        const responsibility = physicalResponsibilityFor(id, responsibilityFor(id))
+        yield* controller.acquire(responsibility).pipe(Effect.orDie)
+        yield* controller.publishAcceptedOwnership(responsibility)
+        const request = promotionRequestFor(id)
+        yield* append.append(
+          runId,
+          targetPromotionIntentRecordKey(request.requestId),
+          TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion })
+        )
+        modelRecordPromotionIntent(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, false)
+        promotionLatestObservation = new Map(promotionLatestObservation).set(id, { _tag: "NoPromotionGitObservation" })
+      })
+    const recordPromotionAttemptIntent = (id: bigint) =>
+      Effect.gen(function* () {
+        const request = promotionRequestFor(id)
+        const previousAttemptOrdinal = modelResultFor(id).promotionAttemptCount
+        const attemptOrdinal = TargetPromotionAttemptOrdinal.make(Number(previousAttemptOrdinal + 1n))
+        const reason =
+          previousAttemptOrdinal === 0n
+            ? TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: request.expectedTargetHead })
+            : TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
+                observedHeadSha: request.expectedTargetHead,
+                previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(Number(previousAttemptOrdinal))
+              })
+        yield* append.append(
+          runId,
+          targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
+          TargetPromotionAttemptIntendedEvent.make({
+            attemptOrdinal,
+            correlation: request,
+            reason,
+            version: workflowJournalEventVersion
+          })
+        )
+        modelRecordPromotionAttemptIntent(id)
+        promotionLatestObservation = new Map(promotionLatestObservation).set(id, { _tag: "NoPromotionGitObservation" })
+      })
+    const sendPromotionAttempt = (id: bigint) =>
+      Effect.gen(function* () {
+        stagePromotionCasFailure(id)
+        const request = promotionRequestFor(id)
+        const result = yield* Effect.exit(targetPromotionGit.compareAndSet(request))
+        if (result._tag !== "Failure") {
+          return yield* Effect.die("promotion compare-and-set did not expose the controlled ambiguous response")
+        }
+        promotionLatestObservation = new Map(promotionLatestObservation).set(id, { _tag: "NoPromotionGitObservation" })
+        modelSendPromotionAttempt(id)
+      })
+    const losePromotionResponse = (id: bigint) =>
+      Effect.gen(function* () {
+        yield* (yield* requireResources()).release(physicalResponsibilityFor(id, responsibilityFor(id)))
+        modelLosePromotionResponse(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, false)
+        promotionLatestObservation = new Map(promotionLatestObservation).set(id, { _tag: "NoPromotionGitObservation" })
+      })
+    const reconcilePromotion = (id: bigint) =>
+      Effect.gen(function* () {
+        const controller = yield* requireResources()
+        const responsibility = physicalResponsibilityFor(id, responsibilityFor(id))
+        yield* controller.acquire(responsibility).pipe(Effect.orDie)
+        yield* controller.publishAcceptedOwnership(responsibility)
+        modelReconcilePromotion(id)
+        modelTargetReacquisitionRequired = anotherResultRequiresTargetReacquisition(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, false)
+        promotionLatestObservation = new Map(promotionLatestObservation).set(id, { _tag: "NoPromotionGitObservation" })
+      })
+    const observePromotionCandidate = (id: bigint, observation: "Current" | "Ancestor") =>
+      Effect.gen(function* () {
+        const request = promotionRequestFor(id)
+        stagePromotionRead(
+          observation === "Current"
+            ? TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
+            : TargetPromotionGitReadObservation.cases.CandidateAncestor.make({
+                currentHeadSha: commitOf(modelResultFor(id).submittedCandidate + 100n)
+              })
+        )
+        promotionReadAccounting = "Count"
+        const controller = yield* requireResources()
+        const result = yield* controller.withPermit(
+          physicalResponsibilityFor(id, responsibilityFor(id)),
+          runConcretePromotion(id)
+        )
+        if (result._tag !== "PromotionSucceeded") {
+          return yield* Effect.die(`promotion ${observation.toLowerCase()} observation did not prove success`)
+        }
+        yield* controller.release(physicalResponsibilityFor(id, responsibilityFor(id)))
+        if (observation === "Current") modelObservePromotionCandidateCurrent(id)
+        else modelObservePromotionCandidateAncestor(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, modelResultFor(id).promotionTargetFactsCurrent)
+      })
+    const observePromotionExactExpectedHead = (id: bigint) =>
+      Effect.gen(function* () {
+        const request = promotionRequestFor(id)
+        stagePromotionRead(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha: request.expectedTargetHead
+          })
+        )
+        promotionReadAccounting = "Count"
+        const controller = yield* requireResources()
+        const attemptCount = modelResultFor(id).promotionAttemptCount
+        if (attemptCount >= 3n) {
+          const result = yield* controller.withPermit(
+            physicalResponsibilityFor(id, responsibilityFor(id)),
+            runConcretePromotion(id)
+          )
+          if (result._tag !== "PromotionNonConvergent") {
+            return yield* Effect.die("third exact expected-head read did not settle non-convergence")
+          }
+        } else {
+          const result = yield* controller.withPermit(
+            physicalResponsibilityFor(id, responsibilityFor(id)),
+            readConcretePromotion(id)
+          )
+          if (result._tag !== "CandidateNotInAncestry" || result.currentHeadSha !== request.expectedTargetHead) {
+            return yield* Effect.die("promotion retry was not authorized by a fresh exact expected-head read")
+          }
+        }
+        modelTargetFactsCurrent = true
+        modelTargetHeadProof = modelResultFor(id).expectedTargetHead
+        modelObservePromotionExactExpectedHead(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, true)
+        if (modelResultFor(id).phase === "PromotionExhausted") {
+          yield* controller.release(physicalResponsibilityFor(id, responsibilityFor(id)))
+        }
+      })
+    const observePromotionOtherHead = (id: bigint) =>
+      Effect.gen(function* () {
+        const request = promotionRequestFor(id)
+        stagePromotionRead(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha: commitOf(numericCommit(request.expectedTargetHead) + 1n)
+          })
+        )
+        promotionReadAccounting = "Count"
+        const controller = yield* requireResources()
+        const result = yield* controller.withPermit(
+          physicalResponsibilityFor(id, responsibilityFor(id)),
+          runConcretePromotion(id)
+        )
+        if (result._tag !== "PromotionStale") {
+          return yield* Effect.die("other exact target head did not settle stale promotion")
+        }
+        yield* controller.release(physicalResponsibilityFor(id, responsibilityFor(id)))
+        modelObservePromotionOtherHead(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, modelResultFor(id).promotionTargetFactsCurrent)
+      })
+    const observePromotionGitUnreadable = (id: bigint) =>
+      Effect.gen(function* () {
+        const request = promotionRequestFor(id)
+        stagePromotionRead(
+          new TargetPromotionGitReadFailure({
+            candidateCommit: request.candidateCommit,
+            detail: "controlled target head and ancestry read was unavailable",
+            target: request.integrationTarget
+          })
+        )
+        promotionReadAccounting = "Count"
+        const controller = yield* requireResources()
+        const attemptCount = modelResultFor(id).promotionAttemptCount
+        const result = yield* Effect.exit(
+          controller.withPermit(physicalResponsibilityFor(id, responsibilityFor(id)), runConcretePromotion(id))
+        )
+        if (attemptCount >= 3n) {
+          if (result._tag !== "Success" || result.value._tag !== "PromotionNonConvergent") {
+            return yield* Effect.die("unreadable third promotion read did not settle non-convergence")
+          }
+        } else if (result._tag !== "Failure") {
+          return yield* Effect.die("unreadable promotion read unexpectedly changed the target")
+        }
+        yield* controller.release(physicalResponsibilityFor(id, responsibilityFor(id)))
+        modelObservePromotionGitUnreadable(id)
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, false)
+      })
+    const assignResultTwoIndependentTarget = () => Effect.sync(() => modelAssignResultTwoIndependentTarget())
+    const observeTargetFacts = (id: bigint) =>
+      Effect.sync(() => {
+        promotionTargetFacts = new Map(promotionTargetFacts).set(id, modelResultFor(id).phase.startsWith("Promotion"))
+        modelObserveTargetFacts(id)
+      })
 
     const concreteVerificationProjectionFor = (id: bigint, targetHeld: boolean): Partial<ModelResult> => {
       const candidateRecord = records.findLast(
@@ -1049,6 +1651,89 @@ const acceptedResultIntegrationDriver = defineDriver(
               : -1n
         },
         wrapperInvocationCount: BigInt(requestIdsSeen.size)
+      }
+    }
+    const concretePromotionProjectionFor = (id: bigint, targetHeld: boolean): Partial<ModelResult> => {
+      const candidateRecord = records.findLast(
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructed" && event.correlation.attemptId === idFor(id).attemptId
+      )
+      if (candidateRecord?.event._tag !== "IntegrationCandidateConstructed") return {}
+      const candidate = {
+        candidateCommit: candidateRecord.event.candidateCommit,
+        constructedAt: candidateRecord.position,
+        correlation: candidateRecord.event.correlation
+      }
+      const verification = deriveTargetVerificationState(records, candidate)
+      if (verification?._tag !== "VerificationPassed") return {}
+      const request = targetPromotionRequestFor(
+        candidate,
+        TargetPromotionVerification.make({ correlation: verification.correlation, manifest: verification.manifest })
+      )
+      const intent = records.findLast(
+        ({ event }) => event._tag === "TargetPromotionIntended" && event.correlation.requestId === request.requestId
+      )
+      if (intent?.event._tag !== "TargetPromotionIntended") return {}
+      const state = deriveTargetPromotionState(records, request)
+      const attempts = records.flatMap(({ event }) =>
+        event._tag === "TargetPromotionAttemptIntended" && event.correlation.requestId === request.requestId
+          ? [event]
+          : []
+      )
+      const lastAttempt = attempts.at(-1)
+      const latest = promotionLatestObservation.get(id)
+      let promotionGitObservation: PromotionGitObservation = latest?._tag ?? "NoPromotionGitObservation"
+      let promotionObservedTargetHead = latest !== undefined && "head" in latest ? latest.head : 0n
+      let promotionCandidateAncestryProven = false
+      let promotionResultRecorded = false
+      let promotionPhase = modelResultFor(id).phase
+      if (state?._tag === "PromotionSucceeded") {
+        promotionPhase = "PromotionSucceeded"
+        promotionCandidateAncestryProven = true
+        promotionResultRecorded = true
+        promotionGitObservation =
+          state.observation._tag === "ReconciledCandidateAncestor"
+            ? "PromotionCandidateAncestor"
+            : "PromotionCandidateCurrent"
+        promotionObservedTargetHead = numericCommit(state.observation.targetHeadSha)
+      } else if (state?._tag === "PromotionStale") {
+        promotionPhase = "PromotionStale"
+        promotionResultRecorded = true
+        promotionGitObservation = "PromotionOtherHead"
+        promotionObservedTargetHead = numericCommit(
+          state.observation._tag === "CompareAndSetRejected"
+            ? state.observation.observedHeadSha
+            : state.observation.observedHeadSha
+        )
+      } else if (state?._tag === "PromotionNonConvergent") {
+        promotionPhase = "PromotionExhausted"
+        promotionGitObservation =
+          state.lastObservation._tag === "ExpectedHeadStillObserved"
+            ? "PromotionExactExpectedHead"
+            : "PromotionUnreadableHead"
+        promotionObservedTargetHead =
+          state.lastObservation._tag === "ExpectedHeadStillObserved"
+            ? numericCommit(state.lastObservation.observedHeadSha)
+            : 0n
+      }
+      return {
+        phase: promotionPhase,
+        targetHeld,
+        promotionIntentRecorded: true,
+        promotionAttemptCount: BigInt(attempts.length),
+        promotionLastAttempt: lastAttempt === undefined ? 0n : BigInt(lastAttempt.attemptOrdinal),
+        promotionFreshExactHeadReads: promotionFreshExactHeadReads.get(id) ?? 0n,
+        promotionFreshExactHeadObservation: promotionLatestObservation.get(id)?._tag === "PromotionExactExpectedHead",
+        promotionTargetFactsCurrent: promotionTargetFacts.get(id) ?? false,
+        promotionExpectedHeadVerified: request.expectedTargetHead === candidate.correlation.expectedTargetHead,
+        promotionGitObservation,
+        promotionObservedTargetHead,
+        promotionCandidateAncestryProven,
+        promotionResultRecorded,
+        promotionResponseAmbiguous: modelResultFor(id).promotionResponseAmbiguous,
+        promotionCompareAndSetRequested: modelResultFor(id).promotionCompareAndSetRequested,
+        promotionForceRequested: false,
+        promotionEquivalentContentAccepted: false
       }
     }
 
@@ -1134,6 +1819,7 @@ const acceptedResultIntegrationDriver = defineDriver(
                     ? BigInt(candidate.correctionCount)
                     : BigInt(invalidObservations.length),
                 expectedTargetHead: numericCommit(correlation?.expectedTargetHead),
+                integrationTarget: 1n,
                 integrationSession: correlation === undefined ? 0n : id,
                 observedFirstParent: numericCommit(parents[0]),
                 observedSecondParent: numericCommit(parents[1]),
@@ -1156,6 +1842,10 @@ const acceptedResultIntegrationDriver = defineDriver(
                   observedResult,
                   modelResultFor(id),
                   concreteVerificationProjectionFor(
+                    id,
+                    queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
+                  ),
+                  concretePromotionProjectionFor(
                     id,
                     queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
                   )
@@ -1190,6 +1880,13 @@ const acceptedResultIntegrationDriver = defineDriver(
           verificationRequestsSeen = []
           verificationReconciliations = new Map()
           failVerificationEvidenceRead = false
+          promotionCasSteps = []
+          promotionReadSteps = []
+          promotionFreshExactHeadReads = new Map()
+          promotionLatestObservation = new Map()
+          promotionTargetFacts = new Map()
+          promotionReadAccounting = "Count"
+          independentTargetTwo = false
         }),
       observeExactCandidateOne: () => observe(1n, true),
       observeExactCandidateTwo: () => observe(2n, true),
@@ -1206,10 +1903,23 @@ const acceptedResultIntegrationDriver = defineDriver(
       queueAcceptedResultTwo: () => queueAcceptedResult(2n),
       reacquireIntegrationTargetOne: () => reacquireIntegrationTarget(1n),
       reacquireIntegrationTargetTwo: () => reacquireIntegrationTarget(2n),
-      recoverCoordinator: () =>
+      recoverCoordinatorStep: () =>
         Effect.gen(function* () {
+          const terminalPromotionPhases = new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"])
           resources = yield* makeIntegrationTargetResourceController()
           releasedContradictions = new Set()
+          promotionCasSteps = []
+          promotionReadSteps = []
+          promotionReadAccounting = "Count"
+          promotionLatestObservation = new Map(
+            [...promotionLatestObservation].map(([id, observation]) => [
+              id,
+              terminalPromotionPhases.has(modelResultFor(id).phase)
+                ? observation
+                : { _tag: "NoPromotionGitObservation" }
+            ])
+          )
+          promotionTargetFacts = new Map([...promotionTargetFacts].map(([id]) => [id, false]))
           modelRecoverCoordinator()
         }),
       releaseForeignCorrelationTargetOne: () => releaseForeignCorrelationTarget(1n),
@@ -1229,6 +1939,17 @@ const acceptedResultIntegrationDriver = defineDriver(
       reportVerificationCorrelationContradictionOne: () => reportVerificationCorrelationContradiction(1n),
       reportVerificationEvidenceFailureOne: () => reportVerificationEvidenceFailure(1n),
       offerPromotionPremiseOne: () => offerPromotionPremise(1n),
+      recordPromotionIntentOne: () => recordPromotionIntent(1n),
+      recordPromotionAttemptIntentOne: () => recordPromotionAttemptIntent(1n),
+      sendPromotionAttemptOne: () => sendPromotionAttempt(1n),
+      losePromotionAttemptResponseOne: () => losePromotionResponse(1n),
+      reconcilePromotionOne: () => reconcilePromotion(1n),
+      observePromotionCandidateCurrentOne: () => observePromotionCandidate(1n, "Current"),
+      observePromotionCandidateAncestorOne: () => observePromotionCandidate(1n, "Ancestor"),
+      observePromotionExactExpectedHeadOne: () => observePromotionExactExpectedHead(1n),
+      observePromotionOtherHeadOne: () => observePromotionOtherHead(1n),
+      observePromotionGitUnreadableOne: () => observePromotionGitUnreadable(1n),
+      assignResultTwoIndependentTargetOne: () => assignResultTwoIndependentTarget(),
       reportWithoutCandidateOne: () => reportWithoutCandidate(1n),
       reportWithoutCandidateTwo: () => reportWithoutCandidate(2n),
       startIntegrationOne: () => startIntegration(1n),
@@ -1249,7 +1970,7 @@ quintIt(
   {
     backend: "typescript",
     driverFactory: acceptedResultIntegrationDriver,
-    maxSteps: 20,
+    maxSteps: 35,
     nTraces: 100,
     seed: "57",
     spec: "specs/acceptedResultIntegration.qnt",
@@ -1264,7 +1985,8 @@ quintIt(
                 {
                   ...result,
                   phase: variantTag(result.phase),
-                  verificationOutcome: variantTag(result.verificationOutcome)
+                  verificationOutcome: variantTag(result.verificationOutcome),
+                  promotionGitObservation: variantTag(result.promotionGitObservation)
                 }
               ])
             )
@@ -1288,6 +2010,7 @@ quintIt(
             expected.continuationCount === actual.continuationCount &&
             expected.correctionCount === actual.correctionCount &&
             expected.expectedTargetHead === actual.expectedTargetHead &&
+            expected.integrationTarget === actual.integrationTarget &&
             expected.integrationSession === actual.integrationSession &&
             expected.observedFirstParent === actual.observedFirstParent &&
             expected.observedSecondParent === actual.observedSecondParent &&
@@ -1310,10 +2033,25 @@ quintIt(
             expected.wrapperInvocationCount === actual.wrapperInvocationCount &&
             expected.reconciliationCount === actual.reconciliationCount &&
             expected.promotionAuthorized === actual.promotionAuthorized &&
-            expected.verificationReplacementCount === actual.verificationReplacementCount
+            expected.verificationReplacementCount === actual.verificationReplacementCount &&
+            expected.promotionIntentRecorded === actual.promotionIntentRecorded &&
+            expected.promotionAttemptCount === actual.promotionAttemptCount &&
+            expected.promotionLastAttempt === actual.promotionLastAttempt &&
+            expected.promotionFreshExactHeadReads === actual.promotionFreshExactHeadReads &&
+            expected.promotionFreshExactHeadObservation === actual.promotionFreshExactHeadObservation &&
+            expected.promotionTargetFactsCurrent === actual.promotionTargetFactsCurrent &&
+            expected.promotionExpectedHeadVerified === actual.promotionExpectedHeadVerified &&
+            expected.promotionGitObservation === actual.promotionGitObservation &&
+            expected.promotionObservedTargetHead === actual.promotionObservedTargetHead &&
+            expected.promotionCandidateAncestryProven === actual.promotionCandidateAncestryProven &&
+            expected.promotionResultRecorded === actual.promotionResultRecorded &&
+            expected.promotionResponseAmbiguous === actual.promotionResponseAmbiguous &&
+            expected.promotionCompareAndSetRequested === actual.promotionCompareAndSetRequested &&
+            expected.promotionForceRequested === actual.promotionForceRequested &&
+            expected.promotionEquivalentContentAccepted === actual.promotionEquivalentContentAccepted
           )
         })
     )
   },
-  30_000
+  120_000
 )

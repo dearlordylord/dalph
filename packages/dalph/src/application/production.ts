@@ -25,7 +25,8 @@ import {
   workflowInterpreterLayer,
   WorkflowInterpreter,
   WorkflowTrace,
-  type TargetVerificationRuntimeInput
+  type TargetVerificationRuntimeInput,
+  type TargetPromotionRuntimeInput
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
@@ -48,7 +49,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   target: GitCommonDirectoryTarget,
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
-  targetVerification?: TargetVerificationRuntimeInput
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -91,7 +93,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           startup,
           undefined,
           undefined,
-          targetVerification
+          targetVerification,
+          targetPromotion
         ).pipe(
           Layer.provide(interpreterLayer),
           Layer.provide(operatorControlLayer),

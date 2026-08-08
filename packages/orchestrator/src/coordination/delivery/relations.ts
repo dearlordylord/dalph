@@ -19,6 +19,7 @@ import type {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
+import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
@@ -187,6 +188,22 @@ export type TicketDeliveryStanding =
       readonly _tag: "TargetVerificationContradicted"
       readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationContradicted" }>
     }
+  | {
+      readonly _tag: "TargetPromotionPending"
+      readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionPending" }>
+    }
+  | {
+      readonly _tag: "TargetPromotionSucceeded"
+      readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionSucceeded" }>
+    }
+  | {
+      readonly _tag: "TargetPromotionStale"
+      readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionStale" }>
+    }
+  | {
+      readonly _tag: "TargetPromotionNonConvergent"
+      readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionNonConvergent" }>
+    }
   | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
 
@@ -211,6 +228,11 @@ export type ExactTicketDeliveryEvidence =
       readonly _tag: "TargetVerification"
       readonly responsibility: StartedIntegrationResponsibility
       readonly state: TargetVerificationState
+    }
+  | {
+      readonly _tag: "TargetPromotion"
+      readonly responsibility: StartedIntegrationResponsibility
+      readonly state: TargetPromotionState
     }
 
 /** Exact accepted evidence plus non-authoritative regional observations. */

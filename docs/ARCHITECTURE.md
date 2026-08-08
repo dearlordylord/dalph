@@ -349,7 +349,7 @@ depart from the community knowledge base.
 | [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | journal publication, reduction, recovery, responsibility reconstruction, and failure locality |
 | [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run lifecycle, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
-| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, and candidate construction |
+| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, candidate construction, verification, and exact-head promotion |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |
 | [adr/](adr/) | accepted design decisions and their trade-offs |

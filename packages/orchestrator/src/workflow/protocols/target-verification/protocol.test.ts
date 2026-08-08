@@ -51,6 +51,7 @@ import {
   type IntegrationHistoryIndexes,
   validateIntegrationHistoryRecord
 } from "../../../coordination/reconstruction/integration-history.js"
+import { makeTargetPromotionHistoryIndexes } from "../../../coordination/reconstruction/target-promotion-history.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
 import { RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
@@ -596,6 +597,7 @@ it("rejects duplicate verification intent, false contradiction, and foreign-run 
     integrationCandidateSubmissions: new Map(),
     integrationCandidateGitObservations: new Map(),
     integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructedEvent]]),
+    targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
     targetVerificationIntents: new Map(),
     targetVerificationTerminals: new Set()
   }

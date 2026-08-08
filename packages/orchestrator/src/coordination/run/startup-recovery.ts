@@ -33,6 +33,10 @@ import {
   TargetVerificationRuntime,
   type TargetVerificationRuntimeInput
 } from "../../workflow/protocols/target-verification/runtime.js"
+import {
+  TargetPromotionRuntime,
+  type TargetPromotionRuntimeInput
+} from "../../workflow/protocols/target-promotion/runtime.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -87,6 +91,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   targetVerification: TargetVerificationRuntimeInput | undefined,
+  targetPromotion: TargetPromotionRuntimeInput | undefined,
   startup: "Fresh" | "Recovered"
 ) {
   yield* CoordinatorOwnership
@@ -113,6 +118,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     candidateContinuationLimit,
     integrationResources,
     targetVerification,
+    targetPromotion,
     startup
   )
   let context = Context.empty().pipe(
@@ -132,6 +138,9 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   if (targetVerification !== undefined) {
     context = Context.add(context, TargetVerificationRuntime, TargetVerificationRuntime.of(targetVerification))
   }
+  if (targetPromotion !== undefined) {
+    context = Context.add(context, TargetPromotionRuntime, TargetPromotionRuntime.of(targetPromotion))
+  }
   /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
 })
@@ -143,6 +152,7 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   integrationResources: ReturnType<typeof DeliveryRuntimeResources.of>["integrationTargets"],
   targetVerification: TargetVerificationRuntimeInput | undefined,
+  targetPromotion: TargetPromotionRuntimeInput | undefined,
   startup: "Fresh" | "Recovered"
 ) {
   return startup === "Fresh"
@@ -152,7 +162,8 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateCorrectionLimit,
         candidateContinuationLimit,
         integrationResources,
-        targetVerification
+        targetVerification,
+        targetPromotion
       )
     : yield* makeRunRecoveryProjection(
         runId,
@@ -160,7 +171,8 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateCorrectionLimit,
         candidateContinuationLimit,
         integrationResources,
-        targetVerification
+        targetVerification,
+        targetPromotion
       )
 })
 
@@ -171,7 +183,8 @@ export const validatedStartupRecoveryLayer = (
   startup: "Fresh" | "Recovered",
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
-  targetVerification?: TargetVerificationRuntimeInput
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
 ) =>
   Layer.effectContext(
     makeStartupRecoveryContext(
@@ -180,6 +193,7 @@ export const validatedStartupRecoveryLayer = (
       candidateCorrectionLimit,
       candidateContinuationLimit,
       targetVerification,
+      targetPromotion,
       startup
     )
   )

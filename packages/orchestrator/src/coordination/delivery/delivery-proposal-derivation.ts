@@ -126,6 +126,7 @@ const isSettlementTransition = (
   transition._tag === "AcquireStartedIntegrationTarget" ||
   transition._tag === "ContinueStartedIntegrationCandidate" ||
   transition._tag === "RunTargetVerification" ||
+  transition._tag === "RunTargetPromotion" ||
   transition._tag === "ReleaseStartedIntegrationTarget" ||
   integrationResponsibilityFor(transition, responsibilities) !== undefined
 
@@ -307,6 +308,7 @@ type IdentityFreeTransition = Extract<
       | "ContinuePlannedAttemptExecutorWork"
       | "ContinueStartedIntegrationCandidate"
       | "RunTargetVerification"
+      | "RunTargetPromotion"
       | "QueueAcceptedResultIntegrationResponsibility"
       | "ReleaseStartedIntegrationTarget"
       | "StartQueuedIntegration"

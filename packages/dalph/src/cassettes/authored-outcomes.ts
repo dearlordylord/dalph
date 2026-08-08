@@ -178,23 +178,11 @@ const orchestrationEvidenceFor = (
       }
     ]
   }
-  if (event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted") {
-    return [
-      {
-        _tag:
-          event._tag === "IntegrationResponsibilityBegan"
-            ? "AcceptedResultIntegrationResponsibilityBegan"
-            : "AcceptedResultIntegrationStarted",
-        attemptId: event.plannedAttempt.attemptId,
-        commit: event.acceptedResult.commit,
-        integrationTarget: event.integrationTarget,
-        taskId: event.plannedAttempt.taskId
-      }
-    ]
-  }
+  if (isIntegrationLifecycleEvidenceEvent(event)) return [integrationLifecycleEvidenceFor(event)]
   if (event._tag === "TargetVerificationEvidenceSealed") {
     return targetVerificationEvidenceFor(event, taskByAttempt)
   }
+  if (isTargetPromotionEvidenceEvent(event)) return targetPromotionEvidenceFor(event, taskByAttempt)
   if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     return [
       {
@@ -208,6 +196,82 @@ const orchestrationEvidenceFor = (
     return [orchestrationReportEvidence(event.report)]
   }
   return []
+}
+
+type IntegrationLifecycleEvidenceEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "IntegrationResponsibilityBegan" | "IntegrationStarted" }
+>
+
+const isIntegrationLifecycleEvidenceEvent = (
+  event: JournalRecord["event"]
+): event is IntegrationLifecycleEvidenceEvent =>
+  event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
+
+const integrationLifecycleEvidenceFor = (event: IntegrationLifecycleEvidenceEvent): OrchestrationEvidence => ({
+  _tag:
+    event._tag === "IntegrationResponsibilityBegan"
+      ? "AcceptedResultIntegrationResponsibilityBegan"
+      : "AcceptedResultIntegrationStarted",
+  attemptId: event.plannedAttempt.attemptId,
+  commit: event.acceptedResult.commit,
+  integrationTarget: event.integrationTarget,
+  taskId: event.plannedAttempt.taskId
+})
+
+type TargetPromotionEvidenceEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "TargetPromotionObservedSuccess" | "TargetPromotionNonConvergence" | "TargetPromotionStale" }
+>
+
+const isTargetPromotionEvidenceEvent = (event: JournalRecord["event"]): event is TargetPromotionEvidenceEvent =>
+  event._tag === "TargetPromotionObservedSuccess" ||
+  event._tag === "TargetPromotionNonConvergence" ||
+  event._tag === "TargetPromotionStale"
+
+const targetPromotionEvidenceFor = (
+  event: TargetPromotionEvidenceEvent,
+  taskByAttempt: ReadonlyMap<AttemptId, TaskId>
+): ReadonlyArray<OrchestrationEvidence> => {
+  const taskId = Option.getOrThrow(
+    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.candidateCorrelation.attemptId))
+  )
+  switch (event._tag) {
+    case "TargetPromotionObservedSuccess":
+      return [
+        {
+          _tag: "TargetPromotionSucceeded",
+          basis: event.basis,
+          candidateCommit: event.correlation.candidateCommit,
+          expectedTargetHead: event.correlation.expectedTargetHead,
+          observedTargetHead: event.observation.targetHeadSha,
+          observation: event.observation._tag,
+          taskId
+        }
+      ]
+    case "TargetPromotionNonConvergence":
+      return [
+        {
+          _tag: "TargetPromotionNonConvergent",
+          attemptOrdinal: event.attemptOrdinal,
+          candidateCommit: event.correlation.candidateCommit,
+          lastObservation: event.lastObservation._tag,
+          taskId
+        }
+      ]
+    case "TargetPromotionStale":
+      return [
+        {
+          _tag: "TargetPromotionStale",
+          basis: event.basis,
+          candidateCommit: event.correlation.candidateCommit,
+          expectedTargetHead: event.correlation.expectedTargetHead,
+          observedTargetHead: event.observation.observedHeadSha,
+          observation: event.observation._tag,
+          taskId
+        }
+      ]
+  }
 }
 
 const taskWorkResultFor = (

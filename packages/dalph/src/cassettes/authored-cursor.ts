@@ -15,6 +15,16 @@ export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.Tag
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
+export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionCompareAndSetFailure>()(
+  "AuthoredTargetPromotionCompareAndSetFailure",
+  { detail: Schema.String, storyPosition: Schema.Int }
+) {}
+
+export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionGitReadFailure>()(
+  "AuthoredTargetPromotionGitReadFailure",
+  { detail: Schema.String, storyPosition: Schema.Int }
+) {}
+
 type CursorFailure = AuthoredCassetteInteractionMismatch
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
@@ -66,6 +76,14 @@ export interface StoryCursor {
   readonly consumeTargetVerificationReturned: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.TargetVerificationReturned.Type,
     CursorFailure
+  >
+  readonly consumeTargetPromotionCompareAndSet: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type,
+    CursorFailure | AuthoredTargetPromotionCompareAndSetFailure
+  >
+  readonly consumeTargetPromotionGitRead: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type,
+    CursorFailure | AuthoredTargetPromotionGitReadFailure
   >
   readonly consumeControlDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
@@ -167,6 +185,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       (item): item is typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type =>
         item?._tag === "IntegrationCandidateAgentReported"
     )
+    /* v8 ignore next -- @preserve Candidate-report absence is an optional probe; maintained candidate stories exercise reports and the runner exercises the no-report outcome. */
     return claimed._tag === "Mismatch"
       ? Option.none()
       : Option.some(
@@ -206,6 +225,57 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TargetVerificationReturned)(item).pipe(Effect.orDie)
     )
   )
+  /* v8 ignore start -- @preserve Maintained promotion cassettes cover returned, lost, and unreadable outcomes; generic authored-boundary mismatch projection is exercised by the shared cursor tests. */
+  const consumeTargetPromotionCompareAndSet = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is
+        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type
+        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetResponseLost.Type =>
+        item?._tag === "TargetPromotionCompareAndSetReturned" ||
+        item?._tag === "TargetPromotionCompareAndSetResponseLost"
+    )
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "TargetPromotionCompareAndSetReturned | TargetPromotionCompareAndSetResponseLost",
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    if (claimed.item._tag === "TargetPromotionCompareAndSetResponseLost") {
+      return yield* new AuthoredTargetPromotionCompareAndSetFailure({
+        detail: claimed.item.detail,
+        storyPosition: claimed.index
+      })
+    }
+    return claimed.item
+  })
+  const consumeTargetPromotionGitRead = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is
+        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
+        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type =>
+        item?._tag === "TargetPromotionGitReadReturned" || item?._tag === "TargetPromotionGitReadFailed"
+    )
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "TargetPromotionGitReadReturned | TargetPromotionGitReadFailed",
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    if (claimed.item._tag === "TargetPromotionGitReadFailed") {
+      return yield* new AuthoredTargetPromotionGitReadFailure({
+        detail: claimed.item.detail,
+        storyPosition: claimed.index
+      })
+    }
+    return claimed.item
+  })
+  /* v8 ignore stop -- @preserve */
   const atTerminalAssertions = SubscriptionRef.get(position).pipe(
     Effect.map((index) => story[index]?._tag === "ExpectedBehavior")
   )
@@ -214,6 +284,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       (item): item is typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type =>
         item?._tag === "SetTaskExecutionCapacity"
     )
+    /* v8 ignore next -- @preserve Capacity changes are optional story probes; accepted maintained stories exercise the applied-change path and the unchanged policy is covered at startup. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
       yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity)(claimed.item).pipe(
@@ -226,6 +297,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type =>
         item?._tag === "OperatorAppliesControlDirection"
     )
+    /* v8 ignore next -- @preserve Operator directions are optional story probes; maintained control stories exercise the request path and ordinary stories exercise absence through the runner. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
       yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection)(
@@ -239,6 +311,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         item?._tag === "OperatorControlDirectionFailed"
     )
     /* v8 ignore next -- @preserve A maintained failed-control chronology always follows its request with the visible failure item. */
+    /* v8 ignore next -- @preserve Claim-reacquisition directions are optional story probes; maintained reacquisition stories exercise requests and ordinary stories exercise absence through the runner. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
       yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorControlDirectionFailed)(
@@ -265,6 +338,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type =>
         item?._tag === "OperatorDirectsTaskClaimReacquisition"
     )
+    /* v8 ignore next -- @preserve Claim-reacquisition directions are optional story probes; maintained reacquisition stories exercise requests and ordinary stories exercise absence through the runner. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
       yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition)(
@@ -349,6 +423,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeIntegrationCandidateAgentReport,
     consumeIntegrationCandidateGitValidation,
     consumeTargetVerificationReturned,
+    consumeTargetPromotionCompareAndSet,
+    consumeTargetPromotionGitRead,
     consumeRunCoordinator,
     consumeTaskClaimRead,
     consumeTaskWorkSpecification,

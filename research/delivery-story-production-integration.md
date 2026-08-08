@@ -80,8 +80,8 @@ that creates executor responsibility directly from a selected tracker ticket.
 | `frontierOf` | `deriveRunnableFrontier` consumes fresh eligible tasks, reconstructed responsibility, and exactly one fresh-facts value per responsibility; it gives existing responsibility journal-order priority and emits explanations for waits and constraints ([frontier input and output](../packages/orchestrator/src/coordination/frontier/frontier.ts#L231), [derivation](../packages/orchestrator/src/coordination/frontier/frontier.ts#L483)). | Reuse and expose through a clean composition. The prototype's lifecycle/prerequisite-only frontier is too small. |
 | `boundedParallelTickets` | `TaskAdmissionController.admit` reserves at most one transition in one atomic call; the activation coordinator repeatedly derives and admits while earlier runners remain live, allowing capacity-N overlap ([admission API](../packages/orchestrator/src/coordination/admission/controller.ts#L46), [activation pass](../packages/orchestrator/src/coordination/activation/coordinator.ts#L397)). | Refactor the composition, retain the protocol. “Bounded tickets” may remain story language, but the production value is bounded owned transitions plus exact task positions, not merely a set of task IDs. |
 | `executorResponsibilities` | A planned-attempt responsibility begins only after the attempt and worktree protocol reach the executor boundary; it is reconstructed from `PlannedAttemptExecutorWorkResponsibilityBegan`, and reports retain exact `(RunId, AttemptId)` correlation ([responsibility type](../packages/orchestrator/src/coordination/reconstruction/state.ts#L24), [responsibility reducer](../packages/orchestrator/src/coordination/reconstruction/reduce.ts#L57), [executor protocol scenarios](../docs/scenarios/planned-attempt-executor-boundary.md)). | Redesign around production semantics. Do not derive a responsibility merely because a ticket is selected. |
-| `deliverySettlements` | Production has accepted-result integration responsibility, journal-position FIFO, an integration-start cutoff, per-target serialization, and candidate construction ([integration admission](../packages/orchestrator/src/workflow/protocols/integration-admission/protocol.ts), [integration runtime](../packages/orchestrator/src/coordination/run/integration-transition-runtime.ts)). | Extend only as later scenarios land. Candidate verification, promotion, tracker completion, cleanup, and final settlement are not yet a reachable complete production lifecycle ([architecture boundary](../docs/ARCHITECTURE.md#accepted-result-integration-admission)). |
-| `reflectDeliverySettlements` | Current quiescent refresh sees tracker completion performed elsewhere, but Dalph does not yet implement the complete tracker-completion mutation as the result of verified promotion ([issue 53 scenario](../docs/scenarios/issue-53-refresh-complete-task-pipelines.md), [issue 56 boundary](../docs/scenarios/issue-56-queue-accepted-integration.md)). | Keep the story seam, but do not fabricate its successful production implementation. Issues #59, #60, #61/#141 must supply the missing chronological protocols. |
+| `deliverySettlements` | Production has accepted-result integration responsibility, journal-position FIFO, an integration-start cutoff, per-target serialization, candidate construction, sealed target verification, and exact-head promotion or preserved reconciliation ([integration admission](../packages/orchestrator/src/workflow/protocols/integration-admission/protocol.ts), [target verification](../packages/orchestrator/src/workflow/protocols/target-verification/protocol.ts), [target promotion](../packages/orchestrator/src/workflow/protocols/target-promotion/protocol.ts)). | Extend only as later scenarios land. Tracker completion, cleanup, and final settlement are not yet a reachable complete production lifecycle. |
+| `reflectDeliverySettlements` | Current quiescent refresh sees tracker completion performed elsewhere, but Dalph does not yet implement the complete tracker-completion mutation as the result of verified promotion ([issue 53 scenario](../docs/scenarios/issue-53-refresh-complete-task-pipelines.md), [issue 60 promotion](../docs/scenarios/issue-60-promote-or-reconcile.md)). | Keep the story seam, but do not fabricate its successful production implementation. Issues #61/#141 must supply the missing chronological protocols. |
 
 ## The important mismatch: frontier already depends on responsibility
 
@@ -348,13 +348,14 @@ protocol needs them. Do not create a placeholder settlement implementation.
 
 ### Phase 4 — implement settlement and reflection incrementally
 
-Only after accepted chronological scenarios exist, extend the same story for:
+The same story has now been extended for:
 
-1. #59 candidate verification;
+1. #59 candidate verification; and
 2. #60 exact-head compare-and-set promotion and ambiguous-result
-   reconciliation;
-3. #61 tracker completion and fresh confirmation; and
-4. #141 complete integration disposition, cleanup, and run finality.
+   reconciliation.
+
+The remaining extensions are #61 tracker completion and fresh confirmation,
+then #141 complete integration disposition, cleanup, and run finality.
 
 Each protocol contributes new events, reducer state, fresh facts, frontier
 transitions/explanations, an interpreter branch, and adapter contract tests.
@@ -385,7 +386,7 @@ refactor must preserve.
 | Two accepted results retain journal FIFO and cross one integration-start cutoff after restart. | [issue 56 chronology](../docs/scenarios/issue-56-queue-accepted-integration.md), integration protocol tests ([integration admission tests](../packages/orchestrator/src/workflow/protocols/integration-admission/protocol.test.ts#L307)), and cassette restart coverage ([scenario test](../packages/dalph/test/cassettes/scenario.test.ts#L300)). | Public delivery-activation test proves integration remains a transition from the same frontier and does not consume task-work capacity. |
 | Current graph or policy changes wake another derivation. | Production capacity scenario ([production test](../packages/dalph/test/scenarios/production.test.ts#L178)) and activation trigger tests ([coordinator tests](../packages/orchestrator/src/coordination/activation/coordinator.test.ts#L32)). | Controlled story runtime changes the graph/policy after first derivation; assert the next derivation observes it without restarting the application. |
 | Restart begins from a freshly reconstructed current value rather than waiting for a future update. | Current journal recovery and restart cassettes provide the factual baseline; no `CurrentSignal` contract exists. | Required before Phase 5: interrupt before subscription, between initial read and update attachment, and after attachment; assert no lost or stale current value. |
-| Verified promoted work alone may request tracker completion, followed by tracker confirmation and cleanup. | Not implemented end to end. Current architecture explicitly stops after candidate construction ([architecture](../docs/ARCHITECTURE.md#accepted-result-integration-admission)). | Blocked until #59/#60/#61/#141 scenarios name every boundary, crash point, retry, visible result, and forbidden result. Then add pure authorization, protocol, adapter-contract, crash-cut, and public-delivery scenario tests. |
+| Verified promoted work alone may request tracker completion, followed by tracker confirmation and cleanup. | Verification and exact promotion are implemented; tracker completion and cleanup are not. | Blocked until #61/#141 scenarios name every boundary, crash point, retry, visible result, and forbidden result. Then add pure authorization, protocol, adapter-contract, crash-cut, and public-delivery scenario tests. |
 
 ## Main risks
 

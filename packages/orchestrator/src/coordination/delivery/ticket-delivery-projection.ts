@@ -4,6 +4,7 @@ import {
   type PlannedTaskAttempt,
   type TaskId
 } from "@dalph/contracts"
+import { Match } from "effect"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { TrackerTask } from "../../authorities/task-tracker/task.js"
 import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
@@ -100,21 +101,17 @@ const integrationWaitTaskId = (
   wait: Extract<TicketDeliveryEvidence, { readonly _tag: "IntegrationWait" }>["wait"]
 ): TaskId => wait.plannedAttempt.taskId
 
-const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId => {
-  switch (evidence._tag) {
-    case "ResponsibilityFacts":
-      return responsibilityTaskId(evidence.facts)
-    case "AcceptedAwaitingIntegration":
-      return evidence.accepted.plannedAttempt.taskId
-    case "QueuedIntegration":
-    case "StartedIntegration":
-    case "IntegrationCandidate":
-    case "TargetVerification":
-      return evidence.responsibility.plannedAttempt.taskId
-    case "IntegrationWait":
-      return integrationWaitTaskId(evidence.wait)
-  }
-}
+const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId =>
+  Match.valueTags(evidence, {
+    AcceptedAwaitingIntegration: ({ accepted }) => accepted.plannedAttempt.taskId,
+    IntegrationCandidate: ({ responsibility }) => responsibility.plannedAttempt.taskId,
+    IntegrationWait: ({ wait }) => integrationWaitTaskId(wait),
+    QueuedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
+    ResponsibilityFacts: ({ facts }) => responsibilityTaskId(facts),
+    StartedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
+    TargetPromotion: ({ responsibility }) => responsibility.plannedAttempt.taskId,
+    TargetVerification: ({ responsibility }) => responsibility.plannedAttempt.taskId
+  })
 
 const targetVerificationIdentity = (
   state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
@@ -123,27 +120,25 @@ const targetVerificationIdentity = (
   return JSON.stringify(["target-verification", state._tag, requestId])
 }
 
-const evidenceIdentity = (evidence: TicketDeliveryEvidence): string => {
-  switch (evidence._tag) {
-    case "ResponsibilityFacts":
-      return `workflow:${workflowResponsibilityKey(evidence.facts.responsibility)}`
-    case "AcceptedAwaitingIntegration":
-      return JSON.stringify(["integration", exactAttemptIdentity(evidence.accepted.plannedAttempt)])
-    case "QueuedIntegration":
-    case "StartedIntegration":
-      return JSON.stringify(["integration", exactAttemptIdentity(evidence.responsibility.plannedAttempt)])
-    case "IntegrationCandidate":
-      return JSON.stringify([
-        "candidate",
-        exactAttemptIdentity(evidence.responsibility.plannedAttempt),
-        evidence.responsibility.startedAt
-      ])
-    case "TargetVerification":
-      return targetVerificationIdentity(evidence.state)
-    case "IntegrationWait":
-      return JSON.stringify(["integration-wait", evidenceTaskId(evidence), evidence.wait._tag])
-  }
-}
+const targetPromotionIdentity = (
+  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }>["state"]
+): string => JSON.stringify(["target-promotion", state._tag, state.correlation.requestId])
+
+const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
+  Match.valueTags(evidence, {
+    AcceptedAwaitingIntegration: ({ accepted }) =>
+      JSON.stringify(["integration", exactAttemptIdentity(accepted.plannedAttempt)]),
+    IntegrationCandidate: ({ responsibility }) =>
+      JSON.stringify(["candidate", exactAttemptIdentity(responsibility.plannedAttempt), responsibility.startedAt]),
+    IntegrationWait: ({ wait }) => JSON.stringify(["integration-wait", integrationWaitTaskId(wait), wait._tag]),
+    QueuedIntegration: ({ responsibility }) =>
+      JSON.stringify(["integration", exactAttemptIdentity(responsibility.plannedAttempt)]),
+    ResponsibilityFacts: ({ facts }) => `workflow:${workflowResponsibilityKey(facts.responsibility)}`,
+    StartedIntegration: ({ responsibility }) =>
+      JSON.stringify(["integration", exactAttemptIdentity(responsibility.plannedAttempt)]),
+    TargetPromotion: ({ state }) => targetPromotionIdentity(state),
+    TargetVerification: ({ state }) => targetVerificationIdentity(state)
+  })
 
 const endedDispositionTags: ReadonlySet<ResponsibilityFreshFacts["disposition"]["_tag"]> = new Set([
   "FinalOutcome",
@@ -171,22 +166,17 @@ const graphAlreadySuccessful = (placement: TicketDeliveryPlacement): boolean =>
 const responsibilityObligationFrom = (facts: ResponsibilityFreshFacts): ReadonlyArray<ExactWorkflowObligation> =>
   responsibilityEnded(facts) ? [] : [{ _tag: "WorkflowResponsibility", responsibility: facts.responsibility }]
 
-const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWorkflowObligation> => {
-  switch (evidence._tag) {
-    case "ResponsibilityFacts":
-      return responsibilityObligationFrom(evidence.facts)
-    case "AcceptedAwaitingIntegration":
-      return [{ _tag: "AcceptedAwaitingIntegration", accepted: evidence.accepted }]
-    case "QueuedIntegration":
-      return [{ _tag: "QueuedIntegration", responsibility: evidence.responsibility }]
-    case "StartedIntegration":
-      return [{ _tag: "StartedIntegration", responsibility: evidence.responsibility }]
-    case "IntegrationCandidate":
-    case "TargetVerification":
-    case "IntegrationWait":
-      return []
-  }
-}
+const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWorkflowObligation> =>
+  Match.valueTags(evidence, {
+    AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegration" as const, accepted }],
+    IntegrationCandidate: () => [],
+    IntegrationWait: () => [],
+    QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
+    ResponsibilityFacts: ({ facts }) => responsibilityObligationFrom(facts),
+    StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
+    TargetPromotion: () => [],
+    TargetVerification: () => []
+  })
 
 const candidateStandingFrom = (state: IntegrationCandidateConstructionState): ReadonlyArray<TicketDeliveryStanding> => {
   if (state._tag === "CandidateConstructed") return [{ _tag: "CandidateConstructedUnsettled", state }]
@@ -211,6 +201,21 @@ const targetVerificationStandingFrom = (
   }
 }
 
+const targetPromotionStandingFrom = (
+  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }>["state"]
+): ReadonlyArray<TicketDeliveryStanding> => {
+  switch (state._tag) {
+    case "PromotionPending":
+      return [{ _tag: "TargetPromotionPending", state }]
+    case "PromotionSucceeded":
+      return [{ _tag: "TargetPromotionSucceeded", state }]
+    case "PromotionStale":
+      return [{ _tag: "TargetPromotionStale", state }]
+    case "PromotionNonConvergent":
+      return [{ _tag: "TargetPromotionNonConvergent", state }]
+  }
+}
+
 const responsibilityStandingFrom = (
   facts: ResponsibilityFreshFacts,
   placement: TicketDeliveryPlacement
@@ -222,24 +227,17 @@ const responsibilityStandingFrom = (
 const standingFrom = (
   evidence: TicketDeliveryEvidence,
   placement: TicketDeliveryPlacement
-): ReadonlyArray<TicketDeliveryStanding> => {
-  switch (evidence._tag) {
-    case "ResponsibilityFacts":
-      return responsibilityStandingFrom(evidence.facts, placement)
-    case "AcceptedAwaitingIntegration":
-      return [{ _tag: "AcceptedAwaitingIntegrationQueue", accepted: evidence.accepted }]
-    case "QueuedIntegration":
-      return [{ _tag: "QueuedIntegration", responsibility: evidence.responsibility }]
-    case "StartedIntegration":
-      return [{ _tag: "StartedIntegration", responsibility: evidence.responsibility }]
-    case "IntegrationCandidate":
-      return candidateStandingFrom(evidence.state)
-    case "TargetVerification":
-      return targetVerificationStandingFrom(evidence.state)
-    case "IntegrationWait":
-      return [{ _tag: "IntegrationWait", wait: evidence.wait }]
-  }
-}
+): ReadonlyArray<TicketDeliveryStanding> =>
+  Match.valueTags(evidence, {
+    AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegrationQueue" as const, accepted }],
+    IntegrationCandidate: ({ state }) => candidateStandingFrom(state),
+    IntegrationWait: ({ wait }) => [{ _tag: "IntegrationWait" as const, wait }],
+    QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
+    ResponsibilityFacts: ({ facts }) => responsibilityStandingFrom(facts, placement),
+    StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
+    TargetPromotion: ({ state }) => targetPromotionStandingFrom(state),
+    TargetVerification: ({ state }) => targetVerificationStandingFrom(state)
+  })
 
 const placementFor = (tickets: BoundedParallelTickets, taskId: TaskId): TicketDeliveryPlacement => {
   const current = tickets.placements.find((placement) => placement.taskId === taskId)?.placement

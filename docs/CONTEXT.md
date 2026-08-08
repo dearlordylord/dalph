@@ -606,6 +606,39 @@ does not acquire that lock separately, inspect private commands, or nest a
 guarded invocation.
 _Avoid_: Dalph lock controller, package script, internal verification command
 
+**Target promotion request**:
+The deterministic request that offers one exact verified candidate M to one
+repository/ref target by atomically replacing M's fixed first parent H. It
+binds the constructed-candidate occurrence and sealed passing verification
+manifest. Recovery reuses it; another operation identity cannot change H, M,
+the target, or the evidence.
+_Avoid_: Force update, target-head observation, candidate replacement, tracker completion
+
+**Target promotion attempt intent**:
+The durable numbered fact written immediately before Dalph may ask Git to
+perform one target promotion request. A crash after this fact cannot prove
+whether the request crossed Git, so recovery treats its ordinal as consumed
+and reconciles before considering the next intent. The first intent requires a
+current exact-H Git proof. After ambiguity, another intent requires Git to
+report exact H again. One candidate permits at most three intents; Git reads
+are not attempt intents.
+_Avoid_: Retry loop iteration, Git read, promotion request identity, candidate attempt
+
+**Promoted integration proof**:
+The durable fact that Git either accepted the exact `H -> M` compare-and-set or
+later proved M is the target head or its ancestor. It retains M's ordered
+parents and sealed passing verification manifest. Equivalent content, a patch
+match, or a journaled request without Git ancestry is not this proof.
+_Avoid_: Verification pass, compare-and-set intent, target head alone, completed tracker task
+
+**Non-convergent target promotion**:
+The durable preservation disposition after three exact target-promotion
+attempts remain unresolved and the final Git reconciliation does not establish
+promotion or a different readable head. Dalph keeps M, its candidate resource,
+session, accepted result, and sealed evidence, releases its process-local
+target position, and sends no fourth attempt.
+_Avoid_: Failed task, discarded candidate, automatic replacement, unbounded retry
+
 **Pending candidate submission**:
 One explicit candidate commit awaiting a readable Git object-type and parent
 observation. An unreadable Git call preserves this submission for a later

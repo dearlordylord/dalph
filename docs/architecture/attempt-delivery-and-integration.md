@@ -3,7 +3,7 @@
 This page groups the protocols that begin after a task is eligible and claimed:
 immutable attempt planning, exact worktree reconciliation, planned-attempt
 executor work, accepted-result admission, and integration candidate
-construction.
+construction, target verification, and exact-head promotion.
 
 ## Immutable planned attempt
 
@@ -134,3 +134,48 @@ See
 [issue-57-build-two-parent-integration-candidate.md](../scenarios/issue-57-build-two-parent-integration-candidate.md)
 and the
 [`acceptedResultIntegration` Quint model](../../specs/acceptedResultIntegration.qnt).
+
+## Target verification
+
+One configured public wrapper receives a deterministic request for the exact
+constructed-candidate occurrence and opaque repository-selected plan. Dalph
+records that request before the call. The wrapper owns its commands and any
+heavy-verification lock; Dalph neither interprets the plan nor acquires that
+lock separately.
+
+Every terminal artifact and the manifest are stored by content identity and
+reread before Dalph records the result. Only a sealed passing result can become
+promotion input. Failed, killed, partial, timed-out, contradictory, missing, or
+corrupt evidence preserves the candidate and cannot move the target ref.
+Process loss reconstructs no target position or wrapper lock and reuses the
+same request identity.
+
+See
+[issue-59-run-target-verification.md](../scenarios/issue-59-run-target-verification.md).
+
+## Exact-head promotion
+
+After a current tracker observation still permits progress, Dalph records one
+deterministic promotion intent, then reads Git again. Only exact H authorizes a
+numbered attempt before Dalph asks Git to atomically replace H with exact
+candidate M. The request carries M's exact
+constructed occurrence and sealed passing verification manifest. Git's atomic
+success or a later Git ancestry read—not equivalent content and not the intent
+alone—establishes promotion.
+
+A stale compare-and-set result preserves M and selects candidate reconciliation;
+there is no force-update, reset, or parent rewrite. After an ambiguous result,
+Dalph reads Git before another request. Exact M ancestry records promotion,
+exact H may begin the next numbered attempt, and another head records stale
+reconciliation. One candidate permits three total attempts. If the third result
+remains unresolved, a final exact-H or unreadable reconciliation records
+non-convergence, preserves the candidate and evidence, and permits no fourth
+request.
+
+Every active boundary call owns only its exact process-local repository/ref
+position and releases it when the action settles. The durable started
+integration responsibility remains the same-target FIFO blocker for later
+tracker completion and settlement, while work for another target can proceed.
+
+See
+[issue-60-promote-or-reconcile.md](../scenarios/issue-60-promote-or-reconcile.md).

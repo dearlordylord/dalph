@@ -19,6 +19,11 @@ import {
   targetVerificationRequestIdForCandidate,
   type TargetVerificationRequestId
 } from "../../workflow/protocols/target-verification/events.js"
+import {
+  invalidTargetPromotionHistory,
+  rememberPassedTargetVerification,
+  type TargetPromotionHistoryIndexes
+} from "./target-promotion-history.js"
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -59,6 +64,7 @@ export interface IntegrationHistoryIndexes {
     Extract<WorkflowJournalEvent, { readonly _tag: "TargetVerificationIntended" }>
   >
   readonly targetVerificationTerminals: Set<TargetVerificationRequestId>
+  readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
 const sameAcceptedResult = (left: AcceptedResult, right: AcceptedResult): boolean => left.commit === right.commit
@@ -196,22 +202,40 @@ const invalidTargetVerificationIntent = (
     : `target verification intent has no exact constructed candidate at ${correlation.candidateConstructedAt}`
 }
 
+const terminalExpectedCorrelation = (
+  event: Extract<
+    WorkflowJournalEvent,
+    { readonly _tag: "TargetVerificationCorrelationContradicted" | "TargetVerificationEvidenceSealed" }
+  >
+) => (event._tag === "TargetVerificationEvidenceSealed" ? event.correlation : event.expected)
+
+const isGenuineVerificationContradiction = (
+  event: Extract<
+    WorkflowJournalEvent,
+    { readonly _tag: "TargetVerificationCorrelationContradicted" | "TargetVerificationEvidenceSealed" }
+  >
+): boolean =>
+  event._tag !== "TargetVerificationCorrelationContradicted" ||
+  !targetVerificationCorrelationEquals(event.expected, event.received)
+
 const invalidTargetVerificationTerminal = (
+  record: JournalRecord,
   event: Extract<
     WorkflowJournalEvent,
     { readonly _tag: "TargetVerificationCorrelationContradicted" | "TargetVerificationEvidenceSealed" }
   >,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
-  const expected = event._tag === "TargetVerificationEvidenceSealed" ? event.correlation : event.expected
+  const expected = terminalExpectedCorrelation(event)
   const intent = indexes.targetVerificationIntents.get(expected.requestId)
   const alreadyTerminal = indexes.targetVerificationTerminals.has(expected.requestId)
   indexes.targetVerificationTerminals.add(expected.requestId)
   const exactIntent = intent !== undefined && targetVerificationCorrelationEquals(intent.correlation, expected)
-  const genuineContradiction =
-    event._tag !== "TargetVerificationCorrelationContradicted" ||
-    !targetVerificationCorrelationEquals(event.expected, event.received)
-  return exactIntent && !alreadyTerminal && genuineContradiction
+  const valid = exactIntent && !alreadyTerminal && isGenuineVerificationContradiction(event)
+  if (valid && event._tag === "TargetVerificationEvidenceSealed" && event.terminal === "Passed") {
+    rememberPassedTargetVerification(indexes.targetPromotionHistory, record, event)
+  }
+  return valid
     ? undefined
     : `target verification terminal has no one exact earlier intent for request ${expected.requestId}`
 }
@@ -271,8 +295,8 @@ const invalidTargetVerificationHistory = (
     return invalidTargetVerificationIntent(record, event, indexes)
   }
   return event._tag === "TargetVerificationEvidenceSealed" || event._tag === "TargetVerificationCorrelationContradicted"
-    ? invalidTargetVerificationTerminal(event, indexes)
-    : undefined
+    ? invalidTargetVerificationTerminal(record, event, indexes)
+    : invalidTargetPromotionHistory(record, indexes.targetPromotionHistory, indexes.integrationCandidatesConstructed)
 }
 
 const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHistoryIndexes): string | undefined => {
@@ -319,6 +343,18 @@ export const invalidIntegrationHistoryEvent = (
 
 // eslint-disable-next-line complexity -- Each closed candidate event variant carries its run binding in a deliberately distinct shape.
 const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
+  if (
+    event._tag === "TargetPromotionIntended" ||
+    event._tag === "TargetPromotionAttemptIntended" ||
+    event._tag === "TargetPromotionObservedSuccess" ||
+    event._tag === "TargetPromotionStale" ||
+    event._tag === "TargetPromotionNonConvergence"
+  ) {
+    return event.correlation.candidateCorrelation.runId === runId &&
+      event.correlation.verificationCorrelation.candidateCorrelation.runId === runId
+      ? undefined
+      : `target promotion binds run ${event.correlation.candidateCorrelation.runId}`
+  }
   if (event._tag === "TargetVerificationCorrelationContradicted") {
     return event.expected.candidateCorrelation.runId === runId
       ? undefined

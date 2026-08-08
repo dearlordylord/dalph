@@ -557,4 +557,438 @@ module acceptedResultIntegrationTest {
         logicalIntegrationResponsibilityBlocksLaterQueue,
       })
   }
+
+  run exactCompareAndSetPromotionRecordsSealedEvidenceTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionIntent,
+        state.results.get(1).promotionIntentRecorded,
+        state.results.get(1).promotionAttemptCount == 0,
+        not(state.results.get(1).promotionFreshExactHeadObservation),
+        state.results.get(1).verificationManifestSealed,
+        state.results.get(1).targetHeld,
+      })
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionAttemptIntended,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).promotionLastAttempt == 1,
+        not(state.results.get(1).promotionCompareAndSetRequested),
+      })
+      .then(sendPromotionAttempt(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionInFlight,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).promotionLastAttempt == 1,
+        state.results.get(1).promotionCompareAndSetRequested,
+        state.results.get(1).promotionExpectedHeadVerified,
+      })
+      .then(observePromotionCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionSucceeded,
+        state.results.get(1).promotionGitObservation == PromotionCandidateCurrent,
+        state.results.get(1).promotionObservedTargetHead
+          == state.results.get(1).submittedCandidate,
+        state.results.get(1).promotionCandidateAncestryProven,
+        state.results.get(1).promotionResultRecorded,
+        state.results.get(1).verificationEvidenceReread,
+        state.results.get(1).verificationManifestSealed,
+        state.results.get(1).observedFirstParent
+          == state.results.get(1).expectedTargetHead,
+        state.results.get(1).observedSecondParent
+          == state.results.get(1).acceptedResultCommit,
+        not(state.results.get(1).promotionForceRequested),
+        not(state.results.get(1).promotionEquivalentContentAccepted),
+        not(state.results.get(1).targetHeld),
+      })
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == PromotionSucceeded,
+        state.results.get(1).promotionGitObservation == PromotionCandidateCurrent,
+        state.results.get(1).promotionObservedTargetHead
+          == state.results.get(1).submittedCandidate,
+        state.results.get(1).promotionCandidateAncestryProven,
+        state.results.get(1).promotionResultRecorded,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run staleTargetSelectsCandidateReconciliationTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionOtherHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionStale,
+        state.results.get(1).promotionGitObservation == PromotionOtherHead,
+        state.results.get(1).promotionObservedTargetHead
+          != state.results.get(1).submittedCandidate,
+        state.results.get(1).promotionResultRecorded,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).verificationManifestSealed,
+        not(state.results.get(1).promotionCandidateAncestryProven),
+        not(state.results.get(1).promotionForceRequested),
+        not(state.results.get(1).promotionEquivalentContentAccepted),
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run initialReadDiscoversCandidateAncestorBeforeCompareAndSetTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionCandidateAncestor(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionSucceeded,
+        state.results.get(1).promotionAttemptCount == 0,
+        not(state.results.get(1).promotionCompareAndSetRequested),
+        state.results.get(1).promotionCandidateAncestryProven,
+      })
+  }
+
+  run lostResponseDiscoversExactPromotedAncestryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionResponseLost,
+        state.results.get(1).promotionResponseAmbiguous,
+        state.results.get(1).promotionAttemptCount == 1,
+        not(state.results.get(1).targetHeld),
+      })
+      .then(reconcilePromotion(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionReconciliation,
+        state.results.get(1).targetHeld,
+        state.results.get(1).promotionAttemptCount == 1,
+      })
+      .then(observePromotionCandidateAncestor(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionSucceeded,
+        state.results.get(1).promotionGitObservation == PromotionCandidateAncestor,
+        state.results.get(1).promotionCandidateAncestryProven,
+        state.results.get(1).promotionResultRecorded,
+        state.results.get(1).promotionObservedTargetHead != state.results.get(1).submittedCandidate,
+        state.results.get(1).verificationManifestSealed,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run ambiguousPromotionNeverRetriesBeforeFreshGitTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .expect(and {
+        not(canSendPromotionAttempt(state, 1)),
+        state.results.get(1).promotionAttemptCount == 1,
+        not(state.results.get(1).promotionFreshExactHeadObservation),
+      })
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionRetryReady,
+        state.results.get(1).promotionFreshExactHeadObservation,
+        state.results.get(1).promotionGitObservation == PromotionExactExpectedHead,
+        state.results.get(1).promotionFreshExactHeadReads == 2,
+        state.results.get(1).promotionAttemptCount == 1,
+      })
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionInFlight,
+        state.results.get(1).promotionAttemptCount == 2,
+        state.results.get(1).promotionLastAttempt == 2,
+      })
+  }
+
+  run unreadablePromotionReadStaysPendingBeforeLimitTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionGitUnreadable(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionReadPending,
+        state.results.get(1).promotionGitObservation == PromotionUnreadableHead,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).promotionIntentRecorded,
+        state.results.get(1).verificationManifestSealed,
+        not(state.results.get(1).promotionResultRecorded),
+        not(state.results.get(1).targetHeld),
+        not(canSendPromotionAttempt(state, 1)),
+      })
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == PromotionResponseLost,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).promotionIntentRecorded,
+        not(state.trackerFactsCurrent),
+        not(state.targetFactsCurrent),
+        state.targetReacquisitionRequired,
+        not(state.results.get(1).targetHeld),
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionRetryReady,
+        state.results.get(1).promotionFreshExactHeadObservation,
+        state.results.get(1).promotionFreshExactHeadReads == 2,
+      })
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionInFlight,
+        state.results.get(1).promotionAttemptCount == 2,
+      })
+  }
+
+  run preFirstUnreadablePromotionRestartsBeforeAttemptOneTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionGitUnreadable(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionReadPending,
+        state.results.get(1).promotionAttemptCount == 0,
+        not(state.results.get(1).targetHeld),
+      })
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == PromotionIntent,
+        state.results.get(1).promotionAttemptCount == 0,
+        state.results.get(1).promotionLastAttempt == 0,
+        not(state.results.get(1).promotionFreshExactHeadObservation),
+        not(state.trackerFactsCurrent),
+        not(state.targetFactsCurrent),
+        state.targetReacquisitionRequired,
+        not(state.results.get(1).targetHeld),
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionAttemptIntended,
+        state.results.get(1).promotionAttemptCount == 1,
+        not(state.results.get(1).promotionCompareAndSetRequested),
+      })
+  }
+
+  run promotionAmbiguityExhaustionPreservesVerifiedCandidateTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionGitUnreadable(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionExhausted,
+        state.results.get(1).promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).promotionLastAttempt == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).promotionGitObservation == PromotionUnreadableHead,
+        state.results.get(1).promotionIntentRecorded,
+        state.results.get(1).promotionResultRecorded == false,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).observedFirstParent
+          == state.results.get(1).expectedTargetHead,
+        state.results.get(1).observedSecondParent
+          == state.results.get(1).acceptedResultCommit,
+        state.results.get(1).verificationEvidenceReread,
+        state.results.get(1).verificationManifestSealed,
+        not(state.results.get(1).promotionCandidateAncestryProven),
+        not(state.results.get(1).targetHeld),
+        not(canSendPromotionAttempt(state, 1)),
+      })
+  }
+
+  run promotionAttemptCountSurvivesRestartTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == PromotionResponseLost,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).promotionLastAttempt == 1,
+        not(state.results.get(1).promotionCompareAndSetRequested),
+        not(state.results.get(1).targetHeld),
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == PromotionResponseLost,
+        state.results.get(1).promotionAttemptCount == 2,
+        state.results.get(1).promotionLastAttempt == 2,
+        state.results.get(1).promotionFreshExactHeadReads == 2,
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionInFlight,
+        state.results.get(1).promotionAttemptCount == 3,
+        state.results.get(1).promotionLastAttempt == 3,
+        state.results.get(1).promotionFreshExactHeadReads == 3,
+        not(canSendPromotionAttempt(state, 1)),
+      })
+  }
+
+  run unrelatedTargetRemainsIndependentWhileSameTargetBlocksTest = {
+    init
+      .then(acceptResult(1))
+      .then(acceptResult(2))
+      .then(assignResultTwoIndependentTarget)
+      .then(queueAcceptedResult(1))
+      .then(queueAcceptedResult(2))
+      .then(startIntegration(1))
+      .then(startIntegration(2))
+      .expect(and {
+        state.results.get(1).phase == Started,
+        state.results.get(2).phase == Started,
+        state.results.get(1).integrationTarget != state.results.get(2).integrationTarget,
+        state.results.get(1).targetHeld,
+        state.results.get(2).targetHeld,
+        atMostOneTargetHolder,
+      })
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionGitUnreadable(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionReadPending,
+        not(state.results.get(1).targetHeld),
+        state.results.get(2).phase == Started,
+        state.results.get(2).targetHeld,
+        state.results.get(1).integrationTarget != state.results.get(2).integrationTarget,
+        atMostOneTargetHolder,
+      })
+  }
 }

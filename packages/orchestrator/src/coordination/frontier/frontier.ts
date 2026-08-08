@@ -34,6 +34,7 @@ import type {
   TargetVerificationCandidate,
   TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
+import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -103,6 +104,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly plan: TargetVerificationPlan
     readonly responsibility: StartedIntegrationResponsibility
   }
+  RunTargetPromotion: {
+    readonly candidate: TargetVerificationCandidate
+    readonly responsibility: StartedIntegrationResponsibility
+    readonly verification: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
+  }
   ReleaseStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
 }>
 
@@ -137,6 +143,7 @@ const transitionTrackerGraphRequirements = {
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
+  RunTargetPromotion: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
@@ -193,6 +200,10 @@ export type FrontierExplanation = Data.TaggedEnum<{
   TargetVerificationConfigurationWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "TargetVerificationPlanConfigured"
+  }
+  TargetPromotionConfigurationWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "TargetPromotionRuntimeConfigured"
   }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation

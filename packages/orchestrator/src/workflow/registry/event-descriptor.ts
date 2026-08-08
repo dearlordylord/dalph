@@ -30,7 +30,12 @@ import {
   taskWorkCapacityPolicyRecordKey,
   targetVerificationCorrelationContradictedRecordKey,
   targetVerificationEvidenceSealedRecordKey,
-  targetVerificationIntentRecordKey
+  targetVerificationIntentRecordKey,
+  targetPromotionAttemptIntentRecordKey,
+  targetPromotionIntentRecordKey,
+  targetPromotionNonConvergenceRecordKey,
+  targetPromotionObservedSuccessRecordKey,
+  targetPromotionStaleRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
@@ -255,6 +260,28 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return {
         _tag: "GenericEventDescriptor",
         expectedKey: targetVerificationCorrelationContradictedRecordKey(event.expected.requestId)
+      }
+    case "TargetPromotionIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetPromotionIntentRecordKey(event.correlation.requestId)
+      }
+    case "TargetPromotionAttemptIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetPromotionAttemptIntentRecordKey(event.correlation.requestId, event.attemptOrdinal)
+      }
+    case "TargetPromotionObservedSuccess":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetPromotionObservedSuccessRecordKey(event.correlation.requestId)
+      }
+    case "TargetPromotionStale":
+      return { _tag: "GenericEventDescriptor", expectedKey: targetPromotionStaleRecordKey(event.correlation.requestId) }
+    case "TargetPromotionNonConvergence":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetPromotionNonConvergenceRecordKey(event.correlation.requestId)
       }
     case "TaskTrackerReadIntentRecorded":
       return operationEvent({

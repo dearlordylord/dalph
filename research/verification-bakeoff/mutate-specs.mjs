@@ -129,7 +129,20 @@ const SPECS = [
       "noAutomaticVerificationReplacement",
       "restartCountBounded",
       "staleTargetProofIsNeverCurrent",
-      "reacquiredVerificationUsesFreshExpectedHead"
+      "reacquiredVerificationUsesFreshExpectedHead",
+      "promotionAttemptsAreBounded",
+      "ambiguousPromotionRequiresFreshObservation",
+      "promotionIntentPrecedesCompareAndSet",
+      "promotionUsesExactSealedCandidate",
+      "promotionCompareAndSetRequiresExactHead",
+      "promotionSuccessRequiresExactAncestryAndEvidence",
+      "stalePromotionPreservesCandidateAndNeverOverwrites",
+      "unreadablePromotionStaysPending",
+      "promotionExhaustionPreservesVerifiedCandidate",
+      "promotionTerminalReleasesTarget",
+      "promotionFreshObservationIsExactExpectedHead",
+      "promotionNoForceOrEquivalentShortcut",
+      "promotionRetryOrdinalsHaveFreshHeadReads"
     ],
     witnesses: [
       "acceptedReached",
@@ -158,6 +171,15 @@ const SPECS = [
       "verificationCorrelationContradictionReached",
       "verificationEvidenceFailureReached",
       "promotionPremiseReached",
+      "promotionIntentReached",
+      "promotionInFlightReached",
+      "promotionResponseLostReached",
+      "promotionReconciliationReached",
+      "promotionRetryReadyReached",
+      "promotionReadPendingReached",
+      "promotionSucceededReached",
+      "promotionStaleReached",
+      "promotionExhaustedReached",
       "releasedLogicalBlockerReached"
     ]
   }

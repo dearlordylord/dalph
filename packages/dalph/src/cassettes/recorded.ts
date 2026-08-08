@@ -17,6 +17,11 @@ import {
   TargetVerificationCorrelationContradictedEvent,
   TargetVerificationEvidenceSealedEvent,
   TargetVerificationIntendedEvent,
+  TargetPromotionIntendedEvent,
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionObservedSuccessEvent,
+  TargetPromotionStaleEvent,
+  TargetPromotionNonConvergenceEvent,
   type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -290,6 +295,91 @@ const recordTargetVerificationEntry = (event: TargetVerificationEvent): Recorded
   }
 }
 
+type TargetPromotionEvent = Extract<WorkflowJournalEvent, { readonly _tag: `TargetPromotion${string}` }>
+type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _tag: TargetPromotionEvent["_tag"] }>
+
+const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPromotionEvent =>
+  event._tag === "TargetPromotionIntended" ||
+  event._tag === "TargetPromotionAttemptIntended" ||
+  event._tag === "TargetPromotionObservedSuccess" ||
+  event._tag === "TargetPromotionStale" ||
+  event._tag === "TargetPromotionNonConvergence"
+
+const isRecordedTargetPromotionEntry = (entry: RecordedCassetteEntry): entry is RecordedTargetPromotionEntry =>
+  entry._tag === "TargetPromotionIntended" ||
+  entry._tag === "TargetPromotionAttemptIntended" ||
+  entry._tag === "TargetPromotionObservedSuccess" ||
+  entry._tag === "TargetPromotionStale" ||
+  entry._tag === "TargetPromotionNonConvergence"
+
+const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTargetPromotionEntry => {
+  switch (event._tag) {
+    case "TargetPromotionIntended":
+      return {
+        _tag: event._tag,
+        correlation: event.correlation,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction"
+      }
+    case "TargetPromotionAttemptIntended":
+      return {
+        _tag: event._tag,
+        attemptOrdinal: event.attemptOrdinal,
+        correlation: event.correlation,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        reason: event.reason
+      }
+    case "TargetPromotionObservedSuccess":
+      return {
+        _tag: event._tag,
+        basis: event.basis,
+        correlation: event.correlation,
+        observation: event.observation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "TargetPromotionStale":
+      return {
+        _tag: event._tag,
+        basis: event.basis,
+        correlation: event.correlation,
+        observation: event.observation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    case "TargetPromotionNonConvergence":
+      return {
+        _tag: event._tag,
+        attemptLimit: event.attemptLimit,
+        attemptOrdinal: event.attemptOrdinal,
+        correlation: event.correlation,
+        lastObservation: event.lastObservation,
+        occurrenceClassification: "NonActionOccurrence"
+      }
+  }
+}
+
+type IntegrationPreparationEvent = CandidateConstructionEvent | TargetVerificationEvent | TargetPromotionEvent
+type RecordedIntegrationPreparationEntry =
+  | RecordedCandidateConstructionEntry
+  | RecordedTargetVerificationEntry
+  | RecordedTargetPromotionEntry
+
+const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
+  isCandidateConstructionEvent(event) || isTargetVerificationEvent(event) || isTargetPromotionEvent(event)
+
+const recordIntegrationPreparationEntry = (event: IntegrationPreparationEvent): RecordedIntegrationPreparationEntry => {
+  if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
+  if (isTargetVerificationEvent(event)) return recordTargetVerificationEntry(event)
+  return recordTargetPromotionEntry(event)
+}
+
+const isRecordedIntegrationPreparationEntry = (
+  entry: RecordedCassetteEntry
+): entry is RecordedIntegrationPreparationEntry =>
+  isRecordedCandidateConstructionEntry(entry) ||
+  isRecordedTargetVerificationEntry(entry) ||
+  isRecordedTargetPromotionEntry(entry)
+
 const recordTaskBoundaryEntry = (
   event: Exclude<
     WorkflowJournalEvent,
@@ -312,6 +402,7 @@ const recordTaskBoundaryEntry = (
         | "TargetVerificationIntended"
         | "TargetVerificationEvidenceSealed"
         | "TargetVerificationCorrelationContradicted"
+        | `TargetPromotion${string}`
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
         | "TaskWorkCapacityChanged"
@@ -372,8 +463,7 @@ const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): Recor
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
-  if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
-  if (isTargetVerificationEvent(event)) return recordTargetVerificationEntry(event)
+  if (isIntegrationPreparationEvent(event)) return recordIntegrationPreparationEntry(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
     event._tag === "PlannedAttemptWorktreeObserved" ||
@@ -688,6 +778,42 @@ const eventForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry)
   }
 }
 
+const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): WorkflowJournalEvent => {
+  const common = { correlation: entry.correlation, version: workflowJournalEventVersion }
+  switch (entry._tag) {
+    case "TargetPromotionIntended":
+      return TargetPromotionIntendedEvent.make(common)
+    case "TargetPromotionAttemptIntended":
+      return TargetPromotionAttemptIntendedEvent.make({
+        ...common,
+        attemptOrdinal: entry.attemptOrdinal,
+        reason: entry.reason
+      })
+    case "TargetPromotionObservedSuccess":
+      return TargetPromotionObservedSuccessEvent.make({ ...common, basis: entry.basis, observation: entry.observation })
+    case "TargetPromotionStale":
+      return TargetPromotionStaleEvent.make({ ...common, basis: entry.basis, observation: entry.observation })
+    case "TargetPromotionNonConvergence":
+      return TargetPromotionNonConvergenceEvent.make({
+        ...common,
+        attemptLimit: entry.attemptLimit,
+        attemptOrdinal: entry.attemptOrdinal,
+        lastObservation: entry.lastObservation
+      })
+  }
+}
+
+const eventForIntegrationPreparationEntry = (
+  entry: RecordedIntegrationPreparationEntry,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number
+): WorkflowJournalEvent => {
+  if (isRecordedCandidateConstructionEntry(entry)) return eventForCandidateConstructionEntry(entry, entries, index)
+  return isRecordedTargetVerificationEntry(entry)
+    ? eventForTargetVerificationEntry(entry)
+    : eventForTargetPromotionEntry(entry)
+}
+
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -696,10 +822,7 @@ const eventForRecordedEntry = (
 ): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
-  if (isRecordedCandidateConstructionEntry(entry)) {
-    return eventForCandidateConstructionEntry(entry, entries, index)
-  }
-  if (isRecordedTargetVerificationEntry(entry)) return eventForTargetVerificationEntry(entry)
+  if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
@@ -830,6 +953,28 @@ const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry)
   }
 }
 
+const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string => {
+  switch (entry._tag) {
+    case "TargetPromotionIntended":
+      return `Dalph coordinator fixed exact promotion ${entry.correlation.expectedTargetHead} -> ${entry.correlation.candidateCommit}.`
+    case "TargetPromotionAttemptIntended":
+      return `Dalph coordinator sent exact compare-and-set attempt ${entry.attemptOrdinal} for candidate ${entry.correlation.candidateCommit}.`
+    case "TargetPromotionObservedSuccess":
+      return `Git established candidate ${entry.correlation.candidateCommit} by ${entry.observation._tag}.`
+    case "TargetPromotionStale":
+      return `Git preserved a different target head while candidate ${entry.correlation.candidateCommit} became stale.`
+    case "TargetPromotionNonConvergence":
+      return `Dalph stopped candidate ${entry.correlation.candidateCommit} after ${entry.attemptOrdinal} ambiguous compare-and-set attempts.`
+  }
+}
+
+const lyricForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparationEntry): string => {
+  if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
+  return isRecordedTargetVerificationEntry(entry)
+    ? lyricForTargetVerificationEntry(entry)
+    : lyricForTargetPromotionEntry(entry)
+}
+
 type RecordedClaimAcquisitionEntry = Extract<
   RecordedCassetteEntry,
   { readonly _tag: "TaskClaimAcquired" | "TaskClaimAcquisitionIntended" | "TaskClaimAcquisitionRejected" }
@@ -860,6 +1005,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedRunEntry
     | RecordedTrackerEntry
     | RecordedTargetVerificationEntry
+    | RecordedTargetPromotionEntry
     | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
@@ -883,8 +1029,7 @@ const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirection
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
-  if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
-  if (isRecordedTargetVerificationEntry(entry)) return lyricForTargetVerificationEntry(entry)
+  if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)

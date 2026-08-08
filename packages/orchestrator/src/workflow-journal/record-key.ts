@@ -11,6 +11,10 @@ import type {
   IntegrationCandidateGitValidationAttemptOrdinal
 } from "../workflow/protocols/integration-candidate-construction/events.js"
 import type { TargetVerificationRequestId } from "../workflow/protocols/target-verification/events.js"
+import type {
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionRequestId
+} from "../workflow/protocols/target-promotion/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -109,3 +113,27 @@ export const targetVerificationCorrelationContradictedRecordKey = (
   requestId: TargetVerificationRequestId
 ): JournalRecordKey =>
   JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:correlation-contradiction`)
+
+const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
+
+/** Stable journal key for one exact candidate's promotion intent. */
+export const targetPromotionIntentRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:intent`)
+
+/** Stable journal key for the intent preceding one numbered compare-and-set request. */
+export const targetPromotionAttemptIntentRecordKey = (
+  requestId: TargetPromotionRequestId,
+  attemptOrdinal: TargetPromotionAttemptOrdinal
+): JournalRecordKey => JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}`)
+
+/** Stable journal key for the one exact promotion proof. */
+export const targetPromotionObservedSuccessRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:observed-success`)
+
+/** Stable journal key for the one stale-head result. */
+export const targetPromotionStaleRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:stale`)
+
+/** Stable journal key for the accepted three-attempt terminal disposition. */
+export const targetPromotionNonConvergenceRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:nonconvergence`)

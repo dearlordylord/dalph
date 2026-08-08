@@ -56,7 +56,9 @@ import {
   targetVerificationRequestIdForCandidate,
   type TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
+import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/target-verification/runtime.js"
+import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -664,12 +666,41 @@ const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_ta
 const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTransition["_tag"]>([
   "ContinueStartedIntegrationCandidate",
   "RunTargetVerification",
+  "RunTargetPromotion",
   "ObservePlannedAttemptContinuationTargetLineage",
   "ObserveResponsibleTaskClaim",
   "ReleaseStartedIntegrationTarget"
 ])
 const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
   transitionTagsAllowedWhilePaused.has(transition._tag)
+
+const recordBeforePause = (
+  records: ReadonlyArray<JournalRecord>,
+  pausePosition: JournalPosition,
+  predicate: (record: JournalRecord) => boolean
+): boolean => records.some((record) => record.position < pausePosition && predicate(record))
+
+type PausedIntegrationReconciliation = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "AcquireStartedIntegrationTarget"
+      | "ContinueStartedIntegrationCandidate"
+      | "RunTargetPromotion"
+      | "RunTargetVerification"
+  }
+>
+
+const pausedIntegrationReconciliationTags: ReadonlySet<RunnableFrontierTransition["_tag"]> = new Set([
+  "AcquireStartedIntegrationTarget",
+  "ContinueStartedIntegrationCandidate",
+  "RunTargetPromotion",
+  "RunTargetVerification"
+])
+
+const isPausedIntegrationReconciliation = (
+  transition: RunnableFrontierTransition
+): transition is PausedIntegrationReconciliation => pausedIntegrationReconciliationTags.has(transition._tag)
 
 /** A crashed candidate request may finish only when its exact intent predates the active Run Pause. */
 /* v8 ignore start -- @preserve Candidate protocol tests cover durable intent correlation; the authored cursor cannot yet crash inside this boundary. */
@@ -678,34 +709,36 @@ const startedIntegrationIntentMayReconcileBeforePause = (
   records: ReadonlyArray<JournalRecord>,
   pausePosition: JournalPosition | undefined
 ): boolean => {
-  if (
-    transition._tag !== "AcquireStartedIntegrationTarget" &&
-    transition._tag !== "ContinueStartedIntegrationCandidate" &&
-    transition._tag !== "RunTargetVerification"
-  ) {
-    return false
-  }
-  if (transition._tag === "RunTargetVerification") {
-    return (
-      pausePosition !== undefined &&
-      records.some(
-        ({ event, position }) =>
-          position < pausePosition &&
+  if (pausePosition === undefined || !isPausedIntegrationReconciliation(transition)) return false
+  switch (transition._tag) {
+    case "RunTargetVerification":
+      return recordBeforePause(
+        records,
+        pausePosition,
+        ({ event }) =>
           event._tag === "TargetVerificationIntended" &&
           event.correlation.requestId ===
             targetVerificationRequestIdForCandidate(transition.candidate.correlation.candidateId)
       )
-    )
+    case "RunTargetPromotion":
+      return recordBeforePause(
+        records,
+        pausePosition,
+        ({ event }) =>
+          event._tag === "TargetPromotionIntended" &&
+          event.correlation.requestId ===
+            targetPromotionRequestIdForCandidate(transition.candidate.correlation.candidateId)
+      )
+    case "AcquireStartedIntegrationTarget":
+    case "ContinueStartedIntegrationCandidate":
+      return recordBeforePause(
+        records,
+        pausePosition,
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructionIntended" &&
+          event.startedAt === transition.responsibility.startedAt
+      )
   }
-  return (
-    pausePosition !== undefined &&
-    records.some(
-      ({ event, position }) =>
-        position < pausePosition &&
-        event._tag === "IntegrationCandidateConstructionIntended" &&
-        event.startedAt === transition.responsibility.startedAt
-    )
-  )
 }
 
 const activeTaskPausePosition = (
@@ -1059,6 +1092,8 @@ const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
   "IntegrationInProgress",
   "IntegrationTrackerFactsWait",
   "IntegrationTargetWait",
+  "TargetPromotionConfigurationWait",
+  "TargetVerificationConfigurationWait",
   "PlannedAttemptTaskLifecycleConstraint",
   "PlannedAttemptGitConstraint",
   "PlannedAttemptTaskClaimConstraint",
@@ -1073,6 +1108,7 @@ const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>
   "CommitTaskClaimReacquisitionIntent",
   "ContinueStartedIntegrationCandidate",
   "RunTargetVerification",
+  "RunTargetPromotion",
   "ObservePlannedAttemptContinuationGraph",
   "ObservePlannedAttemptContinuationClaim",
   "ObservePlannedAttemptContinuationSpecification",
@@ -1093,7 +1129,8 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   activationBaselinePosition: Option.Option<JournalPosition>,
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
-  targetVerificationPlan: Option.Option<TargetVerificationPlan>
+  targetVerificationPlan: Option.Option<TargetVerificationPlan>,
+  targetPromotionConfigured: boolean
 ) {
   const runState = yield* readRecoveredRunState(runId)
   const currentTaskGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
@@ -1189,6 +1226,7 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
     integrationTarget,
     targetLineageByAttemptId,
     targetVerificationPlan,
+    targetPromotionConfigured,
     taskClaimAuthorityByAttemptId: new Map(
       runState.workflowHistory.records.flatMap(({ event }) => {
         if (event._tag !== "TaskAttemptPlanned") return []
@@ -1367,7 +1405,8 @@ const makeJournaledFreshRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProj
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
   targetVerificationPlan: Option.Option<TargetVerificationPlan>,
-  integrationResourcesOverride: IntegrationTargetResourceController | undefined
+  integrationResourcesOverride: IntegrationTargetResourceController | undefined,
+  targetPromotionConfigured: boolean
 ) {
   const journal = yield* InRunJournal
   const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
@@ -1379,7 +1418,8 @@ const makeJournaledFreshRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProj
     activationBaselinePosition,
     candidateCorrectionLimit,
     candidateContinuationLimit,
-    targetVerificationPlan
+    targetVerificationPlan,
+    targetPromotionConfigured
   ).pipe(
     Effect.map((current) =>
       recoveryProjectionSnapshot(
@@ -1404,7 +1444,8 @@ export const makeJournaledFreshRunRecoveryProjection = (
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   integrationResources?: IntegrationTargetResourceController,
-  targetVerification?: TargetVerificationRuntimeInput
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
 ) =>
   makeJournaledFreshRunRecoveryProjectionEffect(
     runId,
@@ -1412,7 +1453,8 @@ export const makeJournaledFreshRunRecoveryProjection = (
     Option.fromUndefinedOr(candidateCorrectionLimit),
     Option.fromUndefinedOr(candidateContinuationLimit),
     Option.fromUndefinedOr(targetVerification?.plan),
-    integrationResources
+    integrationResources,
+    targetPromotion !== undefined
   )
 
 const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAuthoritative")(function* (
@@ -1421,7 +1463,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
   targetVerificationPlan: Option.Option<TargetVerificationPlan>,
-  integrationResourcesOverride: IntegrationTargetResourceController | undefined
+  integrationResourcesOverride: IntegrationTargetResourceController | undefined,
+  targetPromotionConfigured: boolean
 ) {
   const journal = yield* InRunJournal
   const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
@@ -1457,7 +1500,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
     activationBaselinePosition,
     candidateCorrectionLimit,
     candidateContinuationLimit,
-    targetVerificationPlan
+    targetVerificationPlan,
+    targetPromotionConfigured
   ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
   return RunRecoveryProjection.of({
     _tag: "AuthoritativeRunRecoveryProjection",
@@ -1474,7 +1518,8 @@ export const makeRunRecoveryProjection = (
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   integrationResources?: IntegrationTargetResourceController,
-  targetVerification?: TargetVerificationRuntimeInput
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
 ) =>
   makeRunRecoveryProjectionEffect(
     runId,
@@ -1482,7 +1527,8 @@ export const makeRunRecoveryProjection = (
     Option.fromUndefinedOr(candidateCorrectionLimit),
     Option.fromUndefinedOr(candidateContinuationLimit),
     Option.fromUndefinedOr(targetVerification?.plan),
-    integrationResources
+    integrationResources,
+    targetPromotion !== undefined
   )
 
 export const journaledFreshRunRecoveryProjectionLayer = (
@@ -1490,7 +1536,8 @@ export const journaledFreshRunRecoveryProjectionLayer = (
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
-  targetVerification?: TargetVerificationRuntimeInput
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
 ) =>
   Layer.effect(
     RunRecoveryProjection,
@@ -1500,6 +1547,7 @@ export const journaledFreshRunRecoveryProjectionLayer = (
       candidateCorrectionLimit,
       candidateContinuationLimit,
       undefined,
-      targetVerification
+      targetVerification,
+      targetPromotion
     )
   )

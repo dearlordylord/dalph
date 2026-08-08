@@ -11,6 +11,7 @@ import {
   deriveIntegrationCandidateConstruction
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
+import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
@@ -26,7 +27,15 @@ const targetVerificationEvidenceOf = (
     Option.fromUndefinedOr(deriveConstructedIntegrationCandidateOccurrence(records, responsibility))
   )
   const verification = deriveTargetVerificationState(records, constructed)
-  return verification === undefined ? [] : [{ _tag: "TargetVerification", responsibility, state: verification }]
+  if (verification === undefined) return []
+  const promotion =
+    verification._tag === "VerificationPassed"
+      ? deriveTargetPromotionStateFor(records, constructed, verification)
+      : undefined
+  return [
+    { _tag: "TargetVerification", responsibility, state: verification },
+    ...(promotion === undefined ? [] : [{ _tag: "TargetPromotion" as const, responsibility, state: promotion }])
+  ]
 }
 
 const integrationEvidenceOf = (

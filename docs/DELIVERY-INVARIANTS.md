@@ -199,12 +199,12 @@ and Dalph does not attribute an unauthenticated outside edit to a person.
 
 ## Integration and promotion
 
-**Candidate construction audited; later promotion remains separate.** Issue 57's
+**Candidate construction, verification, and promotion audited.** Issue 57's
 explicit submission, exact ordered parents, fixed session, lineage gate, and
-preservation paths are checked against production, maintained cassettes, and
-the accepted-result integration model. Candidate verification, promotion, and
-stale-head reconciliation remain owned by later issues and are not implied by
-that evidence.
+preservation paths, issue 59's sealed verification evidence, and issue 60's
+exact compare-and-set/reconciliation paths are checked against production,
+maintained cassettes, and the accepted-result integration model. Tracker
+completion and final integration settlement remain separate later protocols.
 
 **D26 Candidate shape.** An integration candidate has exactly two ordered direct
 parents: the fixed expected target head first, the immutable accepted result
@@ -215,13 +215,13 @@ second. The order is never reversed and a newer head is never substituted.
 head selects reconciliation and an ambiguous head requires a reread. Neither
 authorizes a force update, a reset, or a rewrite. A candidate is rebuilt and
 reverified rather than reused against a different head.
-→ `I13 (weakened: guard or history flag, no reconciliation branch)`
+→ `acceptedResultIntegration` promotion safety, stale-head, bounded-attempt,
+and non-convergence invariants
 
 **D28 Verification precedes promotion.** Only a verified candidate is offered.
 Process success, the newest worktree commit, or a clean tree do not classify a
 candidate as verified.
-→ `—` no model distinguishes a verified candidate from a constructed one, so
-the premise of the guard is absent.
+→ `acceptedResultIntegration` sealed-evidence promotion premise and ordering
 
 ## Process and durability
 
@@ -358,11 +358,12 @@ a caller argument, and recovery requires no initial-policy input.
 
 ## Serialized integration
 
-**Admission and candidate construction implemented.** The issue 56 queue and
-issue 57 candidate session/resource behavior below are checked against
-production. Issue 138's blocker reconciliation and session-supersession
-qualification remains separately accepted work; the implemented fixed-session
-rules do not imply that later behavior.
+**Admission through exact-head promotion implemented.** The issue 56 queue,
+issue 57 candidate session/resource behavior, issue 59 verification, and issue
+60 promotion behavior below are checked against production. Issue 138's
+blocker reconciliation and session-supersession qualification remains
+separately accepted work; the implemented fixed-session rules do not imply
+that later behavior.
 
 **D41 Integration admission is a distinct resource from task-work capacity.**
 Queued or started integration is not counted against task-work capacity, and
@@ -431,7 +432,7 @@ Items below are unresolved and must not be read as settled behavior.
    value that production always leaves empty, while settlement actions are
    separately proposed and executed. Whether the empty value is future work or
    dead design is undecided.
-2. **Promotion and stale-head reconciliation.** D26's issue 57 candidate shape
-   is checked against production. D27–D28's later candidate-verification,
-   promotion, and stale-head paths still require their own production audit;
-   issue 57's completed construction evidence does not establish them.
+2. **Post-promotion settlement.** D26–D28 are checked through exact promotion
+   or preserved reconciliation. Tracker completion, fresh confirmation,
+   candidate cleanup, and final integration settlement remain owned by issues
+   #61 and #141; a promoted Git proof alone does not establish them.

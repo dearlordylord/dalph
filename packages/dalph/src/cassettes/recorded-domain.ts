@@ -43,7 +43,15 @@ import {
   IntegrationSessionId,
   EvidenceReference,
   TargetVerificationCorrelation,
-  TargetVerificationOutcome
+  TargetVerificationOutcome,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
+  TargetPromotionCorrelation,
+  TargetPromotionSuccessObservation,
+  TargetPromotionStaleObservation,
+  TargetPromotionNonConvergenceObservation,
+  TargetPromotionAttemptLimit,
+  TargetPromotionTerminalBasis
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -136,6 +144,32 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     received: TargetVerificationCorrelation,
     ...nonActionOccurrence
   },
+  TargetPromotionIntended: { correlation: TargetPromotionCorrelation, ...initiatedByCoordinator },
+  TargetPromotionAttemptIntended: {
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation,
+    reason: TargetPromotionAttemptReason,
+    ...initiatedByCoordinator
+  },
+  TargetPromotionObservedSuccess: {
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    observation: TargetPromotionSuccessObservation,
+    ...nonActionOccurrence
+  },
+  TargetPromotionStale: {
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    observation: TargetPromotionStaleObservation,
+    ...nonActionOccurrence
+  },
+  TargetPromotionNonConvergence: {
+    attemptLimit: TargetPromotionAttemptLimit,
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation,
+    lastObservation: TargetPromotionNonConvergenceObservation,
+    ...nonActionOccurrence
+  },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
     ordinal: PlannedAttemptExecutorReportOrdinal,
@@ -200,7 +234,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 6
+const currentRecordedCassetteVersion = 7
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

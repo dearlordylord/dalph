@@ -25,6 +25,7 @@ import {
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { validateRunPolicyHistory } from "./run-policy-history.js"
 import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
+import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -84,6 +85,7 @@ const emptyIndexes = (): FoldIndexes => ({
   integrationCandidatesConstructed: new Map(),
   targetVerificationIntents: new Map(),
   targetVerificationTerminals: new Set(),
+  targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   integrationCandidateSubmissions: new Map(),
   integrationCandidateGitObservations: new Map(),
   latestControlDirectionOrdinal: 0,

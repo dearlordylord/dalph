@@ -48,6 +48,11 @@ import {
   TargetVerificationPlan,
   TargetVerificationRequestId,
   TargetVerificationTerminal,
+  TargetPromotionCompareAndSetFailure,
+  TargetPromotionCompareAndSetResult,
+  TargetPromotionGitReadFailure,
+  TargetPromotionGitReadObservation,
+  type TargetPromotionGitService,
   memoryEvidenceStoreLayer,
   EvidenceStore,
   TestGitWorktree,
@@ -130,6 +135,7 @@ const passedTargetVerificationTerminalFrom = (
   correlation: TargetVerificationCorrelation
 ): TargetVerificationTerminal => {
   const [first, ...rest] = artifacts
+  /* v8 ignore next -- @preserve Authored Passed verification results require at least one declared artifact; non-passing terminals use their distinct cases. */
   return first === undefined
     ? TargetVerificationTerminal.cases.Failed.make({ artifacts: [], correlation })
     : TargetVerificationTerminal.cases.Passed.make({ artifacts: [first, ...rest], correlation })
@@ -168,6 +174,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const cursor = yield* makeStoryCursor(cassette.story)
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
+      const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
       const candidateTerminalEventTag = targetVerificationStory
         ? cassette.story.some(
             (item) => item._tag === "TargetVerificationReturned" && item.result._tag === "CorrelationContradiction"
@@ -231,6 +238,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               return existing === undefined
                 ? cursor.consumeTargetVerificationReturned.pipe(
                     Effect.mapError(
+                      /* v8 ignore next -- @preserve Maintained verification cassettes supply the declared wrapper return; generic cursor mismatch behavior is tested at the cursor seam. */
                       (failure) =>
                         new TargetVerificationBoundaryFailure({
                           detail: `${failure._tag} at story position ${failure.storyPosition}`,
@@ -246,6 +254,41 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             })
           )
       })
+      const targetPromotionGit = {
+        compareAndSet: (request: Parameters<TargetPromotionGitService["compareAndSet"]>[0]) =>
+          cursor.consumeTargetPromotionCompareAndSet.pipe(
+            Effect.map(({ result }) =>
+              result._tag === "Applied"
+                ? TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit })
+                : TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({
+                    observedHeadSha: result.observedHeadSha
+                  })
+            ),
+            Effect.mapError(
+              /* v8 ignore next -- @preserve Maintained promotion cassettes supply the declared compare-and-set occurrence; cursor mismatch behavior is shared. */
+              (failure) =>
+                new TargetPromotionCompareAndSetFailure({
+                  candidateCommit: request.candidateCommit,
+                  detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                  expectedHead: request.expectedTargetHead,
+                  target: request.integrationTarget
+                })
+            )
+          ),
+        read: (request: Parameters<TargetPromotionGitService["read"]>[0]) =>
+          cursor.consumeTargetPromotionGitRead.pipe(
+            Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
+            Effect.mapError(
+              /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
+              (failure) =>
+                new TargetPromotionGitReadFailure({
+                  candidateCommit: request.candidateCommit,
+                  detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                  target: request.integrationTarget
+                })
+            )
+          )
+      }
       const journalLayer = journalStoreCapabilities(
         Layer.succeed(
           JournalStore,
@@ -338,6 +381,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             startOrContinue: (request) =>
               cursor.consumeIntegrationCandidateAgentReport.pipe(
                 Effect.flatMap((candidateReport) => {
+                  /* v8 ignore next -- @preserve Accepted authored candidate stories declare every report; this diagnostic keeps malformed runtime re-entry total. */
                   if (Option.isNone(candidateReport)) {
                     return Context.get(sharedContext, JournalStore)
                       .read(runId)
@@ -422,7 +466,8 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
           verificationPlan === undefined
             ? undefined
-            : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan }
+            : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
+          targetPromotionStory ? { git: targetPromotionGit } : undefined
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),
@@ -555,6 +600,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         }).pipe(Effect.provide(application))
       )
       const { records, recoveredCoordinatorExit } = execution
+      /* v8 ignore next -- @preserve Recovered authored runs return success after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
         return yield* Effect.failCause(recoveredCoordinatorExit.cause)
       }

@@ -46,6 +46,10 @@ import {
   type EvidenceDigest,
   type TargetVerificationPlanId,
   type TargetVerificationCorrelation,
+  type TargetPromotionCorrelation,
+  type TargetPromotionAttemptOrdinal,
+  type TargetPromotionAttemptLimit,
+  targetPromotionRequestIdForCandidate,
   targetVerificationRequestIdForCandidate,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
@@ -119,6 +123,8 @@ type PreservedCassetteBrand =
   | EvidenceReference
   | EvidenceDigest
   | TargetVerificationPlanId
+  | TargetPromotionAttemptOrdinal
+  | TargetPromotionAttemptLimit
   | RunPolicyRevision
   | TaskWorkCapacity
   | TaskClaimReacquisitionRequestId
@@ -205,6 +211,23 @@ const renameTargetVerificationCorrelation = (
     candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
     planId: preserveCassetteValue(correlation.planId),
     requestId: targetVerificationRequestIdForCandidate(candidateCorrelation.candidateId)
+  })
+}
+
+const renameTargetPromotionCorrelation = (
+  correlation: TargetPromotionCorrelation,
+  maps: IdentityRenamingMaps
+): TargetPromotionCorrelation => {
+  const candidateCorrelation = renameCandidateCorrelation(correlation.candidateCorrelation, maps)
+  return completeFields<TargetPromotionCorrelation>({
+    candidateCommit: preserveCassetteValue(correlation.candidateCommit),
+    candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
+    candidateCorrelation,
+    expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
+    integrationTarget: preserveCassetteValue(correlation.integrationTarget),
+    requestId: targetPromotionRequestIdForCandidate(candidateCorrelation.candidateId),
+    verificationCorrelation: renameTargetVerificationCorrelation(correlation.verificationCorrelation, maps),
+    verificationManifest: preserveCassetteValue(correlation.verificationManifest)
   })
 }
 
@@ -511,6 +534,47 @@ const renameRecordedCassetteEntry = (
           expected: renameTargetVerificationCorrelation(verificationEntry.expected, maps),
           received: renameTargetVerificationCorrelation(verificationEntry.received, maps),
           occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification)
+        }),
+      TargetPromotionIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionIntended",
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      TargetPromotionAttemptIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionAttemptIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          reason: preserveCassetteValue(entry.reason)
+        }),
+      TargetPromotionObservedSuccess: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionObservedSuccess",
+          basis: preserveCassetteValue(entry.basis),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          observation: preserveCassetteValue(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      TargetPromotionStale: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionStale",
+          basis: preserveCassetteValue(entry.basis),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          observation: preserveCassetteValue(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      TargetPromotionNonConvergence: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionNonConvergence",
+          attemptLimit: preserveCassetteValue(entry.attemptLimit),
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          lastObservation: preserveCassetteValue(entry.lastObservation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({

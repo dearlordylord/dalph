@@ -82,6 +82,31 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden control: once three compare-and-set requests have been used,
+  // this attempts to mint a fourth durable request. The bounded-attempt
+  // invariant must catch the mutation even though the action is syntactically
+  // well formed.
+  action sendFourthPromotionAttempt: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PromotionExhausted,
+      result.promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+      not(result.targetHeld),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PromotionInFlight,
+          targetHeld: true,
+          promotionAttemptCount: PROMOTION_ATTEMPT_LIMIT + 1,
+          promotionLastAttempt: PROMOTION_ATTEMPT_LIMIT + 1,
+          promotionExpectedHeadVerified: true,
+          promotionCompareAndSetRequested: true,
+        }),
+      },
+    }
+  }
+
   run unsealedPassCannotAuthorizePromotionTest = {
     init
       .then(acceptResult(1))
@@ -154,5 +179,38 @@ module acceptedResultIntegrationNegativeTest {
       .then(offerPromotionPremise(1))
       .then(startLaterQueueAfterPromotionPremise)
       .expect(not(logicalIntegrationResponsibilityBlocksLaterQueue))
+  }
+
+  run fourthPromotionAttemptViolatesBoundTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recordVerificationIntent(1))
+      .then(invokeVerification(1))
+      .then(reportVerificationPassed(1))
+      .then(rereadAndSealPassedVerification(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(sendFourthPromotionAttempt)
+      .expect(not(promotionAttemptsAreBounded))
   }
 }

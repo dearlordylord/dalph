@@ -278,7 +278,20 @@ const acceptedResultIntegrationInvariants = [
   "noAutomaticVerificationReplacement",
   "restartCountBounded",
   "staleTargetProofIsNeverCurrent",
-  "reacquiredVerificationUsesFreshExpectedHead"
+  "reacquiredVerificationUsesFreshExpectedHead",
+  "promotionAttemptsAreBounded",
+  "ambiguousPromotionRequiresFreshObservation",
+  "promotionIntentPrecedesCompareAndSet",
+  "promotionUsesExactSealedCandidate",
+  "promotionCompareAndSetRequiresExactHead",
+  "promotionSuccessRequiresExactAncestryAndEvidence",
+  "stalePromotionPreservesCandidateAndNeverOverwrites",
+  "unreadablePromotionStaysPending",
+  "promotionExhaustionPreservesVerifiedCandidate",
+  "promotionTerminalReleasesTarget",
+  "promotionFreshObservationIsExactExpectedHead",
+  "promotionNoForceOrEquivalentShortcut",
+  "promotionRetryOrdinalsHaveFreshHeadReads"
 ]
 
 await run("accepted-result integration model typecheck", [
@@ -329,6 +342,16 @@ await run("accepted-result integration sampled model", [
   "verificationCorrelationContradictionReached",
   "verificationEvidenceFailureReached",
   "promotionPremiseReached",
+  "promotionIntentReached",
+  "promotionAttemptIntendedReached",
+  "promotionInFlightReached",
+  "promotionResponseLostReached",
+  "promotionReconciliationReached",
+  "promotionRetryReadyReached",
+  "promotionReadPendingReached",
+  "promotionSucceededReached",
+  "promotionStaleReached",
+  "promotionExhaustedReached",
   "releasedLogicalBlockerReached",
   "--max-steps",
   "35",

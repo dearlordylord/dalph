@@ -27,6 +27,8 @@ import type { IntegrationCandidateBoundaryUnavailable } from "./integration-cand
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
+import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
+import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -112,9 +114,11 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof runIntegrationCandidateConstruction>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetVerification>
+  | EffectFunctionFailure<typeof runTargetPromotion>
   | EffectFunctionFailure<typeof startQueuedIntegration>
   | IntegrationCandidateBoundaryUnavailable
   | TargetVerificationRuntimeUnavailable
+  | TargetPromotionRuntimeUnavailable
   | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCorrelationMismatch
   | DeliveryRelationSourceError

@@ -15,6 +15,10 @@ import { TargetVerificationBoundary } from "../../workflow/protocols/target-veri
 import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import { TargetVerificationRuntime } from "../../workflow/protocols/target-verification/runtime.js"
 import { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
+import { TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
+import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
+import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
+import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
 
@@ -28,6 +32,26 @@ type ContinueIntegrationCandidate = Extract<
   { readonly _tag: "ContinueStartedIntegrationCandidate" }
 >
 type RunTargetVerification = Extract<IntegrationTransition, { readonly _tag: "RunTargetVerification" }>
+type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
+
+const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(function* (
+  action: IdentityFreeAction,
+  transition: RunTargetPromotion,
+  lease: DeliveryActionExecutionLease
+) {
+  const context = yield* Effect.context<never>()
+  const runtime = Context.getOption(context, TargetPromotionRuntime)
+  if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
+  yield* lease.integrationTargets
+    .withPermit(
+      transition.responsibility,
+      runTargetPromotion(transition.candidate, transition.verification).pipe(
+        Effect.provideService(TargetPromotionGit, runtime.value.git)
+      )
+    )
+    .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility)))
+  return deliveryActionCompleted(action.proposal.id)
+})
 
 const executeTargetVerification = Effect.fn("DeliveryAction.runTargetVerification")(function* (
   action: IdentityFreeAction,
@@ -103,5 +127,6 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     return deliveryActionCompleted(action.proposal.id)
   }
   if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
+  if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
   return yield* continueIntegrationCandidate(action, transition, lease)
 })

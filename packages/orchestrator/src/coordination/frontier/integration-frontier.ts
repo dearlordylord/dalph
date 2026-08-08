@@ -2,7 +2,6 @@ import { Option, Schema } from "effect"
 import {
   type AttemptId,
   type IntegrationTarget,
-  type PlannedTaskAttempt,
   type TaskId,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -41,23 +40,8 @@ import {
   type TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
-
-/** A region-local reason that accepted integration work cannot advance now. */
-export type IntegrationDeliveryWait =
-  | {
-      readonly _tag: "IntegrationDependencyWait"
-      readonly plannedAttempt: PlannedTaskAttempt
-      readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
-    }
-  | { readonly _tag: "IntegrationConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
-  | {
-      readonly _tag: "IntegrationTaskClaimConstraint"
-      readonly claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
-      readonly plannedAttempt: PlannedTaskAttempt
-    }
-  | { readonly _tag: "IntegrationTrackerFactsWait"; readonly plannedAttempt: PlannedTaskAttempt }
-  | { readonly _tag: "IntegrationTargetWait"; readonly plannedAttempt: PlannedTaskAttempt }
-  | { readonly _tag: "TargetVerificationConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
+import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
+export { integrationDeliveryWaitsOf, type IntegrationDeliveryWait } from "./integration-delivery-waits.js"
 
 const acceptedCandidateProgressAt = (
   records: ReadonlyArray<JournalRecord>,
@@ -77,35 +61,6 @@ const acceptedCandidateProgressAt = (
   return Option.getOrThrow(Option.fromUndefinedOr(relevant)).position
 }
 
-const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): IntegrationDeliveryWait | undefined => {
-  if (explanation._tag === "IntegrationDependencyWait") {
-    return {
-      _tag: explanation._tag,
-      plannedAttempt: explanation.plannedAttempt,
-      prerequisiteTaskIds: explanation.prerequisiteTaskIds
-    }
-  }
-  if (explanation._tag === "IntegrationTaskClaimConstraint") {
-    return { _tag: explanation._tag, claimState: explanation.claimState, plannedAttempt: explanation.plannedAttempt }
-  }
-  if (
-    explanation._tag === "IntegrationConfigurationWait" ||
-    explanation._tag === "IntegrationTrackerFactsWait" ||
-    explanation._tag === "IntegrationTargetWait" ||
-    explanation._tag === "TargetVerificationConfigurationWait"
-  ) {
-    return { _tag: explanation._tag, plannedAttempt: explanation.plannedAttempt }
-  }
-  return undefined
-}
-
-/** Projects only integration waits from the lower integration relation, before scheduler merging. */
-export const integrationDeliveryWaitsOf = (frontier: RunnableFrontier): ReadonlyArray<IntegrationDeliveryWait> =>
-  frontier.explanations.flatMap((explanation) => {
-    const wait = integrationDeliveryWaitFrom(explanation)
-    return wait === undefined ? [] : [wait]
-  })
-
 export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
   readonly activeResponsibilityPositions?: ReadonlySet<JournalPosition>
@@ -116,6 +71,7 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly candidateContinuationLimit?: Option.Option<CandidateContinuationLimit>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
   readonly targetVerificationPlan?: Option.Option<TargetVerificationPlan>
+  readonly targetPromotionConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
 }
 
@@ -128,6 +84,7 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   candidateContinuationLimit: Option.none(),
   targetLineageByAttemptId: new Map(),
   targetVerificationPlan: Option.none(),
+  targetPromotionConfigured: false,
   taskClaimAuthorityByAttemptId: new Map()
 }
 
@@ -141,7 +98,6 @@ const unsatisfiedPrerequisites = (
     .prerequisitesOf(responsibility.plannedAttempt.taskId)
     .filter((taskId) => Option.getOrUndefined(graph.value.lifecycleOf(taskId))?._tag !== "CompletedSuccessfully")
 }
-
 /** Derives target serialization and blocker waits from journal order plus current tracker facts. */
 export const deriveIntegrationFrontier = (
   runState: ReconstructedRunState,
@@ -192,6 +148,61 @@ export const deriveIntegrationFrontier = (
         lineage.targetHeadSha !== candidate.correlation.expectedTargetHead)
     )
   }
+  const verificationFor = (candidate: TargetVerificationCandidate | undefined) =>
+    candidate === undefined ? undefined : deriveTargetVerificationState(runState.workflowHistory.records, candidate)
+  const promotionFor = (
+    candidate: TargetVerificationCandidate | undefined,
+    verification: ReturnType<typeof deriveTargetVerificationState>
+  ) =>
+    candidate === undefined || verification?._tag !== "VerificationPassed"
+      ? undefined
+      : deriveTargetPromotionStateFor(runState.workflowHistory.records, candidate, verification)
+  const candidateAwaitsVerificationPlan = (
+    candidate: TargetVerificationCandidate | undefined,
+    verification: ReturnType<typeof deriveTargetVerificationState>
+  ): boolean =>
+    candidate !== undefined &&
+    verification === undefined &&
+    Option.isNone(runtimeFacts.targetVerificationPlan ?? Option.none())
+  const promotionRuntimeIsMissing = (verification: ReturnType<typeof deriveTargetVerificationState>): boolean =>
+    verification?._tag === "VerificationPassed" && runtimeFacts.targetPromotionConfigured !== true
+  const progressOrRewriteExplanation = (responsibility: StartedIntegrationResponsibility) =>
+    hasPreIntentTargetRewrite(responsibility) || verificationTargetWasRewritten(responsibility)
+      ? FrontierExplanation.PlannedAttemptGitConstraint({
+          correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+          gitState: "TargetRewrite",
+          taskId: responsibility.plannedAttempt.taskId,
+          wakeCondition: "GitFactsObserved"
+        })
+      : FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
+  const explanationForStarted = (responsibility: StartedIntegrationResponsibility) => {
+    const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
+    if (prerequisiteTaskIds.length > 0) {
+      return FrontierExplanation.IntegrationDependencyWait({
+        plannedAttempt: responsibility.plannedAttempt,
+        prerequisiteTaskIds,
+        wakeCondition: "TaskTrackerFactsObserved"
+      })
+    }
+    const candidate = constructedCandidateFor(responsibility)
+    const verification = verificationFor(candidate)
+    if (candidateAwaitsVerificationPlan(candidate, verification)) {
+      return FrontierExplanation.TargetVerificationConfigurationWait({
+        plannedAttempt: responsibility.plannedAttempt,
+        wakeCondition: "TargetVerificationPlanConfigured"
+      })
+    }
+    if (promotionRuntimeIsMissing(verification)) {
+      return FrontierExplanation.TargetPromotionConfigurationWait({
+        plannedAttempt: responsibility.plannedAttempt,
+        wakeCondition: "TargetPromotionRuntimeConfigured"
+      })
+    }
+    if (promotionFor(candidate, verification)?._tag === "PromotionPending") {
+      return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
+    }
+    return progressOrRewriteExplanation(responsibility)
+  }
   const startable = selectStartableIntegrationResponsibilities({ responsibilities }).filter(
     (responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility)
   )
@@ -209,12 +220,32 @@ export const deriveIntegrationFrontier = (
     if (existing?._tag === "CandidateConstructed") {
       const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
       const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
-      if (
-        verification?._tag === "VerificationPassed" ||
-        verification?._tag === "VerificationStopped" ||
-        verification?._tag === "VerificationContradicted"
-      ) {
+      if (verification?._tag === "VerificationStopped" || verification?._tag === "VerificationContradicted") {
         return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      }
+      if (verification?._tag === "VerificationPassed") {
+        const promotion = deriveTargetPromotionStateFor(runState.workflowHistory.records, candidate, verification)
+        if (
+          promotion?._tag === "PromotionSucceeded" ||
+          promotion?._tag === "PromotionStale" ||
+          promotion?._tag === "PromotionNonConvergent"
+        ) {
+          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        }
+        if (waiting || runtimeFacts.targetPromotionConfigured !== true) {
+          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        }
+        if (promotion === undefined && verificationTargetWasRewritten(responsibility)) {
+          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        }
+        if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+        if (
+          promotion === undefined &&
+          !runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)
+        ) {
+          return []
+        }
+        return [RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility, verification })]
       }
       if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
       const plan = runtimeFacts.targetVerificationPlan ?? Option.none()
@@ -348,33 +379,7 @@ export const deriveIntegrationFrontier = (
       ...claimAuthorityWaits,
       ...started
         .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))
-        .map((responsibility) => {
-          const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
-          if (prerequisiteTaskIds.length > 0) {
-            return FrontierExplanation.IntegrationDependencyWait({
-              plannedAttempt: responsibility.plannedAttempt,
-              prerequisiteTaskIds,
-              wakeCondition: "TaskTrackerFactsObserved"
-            })
-          }
-          const candidateAwaitingPlan =
-            constructedCandidateFor(responsibility) !== undefined &&
-            Option.isNone(runtimeFacts.targetVerificationPlan ?? Option.none())
-          if (candidateAwaitingPlan) {
-            return FrontierExplanation.TargetVerificationConfigurationWait({
-              plannedAttempt: responsibility.plannedAttempt,
-              wakeCondition: "TargetVerificationPlanConfigured"
-            })
-          }
-          return hasPreIntentTargetRewrite(responsibility) || verificationTargetWasRewritten(responsibility)
-            ? FrontierExplanation.PlannedAttemptGitConstraint({
-                correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
-                gitState: "TargetRewrite",
-                taskId: responsibility.plannedAttempt.taskId,
-                wakeCondition: "GitFactsObserved"
-              })
-            : FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
-        }),
+        .map(explanationForStarted),
       ...queued
         .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))
         .flatMap((responsibility) =>

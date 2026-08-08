@@ -78,11 +78,14 @@ import {
   maintainedAuthoredCassetteCatalog,
   measureTrackerObservationEncoding,
   projectRecordedCassette,
+  ProtocolStoryItem,
   RecordedCassette,
+  recordedCassetteVersion,
   type RecordedCassetteEntry,
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
+  runTargetPromotionProtocolCassette,
   runPauseRestartsPassivelyAuthoredCassette,
   runPauseSafelySuspendsAuthoredCassette,
   runUnpauseAfterSafeSuspensionAuthoredCassette,
@@ -95,6 +98,9 @@ import {
   runAuthoredScenarioCassette as runAuthoredScenarioCassetteWithCrypto,
   singletonTaskCompletesAuthoredCassette,
   staleTaskPauseRejectedAuthoredCassette,
+  targetPromotionConcurrentTargetsProtocolCassette,
+  TargetPromotionProtocolCassette,
+  targetPromotionUnreadableProtocolCassette,
   unreadableTaskUnpauseRejectedAuthoredCassette,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
@@ -996,6 +1002,250 @@ it.effect("runs only the selected public wrapper and seals passing evidence for 
     expect(renderRecordedCassetteLyrics(recorded)).toContain("returned Passed for candidate")
   })
 )
+
+it.effect("promotes verified M by exact compare-and-set and records exact ancestry", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    const attempts = run.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    const success = run.records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+
+    expect(attempts).toHaveLength(1)
+    expect(success?.event).toMatchObject({
+      _tag: "TargetPromotionObservedSuccess",
+      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+      correlation: {
+        candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+        expectedTargetHead: "1111111111111111111111111111111111111111"
+      },
+      observation: {
+        _tag: "CompareAndSetApplied",
+        candidateAncestry: "Current",
+        targetHeadSha: "cccccccccccccccccccccccccccccccccccccccc"
+      }
+    })
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionStale")).toBe(false)
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual(
+      expect.objectContaining({
+        _tag: "TargetPromotionSucceeded",
+        basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+        taskId: "A"
+      })
+    )
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries.map(({ _tag }) => _tag)).toContain("TargetPromotionObservedSuccess")
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("established candidate")
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
+      )
+    ).toBe(true)
+    const promotionIntent = recorded.entries.find(({ _tag }) => _tag === "TargetPromotionIntended")
+    if (promotionIntent?._tag !== "TargetPromotionIntended") {
+      return yield* Effect.die("promotion cassette must contain its exact intent")
+    }
+    const renamed = yield* renameRecordedCassette(
+      recorded,
+      CassetteIdentityRenaming.make({
+        attemptIds: [],
+        claimTokens: [],
+        integrationCandidateIds: [
+          {
+            from: promotionIntent.correlation.candidateCorrelation.candidateId,
+            to: IntegrationCandidateId.make("renamed-promotion-candidate")
+          }
+        ],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
+        operationIds: [],
+        runIds: [],
+        taskBranchRefs: [],
+        worktreeLocators: []
+      })
+    )
+    expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(renamed.entries.find(({ _tag }) => _tag === "TargetPromotionObservedSuccess")).toMatchObject({
+      correlation: { candidateCorrelation: { candidateId: "renamed-promotion-candidate" } }
+    })
+  })
+)
+
+it.effect("reconciles a lost promotion response and never sends a fourth request", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionAmbiguityExhaustion)
+    const attempts = run.records.flatMap(({ event }) =>
+      event._tag === "TargetPromotionAttemptIntended" ? [event.attemptOrdinal] : []
+    )
+    const terminal = run.records.find(({ event }) => event._tag === "TargetPromotionNonConvergence")
+
+    expect(attempts).toEqual([1, 2, 3])
+    expect(terminal?.event).toMatchObject({
+      _tag: "TargetPromotionNonConvergence",
+      attemptLimit: 3,
+      attemptOrdinal: 3,
+      correlation: { candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" },
+      lastObservation: {
+        _tag: "ExpectedHeadStillObserved",
+        observedHeadSha: "1111111111111111111111111111111111111111"
+      }
+    })
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionStale")).toBe(false)
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual(
+      expect.objectContaining({ _tag: "TargetPromotionNonConvergent", attemptOrdinal: 3, taskId: "A" })
+    )
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("after 3 ambiguous compare-and-set attempts")
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("records stale H2 and never overwrites it", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.targetPromotionStaleBeforeCompareAndSet
+    )
+    expect(run.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toHaveLength(0)
+    expect(run.records.find(({ event }) => event._tag === "TargetPromotionStale")?.event).toMatchObject({
+      _tag: "TargetPromotionStale",
+      basis: { _tag: "BeforeFirstAttempt" },
+      correlation: {
+        candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+        expectedTargetHead: "1111111111111111111111111111111111111111"
+      },
+      observation: {
+        _tag: "ReconciledCandidateNotInAncestry",
+        observedHeadSha: "2222222222222222222222222222222222222222"
+      }
+    })
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual(
+      expect.objectContaining({
+        _tag: "TargetPromotionStale",
+        basis: { _tag: "BeforeFirstAttempt" },
+        observedTargetHead: "2222222222222222222222222222222222222222"
+      })
+    )
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("preserved a different target head")
+  })
+)
+
+it.effect("discovers M in current target ancestry after losing the promotion response", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.targetPromotionLostResponseDiscoversCurrentCandidate
+    )
+    expect(
+      run.records.flatMap(({ event }) =>
+        event._tag === "TargetPromotionAttemptIntended" ? [event.attemptOrdinal] : []
+      )
+    ).toEqual([1])
+    expect(run.records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event).toMatchObject({
+      _tag: "TargetPromotionObservedSuccess",
+      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+      observation: {
+        _tag: "ReconciledCandidateCurrent",
+        candidateAncestry: "Current",
+        targetHeadSha: "cccccccccccccccccccccccccccccccccccccccc"
+      }
+    })
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionStale")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionNonConvergence")).toBe(false)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("keeps another target usable while M promotion waits and releases only M when it settles", () =>
+  Effect.gen(function* () {
+    const run = yield* runTargetPromotionProtocolCassette(targetPromotionConcurrentTargetsProtocolCassette)
+    const replay = yield* runTargetPromotionProtocolCassette(targetPromotionConcurrentTargetsProtocolCassette)
+    const tags = run.records.map(({ event }) => event._tag)
+
+    expect(run).toEqual(replay)
+    expect(run.boundaryCalls).toEqual(["T1.read", "T1.compareAndSet", "T2.read", "T2.compareAndSet"])
+    expect(run.compareAndSetCount).toBe(2)
+    expect(tags.filter((tag) => tag === "TargetPromotionIntended")).toHaveLength(2)
+    expect(tags.filter((tag) => tag === "TargetPromotionAttemptIntended")).toHaveLength(2)
+    expect(tags.filter((tag) => tag === "TargetPromotionObservedSuccess")).toHaveLength(2)
+    expect(run.leaseObservations).toEqual([
+      { active: [8], held: [8], moment: "T1WaitingBeforeT2" },
+      { active: [8], held: [8, 28], moment: "T2AcquiredWhileT1Waiting" },
+      { active: [8], held: [8], moment: "T2Settled" },
+      { active: [], held: [], moment: "AllSettled" }
+    ])
+  })
+)
+
+it.effect("waits without another request when Git cannot be read", () =>
+  Effect.gen(function* () {
+    const run = yield* runTargetPromotionProtocolCassette(targetPromotionUnreadableProtocolCassette)
+    const replay = yield* runTargetPromotionProtocolCassette(targetPromotionUnreadableProtocolCassette)
+
+    expect(run).toEqual(replay)
+    expect(run.boundaryCalls).toEqual(["T1.read"])
+    expect(run.compareAndSetCount).toBe(0)
+    expect(run.failureTag).toBe("TargetPromotionGitReadFailure")
+    expect(run.records.map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    expect(run.leaseObservations).toEqual([{ active: [], held: [], moment: "AllSettled" }])
+  })
+)
+
+it("rejects protocol cassettes with duplicate, missing, or unsettled participants", () => {
+  const participant = targetPromotionUnreadableProtocolCassette.participants[0]
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      name: "empty promotion protocol cassette",
+      participants: [],
+      story: []
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      ...targetPromotionUnreadableProtocolCassette,
+      participants: [participant, participant]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      ...targetPromotionConcurrentTargetsProtocolCassette,
+      participants: [targetPromotionConcurrentTargetsProtocolCassette.participants[0]]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      ...targetPromotionUnreadableProtocolCassette,
+      story: targetPromotionUnreadableProtocolCassette.story.filter((item) => item._tag !== "StartPromotion")
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      ...targetPromotionConcurrentTargetsProtocolCassette,
+      story: targetPromotionConcurrentTargetsProtocolCassette.story.filter(
+        (item) => item._tag !== "ReleaseBlockedBoundary"
+      )
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(TargetPromotionProtocolCassette)({
+      ...targetPromotionUnreadableProtocolCassette,
+      story: [
+        ...targetPromotionUnreadableProtocolCassette.story,
+        ProtocolStoryItem.cases.AwaitBlockedBoundary.make({ owner: "T1" })
+      ]
+    })
+  ).toBe(false)
+})
 
 it.effect("preserves exact M and stops before promotion when selected checks fail", () =>
   Effect.gen(function* () {
@@ -3212,6 +3462,11 @@ it.effect(
         TargetVerificationIntended: true,
         TargetVerificationEvidenceSealed: true,
         TargetVerificationCorrelationContradicted: true,
+        TargetPromotionIntended: true,
+        TargetPromotionAttemptIntended: true,
+        TargetPromotionObservedSuccess: true,
+        TargetPromotionStale: true,
+        TargetPromotionNonConvergence: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
@@ -3258,7 +3513,10 @@ it.effect(
       expect(new Set(recorded.entries.map(({ _tag }) => _tag))).toEqual(
         new Set(
           Object.keys(entryVariants).filter(
-            (tag) => !tag.startsWith("IntegrationCandidate") && !tag.startsWith("TargetVerification")
+            (tag) =>
+              !tag.startsWith("IntegrationCandidate") &&
+              !tag.startsWith("TargetVerification") &&
+              !tag.startsWith("TargetPromotion")
           )
         )
       )
@@ -3314,7 +3572,7 @@ it.effect("renames and renders every contradictory planned-worktree observation 
         originatingActionOperationId: operationId
       })),
       runId: RunId.make("recorded-worktree-variant-run"),
-      schemaVersion: 6
+      schemaVersion: recordedCassetteVersion
     })
     const renamed = yield* renameRecordedCassette(
       cassette,

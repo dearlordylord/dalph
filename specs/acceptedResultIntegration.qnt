@@ -2,8 +2,8 @@
 // integration session that accepts only an explicit submitted commit whose
 // ordered direct parents are [current target head, accepted result]. The
 // verification boundary is one public wrapper request with a fixed opaque
-// plan. Promotion itself, executor internals, and post-milestone retry policy
-// remain absent.
+// plan. Promotion is modelled as one durable exact compare-and-set protocol;
+// executor internals and post-milestone tracker settlement remain absent.
 module acceptedResultIntegration {
   type Phase =
     | NoAcceptedResult
@@ -31,6 +31,16 @@ module acceptedResultIntegration {
     | VerificationCorrelationContradiction
     | VerificationEvidenceFailure
     | PromotionPremise
+    | PromotionIntent
+    | PromotionAttemptIntended
+    | PromotionInFlight
+    | PromotionResponseLost
+    | PromotionReconciliation
+    | PromotionRetryReady
+    | PromotionReadPending
+    | PromotionSucceeded
+    | PromotionStale
+    | PromotionExhausted
 
   // The wrapper's terminal report is exhaustive. A passing report is kept
   // separate from its sealed evidence because the report alone cannot permit
@@ -42,6 +52,16 @@ module acceptedResultIntegration {
     | Killed
     | TimedOut
     | Partial
+
+  // Git observations are exact identities, not equivalent trees or patches.
+  // An unreadable observation cannot establish either promotion or staleness.
+  type PromotionGitObservation =
+    | NoPromotionGitObservation
+    | PromotionExactExpectedHead
+    | PromotionCandidateCurrent
+    | PromotionCandidateAncestor
+    | PromotionOtherHead
+    | PromotionUnreadableHead
 
   // This is the exact request Dalph derives from one constructed candidate.
   // `plan` is opaque to the model: it is fixed and carried through the public
@@ -86,6 +106,23 @@ module acceptedResultIntegration {
     verificationManifestSealed: bool,
     promotionAuthorized: bool,
     verificationReplacementCount: int,
+    // Promotion intent and attempt intents are journal facts. The count
+    // survives a restart and counts durable attempt ordinals, never Git reads.
+    promotionIntentRecorded: bool,
+    promotionAttemptCount: int,
+    promotionLastAttempt: int,
+    promotionFreshExactHeadReads: int,
+    promotionFreshExactHeadObservation: bool,
+    promotionTargetFactsCurrent: bool,
+    promotionExpectedHeadVerified: bool,
+    promotionGitObservation: PromotionGitObservation,
+    promotionObservedTargetHead: int,
+    promotionCandidateAncestryProven: bool,
+    promotionResultRecorded: bool,
+    promotionResponseAmbiguous: bool,
+    promotionCompareAndSetRequested: bool,
+    promotionForceRequested: bool,
+    promotionEquivalentContentAccepted: bool,
   }
 
   type State = {
@@ -104,6 +141,7 @@ module acceptedResultIntegration {
   pure val CONTINUATION_LIMIT = 2
   pure val VERIFICATION_RESULT_ID = 1
   pure val VERIFICATION_PLAN = 7000
+  pure val PROMOTION_ATTEMPT_LIMIT = 3
   // Finite model bounds for exploration; neither is a production policy.
   pure val RESTART_LIMIT = 2
   pure val RECONCILIATION_LIMIT = 2
@@ -140,7 +178,48 @@ module acceptedResultIntegration {
       VerificationCorrelationContradiction,
       VerificationEvidenceFailure,
       PromotionPremise,
+      PromotionIntent,
+      PromotionAttemptIntended,
+      PromotionInFlight,
+      PromotionResponseLost,
+      PromotionReconciliation,
+      PromotionRetryReady,
+      PromotionReadPending,
+      PromotionSucceeded,
+      PromotionStale,
+      PromotionExhausted,
     ).contains(phase)
+
+  pure def promotionProtocolPhase(phase: Phase): bool =
+    Set(
+      PromotionPremise,
+      PromotionIntent,
+      PromotionAttemptIntended,
+      PromotionInFlight,
+      PromotionResponseLost,
+      PromotionReconciliation,
+      PromotionRetryReady,
+      PromotionReadPending,
+      PromotionSucceeded,
+      PromotionStale,
+      PromotionExhausted,
+    ).contains(phase)
+
+  pure def promotionTerminalPhase(phase: Phase): bool =
+    Set(
+      PromotionSucceeded,
+      PromotionStale,
+      PromotionExhausted,
+    ).contains(phase)
+
+  // A fully settled promotion has no work that could consume fresh tracker or
+  // target facts after restart. Keeping those global facts stable avoids
+  // manufacturing a recovery obligation with no possible consumer.
+  pure def restartRequiresFreshAuthorityFacts(s: State): bool =
+    RESULT_IDS.exists(id => {
+      val phase = s.results.get(id).phase
+      phase != NoAcceptedResult and not(promotionTerminalPhase(phase))
+    })
 
   pure def canStart(s: State, id: int): bool = {
     val result = s.results.get(id)
@@ -242,6 +321,36 @@ module acceptedResultIntegration {
   val promotionPremiseReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionPremise)
 
+  val promotionIntentReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionIntent)
+
+  val promotionAttemptIntendedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionAttemptIntended)
+
+  val promotionInFlightReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionInFlight)
+
+  val promotionResponseLostReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionResponseLost)
+
+  val promotionReconciliationReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionReconciliation)
+
+  val promotionRetryReadyReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionRetryReady)
+
+  val promotionReadPendingReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionReadPending)
+
+  val promotionSucceededReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionSucceeded)
+
+  val promotionStaleReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionStale)
+
+  val promotionExhaustedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionExhausted)
+
   val releasedLogicalBlockerReached: bool =
     RESULT_IDS.exists(id =>
       Set(
@@ -250,6 +359,16 @@ module acceptedResultIntegration {
         CorrelationContradictionReleased,
         VerificationPassed,
         PromotionPremise,
+        PromotionIntent,
+        PromotionAttemptIntended,
+        PromotionInFlight,
+        PromotionResponseLost,
+        PromotionReconciliation,
+        PromotionRetryReady,
+        PromotionReadPending,
+        PromotionSucceeded,
+        PromotionStale,
+        PromotionExhausted,
       ).contains(state.results.get(id).phase)
         and not(state.results.get(id).targetHeld)
     )
@@ -288,6 +407,11 @@ module acceptedResultIntegration {
           VerificationResponseLost,
           VerificationReconciling,
           VerificationPassedPendingSeal,
+          PromotionIntent,
+          PromotionAttemptIntended,
+          PromotionInFlight,
+          PromotionReconciliation,
+          PromotionRetryReady,
         ).contains(state.results.get(id).phase)
     )
 
@@ -309,6 +433,16 @@ module acceptedResultIntegration {
         VerificationCorrelationContradiction,
         VerificationEvidenceFailure,
         PromotionPremise,
+        PromotionIntent,
+        PromotionAttemptIntended,
+        PromotionInFlight,
+        PromotionResponseLost,
+        PromotionReconciliation,
+        PromotionRetryReady,
+        PromotionReadPending,
+        PromotionSucceeded,
+        PromotionStale,
+        PromotionExhausted,
       ).contains(result.phase))
         or and {
           result.submittedCandidate != 0,
@@ -341,6 +475,16 @@ module acceptedResultIntegration {
         VerificationCorrelationContradiction,
         VerificationEvidenceFailure,
         PromotionPremise,
+        PromotionIntent,
+        PromotionAttemptIntended,
+        PromotionInFlight,
+        PromotionResponseLost,
+        PromotionReconciliation,
+        PromotionRetryReady,
+        PromotionReadPending,
+        PromotionSucceeded,
+        PromotionStale,
+        PromotionExhausted,
       ).contains(state.results.get(id).phase)
         implies state.results.get(id).integrationSession == id
     )
@@ -398,6 +542,16 @@ module acceptedResultIntegration {
           VerificationCorrelationContradiction,
           VerificationEvidenceFailure,
           PromotionPremise,
+          PromotionIntent,
+          PromotionAttemptIntended,
+          PromotionInFlight,
+          PromotionResponseLost,
+          PromotionReconciliation,
+          PromotionRetryReady,
+          PromotionReadPending,
+          PromotionSucceeded,
+          PromotionStale,
+          PromotionExhausted,
       ).contains(result.phase) implies and {
         result.verificationIntentRecorded,
         result.verificationRequest.requestId == id * 1000 + result.submittedCandidate,
@@ -429,6 +583,16 @@ module acceptedResultIntegration {
         VerificationCorrelationContradiction,
         VerificationEvidenceFailure,
         PromotionPremise,
+        PromotionIntent,
+        PromotionAttemptIntended,
+        PromotionInFlight,
+        PromotionResponseLost,
+        PromotionReconciliation,
+        PromotionRetryReady,
+        PromotionReadPending,
+        PromotionSucceeded,
+        PromotionStale,
+        PromotionExhausted,
       ).contains(result.phase) implies and {
         result.verificationIntentRecorded,
         result.wrapperInvocationCount == 1,
@@ -498,7 +662,20 @@ module acceptedResultIntegration {
         result.verificationOutcome == Passed,
         result.verificationEvidenceReread,
         result.verificationManifestSealed,
-        Set(VerificationPassed, PromotionPremise).contains(result.phase),
+        Set(
+          VerificationPassed,
+          PromotionPremise,
+          PromotionIntent,
+          PromotionAttemptIntended,
+          PromotionInFlight,
+          PromotionResponseLost,
+          PromotionReconciliation,
+          PromotionRetryReady,
+          PromotionReadPending,
+          PromotionSucceeded,
+          PromotionStale,
+          PromotionExhausted,
+        ).contains(result.phase),
       }
     })
 
@@ -577,6 +754,16 @@ module acceptedResultIntegration {
                 VerificationCorrelationContradiction,
                 VerificationEvidenceFailure,
                 PromotionPremise,
+                PromotionIntent,
+                PromotionAttemptIntended,
+                PromotionInFlight,
+                PromotionResponseLost,
+                PromotionReconciliation,
+                PromotionRetryReady,
+                PromotionReadPending,
+                PromotionSucceeded,
+                PromotionStale,
+                PromotionExhausted,
               ).contains(state.results.get(blocker).phase)
             and state.results.get(later).queuePosition > state.results.get(blocker).queuePosition)
           or state.results.get(later).phase == Queued
@@ -610,6 +797,197 @@ module acceptedResultIntegration {
         state.targetFactsCurrent,
         state.targetHeadProof == result.expectedTargetHead,
       }
+    })
+
+  // Promotion attempt intents are durable before possibly ambiguous Git
+  // requests; one verified candidate can consume at most three ordinals.
+  val promotionAttemptsAreBounded: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.promotionAttemptCount >= 0,
+        result.promotionAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+        result.promotionLastAttempt >= 0,
+        result.promotionLastAttempt <= PROMOTION_ATTEMPT_LIMIT,
+        result.promotionLastAttempt == result.promotionAttemptCount,
+      }
+    })
+
+  // After an ambiguous response, a later request is permitted only after a
+  // complete fresh observation proves the exact expected H. A current M,
+  // M-containing head, stale head, or unreadable result never authorizes a
+  // retry.
+  val ambiguousPromotionRequiresFreshObservation: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.promotionResponseAmbiguous)
+        or result.promotionAttemptCount <= result.promotionFreshExactHeadReads
+    })
+
+  val promotionIntentPrecedesCompareAndSet: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.promotionCompareAndSetRequested) or and {
+        result.promotionIntentRecorded,
+        result.promotionAttemptCount > 0,
+        result.promotionAttemptCount == result.promotionLastAttempt,
+      }
+    })
+
+  // The exact candidate occurrence, ordered parents, and sealed passing
+  // manifest remain bound to every promotion boundary and result.
+  val promotionUsesExactSealedCandidate: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(promotionProtocolPhase(result.phase)) or and {
+        result.submittedCandidate != 0,
+        result.observedFirstParent == result.expectedTargetHead,
+        result.observedSecondParent == result.acceptedResultCommit,
+        result.verificationOutcome == Passed,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        result.promotionAuthorized,
+      }
+    })
+
+  val promotionCompareAndSetRequiresExactHead: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.promotionCompareAndSetRequested) or and {
+        result.promotionAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+        result.promotionExpectedHeadVerified,
+        result.phase != PromotionInFlight
+          or result.promotionTargetFactsCurrent,
+        result.submittedCandidate != 0,
+        result.observedFirstParent == result.expectedTargetHead,
+        result.observedSecondParent == result.acceptedResultCommit,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+      }
+    })
+
+  val promotionSuccessRequiresExactAncestryAndEvidence: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionSucceeded or and {
+        result.promotionResultRecorded,
+        result.promotionCandidateAncestryProven,
+        result.verificationOutcome == Passed,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        result.promotionAuthorized,
+        Set(
+          PromotionCandidateCurrent,
+          PromotionCandidateAncestor,
+        ).contains(result.promotionGitObservation),
+        result.promotionObservedTargetHead == result.submittedCandidate
+          or result.promotionGitObservation == PromotionCandidateAncestor,
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+        not(result.targetHeld),
+      }
+    })
+
+  val stalePromotionPreservesCandidateAndNeverOverwrites: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionStale or and {
+        result.promotionResultRecorded,
+        result.promotionGitObservation == PromotionOtherHead,
+        result.promotionObservedTargetHead != result.submittedCandidate,
+        not(result.promotionCandidateAncestryProven),
+        result.submittedCandidate != 0,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+        not(result.targetHeld),
+      }
+    })
+
+  // A missing or unreadable Git response leaves the durable intent pending;
+  // it cannot be interpreted as either absence of M or a stale target.
+  val unreadablePromotionStaysPending: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionReadPending or and {
+        result.promotionIntentRecorded,
+        result.promotionGitObservation == PromotionUnreadableHead,
+        not(result.promotionResultRecorded),
+        not(result.promotionCandidateAncestryProven),
+        result.submittedCandidate != 0,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+        not(result.targetHeld),
+      }
+    })
+
+  val promotionExhaustionPreservesVerifiedCandidate: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionExhausted or and {
+        result.promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        result.promotionIntentRecorded,
+        result.submittedCandidate != 0,
+        result.observedFirstParent == result.expectedTargetHead,
+        result.observedSecondParent == result.acceptedResultCommit,
+        result.verificationOutcome == Passed,
+        result.verificationEvidenceReread,
+        result.verificationManifestSealed,
+        result.promotionAuthorized,
+        Set(
+          NoPromotionGitObservation,
+          PromotionExactExpectedHead,
+          PromotionUnreadableHead,
+        ).contains(result.promotionGitObservation),
+        not(result.promotionResultRecorded),
+        not(result.promotionCandidateAncestryProven),
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+        not(result.targetHeld),
+      }
+    })
+
+  val promotionTerminalReleasesTarget: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(Set(
+        PromotionSucceeded,
+        PromotionStale,
+        PromotionReadPending,
+        PromotionExhausted,
+      ).contains(result.phase)) or not(result.targetHeld)
+    })
+
+  val promotionFreshObservationIsExactExpectedHead: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.promotionFreshExactHeadObservation) or and {
+        result.promotionGitObservation == PromotionExactExpectedHead,
+        result.promotionObservedTargetHead == result.expectedTargetHead,
+      }
+    })
+
+  val promotionNoForceOrEquivalentShortcut: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        not(result.promotionForceRequested),
+        not(result.promotionEquivalentContentAccepted),
+      }
+    })
+
+  // Attempts one, two, and three need one, two, and three fresh H reads. The
+  // relation is historical through durable counters, so it survives restart
+  // even when the current phase is no longer the read that authorized it.
+  val promotionRetryOrdinalsHaveFreshHeadReads: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.promotionFreshExactHeadReads >= result.promotionAttemptCount
     })
 
   action init: bool = all {
@@ -646,6 +1024,21 @@ module acceptedResultIntegration {
         verificationManifestSealed: false,
         promotionAuthorized: false,
         verificationReplacementCount: 0,
+        promotionIntentRecorded: false,
+        promotionAttemptCount: 0,
+        promotionLastAttempt: 0,
+        promotionFreshExactHeadReads: 0,
+        promotionFreshExactHeadObservation: false,
+        promotionTargetFactsCurrent: false,
+        promotionExpectedHeadVerified: false,
+        promotionGitObservation: NoPromotionGitObservation,
+        promotionObservedTargetHead: 0,
+        promotionCandidateAncestryProven: false,
+        promotionResultRecorded: false,
+        promotionResponseAmbiguous: false,
+        promotionCompareAndSetRequested: false,
+        promotionForceRequested: false,
+        promotionEquivalentContentAccepted: false,
       }),
       nextJournalPosition: 1,
       recovered: false,
@@ -703,7 +1096,23 @@ module acceptedResultIntegration {
           expectedTargetHead: id + 10,
         }),
         targetHeadProof: id + 10,
-        targetReacquisitionRequired: false,
+        targetReacquisitionRequired:
+          RESULT_IDS.exists(other =>
+            other != id
+              and not(state.results.get(other).targetHeld)
+              and Set(
+                Started,
+                CandidatePending,
+                CorrectionRequired,
+                CandidateReady,
+                VerificationIntent,
+                VerificationInvoked,
+                VerificationResponseLost,
+                VerificationReconciling,
+                VerificationPassedPendingSeal,
+                PromotionIntent,
+              ).contains(state.results.get(other).phase)
+          ),
       },
     }
   }
@@ -1084,6 +1493,373 @@ module acceptedResultIntegration {
     }
   }
 
+  // The exact candidate, expected H, target, and sealed manifest are recorded
+  // before any compare-and-set boundary call. Reusing this intent is the only
+  // way to issue a later numbered request.
+  action recordPromotionIntent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      result.phase == PromotionPremise,
+      not(result.targetHeld),
+      result.promotionAuthorized,
+      result.verificationOutcome == Passed,
+      result.verificationEvidenceReread,
+      result.verificationManifestSealed,
+      result.submittedCandidate != 0,
+      result.observedFirstParent == result.expectedTargetHead,
+      result.observedSecondParent == result.acceptedResultCommit,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionIntent,
+          targetHeld: true,
+          promotionIntentRecorded: true,
+          promotionAttemptCount: 0,
+          promotionLastAttempt: 0,
+          promotionFreshExactHeadReads: 0,
+          promotionFreshExactHeadObservation: false,
+          promotionTargetFactsCurrent: false,
+          promotionExpectedHeadVerified: true,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+          promotionCandidateAncestryProven: false,
+          promotionResultRecorded: false,
+          promotionResponseAmbiguous: false,
+          promotionCompareAndSetRequested: false,
+          promotionForceRequested: false,
+          promotionEquivalentContentAccepted: false,
+        }),
+      },
+    }
+  }
+
+  pure def canRecordPromotionAttemptIntent(s: State, id: int): bool = {
+    val result = s.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      result.promotionIntentRecorded,
+      result.promotionAuthorized,
+      result.verificationOutcome == Passed,
+      result.verificationEvidenceReread,
+      result.verificationManifestSealed,
+      result.submittedCandidate != 0,
+      result.observedFirstParent == result.expectedTargetHead,
+      result.observedSecondParent == result.acceptedResultCommit,
+      result.targetHeld,
+      result.promotionAttemptCount < PROMOTION_ATTEMPT_LIMIT,
+      and {
+        result.phase == PromotionRetryReady,
+        result.promotionFreshExactHeadObservation,
+        result.promotionGitObservation == PromotionExactExpectedHead,
+        result.promotionExpectedHeadVerified,
+        result.promotionFreshExactHeadReads == result.promotionAttemptCount + 1,
+      },
+    }
+  }
+
+  // The next attempt ordinal is durable before the Git boundary can be
+  // crossed. A crash after this action must reconcile instead of assuming the
+  // compare-and-set was never sent.
+  action recordPromotionAttemptIntent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canRecordPromotionAttemptIntent(state, id),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionAttemptIntended,
+          promotionAttemptCount: result.promotionAttemptCount + 1,
+          promotionLastAttempt: result.promotionLastAttempt + 1,
+          promotionFreshExactHeadObservation: false,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+          promotionResponseAmbiguous: false,
+          promotionCompareAndSetRequested: false,
+          promotionForceRequested: false,
+          promotionEquivalentContentAccepted: false,
+        }),
+      },
+    }
+  }
+
+  pure def canSendPromotionAttempt(s: State, id: int): bool = {
+    val result = s.results.get(id)
+    and {
+      id == VERIFICATION_RESULT_ID,
+      result.phase == PromotionAttemptIntended,
+      result.targetHeld,
+      result.promotionIntentRecorded,
+      result.promotionAttemptCount > 0,
+      result.promotionAttemptCount == result.promotionLastAttempt,
+      result.promotionAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+      result.promotionExpectedHeadVerified,
+      result.promotionTargetFactsCurrent,
+    }
+  }
+
+  // This boundary call is intentionally one exact H -> M compare-and-set. Its
+  // durable ordinal was already written by recordPromotionAttemptIntent.
+  action sendPromotionAttempt(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canSendPromotionAttempt(state, id),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionInFlight,
+          promotionCompareAndSetRequested: true,
+        }),
+      },
+    }
+  }
+
+  // A lost compare-and-set response is ambiguous. The local target position is
+  // released, but the durable intent, candidate, evidence, and attempt count
+  // remain for a fresh Git read.
+  action losePromotionResponse(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      result.phase == PromotionInFlight,
+      result.targetHeld,
+      result.promotionIntentRecorded,
+      result.promotionAttemptCount > 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionResponseLost,
+          targetHeld: false,
+          promotionFreshExactHeadObservation: false,
+          promotionTargetFactsCurrent: false,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+          promotionResponseAmbiguous: true,
+        }),
+      },
+    }
+  }
+
+  // Reconciliation owns a fresh Git read. It can reacquire the target for the
+  // read after an ambiguous or unreadable result, and after restart of an
+  // intent that has not sent its first attempt.
+  action reconcilePromotion(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      not(result.targetHeld),
+      result.promotionIntentRecorded,
+      result.promotionAuthorized,
+      result.verificationEvidenceReread,
+      result.verificationManifestSealed,
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      or {
+        Set(PromotionResponseLost, PromotionReadPending).contains(result.phase),
+        and {
+          result.phase == PromotionIntent,
+          state.targetReacquisitionRequired,
+        },
+      },
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionReconciliation,
+          targetHeld: true,
+          promotionFreshExactHeadObservation: false,
+          promotionTargetFactsCurrent: false,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+        }),
+        targetReacquisitionRequired:
+          RESULT_IDS.exists(other =>
+            other != id
+              and not(state.results.get(other).targetHeld)
+              and Set(
+                Started,
+                CandidatePending,
+                CorrectionRequired,
+                CandidateReady,
+                VerificationIntent,
+                VerificationInvoked,
+                VerificationResponseLost,
+                VerificationReconciling,
+                VerificationPassedPendingSeal,
+                PromotionIntent,
+              ).contains(state.results.get(other).phase)
+          ),
+      },
+    }
+  }
+
+  // Git proving M is current or an exact ancestor discovers the original
+  // promotion. No second compare-and-set is sent, even after a lost response.
+  action observePromotionCandidateCurrent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      Set(PromotionIntent, PromotionInFlight, PromotionReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionSucceeded,
+          targetHeld: false,
+          promotionGitObservation: PromotionCandidateCurrent,
+          promotionObservedTargetHead: result.submittedCandidate,
+          promotionCandidateAncestryProven: true,
+          promotionResultRecorded: true,
+          promotionResponseAmbiguous: false,
+        }),
+      },
+    }
+  }
+
+  action observePromotionCandidateAncestor(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionSucceeded,
+          targetHeld: false,
+          promotionGitObservation: PromotionCandidateAncestor,
+          promotionObservedTargetHead: result.submittedCandidate + 100,
+          promotionCandidateAncestryProven: true,
+          promotionResultRecorded: true,
+          promotionResponseAmbiguous: false,
+        }),
+      },
+    }
+  }
+
+  // A fresh exact H proves that M is not currently promoted and is the only
+  // observation that can make a later numbered attempt eligible. At attempt
+  // three it settles as typed non-convergence instead of sending attempt four.
+  action observePromotionExactExpectedHead(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        targetFactsCurrent: true,
+        targetHeadProof: result.expectedTargetHead,
+        results: state.results.put(id,
+          if (result.promotionAttemptCount >= PROMOTION_ATTEMPT_LIMIT) {
+            {
+              ...result,
+              phase: PromotionExhausted,
+              targetHeld: false,
+              promotionFreshExactHeadReads: result.promotionFreshExactHeadReads + 1,
+              promotionFreshExactHeadObservation: true,
+              promotionTargetFactsCurrent: true,
+              promotionExpectedHeadVerified: true,
+              promotionGitObservation: PromotionExactExpectedHead,
+              promotionObservedTargetHead: result.expectedTargetHead,
+              promotionResultRecorded: false,
+              promotionResponseAmbiguous: false,
+            }
+          } else {
+            {
+              ...result,
+              phase: PromotionRetryReady,
+              targetHeld: true,
+              promotionFreshExactHeadReads: result.promotionFreshExactHeadReads + 1,
+              promotionFreshExactHeadObservation: true,
+              promotionTargetFactsCurrent: true,
+              promotionExpectedHeadVerified: true,
+              promotionGitObservation: PromotionExactExpectedHead,
+              promotionObservedTargetHead: result.expectedTargetHead,
+              promotionResultRecorded: false,
+              promotionResponseAmbiguous: false,
+            }
+          }
+        ),
+      },
+    }
+  }
+
+  // Any other complete exact head is stale, including a head with equivalent
+  // file content. The candidate and sealed evidence remain untouched.
+  action observePromotionOtherHead(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      Set(PromotionIntent, PromotionInFlight, PromotionReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionStale,
+          targetHeld: false,
+          promotionGitObservation: PromotionOtherHead,
+          promotionObservedTargetHead: result.expectedTargetHead + 1,
+          promotionCandidateAncestryProven: false,
+          promotionResultRecorded: true,
+          promotionResponseAmbiguous: false,
+        }),
+      },
+    }
+  }
+
+  // An incomplete Git head/ancestry read remains pending and sends no update.
+  action observePromotionGitUnreadable(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == VERIFICATION_RESULT_ID,
+      Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase:
+            if (result.promotionAttemptCount >= PROMOTION_ATTEMPT_LIMIT)
+              PromotionExhausted
+            else
+              PromotionReadPending,
+          targetHeld: false,
+          promotionTargetFactsCurrent: false,
+          promotionGitObservation: PromotionUnreadableHead,
+          promotionObservedTargetHead: 0,
+          promotionCandidateAncestryProven: false,
+          promotionResultRecorded: false,
+        }),
+      },
+    }
+  }
+
+  // Choose the second responsibility's independent target before its durable
+  // queue record is written. A journaled responsibility never changes target.
+  action assignResultTwoIndependentTarget: bool = {
+    val result = state.results.get(2)
+    all {
+      result.phase == AcceptedResult,
+      result.integrationTarget == 1,
+      state' = {
+        ...state,
+        results: state.results.put(2, {
+          ...result,
+          integrationTarget: 2,
+        }),
+      },
+    }
+  }
+
   action observeInvalidCandidate(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1146,19 +1922,57 @@ module acceptedResultIntegration {
         {
           ...result,
           phase:
-            if (result.phase == CorrelationContradictionReleased)
-              CorrelationContradiction
+          if (result.phase == CorrelationContradictionReleased)
+            CorrelationContradiction
+          else if (
+            Set(
+              PromotionInFlight,
+              PromotionAttemptIntended,
+              PromotionReconciliation,
+              PromotionRetryReady,
+            ).contains(result.phase)
+          )
+            PromotionResponseLost
+          else if (result.phase == PromotionReadPending)
+            if (result.promotionAttemptCount == 0)
+              PromotionIntent
             else
-              result.phase,
+              PromotionResponseLost
+          else
+            result.phase,
+          promotionTargetFactsCurrent:
+            if (promotionProtocolPhase(result.phase)) false
+            else result.promotionTargetFactsCurrent,
+          promotionFreshExactHeadObservation:
+            if (promotionProtocolPhase(result.phase)) false
+            else result.promotionFreshExactHeadObservation,
+          promotionGitObservation:
+            if (
+              promotionProtocolPhase(result.phase)
+                and not(promotionTerminalPhase(result.phase))
+            ) NoPromotionGitObservation
+            else result.promotionGitObservation,
+          promotionObservedTargetHead:
+            if (
+              promotionProtocolPhase(result.phase)
+                and not(promotionTerminalPhase(result.phase))
+            ) 0
+            else result.promotionObservedTargetHead,
           targetHeld: false,
         }
       }),
       recovered: true,
       restartCount: state.restartCount + 1,
-      trackerFactsCurrent: false,
-      targetFactsCurrent: false,
-      targetHeadProof: 0,
-      targetReacquisitionRequired: true,
+      trackerFactsCurrent:
+        if (restartRequiresFreshAuthorityFacts(state)) false
+        else state.trackerFactsCurrent,
+      targetFactsCurrent:
+        if (restartRequiresFreshAuthorityFacts(state)) false
+        else state.targetFactsCurrent,
+      targetHeadProof:
+        if (restartRequiresFreshAuthorityFacts(state)) 0
+        else state.targetHeadProof,
+      targetReacquisitionRequired: restartRequiresFreshAuthorityFacts(state),
     },
   }
 
@@ -1178,6 +1992,12 @@ module acceptedResultIntegration {
       result.phase != NoAcceptedResult,
       state' = {
         ...state,
+        results: state.results.put(id, {
+          ...result,
+          promotionTargetFactsCurrent:
+            if (promotionProtocolPhase(result.phase)) true
+            else result.promotionTargetFactsCurrent,
+        }),
         targetFactsCurrent: true,
         targetHeadProof:
           if (result.expectedTargetHead == 0) id + 10 else result.expectedTargetHead,
@@ -1202,6 +2022,7 @@ module acceptedResultIntegration {
         VerificationResponseLost,
         VerificationReconciling,
         VerificationPassedPendingSeal,
+        PromotionIntent,
       ).contains(result.phase),
       not(result.targetHeld),
       result.expectedTargetHead != 0,
@@ -1217,7 +2038,23 @@ module acceptedResultIntegration {
       state' = {
         ...state,
         results: state.results.put(id, { ...result, targetHeld: true }),
-        targetReacquisitionRequired: false,
+        targetReacquisitionRequired:
+          RESULT_IDS.exists(other =>
+            other != id
+              and not(state.results.get(other).targetHeld)
+              and Set(
+                Started,
+                CandidatePending,
+                CorrectionRequired,
+                CandidateReady,
+                VerificationIntent,
+                VerificationInvoked,
+                VerificationResponseLost,
+                VerificationReconciling,
+                VerificationPassedPendingSeal,
+                PromotionIntent,
+              ).contains(state.results.get(other).phase)
+          ),
       },
     }
   }
@@ -1252,7 +2089,40 @@ module acceptedResultIntegration {
   action reportVerificationPartialOne: bool = reportVerificationPartial(1)
   action reportVerificationCorrelationContradictionOne: bool = reportVerificationCorrelationContradiction(1)
   action reportVerificationEvidenceFailureOne: bool = reportVerificationEvidenceFailure(1)
-  action offerPromotionPremiseOne: bool = offerPromotionPremise(1)
+  // The exhaustive step explores promotion with the second result absent;
+  // the collected two-target scenario below exercises the independent-target
+  // composition directly. This bound avoids a redundant Cartesian product of
+  // the complete second-result lifecycle with every promotion retry state.
+  action offerPromotionPremiseOne: bool = all {
+    state.results.get(2).phase == NoAcceptedResult,
+    offerPromotionPremise(1),
+  }
+  action recordPromotionIntentOne: bool = recordPromotionIntent(1)
+  action recordPromotionAttemptIntentOne: bool = recordPromotionAttemptIntent(1)
+  action sendPromotionAttemptOne: bool = sendPromotionAttempt(1)
+  action losePromotionAttemptResponseOne: bool = losePromotionResponse(1)
+  action reconcilePromotionOne: bool = reconcilePromotion(1)
+  action observePromotionCandidateCurrentOne: bool = observePromotionCandidateCurrent(1)
+  action observePromotionCandidateAncestorOne: bool = all {
+    state.results.get(1).promotionAttemptCount <= 1,
+    observePromotionCandidateAncestor(1),
+  }
+  action observePromotionExactExpectedHeadOne: bool = observePromotionExactExpectedHead(1)
+  action observePromotionOtherHeadOne: bool = all {
+    or {
+      state.results.get(1).promotionAttemptCount == 0,
+      state.results.get(1).phase == PromotionInFlight,
+    },
+    observePromotionOtherHead(1),
+  }
+  action observePromotionGitUnreadableOne: bool = all {
+    or {
+      state.results.get(1).promotionAttemptCount == 0,
+      state.results.get(1).promotionAttemptCount >= PROMOTION_ATTEMPT_LIMIT,
+    },
+    observePromotionGitUnreadable(1),
+  }
+  action assignResultTwoIndependentTargetOne: bool = assignResultTwoIndependentTarget
   action observeInvalidCandidateOne: bool = observeInvalidCandidate(1)
   action observeInvalidCandidateTwo: bool = observeInvalidCandidate(2)
   action gitReadFailsOne: bool = gitReadFails(1)
@@ -1268,21 +2138,33 @@ module acceptedResultIntegration {
   action observeTargetFactsOne: bool = observeTargetFacts(1)
   action observeTargetFactsTwo: bool = observeTargetFacts(2)
 
+  // Exhaustive promotion recovery covers the three ambiguity boundaries;
+  // collected scenarios exercise the remaining restart points directly.
+  action recoverCoordinatorStep: bool = all {
+    or {
+      not(promotionProtocolPhase(state.results.get(1).phase)),
+      Set(
+        PromotionAttemptIntended,
+        PromotionInFlight,
+        PromotionReadPending,
+      ).contains(state.results.get(1).phase),
+    },
+    recoverCoordinator,
+  }
+
   action step: bool = any {
+    // Exhaustive exploration keeps result two at the queue/order boundary.
+    // Collected two-result scenarios exercise its full independent-target
+    // lifecycle without multiplying every result-one protocol state by it.
     acceptResultOne,
     acceptResultTwo,
     queueAcceptedResultOne,
     queueAcceptedResultTwo,
     startIntegrationOne,
-    startIntegrationTwo,
     waitOnDependencyOne,
-    waitOnDependencyTwo,
     submitCandidateOne31,
     submitCandidateOne32,
-    submitCandidateTwo31,
-    submitCandidateTwo32,
     observeExactCandidateOne,
-    observeExactCandidateTwo,
     recordVerificationIntentOne,
     invokeVerificationOne,
     loseVerificationResponseOne,
@@ -1296,21 +2178,25 @@ module acceptedResultIntegration {
     reportVerificationCorrelationContradictionOne,
     reportVerificationEvidenceFailureOne,
     offerPromotionPremiseOne,
+    recordPromotionIntentOne,
+    recordPromotionAttemptIntentOne,
+    sendPromotionAttemptOne,
+    losePromotionAttemptResponseOne,
+    reconcilePromotionOne,
+    observePromotionCandidateCurrentOne,
+    observePromotionCandidateAncestorOne,
+    observePromotionExactExpectedHeadOne,
+    observePromotionOtherHeadOne,
+    observePromotionGitUnreadableOne,
+    assignResultTwoIndependentTargetOne,
     observeInvalidCandidateOne,
-    observeInvalidCandidateTwo,
     gitReadFailsOne,
-    gitReadFailsTwo,
     reportWithoutCandidateOne,
-    reportWithoutCandidateTwo,
     reportForeignCorrelationOne,
-    reportForeignCorrelationTwo,
     releaseForeignCorrelationTargetOne,
-    releaseForeignCorrelationTargetTwo,
     reacquireIntegrationTargetOne,
-    reacquireIntegrationTargetTwo,
-    recoverCoordinator,
+    recoverCoordinatorStep,
     observeTrackerFacts,
     observeTargetFactsOne,
-    observeTargetFactsTwo,
   }
 }

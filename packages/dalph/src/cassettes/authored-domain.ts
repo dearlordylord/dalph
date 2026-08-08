@@ -24,6 +24,8 @@ import {
   TargetLineageObservation,
   TargetVerificationArtifactName,
   TargetVerificationPlanId,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionTerminalBasis,
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
@@ -111,6 +113,28 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
     candidateCommit: GitCommitSha,
     outcome: Schema.Literals(["Failed", "Killed", "Partial", "TimedOut"]),
     planId: TargetVerificationPlanId,
+    taskId: TaskId
+  },
+  TargetPromotionSucceeded: {
+    basis: TargetPromotionTerminalBasis,
+    candidateCommit: GitCommitSha,
+    expectedTargetHead: GitCommitSha,
+    observedTargetHead: GitCommitSha,
+    observation: Schema.Literals(["CompareAndSetApplied", "ReconciledCandidateAncestor", "ReconciledCandidateCurrent"]),
+    taskId: TaskId
+  },
+  TargetPromotionNonConvergent: {
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    candidateCommit: GitCommitSha,
+    lastObservation: Schema.Literals(["ExpectedHeadStillObserved", "TargetReadFailed"]),
+    taskId: TaskId
+  },
+  TargetPromotionStale: {
+    basis: TargetPromotionTerminalBasis,
+    candidateCommit: GitCommitSha,
+    expectedTargetHead: GitCommitSha,
+    observedTargetHead: GitCommitSha,
+    observation: Schema.Literals(["CompareAndSetRejected", "ReconciledCandidateNotInAncestry"]),
     taskId: TaskId
   },
   PlannedAttemptExecutorWorkReported: {
@@ -228,6 +252,20 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   IntegrationCandidateGitValidationReturned: { observation: IntegrationCandidateGitObservation },
   /** The repository's public wrapper returns one terminal result for the selected plan. */
   TargetVerificationReturned: { result: AuthoredTargetVerificationResult },
+  /** Git's exact H -> M compare-and-set result, or its lost response. */
+  TargetPromotionCompareAndSetReturned: {
+    result: Schema.TaggedUnion({ Applied: {}, RejectedExpectedHead: { observedHeadSha: GitCommitSha } })
+  },
+  TargetPromotionCompareAndSetResponseLost: { detail: Schema.String },
+  /** Git's complete candidate-ancestry reconciliation result, or an unreadable read. */
+  TargetPromotionGitReadReturned: {
+    observation: Schema.TaggedUnion({
+      CandidateAncestor: { currentHeadSha: GitCommitSha },
+      CandidateCurrent: { currentHeadSha: GitCommitSha },
+      CandidateNotInAncestry: { currentHeadSha: GitCommitSha }
+    })
+  },
+  TargetPromotionGitReadFailed: { detail: Schema.String },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
@@ -293,6 +331,12 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "IntegrationCandidateGitValidationReturned"
   ],
   TargetVerification: ["TargetVerificationReturned"],
+  TargetPromotion: [
+    "TargetPromotionCompareAndSetReturned",
+    "TargetPromotionCompareAndSetResponseLost",
+    "TargetPromotionGitReadReturned",
+    "TargetPromotionGitReadFailed"
+  ],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: [
     "TaskClaimReadFailed",
