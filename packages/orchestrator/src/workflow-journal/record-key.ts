@@ -5,6 +5,7 @@ import type { PlannedAttemptExecutorReportOrdinal } from "../workflow/protocols/
 import type { RunPolicyRevision } from "../control/policy.js"
 import type { ControlDirectionApplicationOrdinal } from "../workflow/protocols/control-direction-application/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../workflow/protocols/task-claim-reacquisition/events.js"
+import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import type {
   IntegrationCandidateAgentReportOrdinal,
   IntegrationCandidateCorrelation,
@@ -26,6 +27,9 @@ export const controlDirectionAppliedRecordKey = (ordinal: ControlDirectionApplic
 
 export const taskClaimReacquisitionDirectedRecordKey = (requestId: TaskClaimReacquisitionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`task-claim-reacquisition:${requestId}:directed`)
+
+export const attemptChoiceAppliedRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt-choice:${requestId}:applied`)
 
 export const taskWorkCapacityPolicyRecordKey = (revision: RunPolicyRevision): JournalRecordKey =>
   JournalRecordKey.make(`run-policy:${revision}:task-work-capacity`)

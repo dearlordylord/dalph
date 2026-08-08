@@ -998,6 +998,7 @@ it.effect("rejects an observation whose exact initiating action is absent, later
 
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
+    AppliedAttemptChoice: true,
     AppliedControlDirection: true,
     AppliedTaskClaimReacquisitionDirection: true,
     AppliedTaskWorkCapacity: true,
@@ -1013,6 +1014,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(12)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(13)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

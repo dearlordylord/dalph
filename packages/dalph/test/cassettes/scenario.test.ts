@@ -3665,6 +3665,7 @@ it.effect(
         ...renaming.worktreeLocators
       ]
       const entryVariants = {
+        AttemptChoiceApplied: true,
         ControlDirectionApplied: true,
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
@@ -3738,6 +3739,7 @@ it.effect(
         new Set(
           Object.keys(entryVariants).filter(
             (tag) =>
+              tag !== "AttemptChoiceApplied" &&
               !tag.startsWith("IntegrationCandidate") &&
               !tag.startsWith("TargetVerification") &&
               !tag.startsWith("TargetPromotion") &&

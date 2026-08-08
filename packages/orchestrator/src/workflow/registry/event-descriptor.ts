@@ -6,10 +6,12 @@ import {
 } from "@dalph/contracts"
 import type { ControlDirectionApplicationOrdinal } from "../protocols/control-direction-application/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
+import type { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { type OperationId } from "../identity.js"
 import {
   attemptPlanRecordKey,
+  attemptChoiceAppliedRecordKey,
   controlDirectionAppliedRecordKey,
   taskClaimReacquisitionDirectedRecordKey,
   intentRecordKey,
@@ -65,6 +67,13 @@ interface ControlDirectionEventDescriptor {
   readonly runId: RunId
 }
 
+interface AttemptChoiceEventDescriptor {
+  readonly _tag: "AttemptChoiceEventDescriptor"
+  readonly expectedKey: JournalRecordKey
+  readonly requestId: AttemptChoiceRequestId
+  readonly runId: RunId
+}
+
 interface TaskClaimReacquisitionDirectionEventDescriptor {
   readonly _tag: "TaskClaimReacquisitionDirectionEventDescriptor"
   readonly expectedKey: JournalRecordKey
@@ -104,6 +113,7 @@ interface IntegrationEventDescriptor {
 }
 
 type JournalEventDescriptor =
+  | AttemptChoiceEventDescriptor
   | ControlDirectionEventDescriptor
   | GenericEventDescriptor
   | IntegrationEventDescriptor
@@ -176,6 +186,13 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         expectedKey: controlDirectionAppliedRecordKey(event.ordinal),
         ordinal: event.ordinal,
         runId: event.subject.runId
+      }
+    case "AttemptChoiceApplied":
+      return {
+        _tag: "AttemptChoiceEventDescriptor",
+        expectedKey: attemptChoiceAppliedRecordKey(event.requestId),
+        requestId: event.requestId,
+        runId: event.subject.plannedAttempt.runId
       }
     case "TaskClaimReacquisitionDirected":
       return {

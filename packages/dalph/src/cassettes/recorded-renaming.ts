@@ -20,6 +20,7 @@ import {
   ContradictoryWorktreeState,
   type ClaimOwner,
   type ClaimToken,
+  type AttemptChoiceRequestId,
   type ControlDirectionApplicationOrdinal,
   type FixtureTarget,
   ForeignWorktreeRegistration,
@@ -109,6 +110,7 @@ type GeneratedCassetteIdentity =
  */
 type PreservedCassetteBrand =
   | ClaimOwner
+  | AttemptChoiceRequestId
   | ControlDirectionApplicationOrdinal
   | FixtureTarget
   | GitCommitSha
@@ -665,6 +667,18 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           replacementOperationId: renamed(entry.replacementOperationId, maps.operationIds),
           successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+        }),
+      AttemptChoiceApplied: (choiceEntry) =>
+        completeFields<typeof choiceEntry>({
+          _tag: "AttemptChoiceApplied",
+          choice: preserveCassetteValue(choiceEntry.choice),
+          initiatedBy: preserveCassetteValue(choiceEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(choiceEntry.occurrenceClassification),
+          requestId: preserveCassetteValue(choiceEntry.requestId),
+          subject: completeFields<typeof choiceEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(choiceEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(choiceEntry.subject.plannedAttempt, maps)
+          })
         }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({

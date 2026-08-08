@@ -94,6 +94,20 @@ const isExecutorReportFor = (event: JournalRecord["event"], plannedAttempt: Plan
   event.report.correlation.runId === plannedAttempt.runId &&
   event.report.correlation.attemptId === plannedAttempt.attemptId
 
+/** The Operator's Continue authority names the immutable plan and one exact changed authored fingerprint. */
+const appliedContinueChoicePositionFor = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  observedTaskRevision?: PlannedTaskAttempt["taskRevision"]
+): JournalPosition | undefined =>
+  records.findLast(
+    ({ event }) =>
+      event._tag === "AttemptChoiceApplied" &&
+      event.choice === "ContinueExistingAttempt" &&
+      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt) &&
+      (observedTaskRevision === undefined || event.subject.observedTaskRevision === observedTaskRevision)
+  )?.position
+
 const suspensionIsOwedAfterBoundary = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   plannedAttempt: PlannedTaskAttempt,
@@ -323,6 +337,13 @@ const deriveJournalResponsibilityFacts = (
     )
     /* v8 ignore stop -- @preserve */
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
+    const exactChangedSpecificationMayContinue =
+      Option.isSome(changedSpecification) &&
+      appliedContinueChoicePositionFor(
+        records,
+        responsibility.plannedAttempt,
+        changedSpecification.value.fingerprint
+      ) !== undefined
     const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
     const currentClaimRecord = records.findLast(
       ({ event, position }) =>
@@ -520,7 +541,7 @@ const deriveJournalResponsibilityFacts = (
                   ? safelySuspended
                     ? gitConstraint
                     : ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-                  : Option.isSome(changedSpecification)
+                  : Option.isSome(changedSpecification) && !exactChangedSpecificationMayContinue
                     ? safelySuspended
                       ? ResponsibilityDisposition.TaskSpecificationChangeConstraint({
                           observedFingerprint: changedSpecification.value.fingerprint,
@@ -646,13 +667,24 @@ const continuationFreshnessBaselineForTask = (
   const positions = [
     Option.getOrUndefined(activationBaselinePosition),
     latestCompletedRunPauseCyclePosition(runState),
-    latestCompletedTaskPauseCyclePositionFor(runState, taskId, currentGraph)
+    latestCompletedTaskPauseCyclePositionFor(runState, taskId, currentGraph),
+    ...runState.responsibility.entries.flatMap((responsibility) =>
+      responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+      responsibility.plannedAttempt.taskId === taskId
+        ? [appliedContinueChoicePositionFor(runState.workflowHistory.records, responsibility.plannedAttempt)]
+        : []
+    )
   ].filter((position): position is JournalPosition => position !== undefined)
   return positions.length === 0 ? Option.none() : Option.some(JournalPosition.make(Math.max(...positions)))
 }
 
 const continuationRequiresFreshFacts = (runState: ReconstructedRunState): boolean => {
-  return latestCompletedPauseCyclePosition(runState) !== undefined
+  return (
+    latestCompletedPauseCyclePosition(runState) !== undefined ||
+    runState.workflowHistory.records.some(
+      ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "ContinueExistingAttempt"
+    )
+  )
 }
 
 const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_tag"]>([

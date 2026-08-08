@@ -1,5 +1,20 @@
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
 export {
+  AttemptChoice,
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject
+} from "./workflow/protocols/attempt-choice/events.js"
+export { ApplyAttemptChoiceRequest } from "./workflow/protocols/attempt-choice/request.js"
+export {
+  AttemptChoiceAlreadyApplied,
+  AttemptChoiceControl,
+  AttemptChoiceNotAvailable,
+  AttemptChoiceOutsidePreIntegrationPhase,
+  AttemptChoiceRequestIdentityContradiction,
+  attemptChoiceControlLayer
+} from "./workflow/protocols/attempt-choice/control.js"
+export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
@@ -430,6 +445,7 @@ export {
 } from "./coordination/delivery/run-delivery-runtime.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
+  AppliedAttemptChoice,
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,

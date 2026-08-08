@@ -26,6 +26,7 @@ import { IntegrationCandidateConstructionJournalEvent } from "../protocols/integ
 import { TargetVerificationJournalEvent } from "../protocols/target-verification/events.js"
 import { TargetPromotionJournalEvent } from "../protocols/target-promotion/events.js"
 import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
+import { AttemptChoiceAppliedEvent } from "../protocols/attempt-choice/events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -159,6 +160,7 @@ export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunTerminatedEvent,
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
+  AttemptChoiceAppliedEvent,
   TaskClaimReacquisitionDirectedEvent,
   TaskTrackerReadIntentRecorded,
   TaskTrackerFactsObservedEvent,

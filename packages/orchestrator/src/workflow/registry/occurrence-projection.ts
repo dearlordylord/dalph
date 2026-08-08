@@ -19,6 +19,7 @@ import {
   ControlDirectionSubject
 } from "../protocols/control-direction-application/events.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
+import { AttemptChoice, AttemptChoiceRequestId, AttemptChoiceSubject } from "../protocols/attempt-choice/events.js"
 import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
@@ -178,6 +179,17 @@ export const AppliedTaskClaimReacquisitionDirection = Schema.TaggedStruct("Appli
 })
 export type AppliedTaskClaimReacquisitionDirection = typeof AppliedTaskClaimReacquisitionDirection.Type
 
+/** Operator applied one exact Continue-or-Stop choice before integration. */
+export const AppliedAttemptChoice = Schema.TaggedStruct("AppliedAttemptChoice", {
+  choice: AttemptChoice,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  recordedAt: JournalPosition,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+})
+export type AppliedAttemptChoice = typeof AppliedAttemptChoice.Type
+
 /** Operator durably changed the future task-admission ceiling for one Run. */
 export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapacity", {
   capacity: TaskWorkCapacity,
@@ -190,6 +202,7 @@ export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapac
 export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 
 export const WorkflowOccurrence = Schema.Union([
+  AppliedAttemptChoice,
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
@@ -227,7 +240,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 5 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 6 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -370,6 +383,7 @@ type ProjectedJournalEvent = Extract<
       | "PlannedAttemptWorktreeObserved"
       | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
+      | "AttemptChoiceApplied"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
       | "TaskTrackerReadIntentRecorded"
@@ -444,6 +458,7 @@ type DirectlyProjectedJournalEvent = Extract<
       | "IntegrationStarted"
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
       | "TaskWorkCapacityChanged"
+      | "AttemptChoiceApplied"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
   }
@@ -453,6 +468,7 @@ const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is 
   event._tag === "IntegrationResponsibilityBegan" ||
   event._tag === "IntegrationStarted" ||
   event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+  event._tag === "AttemptChoiceApplied" ||
   event._tag === "ControlDirectionApplied" ||
   event._tag === "TaskClaimReacquisitionDirected" ||
   event._tag === "TaskWorkCapacityChanged"
@@ -463,6 +479,19 @@ const projectDirectOccurrence = (
   executorResponsibilities: Set<string>,
   occurrences: Array<WorkflowOccurrence>
 ): void => {
+  if (event._tag === "AttemptChoiceApplied") {
+    occurrences.push(
+      AppliedAttemptChoice.make({
+        choice: event.choice,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        requestId: event.requestId,
+        subject: event.subject
+      })
+    )
+    return
+  }
   if (event._tag === "ControlDirectionApplied") {
     occurrences.push(
       AppliedControlDirection.make({

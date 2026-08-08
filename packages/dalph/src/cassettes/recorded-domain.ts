@@ -13,6 +13,9 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  AttemptChoice,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
   ClaimToken,
   ControlDirection,
   ControlDirectionApplicationOrdinal,
@@ -69,6 +72,13 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  * not belong to this boundary.
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
+  AttemptChoiceApplied: {
+    choice: AttemptChoice,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject
+  },
   ControlDirectionApplied: {
     direction: ControlDirection,
     initiatedBy: WorkflowActor.cases.Operator,
@@ -275,7 +285,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 8
+const currentRecordedCassetteVersion = 9
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

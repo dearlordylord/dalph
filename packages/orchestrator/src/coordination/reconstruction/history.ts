@@ -61,6 +61,7 @@ const semanticIssue = (
 
 interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
+  readonly attemptChoiceSubjects: Set<string>
   latestControlDirectionOrdinal: number
   readonly executorReportOrdinals: Map<AttemptId, number>
   readonly executorResponsibilitiesBegan: Map<
@@ -82,6 +83,7 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
 
 const emptyIndexes = (): FoldIndexes => ({
   acceptedExecutorResults: new Map(),
+  attemptChoiceSubjects: new Set(),
   executorReportOrdinals: new Map(),
   executorResponsibilitiesBegan: new Map(),
   integrationResponsibilitiesBegan: new Map(),
@@ -184,6 +186,105 @@ const validateTaskClaimReacquisitionDirection = (
       `task-claim reacquisition request ${descriptor.requestId} binds run ${descriptor.runId}`
     )
   }
+}
+
+const attemptChoiceSubjectKey = (
+  plannedAttempt: PlannedTaskAttempt,
+  observedTaskRevision: PlannedTaskAttempt["taskRevision"]
+): string => JSON.stringify({ attemptId: plannedAttempt.attemptId, observedTaskRevision, runId: plannedAttempt.runId })
+
+/** Rejects a direction that was not exposed by the exact prior plan, changed specification, and safe report. */
+const validateAttemptChoice = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (record.event._tag !== "AttemptChoiceApplied") return
+  const { subject } = record.event
+  if (subject.plannedAttempt.runId !== runId) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} binds run ${subject.plannedAttempt.runId}`
+    )
+  }
+  const prior = records.filter(({ position }) => position < record.position)
+  const plan = prior.find(
+    ({ event }) =>
+      event._tag === "TaskAttemptPlanned" &&
+      event.operation.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
+  )?.event
+  if (
+    plan?._tag !== "TaskAttemptPlanned" ||
+    !plannedTaskAttemptEquivalence(plan.operation.plannedAttempt, subject.plannedAttempt)
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} has no prior matching planned attempt`
+    )
+  }
+  const latestReport = prior.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report.correlation.runId === subject.plannedAttempt.runId &&
+      event.report.correlation.attemptId === subject.plannedAttempt.attemptId
+  )?.event
+  if (latestReport?._tag !== "PlannedAttemptExecutorWorkReported" || latestReport.report._tag !== "SafelySuspended") {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} requires a latest exact safely-suspended executor report`
+    )
+  }
+  const latestSpecification = prior.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === subject.plannedAttempt.taskId
+  )?.event
+  if (
+    latestSpecification?._tag !== "TaskTrackerFactsObserved" ||
+    latestSpecification.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
+    latestSpecification.observation.factFamily.fingerprint !== subject.observedTaskRevision
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} does not name the latest observed task fingerprint`
+    )
+  }
+  if (
+    prior.some(
+      ({ event }) =>
+        event._tag === "IntegrationStarted" &&
+        event.plannedAttempt.runId === subject.plannedAttempt.runId &&
+        event.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
+    )
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} follows the exact integration-start cutoff`
+    )
+  }
+  const subjectKey = attemptChoiceSubjectKey(subject.plannedAttempt, subject.observedTaskRevision)
+  if (indexes.attemptChoiceSubjects.has(subjectKey)) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `attempt-choice request ${record.event.requestId} follows the winning direction for the same fingerprint pair`
+    )
+  }
+  indexes.attemptChoiceSubjects.add(subjectKey)
 }
 
 const validateOperationEvent = (
@@ -557,6 +658,7 @@ export const reduceWorkflowJournalHistory = (
     const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
     const descriptor = describeJournalEvent(record.event)
     validateControlDirection(record, runId, indexes, issues)
+    validateAttemptChoice(record, runId, records, indexes, issues)
     validateTaskClaimReacquisitionDirection(record, runId, issues)
     if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
       identityIssue(

@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Schema } from "effect"
 import {
+  AttemptChoiceAppliedEvent,
   ControlDirectionAppliedEvent,
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
@@ -503,6 +504,7 @@ const recordTaskBoundaryEntry = (
     WorkflowJournalEvent,
     {
       readonly _tag:
+        | "AttemptChoiceApplied"
         | "ControlDirectionApplied"
         | "TaskClaimReacquisitionDirected"
         | "GitReadIntentRecorded"
@@ -558,13 +560,25 @@ const recordTaskBoundaryEntry = (
 
 type OperatorDirectionEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
 >
 
 const isOperatorDirectionEvent = (event: WorkflowJournalEvent): event is OperatorDirectionEvent =>
-  event._tag === "ControlDirectionApplied" || event._tag === "TaskClaimReacquisitionDirected"
+  event._tag === "AttemptChoiceApplied" ||
+  event._tag === "ControlDirectionApplied" ||
+  event._tag === "TaskClaimReacquisitionDirected"
 
 const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): RecordedCassetteEntry => {
+  if (event._tag === "AttemptChoiceApplied") {
+    return {
+      _tag: "AttemptChoiceApplied",
+      choice: event.choice,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      requestId: event.requestId,
+      subject: event.subject
+    }
+  }
   if (event._tag === "ControlDirectionApplied") {
     return {
       _tag: "ControlDirectionApplied",
@@ -735,16 +749,28 @@ const eventForIntegrationEntry = (
 
 type RecordedOperatorDirectionEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
 >
 
 const isRecordedOperatorDirectionEntry = (entry: RecordedCassetteEntry): entry is RecordedOperatorDirectionEntry =>
-  entry._tag === "ControlDirectionApplied" || entry._tag === "TaskClaimReacquisitionDirected"
+  entry._tag === "AttemptChoiceApplied" ||
+  entry._tag === "ControlDirectionApplied" ||
+  entry._tag === "TaskClaimReacquisitionDirected"
 
 const eventForRecordedOperatorDirectionEntry = (
   entry: RecordedOperatorDirectionEntry,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
+  if (entry._tag === "AttemptChoiceApplied") {
+    return AttemptChoiceAppliedEvent.make({
+      choice: entry.choice,
+      initiatedBy: entry.initiatedBy,
+      occurrenceClassification: entry.occurrenceClassification,
+      requestId: entry.requestId,
+      subject: entry.subject,
+      version: workflowJournalEventVersion
+    })
+  }
   if (entry._tag === "ControlDirectionApplied") {
     return ControlDirectionAppliedEvent.make({ ...entry, version: workflowJournalEventVersion })
   }
@@ -1205,7 +1231,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
-    | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+    | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
@@ -1220,6 +1246,9 @@ const lyricForTaskBoundaryEntry = (
 }
 
 const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirectionEntry): string => {
+  if (entry._tag === "AttemptChoiceApplied") {
+    return `Operator chose ${entry.choice} for attempt ${entry.subject.plannedAttempt.attemptId} after observing task revision ${entry.subject.observedTaskRevision}.`
+  }
   if (entry._tag === "ControlDirectionApplied") {
     return `Operator applied ${entry.direction} to ${entry.subject._tag === "Run" ? "the Run" : `task ${entry.subject.taskId}`}.`
   }
