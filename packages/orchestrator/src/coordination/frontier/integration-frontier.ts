@@ -1,5 +1,11 @@
 import { Option, Schema } from "effect"
-import { type AttemptId, type IntegrationTarget, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
+import {
+  type AttemptId,
+  type IntegrationTarget,
+  type PlannedTaskAttempt,
+  type TaskId,
+  plannedAttemptExecutorCorrelation
+} from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import {
@@ -153,6 +159,15 @@ export const deriveIntegrationFrontier = (
     const authority = claimAuthorityFor(responsibility)
     return authority._tag === "Exact" ? undefined : authority
   }
+  const candidateIntentFor = (responsibility: StartedIntegrationResponsibility) =>
+    runState.workflowHistory.records.findLast(
+      ({ event }) =>
+        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
+    )?.event
+  const hasPreIntentTargetRewrite = (responsibility: StartedIntegrationResponsibility) =>
+    candidateIntentFor(responsibility) === undefined &&
+    runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+      ?.plannedBaseIsAncestorOfTargetHead === false
   const startable = selectStartableIntegrationResponsibilities({ responsibilities }).filter(
     (responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility)
   )
@@ -177,10 +192,8 @@ export const deriveIntegrationFrontier = (
     if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
     if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
     if (waiting) return []
-    const durableIntent = runState.workflowHistory.records.findLast(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-    )?.event
+    const durableIntent = candidateIntentFor(responsibility)
+    if (hasPreIntentTargetRewrite(responsibility)) return []
     return Option.all({
       continuationLimit:
         durableIntent?._tag === "IntegrationCandidateConstructionIntended"
@@ -293,13 +306,21 @@ export const deriveIntegrationFrontier = (
         .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))
         .map((responsibility) => {
           const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
-          return prerequisiteTaskIds.length === 0
-            ? FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
-            : FrontierExplanation.IntegrationDependencyWait({
-                plannedAttempt: responsibility.plannedAttempt,
-                prerequisiteTaskIds,
-                wakeCondition: "TaskTrackerFactsObserved"
+          if (prerequisiteTaskIds.length > 0) {
+            return FrontierExplanation.IntegrationDependencyWait({
+              plannedAttempt: responsibility.plannedAttempt,
+              prerequisiteTaskIds,
+              wakeCondition: "TaskTrackerFactsObserved"
+            })
+          }
+          return hasPreIntentTargetRewrite(responsibility)
+            ? FrontierExplanation.PlannedAttemptGitConstraint({
+                correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+                gitState: "TargetRewrite",
+                taskId: responsibility.plannedAttempt.taskId,
+                wakeCondition: "GitFactsObserved"
               })
+            : FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
         }),
       ...queued
         .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))

@@ -648,12 +648,6 @@ export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCa
     correctionLimit: CandidateCorrectionLimit,
     continuationLimit: CandidateContinuationLimit
   ) {
-    if (!targetLineageAllowsCandidate(responsibility, lineage)) {
-      return yield* new IntegrationCandidateTargetLineageRejected({
-        observedTargetHead: lineage.targetHeadSha,
-        plannedBaseSha: responsibility.plannedAttempt.baseSha
-      })
-    }
     const journal = yield* InRunJournal
     const runId = responsibility.plannedAttempt.runId
     let records = yield* journal.read(runId)
@@ -664,6 +658,12 @@ export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCa
       ({ event }) =>
         event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
     )?.event
+    if (durableIntent === undefined && !targetLineageAllowsCandidate(responsibility, lineage)) {
+      return yield* new IntegrationCandidateTargetLineageRejected({
+        observedTargetHead: lineage.targetHeadSha,
+        plannedBaseSha: responsibility.plannedAttempt.baseSha
+      })
+    }
     const correlation =
       durableIntent?._tag === "IntegrationCandidateConstructionIntended"
         ? durableIntent.correlation

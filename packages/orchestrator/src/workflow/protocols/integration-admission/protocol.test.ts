@@ -734,6 +734,52 @@ it.effect("fails closed without current tracker facts and orders authorized inte
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("derives a target-rewrite constraint before proposing candidate construction", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    if (reconstructed._tag !== "ValidReconstructedRun") {
+      return yield* Effect.die("expected valid reconstructed integration responsibility")
+    }
+    const frontier = deriveIntegrationFrontier(reconstructed.state, {
+      candidateCorrectionLimit: Option.some(CandidateCorrectionLimit.make(1)),
+      candidateContinuationLimit: Option.some(CandidateContinuationLimit.make(2)),
+      currentTrackerTaskIds: new Set([attempt.taskId]),
+      heldResponsibilityPositions: new Set([queued.queuedAt]),
+      integrationTarget: Option.some(integrationTarget),
+      targetLineageByAttemptId: new Map([
+        [
+          attempt.attemptId,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: false,
+            plannedBaseSha: attempt.baseSha,
+            targetHeadSha: GitCommitSha.make("9".repeat(40))
+          })
+        ]
+      ]),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.attemptId)
+    })
+
+    expect(frontier.transitions).not.toContainEqual(
+      expect.objectContaining({ _tag: "ContinueStartedIntegrationCandidate" })
+    )
+    expect(frontier.explanations).toContainEqual({
+      _tag: "PlannedAttemptGitConstraint",
+      correlation: expect.objectContaining({ attemptId: attempt.attemptId }),
+      gitState: "TargetRewrite",
+      taskId: attempt.taskId,
+      wakeCondition: "GitFactsObserved"
+    })
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("rereads target lineage after restart instead of authorizing a candidate from stale evidence", () =>
   Effect.gen(function* () {
     const attempt = plannedAttempt("C", 0)

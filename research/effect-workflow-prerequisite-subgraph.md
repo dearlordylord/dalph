@@ -1,7 +1,7 @@
 ```mermaid
 flowchart LR
   subgraph integration["Integration"]
-    i57["#57 Two-parent candidate"]
+    i57["#57 Two-parent candidate ✓"]
     i59["#59 Target verification"]
     i60["#60 Promote or reconcile"]
     i61["#61 Complete tracker task"]

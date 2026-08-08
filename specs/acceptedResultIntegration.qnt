@@ -15,6 +15,8 @@ module acceptedResultIntegration {
     | CandidateReady
     | CorrectionLimitReached
     | ContinuationLimitReached
+    | CorrelationContradiction
+    | CorrelationContradictionReleased
 
   type ResultState = {
     phase: Phase,
@@ -86,6 +88,12 @@ module acceptedResultIntegration {
   val continuationLimitReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == ContinuationLimitReached)
 
+  val correlationContradictionReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == CorrelationContradiction)
+
+  val correlationContradictionReleasedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == CorrelationContradictionReleased)
+
   val dependencyWaitReleasedTarget: bool =
     state.results.get(1).phase == DependencyWait
       and not(state.results.get(1).targetHeld)
@@ -106,10 +114,10 @@ module acceptedResultIntegration {
       )
     )
 
-  val targetHeldExactlyActiveIntegration: bool =
+  val targetHeldOnlyForActiveIntegration: bool =
     RESULT_IDS.forall(id =>
-      state.results.get(id).targetHeld
-        == Set(Started, CandidatePending, CorrectionRequired, CandidateReady).contains(state.results.get(id).phase)
+      state.results.get(id).targetHeld implies
+        Set(Started, CandidatePending, CorrectionRequired, CandidateReady, CorrelationContradiction).contains(state.results.get(id).phase)
     )
 
   val candidateReadyHasExactOrderedParents: bool =
@@ -125,7 +133,7 @@ module acceptedResultIntegration {
 
   val sessionIdentityFixedAfterStart: bool =
     RESULT_IDS.forall(id =>
-      Set(Started, CandidatePending, CorrectionRequired, CandidateReady, CorrectionLimitReached, ContinuationLimitReached).contains(state.results.get(id).phase)
+      Set(Started, CandidatePending, CorrectionRequired, CandidateReady, CorrectionLimitReached, ContinuationLimitReached, CorrelationContradiction, CorrelationContradictionReleased).contains(state.results.get(id).phase)
         implies state.results.get(id).integrationSession == id
     )
 
@@ -226,6 +234,7 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       Set(Started, CorrectionRequired).contains(result.phase),
+      result.targetHeld,
       candidate != 0,
       state' = {
         ...state,
@@ -247,6 +256,7 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       Set(Started, CorrectionRequired).contains(result.phase),
+      result.targetHeld,
       state' = {
         ...state,
         results: state.results.put(id,
@@ -264,11 +274,48 @@ module acceptedResultIntegration {
     }
   }
 
+  // A report for another session stops this operation before any Git read. The
+  // exact external correlation is exercised by the TypeScript protocol and
+  // cassette adapter; this model retains the fixed session and existing work.
+  action reportForeignCorrelation(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      Set(Started, CorrectionRequired).contains(result.phase),
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: CorrelationContradiction,
+          targetHeld: true,
+        }),
+      },
+    }
+  }
+
+  action releaseForeignCorrelationTarget(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == CorrelationContradiction,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: CorrelationContradictionReleased,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
   action observeExactCandidate(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
       result.phase == CandidatePending,
+      result.targetHeld,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -286,6 +333,7 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       result.phase == CandidatePending,
+      result.targetHeld,
       state' = {
         ...state,
         results: state.results.put(id,
@@ -311,6 +359,7 @@ module acceptedResultIntegration {
   action gitReadFails(id: int): bool = all {
     RESULT_IDS.contains(id),
     state.results.get(id).phase == CandidatePending,
+    state.results.get(id).targetHeld,
     state' = state,
   }
 
@@ -319,6 +368,7 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       result.phase == Started,
+      result.targetHeld,
       state.trackerFactsCurrent,
       state' = {
         ...state,
@@ -333,7 +383,23 @@ module acceptedResultIntegration {
 
   action recoverCoordinator: bool = all {
     not(state.recovered),
-    state' = { ...state, recovered: true, trackerFactsCurrent: false },
+    state' = {
+      ...state,
+      results: RESULT_IDS.mapBy(id => {
+        val result = state.results.get(id)
+        {
+          ...result,
+          phase:
+            if (result.phase == CorrelationContradictionReleased)
+              CorrelationContradiction
+            else
+              result.phase,
+          targetHeld: false,
+        }
+      }),
+      recovered: true,
+      trackerFactsCurrent: false,
+    },
   }
 
   action observeTrackerFacts: bool = all {
@@ -341,27 +407,86 @@ module acceptedResultIntegration {
     state' = { ...state, trackerFactsCurrent: true },
   }
 
+  pure def canReacquireTarget(s: State, id: int): bool = {
+    val result = s.results.get(id)
+    and {
+      RESULT_IDS.contains(id),
+      s.trackerFactsCurrent,
+      Set(Started, CandidatePending, CorrectionRequired).contains(result.phase),
+      not(result.targetHeld),
+      not(RESULT_IDS.exists(other => s.results.get(other).targetHeld)),
+    }
+  }
+
+  action reacquireIntegrationTarget(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canReacquireTarget(state, id),
+      state' = {
+        ...state,
+        results: state.results.put(id, { ...result, targetHeld: true }),
+      },
+    }
+  }
+
+  // Quint traces retain action names but not the arguments passed to action
+  // definitions. These concrete executable actions preserve the parameterized
+  // helpers above for exact tests while giving the TypeScript conformance
+  // adapter an unambiguous production operation for every trace step.
+  action acceptResultOne: bool = acceptResult(1)
+  action acceptResultTwo: bool = acceptResult(2)
+  action queueAcceptedResultOne: bool = queueAcceptedResult(1)
+  action queueAcceptedResultTwo: bool = queueAcceptedResult(2)
+  action startIntegrationOne: bool = startIntegration(1)
+  action startIntegrationTwo: bool = startIntegration(2)
+  action waitOnDependencyOne: bool = waitOnDependency(1)
+  action waitOnDependencyTwo: bool = waitOnDependency(2)
+  action submitCandidateOne31: bool = submitCandidate(1, 31)
+  action submitCandidateOne32: bool = submitCandidate(1, 32)
+  action submitCandidateTwo31: bool = submitCandidate(2, 31)
+  action submitCandidateTwo32: bool = submitCandidate(2, 32)
+  action observeExactCandidateOne: bool = observeExactCandidate(1)
+  action observeExactCandidateTwo: bool = observeExactCandidate(2)
+  action observeInvalidCandidateOne: bool = observeInvalidCandidate(1)
+  action observeInvalidCandidateTwo: bool = observeInvalidCandidate(2)
+  action gitReadFailsOne: bool = gitReadFails(1)
+  action gitReadFailsTwo: bool = gitReadFails(2)
+  action reportWithoutCandidateOne: bool = reportWithoutCandidate(1)
+  action reportWithoutCandidateTwo: bool = reportWithoutCandidate(2)
+  action reportForeignCorrelationOne: bool = reportForeignCorrelation(1)
+  action reportForeignCorrelationTwo: bool = reportForeignCorrelation(2)
+  action releaseForeignCorrelationTargetOne: bool = releaseForeignCorrelationTarget(1)
+  action releaseForeignCorrelationTargetTwo: bool = releaseForeignCorrelationTarget(2)
+  action reacquireIntegrationTargetOne: bool = reacquireIntegrationTarget(1)
+  action reacquireIntegrationTargetTwo: bool = reacquireIntegrationTarget(2)
+
   action step: bool = any {
-    acceptResult(1),
-    acceptResult(2),
-    queueAcceptedResult(1),
-    queueAcceptedResult(2),
-    startIntegration(1),
-    startIntegration(2),
-    waitOnDependency(1),
-    waitOnDependency(2),
-    submitCandidate(1, 31),
-    submitCandidate(1, 32),
-    submitCandidate(2, 31),
-    submitCandidate(2, 32),
-    observeExactCandidate(1),
-    observeExactCandidate(2),
-    observeInvalidCandidate(1),
-    observeInvalidCandidate(2),
-    gitReadFails(1),
-    gitReadFails(2),
-    reportWithoutCandidate(1),
-    reportWithoutCandidate(2),
+    acceptResultOne,
+    acceptResultTwo,
+    queueAcceptedResultOne,
+    queueAcceptedResultTwo,
+    startIntegrationOne,
+    startIntegrationTwo,
+    waitOnDependencyOne,
+    waitOnDependencyTwo,
+    submitCandidateOne31,
+    submitCandidateOne32,
+    submitCandidateTwo31,
+    submitCandidateTwo32,
+    observeExactCandidateOne,
+    observeExactCandidateTwo,
+    observeInvalidCandidateOne,
+    observeInvalidCandidateTwo,
+    gitReadFailsOne,
+    gitReadFailsTwo,
+    reportWithoutCandidateOne,
+    reportWithoutCandidateTwo,
+    reportForeignCorrelationOne,
+    reportForeignCorrelationTwo,
+    releaseForeignCorrelationTargetOne,
+    releaseForeignCorrelationTargetTwo,
+    reacquireIntegrationTargetOne,
+    reacquireIntegrationTargetTwo,
     recoverCoordinator,
     observeTrackerFacts,
   }

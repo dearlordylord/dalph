@@ -118,10 +118,12 @@ const invalidCandidateAgentReport = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateAgentReported" }>,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
+  const intent = indexes.integrationCandidateIntents.get(candidateKey(event.expectedCorrelation))
+  if (intent === undefined || !integrationCandidateCorrelationEquals(intent.correlation, event.expectedCorrelation)) {
+    return `candidate agent report has no exact earlier intent for candidate ${event.expectedCorrelation.candidateId}`
+  }
   indexes.integrationCandidateSubmissions.set(record.position, event)
-  return indexes.integrationCandidateIntents.has(candidateKey(event.expectedCorrelation))
-    ? undefined
-    : `candidate agent report has no earlier intent for candidate ${event.expectedCorrelation.candidateId}`
+  return undefined
 }
 
 const invalidCandidateGitResult = (

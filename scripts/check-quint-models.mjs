@@ -249,7 +249,7 @@ await run("Git reconciliation exhaustive model", [
 const acceptedResultIntegrationInvariants = [
   "cancellationExactlyQueued",
   "queuePositionsAreUnique",
-  "targetHeldExactlyActiveIntegration",
+  "targetHeldOnlyForActiveIntegration",
   "atMostOneTargetHolder",
   "startedPrecedesRemainingQueue",
   "dependencyWaitPreservesQueueOrder",
@@ -283,6 +283,8 @@ await run("accepted-result integration sampled model", [
   "correctionRequiredReached",
   "correctionLimitReached",
   "continuationLimitReached",
+  "correlationContradictionReached",
+  "correlationContradictionReleasedReached",
   "--max-steps",
   "12",
   "--max-samples",
@@ -290,7 +292,7 @@ await run("accepted-result integration sampled model", [
   "--verbosity",
   "1"
 ])
-// TLC checks the complete state graph: 4309 generated / 1890 distinct states,
+// TLC checks the complete state graph: 8701 generated / 4158 distinct states,
 // diameter 19, ~0.9s (Quint 0.32.0, linux-aarch64). A previous --max-steps 12
 // truncated the check four levels short of the diameter; with no bound the
 // whole graph is covered against all eight invariants and future growth shows

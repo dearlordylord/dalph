@@ -108,7 +108,7 @@ const SPECS = [
     invariants: [
       "cancellationExactlyQueued",
       "queuePositionsAreUnique",
-      "targetHeldExactlyActiveIntegration",
+      "targetHeldOnlyForActiveIntegration",
       "atMostOneTargetHolder",
       "startedPrecedesRemainingQueue",
       "dependencyWaitPreservesQueueOrder",
@@ -125,7 +125,9 @@ const SPECS = [
       "candidateReadyReached",
       "correctionRequiredReached",
       "correctionLimitReached",
-      "continuationLimitReached"
+      "continuationLimitReached",
+      "correlationContradictionReached",
+      "correlationContradictionReleasedReached"
     ]
   }
 ]

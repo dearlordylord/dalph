@@ -582,6 +582,51 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
   })
 )
 
+it.effect("rejects every mismatched candidate report expectation during reconstruction", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const intent = recorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateConstructionIntended")
+    if (intent?._tag !== "IntegrationCandidateConstructionIntended") {
+      return yield* Effect.die("candidate cassette must contain its construction intent")
+    }
+    const mismatches = [
+      { ...intent.correlation, acceptedResultCommit: GitCommitSha.make("d".repeat(40)) },
+      { ...intent.correlation, attemptId: AttemptId.make("foreign-candidate-attempt") },
+      { ...intent.correlation, candidateId: IntegrationCandidateId.make("foreign-candidate") },
+      {
+        ...intent.correlation,
+        candidateResource: IntegrationCandidateResourceLocator.make("foreign-candidate-resource")
+      },
+      { ...intent.correlation, expectedTargetHead: GitCommitSha.make("e".repeat(40)) },
+      { ...intent.correlation, integrationSessionId: IntegrationSessionId.make("foreign-session") },
+      {
+        ...intent.correlation,
+        integrationTarget: IntegrationTarget.make({
+          repository: GitRepositoryLocator.make("/foreign-repository/.git"),
+          ref: IntegrationTargetRef.make("refs/heads/foreign")
+        })
+      },
+      { ...intent.correlation, runId: RunId.make("foreign-candidate-run") }
+    ]
+    const reportAt = recorded.entries.findIndex(({ _tag }) => _tag === "IntegrationCandidateAgentReported")
+    const reportPrefix = recorded.entries.slice(0, reportAt + 1)
+
+    for (const expectedCorrelation of mismatches) {
+      expect(
+        foldRecordedCassette(
+          RecordedCassette.make({
+            ...recorded,
+            entries: reportPrefix.map((entry) =>
+              entry._tag === "IntegrationCandidateAgentReported" ? { ...entry, expectedCorrelation } : entry
+            )
+          })
+        )._tag
+      ).toBe("InvalidWorkflowJournalHistory")
+    }
+  })
+)
+
 it.effect("round-trips pending Git failure and correction-limit candidate evidence", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)

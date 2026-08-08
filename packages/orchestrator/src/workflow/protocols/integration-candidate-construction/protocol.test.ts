@@ -334,6 +334,32 @@ it.effect("builds one candidate with current target first and accepted result se
   )
 )
 
+it.effect("does not verify or promote the constructed candidate", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const result = yield* continueIntegrationCandidateConstruction(started, lineage, CandidateCorrectionLimit.make(2))
+    expect(result._tag).toBe("CandidateConstructed")
+
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(records.map(({ event }) => event._tag).filter((tag) => tag.startsWith("IntegrationCandidate"))).toEqual([
+      "IntegrationCandidateConstructionIntended",
+      "IntegrationCandidateAgentReported",
+      "IntegrationCandidateGitObserved",
+      "IntegrationCandidateConstructed"
+    ])
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer([
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate,
+          correlation: placeholderCorrelation
+        })
+      ])
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
 it.effect("requires explicit candidate submission instead of inferring worktree head", () =>
   Effect.gen(function* () {
     yield* seedStartedResponsibility
@@ -475,6 +501,38 @@ it.effect("keeps conflict edits bound to the same candidate and integration sess
     expect(requests[0]?.correlation.expectedTargetHead).toBe(lineage.targetHeadSha)
     expect(requests[0]?.candidateResource).toBe(requests[1]?.candidateResource)
     expect(requests[0]?.candidateResource).not.toBe(plannedAttempt.worktree)
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer([
+        IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: placeholderCorrelation }),
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate,
+          correlation: placeholderCorrelation
+        })
+      ])
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it.effect("continues the fixed session after a later target rewrite observation", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const conflict = yield* continueIntegrationCandidateConstruction(started, lineage, CandidateCorrectionLimit.make(2))
+    const completed = yield* continueIntegrationCandidateConstruction(
+      started,
+      TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: false,
+        plannedBaseSha: base,
+        targetHeadSha: GitCommitSha.make("8".repeat(40))
+      }),
+      CandidateCorrectionLimit.make(2)
+    )
+
+    expect(conflict._tag).toBe("CandidateConstructionInProgress")
+    expect(completed).toMatchObject({ _tag: "CandidateConstructed", expectedTargetHead: lineage.targetHeadSha })
+    const requests = yield* (yield* CandidateBoundaryInspection).requests
+    expect(requests[0]?.correlation).toEqual(requests[1]?.correlation)
   }).pipe(
     Effect.provide(
       candidateBoundaryLayer([
@@ -896,4 +954,48 @@ it.effect("releases the integration target after non-convergence so unrelated wo
     ),
     Effect.provide(legacyMemoryJournalStoreLayer)
   )
+)
+
+it.effect(
+  "releases the integration target after automatic continuation exhaustion so unrelated work may continue",
+  () =>
+    Effect.gen(function* () {
+      yield* seedStartedResponsibility
+      const resources = yield* makeIntegrationTargetResourceController()
+      yield* resources.acquire(started)
+      const first = yield* runIntegrationCandidateConstruction(
+        started,
+        lineage,
+        CandidateCorrectionLimit.make(1),
+        resources
+      )
+      const exhausted = yield* runIntegrationCandidateConstruction(
+        started,
+        lineage,
+        CandidateCorrectionLimit.make(1),
+        resources
+      )
+      const released = yield* runIntegrationCandidateConstruction(
+        started,
+        lineage,
+        CandidateCorrectionLimit.make(1),
+        resources
+      )
+      expect(first._tag).toBe("CandidateConstructionInProgress")
+      expect(exhausted._tag).toBe("CandidateConstructionInProgress")
+      expect(released).toMatchObject({
+        _tag: "CandidateContinuationLimitReached",
+        continuationCount: 2,
+        continuationLimit: 2
+      })
+      expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
+    }).pipe(
+      Effect.provide(
+        candidateBoundaryLayer([
+          IntegrationCandidateAgentReport.cases.Working.make({ correlation: placeholderCorrelation }),
+          IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: placeholderCorrelation })
+        ])
+      ),
+      Effect.provide(legacyMemoryJournalStoreLayer)
+    )
 )

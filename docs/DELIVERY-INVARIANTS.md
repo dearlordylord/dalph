@@ -199,9 +199,12 @@ and Dalph does not attribute an unauthenticated outside edit to a person.
 
 ## Integration and promotion
 
-**Unverified against production.** These come from issues 56, 57, 138 and 139,
-all open. Candidate construction and promotion exist in production; whether they
-satisfy these rules has not been checked.
+**Candidate construction audited; later promotion remains separate.** Issue 57's
+explicit submission, exact ordered parents, fixed session, lineage gate, and
+preservation paths are checked against production, maintained cassettes, and
+the accepted-result integration model. Candidate verification, promotion, and
+stale-head reconciliation remain owned by later issues and are not implied by
+that evidence.
 
 **D26 Candidate shape.** An integration candidate has exactly two ordered direct
 parents: the fixed expected target head first, the immutable accepted result
@@ -355,8 +358,11 @@ a caller argument, and recovery requires no initial-policy input.
 
 ## Serialized integration
 
-**Not implemented.** This whole section is accepted specification from issues 56,
-57 and 138, all open. Nothing here describes what Dalph does today.
+**Admission and candidate construction implemented.** The issue 56 queue and
+issue 57 candidate session/resource behavior below are checked against
+production. Issue 138's blocker reconciliation and session-supersession
+qualification remains separately accepted work; the implemented fixed-session
+rules do not imply that later behavior.
 
 **D41 Integration admission is a distinct resource from task-work capacity.**
 Queued or started integration is not counted against task-work capacity, and
@@ -425,7 +431,7 @@ Items below are unresolved and must not be read as settled behavior.
    value that production always leaves empty, while settlement actions are
    separately proposed and executed. Whether the empty value is future work or
    dead design is undecided.
-2. **Integration and promotion.** D26–D28 come from issues 56, 57, 138 and 139,
-   all open. They are marked at their own section rather than here once their
-   implementation state is established; today they are unverified against
-   production.
+2. **Promotion and stale-head reconciliation.** D26's issue 57 candidate shape
+   is checked against production. D27–D28's later candidate-verification,
+   promotion, and stale-head paths still require their own production audit;
+   issue 57's completed construction evidence does not establish them.

@@ -82,13 +82,19 @@ substitute a newer target head, mutate the target ref, create a second
 integration session, infer M from process success or the newest worktree
 commit, classify M as verified, or mark the tracker task complete.
 
-### Acceptance-test seam
+### Acceptance evidence
 
 - `builds one candidate with current target first and accepted result second`
 - `requires explicit candidate submission instead of inferring worktree head`
 - `keeps the first submitted candidate when later commits appear`
 - `reopens an ambiguously constructed candidate before retrying it`
 - `does not verify or promote the constructed candidate`
+- Maintained cassette: `candidate conflict recovery stays in one isolated integration resource`, exercised by
+  `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
+- Quint: `explicitExactCandidateFixesOrderedParentsTest` and
+  `unreadableGitPreservesExplicitSubmissionAcrossRestartTest`, plus
+  `candidateReadyRestartReconstructsNoTargetLeaseTest` for the process-local
+  resource boundary
 
 ## Dalph rejects rewritten or unrelated target lineage before invocation
 
@@ -116,10 +122,15 @@ The operator sees a lineage constraint rather than a fabricated candidate.
 Dalph must not reset or overwrite H, merge unrelated histories, rewrite C,
 release the responsibility as completed, or silently choose a different Base.
 
-### Acceptance-test seam
+### Acceptance evidence
 
-- `rejects rewritten target lineage before candidate construction`
-- `preserves the accepted result and integration responsibility on lineage rejection`
+- `rejects rewritten target lineage before candidate construction and preserves its accepted responsibility`
+- `derives a target-rewrite constraint before proposing candidate construction`
+- `continues after Git proves the target advanced from the planned Base`
+- `isolates the affected attempt after Git proves an incompatible target rewrite`
+- `records compatible target advancement and isolates a proven target rewrite in maintained cassettes`
+- Quint: `compatibleAdvanceContinuesTest` and
+  `incompatibleRewriteSuspendsOnlyAffectedAttemptTest`
 
 ## Conflict resolution remains inside the exact candidate session
 
@@ -153,11 +164,17 @@ Dalph must not apply edits to the planned task worktree, start a second
 candidate from a newer head, discard conflict work automatically, or treat a
 clean working tree as proof of the required commit parents.
 
-### Acceptance-test seam
+### Acceptance evidence
 
 - `keeps conflict edits bound to the same candidate and integration session`
+- `continues the fixed session after a later target rewrite observation`
 - `preserves conflicting candidate work across restart`
-- `rejects a candidate whose session identity or ordered parents changed`
+- `returns an invalid parent structure and accepts the first exact corrected submission in the same session`
+- `fails closed before Git and preserves involved sessions without automatic resubmission`
+- Maintained cassette: `candidate conflict recovery stays in one isolated integration resource`, exercised by
+  `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
+- Quint: `correctionReusesSessionAndAcceptsFirstCorrectedSubmissionTest`;
+  sampled and exhaustive checks also include `sessionIdentityFixedAfterStart`
 
 ## The integration agent corrects an invalid candidate submission
 
@@ -203,14 +220,21 @@ silently reinterpret a wrong parent, discard the isolated work, treat the
 invalid submission as a valid M, or restart candidate construction with a
 newer target head.
 
-### Acceptance-test seam
+### Acceptance evidence
 
-- `returns an invalid parent structure to the same integration agent`
+- `returns an invalid parent structure and accepts the first exact corrected submission in the same session`
 - `returns a missing or non-commit submission to the same integration agent`
-- `accepts the first corrected submission with exact ordered parents`
-- `reconnects to the same session after an invalid submission and crash`
+- `reconciles a limit-reaching Git observation after a crash before another agent call`
 - `preserves non-convergent work and leaves the task incomplete after correction exhaustion`
 - `releases the integration target after non-convergence so unrelated work may continue`
+- `releases the integration target after automatic continuation exhaustion so unrelated work may continue`
+- `stops automatic agent continuation at the durable configured limit`
+- Maintained cassettes: `candidate correction exhaustion preserves non-convergent work` and
+  `candidate correction rereads unreadable Git without charging the agent`, exercised by
+  `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
+- Quint: `correctionReusesSessionAndAcceptsFirstCorrectedSubmissionTest`,
+  `correctionExhaustionPreservesWorkAndReleasesTargetTest`, and
+  `automaticContinuationExhaustionPreservesWorkAndReleasesTargetTest`
 
 ## A submission contradicts its bound integration identity
 
@@ -241,10 +265,14 @@ agent merge failure. Dalph must not touch either candidate, guess the intended
 session, route the submission by worktree tip, or repeatedly ask an agent to
 resubmit.
 
-### Acceptance-test seam
+### Acceptance evidence
 
-- `fails closed before Git when candidate submission correlation contradicts its session`
-- `preserves every possibly involved session without automatic resubmission`
+- `fails closed before Git and preserves involved sessions without automatic resubmission`
+- `rejects every mismatched candidate report expectation during reconstruction`
+- Maintained cassette: `candidate correlation contradiction fails closed before Git`, exercised by
+  `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
+- Quint: `foreignCorrelationStopsBeforeGitAndKeepsSessionTest` and
+  `correlationContradictionRestartReconstructsNoTargetLeaseTest`
 
 ## Git cannot validate an explicitly submitted candidate
 
@@ -281,16 +309,31 @@ failure. Dalph must not mutate the target ref, blame or restart the agent, lose
 the accepted result, allocate another identity, or collapse unreadable,
 invalid, and absent into one result.
 
-### Acceptance-test seam
+### Acceptance evidence
 
-- `keeps the submitted candidate pending when Git validation is unreadable`
-- `rereads the same candidate without charging an agent correction round`
-- `resolves a later readable Git result as valid or invalid`
+- `keeps and rereads the same submitted candidate without charging an agent correction round when Git is unreadable`
+- `resolves a later readable invalid Git result through same-session correction`
+- `round-trips pending Git failure and correction-limit candidate evidence`
+- Maintained cassette: `candidate correction rereads unreadable Git without charging the agent`, exercised by
+  `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
+- Quint: `unreadableGitPreservesExplicitSubmissionAcrossRestartTest` and
+  `correctionReusesSessionAndAcceptsFirstCorrectedSubmissionTest`
 
-## Scenario-to-test mapping required at handoff
+## Handoff boundary
 
-The implementation handoff must replace every seam above with a passing test,
-authored/recorded cassette scenario where actor-visible behavior applies, and
-the owning Quint scenario plus executable adapter. It must identify the exact
-Git boundary calls and their typed failures. Aggregate coverage and P0–P6
-cut-point labels are supporting evidence, not substitutes for this mapping.
+The evidence above names the collected acceptance tests, maintained authored
+cassettes, and collected Quint runs. The executable protocol tests inject the
+integration-agent and Git boundaries directly; the maintained cassette tests
+drive those same operations through the composed workflow. Exact external
+correlation is represented by the TypeScript schemas and cassette projection,
+while the Quint model deliberately uses small integer identities and checks the
+same-session consequence rather than pretending to model provider payloads.
+The model-based acceptance test
+`replays accepted-result integration through production journal and candidate protocols`
+also drives every executable Quint step through production admission, journal,
+candidate-boundary, Git-observation, restart, and target-resource operations,
+then compares the resulting state after every step.
+
+The concrete CLI transport that carries an agent submission remains deferred.
+Nothing in this handoff infers a candidate from freeform output or claims that
+the integration agent adapter can yet survive independently of Dalph's process.

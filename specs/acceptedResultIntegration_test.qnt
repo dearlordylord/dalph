@@ -55,7 +55,7 @@ module acceptedResultIntegrationTest {
       .then(startIntegration(1))
       .expect(and {
         startedReached,
-        targetHeldExactlyActiveIntegration,
+        targetHeldOnlyForActiveIntegration,
         cancellationExactlyQueued,
         not(state.results.get(1).preIntegrationCancellation),
       })
@@ -101,12 +101,45 @@ module acceptedResultIntegrationTest {
       .then(submitCandidate(1, 31))
       .then(gitReadFails(1))
       .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(reacquireIntegrationTarget(1))
       .then(observeExactCandidate(1))
       .expect(and {
         restartReached,
         candidateReadyReached,
         state.results.get(1).submittedCandidate == 31,
         state.results.get(1).integrationSession == 1,
+      })
+  }
+
+  run candidateReadyRestartReconstructsNoTargetLeaseTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(submitCandidate(1, 31))
+      .then(observeExactCandidate(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .expect(and {
+        state.results.get(1).phase == CandidateReady,
+        not(state.results.get(1).targetHeld),
+        not(canReacquireTarget(state, 1)),
+      })
+  }
+
+  run correlationContradictionRestartReconstructsNoTargetLeaseTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(reportForeignCorrelation(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .expect(and {
+        state.results.get(1).phase == CorrelationContradiction,
+        not(state.results.get(1).targetHeld),
+        not(canReacquireTarget(state, 1)),
       })
   }
 
@@ -154,6 +187,30 @@ module acceptedResultIntegrationTest {
       .expect(and {
         continuationLimitReached,
         state.results.get(1).continuationCount == CONTINUATION_LIMIT,
+        state.results.get(1).integrationSession == 1,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run foreignCorrelationStopsBeforeGitAndKeepsSessionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(reportForeignCorrelation(1))
+      .expect(and {
+        correlationContradictionReached,
+        state.results.get(1).phase == CorrelationContradiction,
+        state.results.get(1).integrationSession == 1,
+        state.results.get(1).submittedCandidate == 0,
+        state.results.get(1).observedFirstParent == 0,
+        state.results.get(1).observedSecondParent == 0,
+        state.results.get(1).targetHeld,
+      })
+      .then(releaseForeignCorrelationTarget(1))
+      .expect(and {
+        correlationContradictionReleasedReached,
+        state.results.get(1).phase == CorrelationContradictionReleased,
         state.results.get(1).integrationSession == 1,
         not(state.results.get(1).targetHeld),
       })
