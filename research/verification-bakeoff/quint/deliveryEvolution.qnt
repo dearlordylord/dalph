@@ -11,6 +11,8 @@ module deliveryEvolutionCore {
     | NoObligation
     | Claimed
     | Executing
+    | SuspensionRequested
+    | Suspended
     | Settled
     | Retained
 
@@ -20,6 +22,8 @@ module deliveryEvolutionCore {
     open: bool,
     blockers: Set[int],
     retainedForBlocker: bool,
+    attemptId: int,
+    work: int,
   }
 
   type State = {
@@ -36,6 +40,8 @@ module deliveryEvolutionCore {
     open: false,
     blockers: Set(),
     retainedForBlocker: false,
+    attemptId: 0,
+    work: 0,
   }
 
   pure def isBlocked(ticket: Ticket): bool =
@@ -77,6 +83,22 @@ module deliveryEvolutionCore {
   val arrivalBudgetIsBounded: bool =
     state.arrivalsRemaining >= 0 and state.arrivalsRemaining <= INITIAL_ARRIVAL_BUDGET
 
+  val workIsBounded: bool = TASKS.forall(id => {
+    val ticket = state.tickets.get(id)
+    ticket.work >= 0 and ticket.work <= 2
+  })
+
+  val settlementRequiresCompleteWork: bool = TASKS.forall(id => {
+    val ticket = state.tickets.get(id)
+    ticket.phase != Settled or ticket.work == 2
+  })
+
+  val oneAttemptIdentityPerObligation: bool = TASKS.forall(id => {
+    val ticket = state.tickets.get(id)
+    if (ticket.phase == NoObligation) ticket.attemptId == 0
+    else ticket.attemptId == 1
+  })
+
   val allInvariants: bool = and {
     blockersWellFormed,
     selectionRespectsBlockers,
@@ -84,6 +106,9 @@ module deliveryEvolutionCore {
     obligationsSurviveGraphChanges,
     retainedTicketsStateAReason,
     arrivalBudgetIsBounded,
+    workIsBounded,
+    settlementRequiresCompleteWork,
+    oneAttemptIdentityPerObligation,
   }
 
   val blockedTaskReached: bool =
@@ -95,6 +120,21 @@ module deliveryEvolutionCore {
   })
 
   val arrivalBudgetExhaustedReached: bool = state.arrivalsRemaining == 0
+
+  val workZeroReached: bool =
+    TASKS.exists(id => state.tickets.get(id).phase == Executing
+      and state.tickets.get(id).work == 0)
+
+  val workOneReached: bool =
+    TASKS.exists(id => state.tickets.get(id).work == 1)
+
+  val workTwoReached: bool =
+    TASKS.exists(id => state.tickets.get(id).work == 2)
+
+  val suspendedWithPreservedWorkReached: bool = TASKS.exists(id => {
+    val ticket = state.tickets.get(id)
+    ticket.phase == Suspended and ticket.work == 1 and ticket.attemptId == 1
+  })
 
   action init: bool = all {
     state' = {
@@ -152,7 +192,7 @@ module deliveryEvolutionCore {
       current.phase == NoObligation,
       state' = {
         ...state,
-        tickets: state.tickets.set(id, {...current, phase: Claimed}),
+        tickets: state.tickets.set(id, {...current, phase: Claimed, attemptId: 1}),
       },
     }
   }
@@ -169,11 +209,63 @@ module deliveryEvolutionCore {
     }
   }
 
+  action doWork(id: int): bool = {
+    val current = state.tickets.get(id)
+    all {
+      current.phase == Executing,
+      current.blockers.size() == 0,
+      current.work < 2,
+      state' = {
+        ...state,
+        tickets: state.tickets.set(id, {...current, work: current.work + 1}),
+      },
+    }
+  }
+
+  action requestSuspension(id: int): bool = {
+    val current = state.tickets.get(id)
+    all {
+      current.phase == Executing,
+      state' = {
+        ...state,
+        tickets: state.tickets.set(id, {...current, phase: SuspensionRequested}),
+      },
+    }
+  }
+
+  action safelySuspend(id: int): bool = {
+    val current = state.tickets.get(id)
+    all {
+      current.phase == SuspensionRequested,
+      state' = {
+        ...state,
+        tickets: state.tickets.set(id, {
+          ...current,
+          phase: Suspended,
+          work: if (MUTANT == 4) 0 else current.work,
+        }),
+      },
+    }
+  }
+
+  action resumeWork(id: int): bool = {
+    val current = state.tickets.get(id)
+    all {
+      current.phase == Suspended,
+      current.blockers.size() == 0,
+      state' = {
+        ...state,
+        tickets: state.tickets.set(id, {...current, phase: Executing}),
+      },
+    }
+  }
+
   action settle(id: int): bool = {
     val current = state.tickets.get(id)
     all {
       current.phase == Executing,
       current.blockers.size() == 0,
+      or { MUTANT == 3, current.work == 2 },
       state' = {
         ...state,
         tickets: state.tickets.set(id, {...current, phase: Settled, open: false}),
@@ -184,7 +276,8 @@ module deliveryEvolutionCore {
   action retainBlocked(id: int): bool = {
     val current = state.tickets.get(id)
     all {
-      current.phase == Claimed or current.phase == Executing,
+      current.phase == Claimed or current.phase == Executing
+        or current.phase == SuspensionRequested or current.phase == Suspended,
       current.blockers.size() > 0,
       state' = {
         ...state,
@@ -222,6 +315,9 @@ module deliveryEvolutionCore {
   action progress(id: int): bool = any {
     acquireClaim(id),
     beginWork(id),
+    doWork(id),
+    safelySuspend(id),
+    resumeWork(id),
     settle(id),
     retainBlocked(id),
     recycleArrival(id),
@@ -237,6 +333,7 @@ module deliveryEvolutionCore {
       observeArrival(id, Set(blocker)),
       observeBlockers(id, Set()),
       observeBlockers(id, Set(blocker)),
+      requestSuspension(id),
       progress(id),
     }
   }
@@ -244,8 +341,31 @@ module deliveryEvolutionCore {
   val vars = Set(state)
 
   temporal fairLifecycle: bool = and {
-    TASKS.forall(id => progress(id).strongFair(vars)),
-    TASKS.forall(id => arrival(id).strongFair(vars)),
+    TASKS.forall(id => and {
+      acquireClaim(id).strongFair(vars),
+      beginWork(id).strongFair(vars),
+      doWork(id).strongFair(vars),
+      safelySuspend(id).strongFair(vars),
+      resumeWork(id).strongFair(vars),
+      settle(id).strongFair(vars),
+      retainBlocked(id).strongFair(vars),
+      recycleArrival(id).strongFair(vars),
+      arrival(id).strongFair(vars),
+    }),
+  }
+
+  temporal weakLifecycleFairness: bool = and {
+    TASKS.forall(id => and {
+      acquireClaim(id).weakFair(vars),
+      beginWork(id).weakFair(vars),
+      doWork(id).weakFair(vars),
+      safelySuspend(id).weakFair(vars),
+      resumeWork(id).weakFair(vars),
+      settle(id).weakFair(vars),
+      retainBlocked(id).weakFair(vars),
+      recycleArrival(id).weakFair(vars),
+      arrival(id).weakFair(vars),
+    }),
   }
 
   temporal blockersEventuallyClear: bool =
@@ -261,6 +381,29 @@ module deliveryEvolutionCore {
         }),
         not(TASKS.exists(id => progress(id).enabled())),
       }))
+
+  temporal everyBegunAttemptSettles: bool =
+    (fairLifecycle and blockersEventuallyClear)
+      implies TASKS.forall(id => always(
+        not(state.tickets.get(id).phase == Executing
+          or state.tickets.get(id).phase == SuspensionRequested
+          or state.tickets.get(id).phase == Suspended)
+        or eventually(state.tickets.get(id).phase == Settled
+          or state.tickets.get(id).phase == Retained)
+      ))
+
+  // Negative control: weak fairness does not force an intermittently enabled
+  // work step when the operator requests suspension forever. Preserving the
+  // counter makes the lasso honest, but does not remove scheduling fairness.
+  temporal everyBegunAttemptSettlesUnderWeakFairness: bool =
+    (weakLifecycleFairness and blockersEventuallyClear)
+      implies TASKS.forall(id => always(
+        not(state.tickets.get(id).phase == Executing
+          or state.tickets.get(id).phase == SuspensionRequested
+          or state.tickets.get(id).phase == Suspended)
+        or eventually(state.tickets.get(id).phase == Settled
+          or state.tickets.get(id).phase == Retained)
+      ))
 }
 
 module deliveryEvolution2 {
@@ -268,6 +411,14 @@ module deliveryEvolution2 {
     MUTANT = 0,
     TASKS = Set(0, 1),
     INITIAL_ARRIVAL_BUDGET = 2,
+  ).*
+}
+
+module deliveryEvolution1 {
+  import deliveryEvolutionCore(
+    MUTANT = 0,
+    TASKS = Set(0),
+    INITIAL_ARRIVAL_BUDGET = 1,
   ).*
 }
 
@@ -282,6 +433,30 @@ module deliveryEvolution2IgnoreBlockers {
 module deliveryEvolution2UnboundedArrival {
   import deliveryEvolutionCore(
     MUTANT = 2,
+    TASKS = Set(0, 1),
+    INITIAL_ARRIVAL_BUDGET = 2,
+  ).*
+}
+
+module deliveryEvolution1UnboundedArrival {
+  import deliveryEvolutionCore(
+    MUTANT = 2,
+    TASKS = Set(0),
+    INITIAL_ARRIVAL_BUDGET = 1,
+  ).*
+}
+
+module deliveryEvolution2EarlyAcceptance {
+  import deliveryEvolutionCore(
+    MUTANT = 3,
+    TASKS = Set(0, 1),
+    INITIAL_ARRIVAL_BUDGET = 2,
+  ).*
+}
+
+module deliveryEvolution2ResetOnSuspend {
+  import deliveryEvolutionCore(
+    MUTANT = 4,
     TASKS = Set(0, 1),
     INITIAL_ARRIVAL_BUDGET = 2,
   ).*

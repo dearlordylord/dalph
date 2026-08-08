@@ -57,3 +57,45 @@ node research/verification-bakeoff/quint/run-evolution.mjs
 
 The harness treats a timeout, missing verdict marker, unexpectedly passing
 mutant, or zero-witness run as failure.
+
+## #198 — finite work preserved through suspension
+
+Planned Base SHA: `0376ef8c59b92e98bb75143b4c31d8da0d9ac984`.
+
+### Model boundary and fairness result
+
+- One modeled attempt has identity 1 and work counter `0..2`. `doWork`
+  increments it; settlement is disabled below 2.
+- Requesting suspension, receiving the safe-suspension report, and resuming
+  keep the same attempt identity and counter. The counter is not an executor
+  implementation stage; it is the finite-work measure required by #198.
+- The explicit counter removes the earlier need to use action fairness as a
+  *proxy* for work. It does not remove scheduling fairness itself. With endless
+  operator suspension, `doWork` and settlement are only intermittently
+  enabled: TLC accepts the strong-fairness property and finds a lasso under
+  weak fairness. No `EventuallyUninterrupted` assumption was added.
+- Two-task I18 produced no verdict within 120 seconds. The accepted bounded
+  specialization is one task, matching the earlier liveness study; safety,
+  directed scenarios, and sampled witnesses still run with two tasks.
+
+### Scenario-to-test mapping
+
+| Accepted scenario | Concrete result | Executable evidence |
+|---|---|---|
+| Work advances 0 → 1 → 2 and cannot settle early | Settlement requires exactly two work steps | `workCounterReachesEveryValueBeforeSettlementTest`, `oneWorkStepCannotSettleTest`, `twoWorkStepsPermitSettlementTest`; mutant 3 is rejected |
+| Suspension after work 1 preserves progress and identity | The safely suspended and resumed ticket retains work 1 and attempt id 1, then reaches work 2 without a second attempt | `suspensionPreservesProgressAndAttemptTest`, `resumedAttemptContinuesFromOneTest`; mutant 4 is rejected |
+| Recheck I18 with explicit finite work | Every begun one-task attempt eventually settles or is retained under strong scheduling fairness; weak fairness admits the suspend/resume lasso | TLC checks `everyBegunAttemptSettles`; `everyBegunAttemptSettlesUnderWeakFairness` is violated |
+
+### Measurements
+
+Quint 0.32.0 / TLC on Linux aarch64:
+
+- directed progress scenarios: 5/5;
+- two-task sampling: work 0 in 9,743/10,000 traces, work 1 in
+  7,154/10,000, work 2 in 4,022/10,000, and safely suspended with preserved
+  work 1 in 3,005/10,000 (20 steps, seed 197);
+- one-task I18: 16 generated states, 13 distinct states, complete graph depth
+  8, about 2.7 seconds checker time (about 9 seconds including startup in the
+  fail-closed harness);
+- weak-fairness control: counterexample in about 2.1 seconds checker time;
+- two-task I18: no verdict within the explicit 120-second timeout.

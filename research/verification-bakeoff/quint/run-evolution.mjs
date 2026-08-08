@@ -25,12 +25,28 @@ const checks = [
     accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
   },
   {
+    name: "#198 progress scenarios",
+    args: ["test", tests, "--main", "deliveryEvolutionProgressTest"],
+    accepts: (result) => result.status === 0 && result.output.includes("5 passing")
+  },
+  {
+    name: "#198 early-acceptance mutant",
+    args: ["test", tests, "--main", "deliveryEvolutionEarlyAcceptanceTest"],
+    accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
+  },
+  {
+    name: "#198 reset-on-suspend mutant",
+    args: ["test", tests, "--main", "deliveryEvolutionResetOnSuspendTest"],
+    accepts: (result) => result.status !== 0 && result.output.includes("1 failed")
+  },
+  {
     name: "#197 sampled invariants/witnesses",
     args: [
       "run", spec, "--main", "deliveryEvolution2",
       "--invariants", "allInvariants",
       "--witnesses", "blockedTaskReached", "postSelectionBlockerReached",
-      "arrivalBudgetExhaustedReached",
+      "arrivalBudgetExhaustedReached", "workZeroReached", "workOneReached",
+      "workTwoReached", "suspendedWithPreservedWorkReached",
       "--max-steps", "20", "--max-samples", "10000", "--seed", "197",
       "--verbosity", "1"
     ],
@@ -41,7 +57,7 @@ const checks = [
   {
     name: "#197 bounded-arrival I19",
     args: [
-      "verify", spec, "--main", "deliveryEvolution2", "--backend", "tlc",
+      "verify", spec, "--main", "deliveryEvolution1", "--backend", "tlc",
       "--temporal", "reachesQuiescenceAfterBoundedArrival", "--verbosity", "1"
     ],
     accepts: (result) => result.status === 0 && result.output.includes("[ok]")
@@ -49,8 +65,24 @@ const checks = [
   {
     name: "#197 unbounded-arrival control",
     args: [
-      "verify", spec, "--main", "deliveryEvolution2UnboundedArrival", "--backend", "tlc",
+      "verify", spec, "--main", "deliveryEvolution1UnboundedArrival", "--backend", "tlc",
       "--temporal", "reachesQuiescenceAfterBoundedArrival", "--verbosity", "1"
+    ],
+    accepts: (result) => result.status !== 0 && result.output.includes("[violation]")
+  },
+  {
+    name: "#198 finite-work I18",
+    args: [
+      "verify", spec, "--main", "deliveryEvolution1", "--backend", "tlc",
+      "--temporal", "everyBegunAttemptSettles", "--verbosity", "1"
+    ],
+    accepts: (result) => result.status === 0 && result.output.includes("[ok]")
+  },
+  {
+    name: "#198 weak-fairness control",
+    args: [
+      "verify", spec, "--main", "deliveryEvolution1", "--backend", "tlc",
+      "--temporal", "everyBegunAttemptSettlesUnderWeakFairness", "--verbosity", "1"
     ],
     accepts: (result) => result.status !== 0 && result.output.includes("[violation]")
   }
