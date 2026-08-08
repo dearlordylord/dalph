@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { NodeServices } from "@effect/platform-node"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
@@ -34,16 +35,34 @@ import {
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
   IntegrationSessionId,
+  EvidenceDigest,
+  EvidenceReference,
+  EvidenceStore,
+  EvidenceStoreFailure,
   integrationCandidateCorrelationEquals,
   integrationCandidateHasExactParents,
   makeIntegrationTargetResourceController,
+  memoryEvidenceStoreLayer,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   queueAcceptedResultIntegrationResponsibility,
   selectStartableIntegrationResponsibilities,
   startQueuedIntegration,
+  TargetVerificationArtifactName,
+  TargetVerificationBoundary,
+  TargetVerificationBoundaryFailure,
+  TargetVerificationCorrelation,
+  TargetVerificationIntendedEvent,
+  TargetVerificationPlan,
+  TargetVerificationPlanId,
+  TargetVerificationTerminal,
   TargetLineageObservation,
+  deriveTargetVerificationState,
+  runTargetVerification,
+  targetVerificationCorrelationFor,
+  targetVerificationIntentRecordKey,
+  targetVerificationRequestIdForCandidate,
   workflowJournalEventVersion,
   type IntegrationCandidateAgentReport as CandidateReport,
   type IntegrationCandidateGitObservation as CandidateGitObservation,
@@ -62,6 +81,8 @@ const target = IntegrationTarget.make({
 })
 const correctionLimit = CandidateCorrectionLimit.make(1)
 const continuationLimit = CandidateContinuationLimit.make(2)
+const verificationPlanFor = (id: bigint) =>
+  TargetVerificationPlan.make({ planId: TargetVerificationPlanId.make(`model-public-plan-${id}`), target })
 
 const commitOf = (value: bigint | number): GitCommitSha =>
   GitCommitSha.make(BigInt(value).toString(16).padStart(40, "0"))
@@ -330,6 +351,18 @@ const acceptedResultIntegrationDriver = defineDriver(
     let modelResults = new Map<bigint, ModelResult>([...attempts.keys()].map((id) => [id, initialModelResult(id)]))
     let dependencyWaits = new Set<bigint>()
     let releasedContradictions = new Set<bigint>()
+    let stagedVerificationOutcome:
+      | "Passed"
+      | "Failed"
+      | "Killed"
+      | "TimedOut"
+      | "Partial"
+      | "CorrelationContradiction"
+      | undefined
+    let verificationBoundaryMode: "ResponseLost" | "ReturnStaged" = "ResponseLost"
+    let verificationRequestsSeen: ReadonlyArray<TargetVerificationCorrelation> = []
+    let verificationReconciliations = new Map<bigint, bigint>()
+    let failVerificationEvidenceRead = false
 
     const modelResultFor = (id: bigint): ModelResult => {
       const result = modelResults.get(id)
@@ -621,6 +654,94 @@ const acceptedResultIntegrationDriver = defineDriver(
       }
       return state._tag === "CandidateCorrelationContradiction" ? state.expected : state.correlation
     }
+    const verificationCandidateFor = (id: bigint) => {
+      const constructed = records.findLast(
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructed" &&
+          event.correlation.attemptId === idFor(id).attemptId &&
+          event.correlation.runId === runId
+      )
+      if (constructed?.event._tag !== "IntegrationCandidateConstructed") {
+        return Effect.runSync(Effect.die(`result ${id} has no constructed candidate`))
+      }
+      return {
+        candidateCommit: constructed.event.candidateCommit,
+        constructedAt: constructed.position,
+        correlation: constructed.event.correlation
+      }
+    }
+    const verificationArtifact = {
+      bytes: new TextEncoder().encode("controlled verification evidence"),
+      name: TargetVerificationArtifactName.make("verification.log")
+    }
+    const verificationTerminalFor = (
+      outcome: Exclude<typeof stagedVerificationOutcome, "CorrelationContradiction" | undefined>,
+      correlation: TargetVerificationCorrelation
+    ): TargetVerificationTerminal =>
+      outcome === "Passed"
+        ? TargetVerificationTerminal.cases.Passed.make({ artifacts: [verificationArtifact], correlation })
+        : TargetVerificationTerminal.cases[outcome].make({ artifacts: [verificationArtifact], correlation })
+    const verificationBoundary = TargetVerificationBoundary.of({
+      runOrResume: (request) =>
+        Effect.suspend(() => {
+          verificationRequestsSeen = [...verificationRequestsSeen, request]
+          if (verificationBoundaryMode === "ResponseLost" || stagedVerificationOutcome === undefined) {
+            return Effect.fail(
+              new TargetVerificationBoundaryFailure({
+                detail: "controlled wrapper response was lost",
+                requestId: request.requestId
+              })
+            )
+          }
+          if (stagedVerificationOutcome === "CorrelationContradiction") {
+            return Effect.succeed(
+              TargetVerificationTerminal.cases.Failed.make({
+                artifacts: [],
+                correlation: TargetVerificationCorrelation.make({
+                  ...request,
+                  candidateCommit: commitOf(99),
+                  requestId: targetVerificationRequestIdForCandidate(
+                    IntegrationCandidateId.make(`${request.candidateCorrelation.candidateId}:foreign`)
+                  )
+                })
+              })
+            )
+          }
+          return Effect.succeed(verificationTerminalFor(stagedVerificationOutcome, request))
+        })
+    })
+    const unavailableEvidenceLayer = Layer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: (bytes) =>
+          Effect.succeed(
+            EvidenceReference.make({ byteLength: bytes.byteLength, digest: EvidenceDigest.make("a".repeat(64)) })
+          ),
+        read: () =>
+          Effect.fail(
+            new EvidenceStoreFailure({
+              detail: "controlled evidence object is unavailable",
+              operation: "EvidenceStore.read"
+            })
+          )
+      })
+    )
+    const runConcreteVerification = (id: bigint) =>
+      runTargetVerification(verificationCandidateFor(id), verificationPlanFor(id)).pipe(
+        Effect.provideService(InRunJournal, append),
+        Effect.provideService(TargetVerificationBoundary, verificationBoundary),
+        Effect.provide(failVerificationEvidenceRead ? unavailableEvidenceLayer : memoryEvidenceStoreLayer),
+        Effect.provide(NodeServices.layer)
+      )
+    const appendConcreteVerificationIntent = (id: bigint) => {
+      const candidate = verificationCandidateFor(id)
+      const correlation = targetVerificationCorrelationFor(candidate, verificationPlanFor(id).planId)
+      return append.append(
+        runId,
+        targetVerificationIntentRecordKey(correlation.requestId),
+        TargetVerificationIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+      )
+    }
     const submit = (id: bigint, candidate: bigint) =>
       Effect.gen(function* () {
         const correlation = correlationFor(id)
@@ -775,26 +896,161 @@ const acceptedResultIntegrationDriver = defineDriver(
         dependencyWaits = new Set(dependencyWaits).add(id)
         modelWaitOnDependency(id)
       })
-    const recordVerificationIntent = (id: bigint) => Effect.sync(() => modelRecordVerificationIntent(id))
-    const invokeVerification = (id: bigint) => Effect.sync(() => modelInvokeVerification(id))
+    const recordVerificationIntent = (id: bigint) =>
+      appendConcreteVerificationIntent(id).pipe(Effect.tap(() => Effect.sync(() => modelRecordVerificationIntent(id))))
+    const invokeVerification = (id: bigint) =>
+      Effect.gen(function* () {
+        verificationBoundaryMode = "ResponseLost"
+        stagedVerificationOutcome = undefined
+        yield* Effect.exit(runConcreteVerification(id))
+        modelInvokeVerification(id)
+      })
     const loseVerificationResponse = (id: bigint) => Effect.sync(() => modelLoseVerificationResponse(id))
-    const reconcileVerification = (id: bigint) => Effect.sync(() => modelReconcileVerification(id))
-    const reportVerificationPassed = (id: bigint) => Effect.sync(() => modelReportVerificationPassed(id))
-    const rereadAndSealPassedVerification = (id: bigint) => Effect.sync(() => modelRereadAndSealPassedVerification(id))
-    const reportVerificationFailed = (id: bigint) =>
-      Effect.sync(() => modelReportDiagnostic(id, "VerificationFailed", "Failed"))
-    const reportVerificationKilled = (id: bigint) =>
-      Effect.sync(() => modelReportDiagnostic(id, "VerificationKilled", "Killed"))
-    const reportVerificationTimedOut = (id: bigint) =>
-      Effect.sync(() => modelReportDiagnostic(id, "VerificationTimedOut", "TimedOut"))
-    const reportVerificationPartial = (id: bigint) =>
-      Effect.sync(() => modelReportDiagnostic(id, "VerificationPartial", "Partial"))
+    const reconcileVerification = (id: bigint) =>
+      Effect.gen(function* () {
+        verificationBoundaryMode = "ResponseLost"
+        stagedVerificationOutcome = undefined
+        yield* Effect.exit(runConcreteVerification(id))
+        verificationReconciliations = new Map(verificationReconciliations).set(
+          id,
+          (verificationReconciliations.get(id) ?? 0n) + 1n
+        )
+        modelReconcileVerification(id)
+      })
+    const reportVerificationPassed = (id: bigint) =>
+      Effect.sync(() => {
+        verificationBoundaryMode = "ReturnStaged"
+        stagedVerificationOutcome = "Passed"
+        modelReportVerificationPassed(id)
+      })
+    const rereadAndSealPassedVerification = (id: bigint) =>
+      Effect.gen(function* () {
+        const state = yield* runConcreteVerification(id)
+        if (state._tag !== "VerificationPassed") return yield* Effect.die("passing evidence was not sealed")
+        yield* (yield* requireResources()).release(responsibilityFor(id))
+        modelRereadAndSealPassedVerification(id)
+      })
+    const reportDiagnostic = (id: bigint, outcome: "Failed" | "Killed" | "TimedOut" | "Partial", phase: Phase) =>
+      Effect.gen(function* () {
+        verificationBoundaryMode = "ReturnStaged"
+        stagedVerificationOutcome = outcome
+        const state = yield* runConcreteVerification(id)
+        if (state._tag !== "VerificationStopped" || state.outcome !== outcome) {
+          return yield* Effect.die(`diagnostic ${outcome} was not sealed`)
+        }
+        yield* (yield* requireResources()).release(responsibilityFor(id))
+        modelReportDiagnostic(id, phase, outcome)
+      })
+    const reportVerificationFailed = (id: bigint) => reportDiagnostic(id, "Failed", "VerificationFailed")
+    const reportVerificationKilled = (id: bigint) => reportDiagnostic(id, "Killed", "VerificationKilled")
+    const reportVerificationTimedOut = (id: bigint) => reportDiagnostic(id, "TimedOut", "VerificationTimedOut")
+    const reportVerificationPartial = (id: bigint) => reportDiagnostic(id, "Partial", "VerificationPartial")
     const reportVerificationCorrelationContradiction = (id: bigint) =>
-      Effect.sync(() => modelReportVerificationBoundaryFailure(id, "VerificationCorrelationContradiction"))
+      Effect.gen(function* () {
+        verificationBoundaryMode = "ReturnStaged"
+        stagedVerificationOutcome = "CorrelationContradiction"
+        const state = yield* runConcreteVerification(id)
+        if (state._tag !== "VerificationContradicted") {
+          return yield* Effect.die("foreign verification correlation was not stopped")
+        }
+        yield* (yield* requireResources()).release(responsibilityFor(id))
+        modelReportVerificationBoundaryFailure(id, "VerificationCorrelationContradiction")
+      })
     const reportVerificationEvidenceFailure = (id: bigint) =>
-      Effect.sync(() => modelReportVerificationBoundaryFailure(id, "VerificationEvidenceFailure"))
+      Effect.gen(function* () {
+        verificationBoundaryMode = "ReturnStaged"
+        stagedVerificationOutcome = "Passed"
+        failVerificationEvidenceRead = true
+        const failure = yield* runConcreteVerification(id).pipe(Effect.flip)
+        failVerificationEvidenceRead = false
+        if (!(failure instanceof EvidenceStoreFailure)) {
+          return yield* Effect.die("incomplete verification evidence did not fail closed")
+        }
+        yield* (yield* requireResources()).release(responsibilityFor(id))
+        modelReportVerificationBoundaryFailure(id, "VerificationEvidenceFailure")
+      })
     const offerPromotionPremise = (id: bigint) => Effect.sync(() => modelOfferPromotionPremise(id))
     const observeTargetFacts = (id: bigint) => Effect.sync(() => modelObserveTargetFacts(id))
+
+    const concreteVerificationProjectionFor = (id: bigint, targetHeld: boolean): Partial<ModelResult> => {
+      const candidateRecord = records.findLast(
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructed" && event.correlation.attemptId === idFor(id).attemptId
+      )
+      if (candidateRecord?.event._tag !== "IntegrationCandidateConstructed") return {}
+      const candidate = {
+        candidateCommit: candidateRecord.event.candidateCommit,
+        constructedAt: candidateRecord.position,
+        correlation: candidateRecord.event.correlation
+      }
+      const intent = records.findLast(
+        ({ event }) =>
+          event._tag === "TargetVerificationIntended" &&
+          event.correlation.candidateCorrelation.attemptId === idFor(id).attemptId
+      )?.event
+      if (intent?._tag !== "TargetVerificationIntended") return {}
+      const correlation = intent.correlation
+      const expectedRequestId = targetVerificationRequestIdForCandidate(candidate.correlation.candidateId)
+      const expectedPlan = verificationPlanFor(id)
+      const exactCandidateBinding =
+        correlation.candidateCommit === candidate.candidateCommit &&
+        correlation.candidateConstructedAt === candidate.constructedAt &&
+        integrationCandidateCorrelationEquals(correlation.candidateCorrelation, candidate.correlation)
+      const verification = deriveTargetVerificationState(records, candidate)
+      const terminalPhase: Phase | undefined =
+        verification?._tag === "VerificationPassed"
+          ? modelResultFor(id).phase === "PromotionPremise"
+            ? "PromotionPremise"
+            : "VerificationPassed"
+          : verification?._tag === "VerificationStopped"
+            ? (`Verification${verification.outcome}` as Phase)
+            : verification?._tag === "VerificationContradicted"
+              ? "VerificationCorrelationContradiction"
+              : undefined
+      const outcome: VerificationOutcome =
+        verification?._tag === "VerificationPassed"
+          ? "Passed"
+          : verification?._tag === "VerificationStopped"
+            ? verification.outcome
+            : verification?._tag === "VerificationContradicted"
+              ? "NoVerificationOutcome"
+              : modelResultFor(id).verificationOutcome
+      const requestIdsSeen = new Set(
+        verificationRequestsSeen
+          .filter((request) => request.candidateCorrelation.attemptId === idFor(id).attemptId)
+          .map((request) => request.requestId)
+      )
+      const terminalWasSealed =
+        verification?._tag === "VerificationPassed" || verification?._tag === "VerificationStopped"
+      return {
+        phase: terminalPhase ?? modelResultFor(id).phase,
+        promotionAuthorized: verification?._tag === "VerificationPassed",
+        reconciliationCount: verificationReconciliations.get(id) ?? 0n,
+        targetHeld,
+        verificationEvidenceReread: terminalWasSealed,
+        verificationIntentRecorded: true,
+        verificationManifestSealed: terminalWasSealed,
+        verificationOutcome: outcome,
+        verificationReplacementCount: BigInt(Math.max(0, requestIdsSeen.size - 1)),
+        verificationRequest: {
+          acceptedResult: numericCommit(correlation.candidateCorrelation.acceptedResultCommit),
+          candidate: numericCommit(correlation.candidateCommit),
+          candidatePosition: exactCandidateBinding ? modelResultFor(id).candidateJournalPosition : -1n,
+          integrationSession:
+            correlation.candidateCorrelation.integrationSessionId === candidate.correlation.integrationSessionId
+              ? id
+              : -1n,
+          plan: correlation.planId === expectedPlan.planId ? 7000n + id : -1n,
+          requestId:
+            correlation.requestId === expectedRequestId ? id * 1000n + numericCommit(correlation.candidateCommit) : -1n,
+          target:
+            JSON.stringify(correlation.candidateCorrelation.integrationTarget) === JSON.stringify(expectedPlan.target)
+              ? 1n
+              : -1n
+        },
+        wrapperInvocationCount: BigInt(requestIdsSeen.size)
+      }
+    }
 
     return {
       acceptResultOne: () => acceptResult(1n),
@@ -894,7 +1150,17 @@ const acceptedResultIntegrationDriver = defineDriver(
                     : 0n,
                 targetHeld: queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
               }
-              return [id, Object.assign(observedResult, modelResultFor(id))] as const
+              return [
+                id,
+                Object.assign(
+                  observedResult,
+                  modelResultFor(id),
+                  concreteVerificationProjectionFor(
+                    id,
+                    queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
+                  )
+                )
+              ] as const
             })
           )
           return {
@@ -919,6 +1185,11 @@ const acceptedResultIntegrationDriver = defineDriver(
           resetModelState()
           dependencyWaits = new Set()
           releasedContradictions = new Set()
+          stagedVerificationOutcome = undefined
+          verificationBoundaryMode = "ResponseLost"
+          verificationRequestsSeen = []
+          verificationReconciliations = new Map()
+          failVerificationEvidenceRead = false
         }),
       observeExactCandidateOne: () => observe(1n, true),
       observeExactCandidateTwo: () => observe(2n, true),

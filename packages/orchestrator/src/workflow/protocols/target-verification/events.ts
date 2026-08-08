@@ -2,6 +2,7 @@ import { Context, type Effect, Schema } from "effect"
 import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
+  ConstructedIntegrationCandidateOccurrence,
   IntegrationCandidateCorrelation,
   type IntegrationCandidateId,
   integrationCandidateCorrelationEquals
@@ -26,11 +27,7 @@ export const TargetVerificationArtifactName = Schema.NonEmptyString.pipe(Schema.
 export type TargetVerificationArtifactName = typeof TargetVerificationArtifactName.Type
 
 /** The candidate and exact journal occurrence that verification is allowed to authorize. */
-export const TargetVerificationCandidate = Schema.Struct({
-  candidateCommit: GitCommitSha,
-  correlation: IntegrationCandidateCorrelation,
-  constructedAt: JournalPosition
-})
+export const TargetVerificationCandidate = ConstructedIntegrationCandidateOccurrence
 export type TargetVerificationCandidate = typeof TargetVerificationCandidate.Type
 
 /** Full immutable binding carried by every verification request and result. */

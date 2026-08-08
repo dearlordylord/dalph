@@ -227,7 +227,7 @@ export * from "./workflow/protocols/target-verification/events.js"
 export * from "./workflow/protocols/target-verification/manifest.js"
 export * from "./workflow/protocols/target-verification/protocol.js"
 export * from "./workflow/protocols/target-verification/runtime.js"
-export { TargetVerificationBoundaryUnavailable } from "./coordination/delivery/target-verification-boundary.js"
+export { TargetVerificationRuntimeUnavailable } from "./coordination/delivery/target-verification-boundary.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export {

@@ -26,6 +26,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
+  deriveConstructedIntegrationCandidateOccurrence,
   deriveIntegrationCandidateConstruction,
   type CandidateCorrectionLimit,
   type CandidateContinuationLimit
@@ -179,21 +180,8 @@ export const deriveIntegrationFrontier = (
       ?.plannedBaseIsAncestorOfTargetHead === false
   const constructedCandidateFor = (
     responsibility: StartedIntegrationResponsibility
-  ): TargetVerificationCandidate | undefined => {
-    const constructed = runState.workflowHistory.records.findLast(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructed" &&
-        event.correlation.attemptId === responsibility.plannedAttempt.attemptId &&
-        event.correlation.runId === responsibility.plannedAttempt.runId
-    )
-    return constructed?.event._tag === "IntegrationCandidateConstructed"
-      ? {
-          candidateCommit: constructed.event.candidateCommit,
-          correlation: constructed.event.correlation,
-          constructedAt: constructed.position
-        }
-      : undefined
-  }
+  ): TargetVerificationCandidate | undefined =>
+    deriveConstructedIntegrationCandidateOccurrence(runState.workflowHistory.records, responsibility)
   const verificationTargetWasRewritten = (responsibility: StartedIntegrationResponsibility): boolean => {
     const candidate = constructedCandidateFor(responsibility)
     const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)

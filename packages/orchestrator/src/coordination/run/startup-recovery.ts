@@ -30,11 +30,9 @@ import { IntegrationTargetSelection } from "../../workflow/protocols/integration
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
-  TargetVerificationBoundary,
-  type TargetVerificationPlan
-} from "../../workflow/protocols/target-verification/events.js"
-import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
-import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/target-verification/runtime.js"
+  TargetVerificationRuntime,
+  type TargetVerificationRuntimeInput
+} from "../../workflow/protocols/target-verification/runtime.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -114,7 +112,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     candidateCorrectionLimit,
     candidateContinuationLimit,
     integrationResources,
-    targetVerification?.plan,
+    targetVerification,
     startup
   )
   let context = Context.empty().pipe(
@@ -132,12 +130,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   if (candidateAgent._tag === "Some") context = Context.add(context, IntegrationCandidateAgent, candidateAgent.value)
   if (candidateGit._tag === "Some") context = Context.add(context, IntegrationCandidateGit, candidateGit.value)
   if (targetVerification !== undefined) {
-    context = Context.add(
-      context,
-      TargetVerificationBoundary,
-      TargetVerificationBoundary.of(targetVerification.boundary)
-    )
-    context = Context.add(context, EvidenceStore, EvidenceStore.of(targetVerification.evidenceStore))
+    context = Context.add(context, TargetVerificationRuntime, TargetVerificationRuntime.of(targetVerification))
   }
   /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
@@ -149,7 +142,7 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
   candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   integrationResources: ReturnType<typeof DeliveryRuntimeResources.of>["integrationTargets"],
-  targetVerificationPlan: TargetVerificationPlan | undefined,
+  targetVerification: TargetVerificationRuntimeInput | undefined,
   startup: "Fresh" | "Recovered"
 ) {
   return startup === "Fresh"
@@ -159,7 +152,7 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateCorrectionLimit,
         candidateContinuationLimit,
         integrationResources,
-        targetVerificationPlan
+        targetVerification
       )
     : yield* makeRunRecoveryProjection(
         runId,
@@ -167,7 +160,7 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateCorrectionLimit,
         candidateContinuationLimit,
         integrationResources,
-        targetVerificationPlan
+        targetVerification
       )
 })
 

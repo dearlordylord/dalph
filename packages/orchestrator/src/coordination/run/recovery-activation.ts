@@ -56,6 +56,7 @@ import {
   targetVerificationRequestIdForCandidate,
   type TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
+import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/target-verification/runtime.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -1403,14 +1404,14 @@ export const makeJournaledFreshRunRecoveryProjection = (
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   integrationResources?: IntegrationTargetResourceController,
-  targetVerificationPlan?: TargetVerificationPlan
+  targetVerification?: TargetVerificationRuntimeInput
 ) =>
   makeJournaledFreshRunRecoveryProjectionEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
     Option.fromUndefinedOr(candidateContinuationLimit),
-    Option.fromUndefinedOr(targetVerificationPlan),
+    Option.fromUndefinedOr(targetVerification?.plan),
     integrationResources
   )
 
@@ -1473,14 +1474,14 @@ export const makeRunRecoveryProjection = (
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   integrationResources?: IntegrationTargetResourceController,
-  targetVerificationPlan?: TargetVerificationPlan
+  targetVerification?: TargetVerificationRuntimeInput
 ) =>
   makeRunRecoveryProjectionEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     Option.fromUndefinedOr(candidateCorrectionLimit),
     Option.fromUndefinedOr(candidateContinuationLimit),
-    Option.fromUndefinedOr(targetVerificationPlan),
+    Option.fromUndefinedOr(targetVerification?.plan),
     integrationResources
   )
 
@@ -1489,7 +1490,7 @@ export const journaledFreshRunRecoveryProjectionLayer = (
   configuredIntegrationTarget?: IntegrationTarget,
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
-  targetVerificationPlan?: TargetVerificationPlan
+  targetVerification?: TargetVerificationRuntimeInput
 ) =>
   Layer.effect(
     RunRecoveryProjection,
@@ -1499,6 +1500,6 @@ export const journaledFreshRunRecoveryProjectionLayer = (
       candidateCorrectionLimit,
       candidateContinuationLimit,
       undefined,
-      targetVerificationPlan
+      targetVerification
     )
   )

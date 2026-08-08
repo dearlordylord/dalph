@@ -61,7 +61,7 @@ import {
   TargetVerificationPlanId,
   TargetVerificationTerminal
 } from "../../workflow/protocols/target-verification/events.js"
-import { memoryEvidenceStoreLayer } from "../../workflow/protocols/target-verification/evidence-store.js"
+import { EvidenceStore, memoryEvidenceStoreLayer } from "../../workflow/protocols/target-verification/evidence-store.js"
 import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -448,13 +448,31 @@ it.effect("restart rereads the exact target head before offering candidate verif
         planId: TargetVerificationPlanId.make("recovered-public-plan"),
         target: integrationTarget
       })
+      const boundary = TargetVerificationBoundary.of({
+        runOrResume: (request) =>
+          Effect.succeed(
+            TargetVerificationTerminal.cases.Passed.make({
+              artifacts: [
+                {
+                  bytes: new TextEncoder().encode("repository checks passed"),
+                  name: TargetVerificationArtifactName.make("verification.log")
+                }
+              ],
+              correlation: request
+            })
+          )
+      })
+      const evidenceStore = yield* EvidenceStore.pipe(
+        Effect.provide(memoryEvidenceStoreLayer),
+        Effect.provide(NodeServices.layer)
+      )
       const recovery = yield* makeRunRecoveryProjection(
         runId,
         integrationTarget,
         CandidateCorrectionLimit.make(1),
         CandidateContinuationLimit.make(2),
         resources,
-        plan
+        { boundary, evidenceStore, plan }
       )
       yield* installFreshTrackerFacts(journalService)
       expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
@@ -640,25 +658,8 @@ it.effect("restart rereads the exact target head before offering candidate verif
       )
       if (verification?._tag !== "RunTargetVerification") return yield* Effect.die("missing verification")
       const sealed = yield* runTargetVerification(verification.candidate, verification.plan).pipe(
-        Effect.provideService(
-          TargetVerificationBoundary,
-          TargetVerificationBoundary.of({
-            runOrResume: (request) =>
-              Effect.succeed(
-                TargetVerificationTerminal.cases.Passed.make({
-                  artifacts: [
-                    {
-                      bytes: new TextEncoder().encode("repository checks passed"),
-                      name: TargetVerificationArtifactName.make("verification.log")
-                    }
-                  ],
-                  correlation: request
-                })
-              )
-          })
-        ),
-        Effect.provide(memoryEvidenceStoreLayer),
-        Effect.provide(NodeServices.layer)
+        Effect.provideService(TargetVerificationBoundary, boundary),
+        Effect.provideService(EvidenceStore, evidenceStore)
       )
       expect(sealed._tag).toBe("VerificationPassed")
       expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(

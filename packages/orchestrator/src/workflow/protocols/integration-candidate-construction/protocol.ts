@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The candidate state derivation and its intent/observation interpreter stay adjacent for auditability. */
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import { type TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import {
@@ -17,6 +17,7 @@ import type { StartedIntegrationResponsibility } from "../integration-admission/
 import {
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateConstructedEvent,
+  type ConstructedIntegrationCandidateOccurrence,
   IntegrationCandidateConstructionIntendedEvent,
   IntegrationCandidateCorrelation,
   IntegrationCandidateGitObservedEvent,
@@ -282,6 +283,26 @@ export const deriveIntegrationCandidateConstruction = (
     correlationContradictionState(relevant, intended.correlation) ??
     activeCandidateState(relevant, intended)
   )
+}
+
+/** Finds the constructed occurrence through the responsibility's exact candidate-session intent. */
+export const deriveConstructedIntegrationCandidateOccurrence = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): ConstructedIntegrationCandidateOccurrence | undefined => {
+  const state = deriveIntegrationCandidateConstruction(records, responsibility)
+  if (state?._tag !== "CandidateConstructed") return undefined
+  const constructed = Option.getOrThrow(
+    Option.fromUndefinedOr(
+      records.findLast(
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructed" &&
+          event.candidateCommit === state.candidateCommit &&
+          integrationCandidateCorrelationEquals(event.correlation, state.correlation)
+      )
+    )
+  )
+  return { candidateCommit: state.candidateCommit, constructedAt: constructed.position, correlation: state.correlation }
 }
 
 const stateAfterRecordedIntent = (

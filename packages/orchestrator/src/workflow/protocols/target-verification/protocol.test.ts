@@ -1,14 +1,21 @@
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
+  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  RunId
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
 } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
@@ -44,6 +51,16 @@ import {
   type IntegrationHistoryIndexes,
   validateIntegrationHistoryRecord
 } from "../../../coordination/reconstruction/integration-history.js"
+import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
+import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
+import { RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
+import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-proposal-derivation.js"
+import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
+import { TargetVerificationRuntime } from "./runtime.js"
+import type {
+  DeliveryActionProposal,
+  IdentityFreeDeliveryProposal
+} from "../../../coordination/delivery/delivery-action-proposal.js"
 
 const runId = RunId.make("verification-run")
 const target = IntegrationTarget.make({
@@ -52,6 +69,16 @@ const target = IntegrationTarget.make({
 })
 const planId = TargetVerificationPlanId.make("repository-public-plan")
 const plan = TargetVerificationPlan.make({ planId, target })
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("verification-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/verification"),
+  executor: TaskExecutorLocator.make("executor:verification"),
+  runId,
+  taskId: TaskId.make("verification-task"),
+  taskRevision: TaskRevision.make("verification-revision"),
+  worktree: WorktreeLocator.make("/worktrees/verification")
+})
 const candidate: TargetVerificationCandidate = {
   candidateCommit: GitCommitSha.make("4".repeat(40)),
   constructedAt: JournalPosition.make(11),
@@ -67,6 +94,13 @@ const candidate: TargetVerificationCandidate = {
   }
 }
 const correlation = targetVerificationCorrelationFor(candidate, planId)
+const responsibility = StartedIntegrationResponsibility.make({
+  acceptedResult: AcceptedResult.make({ commit: candidate.correlation.acceptedResultCommit }),
+  integrationTarget: target,
+  plannedAttempt,
+  queuedAt: JournalPosition.make(8),
+  startedAt: JournalPosition.make(9)
+})
 const artifact = (name: string, contents: string) => ({
   bytes: new TextEncoder().encode(contents),
   name: TargetVerificationArtifactName.make(name)
@@ -124,6 +158,107 @@ const harness = <A, E>(
     )
   }).pipe(Effect.provide(NodeServices.layer))
 
+const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
+  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
+
+const verificationActionFor = (started: StartedIntegrationResponsibility) => {
+  const transition = RunnableFrontierTransition.RunTargetVerification({ candidate, plan, responsibility: started })
+  const contributions = deliveryProposalsOf({
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    integrationResponsibilities: [started],
+    runId,
+    transitions: [transition]
+  })
+  const proposal = contributions.deliverySettlement[0] ?? contributions.ticketDelivery[0]
+  if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+    throw new Error("verification must derive one identity-free proposal")
+  }
+  return { action: { _tag: "IdentityFreeAction" as const, proposal }, transition }
+}
+
+it.effect("keeps another target usable while exact M verifies and releases only M's target when it settles", () =>
+  Effect.gen(function* () {
+    const invoked = yield* Deferred.make<void>()
+    const finish = yield* Deferred.make<void>()
+    yield* harness(
+      {
+        runOrResume: (request) =>
+          Deferred.succeed(invoked, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as(
+              TargetVerificationTerminal.cases.Passed.make({
+                artifacts: [artifact("verification.log", "passed")],
+                correlation: request
+              })
+            )
+          )
+      },
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const resources = yield* makeIntegrationTargetResourceController()
+            const boundary = yield* TargetVerificationBoundary
+            const evidenceStore = yield* EvidenceStore
+            yield* resources.acquire(responsibility)
+            yield* resources.publishAcceptedOwnership(responsibility)
+            const { action, transition } = verificationActionFor(responsibility)
+            expect(
+              (yield* executeIntegrationAction(action, transition, {
+                acceptIntegrationTargetOwnership: Effect.void,
+                bindPlannedAttemptPosition: () => Effect.void,
+                integrationTargets: resources,
+                recordIntent: () => Effect.void,
+                releasePlannedAttemptPosition: () => Effect.void
+              }).pipe(Effect.flip))._tag
+            ).toBe("TargetVerificationRuntimeUnavailable")
+            const running = yield* executeIntegrationAction(action, transition, {
+              acceptIntegrationTargetOwnership: Effect.void,
+              bindPlannedAttemptPosition: () => Effect.void,
+              integrationTargets: resources,
+              recordIntent: () => Effect.void,
+              releasePlannedAttemptPosition: () => Effect.void
+            }).pipe(
+              Effect.provideService(
+                TargetVerificationRuntime,
+                TargetVerificationRuntime.of({ boundary, evidenceStore, plan })
+              ),
+              Effect.forkScoped
+            )
+            yield* Deferred.await(invoked)
+
+            const otherTarget = IntegrationTarget.make({
+              repository: GitRepositoryLocator.make("/repositories/other.git"),
+              ref: IntegrationTargetRef.make("refs/heads/main")
+            })
+            const other = StartedIntegrationResponsibility.make({
+              ...responsibility,
+              integrationTarget: otherTarget,
+              queuedAt: JournalPosition.make(20),
+              startedAt: JournalPosition.make(21)
+            })
+            yield* resources.acquire(other)
+            yield* resources.publishAcceptedOwnership(other)
+            const laterSameTarget = StartedIntegrationResponsibility.make({
+              ...responsibility,
+              queuedAt: JournalPosition.make(30),
+              startedAt: JournalPosition.make(31)
+            })
+            expect((yield* resources.acquire(laterSameTarget).pipe(Effect.flip))._tag).toBe(
+              "IntegrationTargetResourceUnavailable"
+            )
+
+            yield* Deferred.succeed(finish, undefined)
+            yield* Fiber.join(running)
+            const snapshot = yield* resources.snapshot
+            expect(snapshot.heldResponsibilityPositions.has(responsibility.queuedAt)).toBe(false)
+            expect(snapshot.heldResponsibilityPositions.has(other.queuedAt)).toBe(true)
+          })
+        )
+    )
+  })
+)
+
 it.effect("runs only the selected public wrapper and seals passing evidence for exact M", () =>
   harness(
     {
@@ -153,6 +288,29 @@ it.effect("runs only the selected public wrapper and seals passing evidence for 
           expect(decoded.outcome).toBe("Passed")
           expect(decoded.artifacts.map(({ name }) => name)).toEqual(["a-summary.txt", "z-verification.log"])
         }
+      })
+  )
+)
+
+it.effect("orders manifest artifacts independently of the host locale", () =>
+  harness(
+    {
+      runOrResume: () =>
+        Effect.succeed(
+          TargetVerificationTerminal.cases.Passed.make({
+            artifacts: [artifact("ä.log", "umlaut"), artifact("z.log", "zed"), artifact("a.log", "aye")],
+            correlation
+          })
+        )
+    },
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runTargetVerification(candidate, plan)
+        if (result._tag !== "VerificationPassed") return yield* Effect.die("verification fixture did not pass")
+        const evidence = yield* EvidenceStore
+        const manifest = yield* evidence.read(result.manifest)
+        const decoded = yield* decodeTargetVerificationManifest(manifest, correlation.requestId)
+        expect(decoded.artifacts.map(({ name }) => name)).toEqual(["a.log", "z.log", "ä.log"])
       })
   )
 )
@@ -263,8 +421,27 @@ it.effect("fails closed when referenced evidence cannot be reread", () => {
     },
     (records) =>
       Effect.gen(function* () {
-        const failure = yield* runTargetVerification(candidate, plan).pipe(Effect.flip)
+        const resources = yield* makeIntegrationTargetResourceController()
+        const boundary = yield* TargetVerificationBoundary
+        const evidenceStore = yield* EvidenceStore
+        yield* resources.acquire(responsibility)
+        yield* resources.publishAcceptedOwnership(responsibility)
+        const { action, transition } = verificationActionFor(responsibility)
+        const failure = yield* executeIntegrationAction(action, transition, {
+          acceptIntegrationTargetOwnership: Effect.void,
+          bindPlannedAttemptPosition: () => Effect.void,
+          integrationTargets: resources,
+          recordIntent: () => Effect.void,
+          releasePlannedAttemptPosition: () => Effect.void
+        }).pipe(
+          Effect.provideService(
+            TargetVerificationRuntime,
+            TargetVerificationRuntime.of({ boundary, evidenceStore, plan })
+          ),
+          Effect.flip
+        )
         expect(failure).toBeInstanceOf(EvidenceStoreFailure)
+        expect((yield* resources.snapshot).heldResponsibilityPositions.has(responsibility.queuedAt)).toBe(false)
         expect((yield* Ref.get(records)).some(({ event }) => event._tag === "TargetVerificationEvidenceSealed")).toBe(
           false
         )

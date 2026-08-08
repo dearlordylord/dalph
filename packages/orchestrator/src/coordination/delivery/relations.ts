@@ -171,10 +171,22 @@ export type TicketDeliveryStanding =
       readonly _tag: "CandidateConstructedUnsettled"
       readonly state: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>
     }
-  | { readonly _tag: "TargetVerificationPending"; readonly state: TargetVerificationState }
-  | { readonly _tag: "TargetVerificationPassed"; readonly state: TargetVerificationState }
-  | { readonly _tag: "TargetVerificationStopped"; readonly state: TargetVerificationState }
-  | { readonly _tag: "TargetVerificationContradicted"; readonly state: TargetVerificationState }
+  | {
+      readonly _tag: "TargetVerificationPending"
+      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationPending" }>
+    }
+  | {
+      readonly _tag: "TargetVerificationPassed"
+      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
+    }
+  | {
+      readonly _tag: "TargetVerificationStopped"
+      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationStopped" }>
+    }
+  | {
+      readonly _tag: "TargetVerificationContradicted"
+      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationContradicted" }>
+    }
   | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
 

@@ -73,6 +73,14 @@ export const TargetVerificationState = Schema.TaggedUnion({
 })
 export type TargetVerificationState = typeof TargetVerificationState.Type
 
+const orderedBefore = -1
+const orderedAfter = 1
+
+const compareArtifactNames = (
+  left: TargetVerificationTerminal["artifacts"][number],
+  right: TargetVerificationTerminal["artifacts"][number]
+): number => (left.name < right.name ? orderedBefore : left.name > right.name ? orderedAfter : 0)
+
 const recordsForRequest = (records: ReadonlyArray<JournalRecord>, requestId: TargetVerificationRequestId) =>
   records.filter((record) => {
     const event = record.event
@@ -143,7 +151,7 @@ const putAndReconfirmArtifacts = Effect.fn("TargetVerification.putAndReconfirmAr
   terminal: TargetVerificationTerminal
 ) {
   const evidence = yield* EvidenceStore
-  const sorted = [...terminal.artifacts].sort((left, right) => left.name.localeCompare(right.name))
+  const sorted = [...terminal.artifacts].sort(compareArtifactNames)
   for (let index = 1; index < sorted.length; index++) {
     const previous = sorted[index - 1]
     const current = sorted[index]

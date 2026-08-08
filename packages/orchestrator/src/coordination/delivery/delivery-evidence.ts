@@ -6,7 +6,10 @@ import {
   deriveIntegrationAdmission,
   deriveUnqueuedAcceptedResults
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import { deriveIntegrationCandidateConstruction } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import {
+  deriveConstructedIntegrationCandidateOccurrence,
+  deriveIntegrationCandidateConstruction
+} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
@@ -19,18 +22,10 @@ const targetVerificationEvidenceOf = (
     { readonly _tag: "StartedIntegrationResponsibility" }
   >
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  const constructed = records.findLast(
-    ({ event }) =>
-      event._tag === "IntegrationCandidateConstructed" &&
-      event.correlation.runId === responsibility.plannedAttempt.runId &&
-      event.correlation.attemptId === responsibility.plannedAttempt.attemptId
+  const constructed = Option.getOrThrow(
+    Option.fromUndefinedOr(deriveConstructedIntegrationCandidateOccurrence(records, responsibility))
   )
-  if (constructed?.event._tag !== "IntegrationCandidateConstructed") return []
-  const verification = deriveTargetVerificationState(records, {
-    candidateCommit: constructed.event.candidateCommit,
-    correlation: constructed.event.correlation,
-    constructedAt: constructed.position
-  })
+  const verification = deriveTargetVerificationState(records, constructed)
   return verification === undefined ? [] : [{ _tag: "TargetVerification", responsibility, state: verification }]
 }
 

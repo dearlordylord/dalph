@@ -199,6 +199,9 @@ or serialize unrelated targets behind M.
 - `runs only the selected public wrapper and seals passing evidence for exact M`
   (the fake-provider boundary exposes only `runOrResume`; there is no Dalph
   heavy-lock call to author or record)
+- `keeps another target usable while exact M verifies and releases only M's target when it settles`
+  (the production resource controller holds T1 during the suspended wrapper
+  call, admits T2, rejects a later T1 owner, and releases only T1 afterward)
 - `candidateReadyRestartReconstructsNoTargetLeaseTest`
 - `activeVerificationRetainsTargetUnlessRestarted`
 - `logicalIntegrationResponsibilityBlocksLaterQueue`

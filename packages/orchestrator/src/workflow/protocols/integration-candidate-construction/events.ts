@@ -161,6 +161,14 @@ export const IntegrationCandidateConstructedEvent = Schema.TaggedStruct("Integra
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+/** The exact durable candidate occurrence established by one constructed event. */
+export const ConstructedIntegrationCandidateOccurrence = Schema.Struct({
+  candidateCommit: GitCommitSha,
+  constructedAt: JournalPosition,
+  correlation: IntegrationCandidateCorrelation
+})
+export type ConstructedIntegrationCandidateOccurrence = typeof ConstructedIntegrationCandidateOccurrence.Type
+
 export const IntegrationCandidateConstructionJournalEvent = Schema.Union([
   IntegrationCandidateConstructionIntendedEvent,
   IntegrationCandidateAgentReportedEvent,
