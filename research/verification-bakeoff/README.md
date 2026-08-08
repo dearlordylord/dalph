@@ -1,5 +1,8 @@
 # Verification bake-off
 
+The completed follow-up experiments for #197–#201 are recorded in
+[`EVOLUTION.md`](EVOLUTION.md).
+
 One fixed set of delivery invariants, encoded in several verification tools,
 measured against the same seeded defects. The goal is to learn each tool's
 character by running it on work this repository actually cares about, rather
