@@ -378,6 +378,14 @@ requirements. Constructing, comparing, or observing a proposal performs no
 action and acquires no process-local resource.
 _Avoid_: Workflow occurrence, admitted action, runtime ownership
 
+**Delivery action planning**:
+The process-local descriptive composition that combines current delivery
+consequences with exact proposed-action requirements from tracker observation,
+ticket delivery, settlement or integration, and tracker reflection into one
+ordered proposal frontier. It performs no action, admits no resource, allocates
+no identity, and owns no fiber.
+_Avoid_: Delivery runtime relation, action execution, action controller
+
 **Run quiescence**:
 The process-local condition for one Run in which no delivery action is currently
 executable and no admitted delivery action is still running. It does not prove

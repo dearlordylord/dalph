@@ -342,6 +342,7 @@ export {
   type JournalStorageAppend
 } from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
+export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"

@@ -1,10 +1,6 @@
 import { Effect } from "effect"
-import {
-  TrackerGraphRelation,
-  DeliveryRuntimeAssembly,
-  type CurrentSignal,
-  type DeliveryConsequences
-} from "./relations.js"
+import { deliveryActionPlanning } from "./delivery-action-planning.js"
+import { DeliveryRuntimeAssembly, type CurrentSignal, type DeliveryConsequences } from "./relations.js"
 import { delivery } from "./delivery.js"
 
 /**
@@ -14,9 +10,9 @@ import { delivery } from "./delivery.js"
  */
 export const deliveryRuntimeFrom = <E>(consequences: CurrentSignal<DeliveryConsequences, E>) =>
   Effect.gen(function* () {
-    const trackerGraph = yield* TrackerGraphRelation
+    const proposedActions = yield* deliveryActionPlanning(consequences)
     const assembly = yield* DeliveryRuntimeAssembly
-    return assembly.of({ delivery: consequences, trackerGraph })
+    return assembly.of({ delivery: consequences, proposedActions })
   })
 
 export const deliveryRuntime = Effect.gen(function* () {

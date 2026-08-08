@@ -9,6 +9,7 @@ import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-
 import { JournalStore } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { delivery } from "./delivery.js"
+import { deliveryActionPlanning, type DeliveryActionPlanningInputs } from "./delivery-action-planning.js"
 import { makeJournal, type JournalService, type JournalState } from "./journal.js"
 import { makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
 import type {
@@ -43,10 +44,19 @@ type DescriptiveServices = Effect.Services<typeof delivery>
 const descriptiveAdmitsEveryProjection = (service: DeliveryProjections): DescriptiveServices => service
 const descriptiveAdmitsNothingElse = (service: DescriptiveServices): DeliveryProjections => service
 
+type PlanningServices = Effect.Services<ReturnType<typeof deliveryActionPlanning>>
+
+const planningAdmitsItsInput = (service: DeliveryActionPlanningInputs): PlanningServices => service
+const planningAdmitsNothingElse = (service: PlanningServices): DeliveryActionPlanningInputs => service
+
 it("requires exactly the projection services and no boundary", () => {
   expect([descriptiveAdmitsEveryProjection, descriptiveAdmitsNothingElse].every((f) => typeof f === "function")).toBe(
     true
   )
+})
+
+it("requires exactly the descriptive proposal inputs and no runtime boundary", () => {
+  expect([planningAdmitsItsInput, planningAdmitsNothingElse].every((f) => typeof f === "function")).toBe(true)
 })
 
 const makeJournalService = Effect.gen(function* () {
@@ -95,14 +105,19 @@ it.effect("appends nothing while every descriptive signal is observed", () =>
 
     const observed = yield* Effect.gen(function* () {
       const consequences = yield* delivery
+      const proposals = yield* deliveryActionPlanning(consequences)
       const first = yield* consequences.get
       const streamed = yield* consequences.changes.pipe(Stream.take(1), Stream.runCollect)
       const again = yield* consequences.get
-      return { again, first, streamed: Array.from(streamed) }
+      const proposal = yield* proposals.get
+      const proposalStreamed = yield* proposals.changes.pipe(Stream.take(1), Stream.runCollect)
+      return { again, first, proposal, proposalStreamed: Array.from(proposalStreamed), streamed: Array.from(streamed) }
     }).pipe(Effect.provide(layer))
 
     expect(observed.streamed).toHaveLength(1)
     expect(observed.first._tag).toBe("DeliveryConsequences")
     expect(observed.again._tag).toBe("DeliveryConsequences")
+    expect(observed.proposal._tag).toBe("DeliveryProposalsAvailable")
+    expect(observed.proposalStreamed).toHaveLength(1)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )

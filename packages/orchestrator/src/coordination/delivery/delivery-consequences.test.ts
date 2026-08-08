@@ -301,10 +301,8 @@ it.effect("evaluates every coherent projection owner from the shared publication
           revision: DeliveryRelationRevision.make(0),
           taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
         }),
-        trackerGraph,
-        proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [] }),
-        reflectionProposals: currentSignalOf([]),
-        invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0))
+        invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
+        proposedActions: currentSignalOf({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
       })
       yield* directRuntime.evaluations.changes.pipe(Stream.runCollect)
     }).pipe(Effect.provide(layer))

@@ -296,9 +296,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       withStableRevision: (effect) => gate.withPermit(effect)
     },
     invalidate,
-    proposalContributions: bundleSignal(({ legacy }) => legacy.proposalContributions),
     runtimeFacts: bundleSignal(({ legacy }) => legacy.runtimeFacts),
-    trackerGraphProposals: bundleSignal(({ legacy }) => legacy.trackerGraphProposals),
     coherent: bundleSignal((bundle) => bundle)
   })
 })

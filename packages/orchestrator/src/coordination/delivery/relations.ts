@@ -540,16 +540,6 @@ export const deliveryFinalityOf = (
 const proposalOrdinal = (proposal: DeliveryActionProposal): number =>
   proposal.order._tag === "TrackerGraphOrder" ? Number.MAX_SAFE_INTEGER : proposal.order.frontierOrdinal
 
-const trackerProposalsFor = (
-  graph: TrackerGraphState,
-  proposals: ReadonlyArray<TrackerGraphActionProposal>
-): ReadonlyArray<TrackerGraphActionProposal> =>
-  proposals.filter(({ route }) =>
-    graph._tag === "GraphNotEstablished"
-      ? route.purpose === "EstablishCurrentGraph"
-      : route.purpose === "QuiescenceProbe"
-  )
-
 /** Combines lower owners without consulting live positions or silently deduplicating identities. */
 export const deliveryProposalFrontierOf = (
   contributions: ReadonlyArray<ReadonlyArray<DeliveryActionProposal>>,
@@ -582,16 +572,13 @@ export const deliveryProposalFrontierOf = (
     : { _tag: "DeliveryProposalOwnershipConflict", conflicts: [firstConflict, ...remainingConflicts] }
 }
 
-/** Assembles the final descriptive value and pure proposal frontier returned by the flat Effect. */
+/** Adapts descriptive delivery and an already-planned frontier to the temporary runtime relation. */
 export const makeDeliveryRuntimeRelation = <E>(input: {
   /** Canonical descriptive current; runtime snapshots never reconstruct it from action-plan inputs. */
   readonly delivery: CurrentSignal<DeliveryConsequences, E>
   readonly facts: CurrentSignal<DeliveryRuntimeFacts, E>
-  readonly trackerGraph: TrackerGraphRelationService
-  /** Legacy action-plan contributions retained outside the descriptive delivery relation. */
-  readonly proposalContributions: CurrentSignal<DeliveryProposalContributions, E>
-  readonly reflectionProposals: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, E>
   readonly invalidate: DeliveryRuntimeRelation<E>["invalidate"]
+  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
 }): DeliveryRuntimeRelation<E | DeliveryRelationSourceError> => {
   const snapshot = mapCurrentSignal(input.delivery, (delivery) => ({
     _tag: "DeliveryRuntimeSnapshot" as const,
@@ -600,20 +587,8 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
     ticketDeliveries: delivery.ticketDeliveries,
     trackerGraph: delivery.graph
   }))
-  const contributions = zipCurrentSignals(
-    snapshot,
-    zipCurrentSignals(
-      input.trackerGraph.proposedActions,
-      zipCurrentSignals(input.proposalContributions, input.reflectionProposals)
-    )
-  )
-  const proposedActions = mapCurrentSignal(contributions, ([current, [tracker, [lowerContributions, reflection]]]) => {
-    const lower = [lowerContributions.ticketDelivery, lowerContributions.deliverySettlement, reflection]
-    const trackerProposals = trackerProposalsFor(current.trackerGraph, tracker)
-    return deliveryProposalFrontierOf([trackerProposals, ...lower], lowerContributions.issues)
-  })
   const evaluations = mapCurrentSignal(
-    zipCurrentSignals(zipCurrentSignals(snapshot, proposedActions), input.facts),
+    zipCurrentSignals(zipCurrentSignals(snapshot, input.proposedActions), input.facts),
     ([[current, frontier], facts]): DeliveryRuntimeEvaluation => ({
       _tag: "DeliveryRuntimeEvaluation",
       acceptedAt: facts.acceptedAt,
@@ -625,7 +600,7 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
       taskWork: facts.taskWork
     })
   )
-  return { current: snapshot, evaluations, invalidate: input.invalidate, proposedActions }
+  return { current: snapshot, evaluations, invalidate: input.invalidate, proposedActions: input.proposedActions }
 }
 
 export interface BoundedParallelTicketsProjectionService {
@@ -675,7 +650,12 @@ export class DeliveryReflectionProjection extends Context.Service<
 export interface DeliveryRuntimeAssemblyService {
   readonly of: <E>(input: {
     readonly delivery: CurrentSignal<DeliveryConsequences, E>
-    readonly trackerGraph: TrackerGraphRelationService
+    readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError> & {
+      /** Ungated current-first planning stream used only while this assembly holds the shared publication gate. */
+      readonly changesWithinStableRevision: Stream.Stream<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
+      /** Ungated planning read used only while this assembly holds the shared publication gate. */
+      readonly getWithinStableRevision: Effect.Effect<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
+    }
   }) => DeliveryRuntimeRelation<E | DeliveryRelationSourceError>
 }
 

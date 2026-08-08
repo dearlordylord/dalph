@@ -1,14 +1,18 @@
 import { it } from "@effect/vitest"
-import { TaskId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Fiber, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
+import { delivery } from "./delivery.js"
+import { deliveryActionPlanning } from "./delivery-action-planning.js"
+import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   DeliveryRelationRevision,
@@ -40,6 +44,87 @@ const graph = (revision: string, taskId: TaskId) => {
 
 const policy = (capacity: number) =>
   RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
+
+it.effect("does not mix delivery consequences and proposal owners across a refresh", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstRevision = DeliveryRelationRevision.make(1)
+      const secondRevision = DeliveryRelationRevision.make(2)
+      const proposal = (purpose: "EstablishCurrentGraph" | "QuiescenceProbe", acceptedAt: number) =>
+        trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(acceptedAt),
+          purpose,
+          runId: RunId.make("planning-coherence"),
+          target: FixtureTarget.make("planning-coherence-target")
+        })
+      const bundle = (
+        revision: DeliveryRelationRevision,
+        graphState: TrackerGraphState,
+        trackerGraphProposals: Array<ReturnType<typeof proposal>>
+      ): DeliveryRelationInputBundle => ({
+        legacy: {
+          proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+          reflectionProposals: [],
+          runtimeFacts: {
+            acceptedAt: JournalPosition.make(revision),
+            quiescence: { _tag: "QuiescenceProbeAllowed" },
+            revision,
+            taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
+          },
+          trackerGraphProposals
+        },
+        publication: { exactEvidence: [], graph: graphState, policy: policy(1) }
+      })
+      const first = bundle(firstRevision, TrackerGraphState.cases.GraphNotEstablished.make({}), [
+        proposal("EstablishCurrentGraph", 1)
+      ])
+      const second = bundle(secondRevision, graph("graph-2", TaskId.make("B")), [proposal("QuiescenceProbe", 2)])
+      const state = yield* SubscriptionRef.make(first)
+      const gate = yield* Semaphore.make(1)
+      const revision = yield* Ref.make(firstRevision)
+      const sampleEntered = yield* Deferred.make<void>()
+      const permitSample = yield* Deferred.make<void>()
+      const coherent = {
+        get: SubscriptionRef.get(state).pipe(
+          Effect.tap(() => Deferred.succeed(sampleEntered, undefined)),
+          Effect.tap(() => Deferred.await(permitSample))
+        ),
+        changes: SubscriptionRef.changes(state)
+      }
+      const layer = makeDeliveryRelationsLayer({
+        evaluationConsistency: {
+          currentRevision: Ref.get(revision),
+          withStableRevision: (effect) => gate.withPermit(effect)
+        },
+        coherent,
+        invalidate: () => Ref.get(revision),
+        runtimeFacts: mapCurrentSignal(coherent, ({ legacy }) => legacy.runtimeFacts)
+      })
+      const proposals = yield* Effect.gen(function* () {
+        const consequences = yield* delivery
+        return yield* deliveryActionPlanning(consequences)
+      }).pipe(Effect.provide(layer))
+      const firstRead = yield* proposals.get.pipe(Effect.forkChild)
+      yield* Deferred.await(sampleEntered)
+      const publishSecond = yield* gate
+        .withPermit(Ref.set(revision, secondRevision).pipe(Effect.andThen(SubscriptionRef.set(state, second))))
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(publishSecond.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(permitSample, undefined)
+
+      expect(yield* Fiber.join(firstRead)).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { purpose: "EstablishCurrentGraph" } }]
+      })
+      yield* Fiber.join(publishSecond)
+      expect(yield* proposals.get).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { purpose: "QuiescenceProbe" } }]
+      })
+    })
+  )
+)
 
 interface CoherentInput {
   readonly facts: DeliveryRuntimeFacts

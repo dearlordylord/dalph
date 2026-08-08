@@ -15,7 +15,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Exit, Option, Schema, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -26,6 +26,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { delivery } from "./delivery.js"
+import { deliveryActionPlanning } from "./delivery-action-planning.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   TrackerGraphRelation,
@@ -49,7 +50,12 @@ import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer as makeDeliveryRelationsLayerWithRuntime
 } from "./in-memory-relations.js"
-import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import {
+  DeliveryProposalOrdinal,
+  deliveryProposalsOf,
+  trackerGraphReadProposalOf,
+  type DeliveryProposalContributions
+} from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
@@ -352,41 +358,47 @@ it.effect("exposes each lower proposal stream without performing an action", () 
 )
 
 it.effect("cannot carry an initial graph-read proposal into an established graph revision", () =>
-  Effect.gen(function* () {
-    const proposal = trackerGraphReadProposalOf({
-      acceptedAt: JournalPosition.make(1),
-      purpose: "EstablishCurrentGraph",
-      runId: RunId.make("causal-tracker-proposal"),
-      target: FixtureTarget.make("causal-tracker-proposal-target")
-    })
-    const relation = yield* deliveryRuntime.pipe(
-      Effect.provide(
-        makeDeliveryRelationsLayer({
-          exactEvidence: currentSignalOf([]),
-          graph: {
-            get: Effect.succeed(TrackerGraphState.cases.GraphNotEstablished.make({})),
-            changes: Stream.make(
-              TrackerGraphState.cases.GraphNotEstablished.make({}),
-              journaledGraphState(journaledGraph("causal-established"))
-            )
-          },
-          policy: currentSignalOf(policy),
-          trackerGraphProposals: currentSignalOf([proposal])
-        })
+  Effect.scoped(
+    Effect.gen(function* () {
+      const proposal = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(1),
+        purpose: "EstablishCurrentGraph",
+        runId: RunId.make("causal-tracker-proposal"),
+        target: FixtureTarget.make("causal-tracker-proposal-target")
+      })
+      const graphState = yield* SubscriptionRef.make(TrackerGraphState.cases.GraphNotEstablished.make({}))
+      const relation = yield* deliveryRuntime.pipe(
+        Effect.provide(
+          makeDeliveryRelationsLayer({
+            exactEvidence: currentSignalOf([]),
+            graph: { get: SubscriptionRef.get(graphState), changes: SubscriptionRef.changes(graphState) },
+            policy: currentSignalOf(policy),
+            trackerGraphProposals: currentSignalOf([proposal])
+          })
+        )
       )
-    )
 
-    const frontiers = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
+      const firstObserved = yield* Deferred.make<void>()
+      const collected = yield* relation.proposedActions.changes.pipe(
+        Stream.tap(() => Deferred.succeed(firstObserved, undefined)),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      yield* Deferred.await(firstObserved)
+      yield* SubscriptionRef.set(graphState, journaledGraphState(journaledGraph("causal-established")))
+      const frontiers = Array.from(yield* Fiber.join(collected))
 
-    expect(frontiers[0]).toMatchObject({
-      _tag: "DeliveryProposalsAvailable",
-      proposals: [{ id: proposal.id, route: { purpose: "EstablishCurrentGraph" } }]
+      expect(frontiers[0]).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ id: proposal.id, route: { purpose: "EstablishCurrentGraph" } }]
+      })
+      expect(frontiers.at(-1)).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
     })
-    expect(frontiers.at(-1)).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
-  })
+  )
 )
 
-it.effect("keeps legacy action chronology while current comes from the coherent delivery", () =>
+it.effect("derives one stable proposal from a persistent delivery consequence without performing it", () =>
   Effect.gen(function* () {
     const task: Task = {
       id: TaskId.make("legacy-action-task"),
@@ -413,33 +425,34 @@ it.effect("keeps legacy action chronology while current comes from the coherent 
       runId: RunId.make("legacy-action-run"),
       target: FixtureTarget.make("legacy-action-target")
     })
-    const relation = yield* deliveryRuntime.pipe(
-      Effect.provide(
-        makeDeliveryRelationsLayer({
-          exactEvidence: currentSignalOf([]),
-          graph: currentSignalOf(journaledGraphState(journaledGraph("canonical-delivery-current"))),
-          policy: currentSignalOf(policy),
-          proposalContributions: currentSignalOf({
-            deliverySettlement: [],
-            issues: [],
-            ticketDelivery: [lowerProposal]
-          }),
-          trackerGraphProposals: currentSignalOf([probe])
-        })
-      )
-    )
+    const layer = makeDeliveryRelationsLayer({
+      exactEvidence: currentSignalOf([]),
+      graph: currentSignalOf(journaledGraphState(journaledGraph("canonical-delivery-current"))),
+      policy: currentSignalOf(policy),
+      proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [lowerProposal] }),
+      trackerGraphProposals: currentSignalOf([probe])
+    })
+    const { current, first, second } = yield* Effect.gen(function* () {
+      const consequences = yield* delivery
+      const proposals = yield* deliveryActionPlanning(consequences)
+      return {
+        current: Option.getOrThrow(yield* consequences.changes.pipe(Stream.runHead)),
+        first: yield* proposals.get,
+        second: yield* proposals.get
+      }
+    }).pipe(Effect.provide(layer))
 
-    const current = Option.getOrThrow(yield* relation.current.changes.pipe(Stream.runHead))
-    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
-    expect(current.trackerGraph._tag).toBe("GraphEstablished")
-    if (current.trackerGraph._tag === "GraphEstablished") {
-      expect(current.trackerGraph.observation.snapshot.revision).toBe("canonical-delivery-current")
+    expect(current.graph._tag).toBe("GraphEstablished")
+    if (current.graph._tag === "GraphEstablished") {
+      expect(current.graph.observation.snapshot.revision).toBe("canonical-delivery-current")
     }
-    expect(frontier).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
+    expect(second).toEqual(first)
+    expect(first).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
+    expect(lowerProposal.actionIdentity._tag).toBe("FreshOperationIdRequired")
   })
 )
 
-it.effect("fails closed when two lower relations claim one exact proposal identity", () =>
+it.effect("fails closed when two owners claim one proposal identity", () =>
   Effect.gen(function* () {
     const proposal = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(1),
@@ -458,32 +471,42 @@ it.effect("fails closed when two lower relations claim one exact proposal identi
       }),
       trackerGraphProposals: currentSignalOf([proposal])
     })
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-
-    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
-    const evaluation = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+    const { frontier, runtimeFrontier } = yield* Effect.gen(function* () {
+      const consequences = yield* delivery
+      const proposals = yield* deliveryActionPlanning(consequences)
+      const runtime = yield* deliveryRuntime
+      return { frontier: yield* proposals.get, runtimeFrontier: yield* runtime.proposedActions.get }
+    }).pipe(Effect.provide(layer))
 
     expect(frontier).toEqual({
       _tag: "DeliveryProposalOwnershipConflict",
       conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery", "DeliverySettlement"] }]
     })
-    expect(evaluation.finality).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+    expect(runtimeFrontier).toEqual(frontier)
   })
 )
 
-it.effect("carries every lower owner's pure proposal through the literal delivery composition", () =>
+it.effect("combines every proposal owner in accepted order", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("proposal-composition-target")
     const proposalFor = (
-      position: number,
+      ordinal: number,
       owner: "DeliveryReflection" | "DeliverySettlement" | "TicketDelivery" | "TrackerGraph"
     ) => ({
       ...trackerGraphReadProposalOf({
-        acceptedAt: JournalPosition.make(position),
-        purpose: position === 1 ? "EstablishCurrentGraph" : "QuiescenceProbe",
+        acceptedAt: JournalPosition.make(ordinal + 2),
+        purpose: "QuiescenceProbe",
         runId: RunId.make("proposal-composition"),
-        target: FixtureTarget.make(`proposal-composition-target-${position}`)
+        target: FixtureTarget.make(`proposal-composition-target-${ordinal}`)
       }),
+      order: {
+        _tag: "RecoveredWorkflowOrder" as const,
+        acceptedAt: JournalPosition.make(1),
+        frontierOrdinal: DeliveryProposalOrdinal.make(ordinal),
+        responsibilityBeganAt: null,
+        taskId: TaskId.make(`proposal-owner-${ordinal}`),
+        transition: "CheckTaskClaim" as const
+      },
       owner
     })
     const tracker = trackerGraphReadProposalOf({
@@ -493,34 +516,110 @@ it.effect("carries every lower owner's pure proposal through the literal deliver
       target
     })
     const ticket = proposalFor(2, "TicketDelivery")
-    const settlement = proposalFor(3, "DeliverySettlement")
-    const reflection = proposalFor(4, "DeliveryReflection")
-    const relation = yield* deliveryRuntime.pipe(
-      Effect.provide(
-        makeDeliveryRelationsLayer({
-          exactEvidence: currentSignalOf([]),
-          graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
-          policy: currentSignalOf(policy),
-          proposalContributions: currentSignalOf({
-            deliverySettlement: [settlement],
-            issues: [],
-            ticketDelivery: [ticket]
-          }),
-          reflectionProposals: currentSignalOf([reflection]),
-          trackerGraphProposals: currentSignalOf([tracker])
-        })
-      )
-    )
-
-    const frontier = Option.getOrThrow(yield* relation.proposedActions.changes.pipe(Stream.runHead))
+    const settlement = proposalFor(0, "DeliverySettlement")
+    const reflection = proposalFor(1, "DeliveryReflection")
+    const isolatedIssue = {
+      _tag: "FreshRouteProvenanceMissing" as const,
+      taskId: TaskId.make("isolated-owner-task"),
+      transition: "CommitFreshTaskClaimIntent" as const
+    }
+    const layer = makeDeliveryRelationsLayer({
+      exactEvidence: currentSignalOf([]),
+      graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+      policy: currentSignalOf(policy),
+      proposalContributions: currentSignalOf({
+        deliverySettlement: [settlement],
+        issues: [isolatedIssue],
+        ticketDelivery: [ticket]
+      }),
+      reflectionProposals: currentSignalOf([reflection]),
+      trackerGraphProposals: currentSignalOf([tracker])
+    })
+    const frontier = yield* Effect.gen(function* () {
+      const consequences = yield* delivery
+      const proposals = yield* deliveryActionPlanning(consequences)
+      return yield* proposals.get
+    }).pipe(Effect.provide(layer))
 
     expect(frontier._tag).toBe("DeliveryProposalsAvailable")
     if (frontier._tag === "DeliveryProposalsAvailable") {
-      expect(new Set(frontier.proposals.map(({ owner }) => owner))).toEqual(
-        new Set(["TrackerGraph", "TicketDelivery", "DeliverySettlement", "DeliveryReflection"])
-      )
+      expect(frontier.proposals.map(({ owner }) => owner)).toEqual([
+        "DeliverySettlement",
+        "DeliveryReflection",
+        "TicketDelivery",
+        "TrackerGraph"
+      ])
+      expect(frontier.isolatedIssues).toEqual([isolatedIssue])
     }
   })
+)
+
+it.effect("changes the proposal frontier when its accepted fact signal changes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const task: Task = {
+        id: TaskId.make("accepted-fact-task"),
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+      const step = FreshWorkflowStep.AcquireTaskClaim({
+        predecessorOperationId: OperationId.make("accepted-fact-graph"),
+        task
+      })
+      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId: task.id,
+        taskRevision: TaskRevision.make("accepted-fact-revision")
+      })
+      const proposal = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [{ step, transition }],
+        runId: RunId.make("accepted-fact-run"),
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (proposal === undefined) return yield* Effect.die("fixture must derive an accepted-fact proposal")
+      const initialContributions: DeliveryProposalContributions = {
+        deliverySettlement: [],
+        issues: [],
+        ticketDelivery: []
+      }
+      const acceptedContributions: DeliveryProposalContributions = {
+        deliverySettlement: [],
+        issues: [],
+        ticketDelivery: [proposal]
+      }
+      const acceptedFacts = yield* SubscriptionRef.make(initialContributions)
+      const proposalContributions = {
+        get: SubscriptionRef.get(acceptedFacts),
+        changes: SubscriptionRef.changes(acceptedFacts)
+      }
+      const layer = makeDeliveryRelationsLayer({
+        exactEvidence: currentSignalOf([]),
+        graph: currentSignalOf(journaledGraphState(journaledGraph("accepted-fact-graph", [task.id]))),
+        policy: currentSignalOf(policy),
+        proposalContributions
+      })
+      const frontiers = yield* Effect.gen(function* () {
+        const consequences = yield* delivery
+        const proposals = yield* deliveryActionPlanning(consequences)
+        const firstObserved = yield* Deferred.make<void>()
+        const collected = yield* proposals.changes.pipe(
+          Stream.tap(() => Deferred.succeed(firstObserved, undefined)),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild
+        )
+        yield* Deferred.await(firstObserved)
+        yield* SubscriptionRef.set(acceptedFacts, acceptedContributions)
+        return Array.from(yield* Fiber.join(collected))
+      }).pipe(Effect.provide(layer))
+
+      expect(frontiers).toEqual([
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [proposal] }
+      ])
+    })
+  )
 )
 
 it.effect("keeps empty settlements action-free after reconstructing the relation on restart", () =>
@@ -616,6 +715,11 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
 
 it("keeps the production delivery Effect flat and free of runtime-coloured coordination", () => {
   const deliverySource = readFileSync(fileURLToPath(new URL("./delivery.ts", import.meta.url)), "utf8")
+  const planningSource = readFileSync(fileURLToPath(new URL("./delivery-action-planning.ts", import.meta.url)), "utf8")
+  const runtimeAdapterSource = readFileSync(
+    fileURLToPath(new URL("./delivery-runtime-adapter.ts", import.meta.url)),
+    "utf8"
+  )
   const relationSource = readFileSync(fileURLToPath(new URL("./relations.ts", import.meta.url)), "utf8")
   const projectionSource = readFileSync(
     fileURLToPath(new URL("./ticket-delivery-projection.ts", import.meta.url)),
@@ -663,6 +767,11 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   expect(`${proposalSource}\n${proposalModelSource}\n${proposalDerivationSource}\n${proposalRouteSource}`).not.toMatch(
     /(?:\.\.\/admission\/controller|\.\.\/run\/|\b(?:Effect|Queue|Ref|Semaphore|WorkflowInterpreter)\b)/
   )
+  expect(planningSource).not.toMatch(
+    /\b(?:DeliveryActionExecutor|DeliveryRuntimeAssembly|DeliveryRuntimeRelation|Queue|Ref|Semaphore|fork|runDeliveryRuntime)\b/
+  )
+  expect(runtimeAdapterSource).toContain("const proposedActions = yield* deliveryActionPlanning(consequences)")
+  expect(runtimeAdapterSource).toContain("return assembly.of({ delivery: consequences, proposedActions })")
   expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
 })

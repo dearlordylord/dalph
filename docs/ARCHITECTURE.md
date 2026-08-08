@@ -71,12 +71,14 @@ not incidental glue.
 | Bounded placements and exact obligations become ticket deliveries | `executorResponsibilities` | current bounded parallel tickets | established exact obligations and their current evidence | `TicketDeliveryRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Ticket deliveries become established settlement facts | `deliverySettlements` | ticket-delivery relation | established integration, verification, promotion, cleanup, and disposition evidence | `DeliverySettlementRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Settlement facts become coherent tracker-reflection meaning | `reflectDeliverySettlements` | delivery-settlement relation | none | `CurrentSignal<DeliveryConsequences>` with semantic tracker consequences, never executable proposals | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Current delivery consequences and accepted action requirements become one checked proposal frontier | `deliveryActionPlanning` | current delivery consequences | named tracker-graph, ticket-delivery, settlement/integration, and tracker-reflection requirements | `CurrentSignal<DeliveryProposalFrontier>` | planning | [`delivery-action-planning.ts`](../packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts) |
 
-The five compositions are indexed by stable meaning, current exported symbol,
-and source file. `executorResponsibilities` is the current source locator; its
-returned domain value is broader `TicketDelivery`, not proof that an executor
-responsibility already began. A separately approved vocabulary change updates
-the index without changing the stable semantic step.
+The five delivery compositions and the downstream planning composition are
+indexed by stable meaning, current exported symbol, and source file.
+`executorResponsibilities` is the current source locator; its returned domain
+value is broader `TicketDelivery`, not proof that an executor responsibility
+already began. A separately approved vocabulary change updates the index
+without changing the stable semantic step.
 
 Any change to the visible steps, order, semantic inputs, result meaning, or
 colour of these compositions requires explicit project-owner approval, an

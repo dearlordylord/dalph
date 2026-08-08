@@ -1,6 +1,11 @@
 import { Effect, Layer, Option, Stream } from "effect"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
+  DeliveryActionPlanningInputs,
+  type DeliveryActionPlanningInput,
+  type DeliveryActionPlanningSignal
+} from "./delivery-action-planning.js"
+import {
   BoundedParallelTicketsProjection,
   currentSignalOf,
   DeliveryReflectionProjection,
@@ -23,7 +28,6 @@ import {
   type DeliveryConsequences,
   type DeliveryRelationSourceError,
   type TrackerGraphActionProposal,
-  type TrackerGraphRelationService,
   zipCurrentSignals
 } from "./relations.js"
 import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
@@ -112,30 +116,60 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   })
   const proposalContributions = input.proposalContributions ?? noProposalContributions
   const reflectionProposals = input.reflectionProposals ?? noActions
+  const planningInputOf = (
+    trackerProposals: ReadonlyArray<TrackerGraphActionProposal>,
+    lowerContributions: DeliveryProposalContributions,
+    deliveryReflection: ReadonlyArray<DeliveryActionProposal>
+  ): DeliveryActionPlanningInput => {
+    const hasNonProbeWork = [
+      lowerContributions.ticketDelivery,
+      lowerContributions.deliverySettlement,
+      deliveryReflection
+    ].some((proposals) =>
+      proposals.some(({ route }) => route._tag !== "TrackerGraphReadRoute" || route.purpose !== "QuiescenceProbe")
+    )
+    const trackerGraph = hasNonProbeWork
+      ? trackerProposals.filter(({ route }) => route.purpose !== "QuiescenceProbe")
+      : trackerProposals
+    return {
+      deliveryReflection,
+      deliverySettlement: lowerContributions.deliverySettlement,
+      isolatedIssues: lowerContributions.issues,
+      ticketDelivery: lowerContributions.ticketDelivery,
+      trackerGraph
+    }
+  }
+  const hasPlanningOverrides =
+    input.proposalContributions !== undefined ||
+    input.reflectionProposals !== undefined ||
+    input.trackerGraphProposals !== undefined
+  /**
+   * Production obtains all four owners from one coherent bundle. Focused
+   * deterministic tests may override an owner signal explicitly without
+   * changing the production publication law.
+   */
+  const planningInputs = hasPlanningOverrides
+    ? mapCurrentSignal(
+        zipCurrentSignals(
+          input.coherent,
+          zipCurrentSignals(
+            input.trackerGraphProposals ?? noTrackerActions,
+            zipCurrentSignals(proposalContributions, reflectionProposals)
+          )
+        ),
+        ([, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
+          planningInputOf(trackerProposals, lowerContributions, deliveryReflection)
+      )
+    : mapCurrentSignal(input.coherent, ({ legacy }) =>
+        planningInputOf(legacy.trackerGraphProposals, legacy.proposalContributions, legacy.reflectionProposals)
+      )
   /**
    * The old action planner did not expose an idle probe while a lower owner
    * already had real work. Keep that timing at this compatibility seam only;
    * the canonical delivery relation below remains a complete descriptive
    * snapshot and never consults this scheduling choice.
    */
-  const actionPlanTrackerGraphProposals = mapCurrentSignal(
-    zipCurrentSignals(
-      input.trackerGraphProposals ?? noTrackerActions,
-      zipCurrentSignals(proposalContributions, reflectionProposals)
-    ),
-    ([trackerProposals, [lowerContributions, reflection]]) => {
-      const hasNonProbeWork = [
-        lowerContributions.ticketDelivery,
-        lowerContributions.deliverySettlement,
-        reflection
-      ].some((proposals) =>
-        proposals.some(({ route }) => route._tag !== "TrackerGraphReadRoute" || route.purpose !== "QuiescenceProbe")
-      )
-      return hasNonProbeWork
-        ? trackerProposals.filter(({ route }) => route.purpose !== "QuiescenceProbe")
-        : trackerProposals
-    }
-  )
+  const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
   const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ publication }) => publication))
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: actionPlanTrackerGraphProposals,
@@ -181,24 +215,37 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
       })
     })
   )
+  const planning = Layer.succeed(
+    DeliveryActionPlanningInputs,
+    DeliveryActionPlanningInputs.of({
+      withConsequences: <E>(consequences: CurrentSignal<DeliveryConsequences, E>) => {
+        const getWithinStableRevision = Effect.all([consequences.get, planningInputs.get])
+        const get = input.evaluationConsistency.withStableRevision(getWithinStableRevision)
+        const changes = Stream.merge(
+          consequences.changes.pipe(Stream.map(() => undefined)),
+          planningInputs.changes.pipe(Stream.map(() => undefined))
+        ).pipe(Stream.mapEffect(() => get))
+        const changesWithinStableRevision = zipCurrentSignals(consequences, planningInputs).changes
+        return { changes, changesWithinStableRevision, get, getWithinStableRevision }
+      }
+    })
+  )
   const runtime = Layer.succeed(
     DeliveryRuntimeAssembly,
     DeliveryRuntimeAssembly.of({
       of: <E>({
         delivery,
-        trackerGraph
+        proposedActions
       }: {
         readonly delivery: CurrentSignal<DeliveryConsequences, E>
-        readonly trackerGraph: TrackerGraphRelationService
+        readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
         const facts = input.runtimeFacts
         const relation = makeDeliveryRuntimeRelation<E | DeliveryRelationSourceError>({
           delivery,
           facts,
           invalidate: input.invalidate,
-          trackerGraph,
-          proposalContributions,
-          reflectionProposals
+          proposedActions
         })
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,
@@ -223,20 +270,21 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           makeEvaluation(
             facts,
             relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            relation.proposedActions.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+            proposedActions.changesWithinStableRevision.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
           )
+        const readCurrentEvaluation = (facts: DeliveryRuntimeFacts) =>
+          makeEvaluation(facts, relation.current.get, proposedActions.getWithinStableRevision)
         const readStableEvaluation = Effect.fn("DeliveryRelations.readStableEvaluation")(function* () {
           for (;;) {
             const evaluation = yield* input.evaluationConsistency.withStableRevision(
               Effect.gen(function* () {
                 const currentFacts = yield* facts.get
                 const revision = yield* input.evaluationConsistency.currentRevision
-                if (revision !== currentFacts.revision) return Option.none<DeliveryRuntimeEvaluation>()
-                const sampled = yield* makeEvaluation(currentFacts, relation.current.get, relation.proposedActions.get)
-                return Option.some(sampled)
+                if (revision !== currentFacts.revision) return undefined
+                return yield* readCurrentEvaluation(currentFacts)
               })
             )
-            if (Option.isSome(evaluation)) return evaluation.value
+            if (evaluation !== undefined) return evaluation
             yield* Effect.yieldNow
           }
         })
@@ -262,5 +310,5 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     })
   )
 
-  return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection, runtime)
+  return Layer.mergeAll(trackerGraph, bounded, deliveries, settlements, reflection, planning, runtime)
 }

@@ -234,9 +234,7 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       withStableRevision: (effect) => gate.withPermit(effect)
     },
     invalidate,
-    proposalContributions: signal(({ legacy }) => legacy.proposalContributions),
     runtimeFacts: signal(({ legacy }) => legacy.runtimeFacts),
-    trackerGraphProposals: signal(({ legacy }) => legacy.trackerGraphProposals),
     coherent: signal((bundle) => bundle)
   })
 })
