@@ -40,6 +40,7 @@ on the issue while later dependent work proceeds.
 | `issue-57-build-two-parent-integration-candidate.md` | 57 |
 | `issue-59-run-target-verification.md` | 59 |
 | `issue-60-promote-or-reconcile.md` | 60 |
+| `issue-61-complete-task-and-release-dependants.md` | 61 |
 | `issue-141-integration-finality.md` | 141 |
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
@@ -56,6 +57,7 @@ today.
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
+| `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
 | `issue-136-reconcile-changed-task-facts.md` | 136 |
 | `issue-137-reconcile-task-claims.md` | 137 |
@@ -69,15 +71,6 @@ implementing runtime behavior.
 | File | Issue |
 |---|---|
 | `issue-169-graceful-application-exit.md` | 169 |
-
-**Accepted, not yet implemented** — the owning issue is accepted as work and
-the chronology is precise enough to permit runtime implementation. These files
-state required behavior and remain an operational-scenario gate for their
-implementation.
-
-| File | Issue |
-|---|---|
-| `issue-61-complete-task-and-release-dependants.md` | 61 |
 
 **Milestone-scoped** — accepted against a milestone rather than one issue.
 `authored-cassette-abstraction-levels.md` refines the vocabulary accepted in
