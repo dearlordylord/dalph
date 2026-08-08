@@ -97,7 +97,7 @@ it.effect("does not mix delivery consequences and proposal owners across a refre
           withStableRevision: (effect) => gate.withPermit(effect)
         },
         coherent,
-        invalidate: () => Ref.get(revision),
+        requestStabilizationRead: () => Ref.get(revision),
         runtimeFacts: mapCurrentSignal(coherent, ({ legacy }) => legacy.runtimeFacts)
       })
       const proposals = yield* Effect.gen(function* () {
@@ -184,7 +184,7 @@ it.effect("never combines runtime facts from one accepted revision with another 
           )
       },
       coherent,
-      invalidate: () => Ref.get(revision),
+      requestStabilizationRead: () => Ref.get(revision),
       runtimeFacts: mapCurrentSignal(signal, ({ facts }) => facts)
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
@@ -289,7 +289,7 @@ it.effect("does not mix facts with a refresh interleaving during a get", () =>
         withStableRevision: (effect) => gate.withPermit(effect)
       },
       coherent,
-      invalidate: () => Ref.get(revision),
+      requestStabilizationRead: () => Ref.get(revision),
       runtimeFacts
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
@@ -364,7 +364,7 @@ it.effect("retries a get whose facts are behind the current relation revision", 
         },
         publication: { exactEvidence: [], graph: graph("graph-1", taskA), policy: policy(1) }
       }),
-      invalidate: () => Effect.succeed(firstRevision),
+      requestStabilizationRead: () => Effect.succeed(firstRevision),
       runtimeFacts: currentSignalOf(facts)
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))

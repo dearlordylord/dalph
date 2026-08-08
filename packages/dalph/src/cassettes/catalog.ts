@@ -166,13 +166,13 @@ const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningE
     item._tag === "TrackerGraphReadReturned" ? { ...item, graph: twoEligibleTasksGraph } : item
   ])
   .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "ReadTaskWorkSpecification"
+    item,
+    ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
       ? [{ _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } }]
-      : []),
-    item
+      : [])
   ])
   .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
+    ...(item._tag === "DalphSelects" && item.operation._tag === "ReadTaskWorkSpecification"
       ? [
           {
             _tag: "DalphSelects" as const,
@@ -184,7 +184,7 @@ const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningE
     item
   ])
   .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
       ? [
           { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
           {
@@ -197,13 +197,26 @@ const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningE
       : []),
     item
   ])
-const twoEligiblePlannedStoryBeforeRunningExecutorReport = [
-  ...twoEligibleStoryBeforeRunningExecutorReport,
-  {
-    _tag: "DalphSelects" as const,
-    operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
-  }
-]
+  .flatMap((item) => [
+    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+      ? [
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
+          }
+        ]
+      : []),
+    item,
+    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+      ? [
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "ReconcileTaskWorktree" as const, attemptId: "attempt:B:1", taskId: "B" }
+          }
+        ]
+      : [])
+  ])
+const twoEligiblePlannedStoryBeforeRunningExecutorReport = twoEligibleStoryBeforeRunningExecutorReport
 const runPauseExpectedBehavior = {
   _tag: "ExpectedBehavior",
   orchestration: [
@@ -215,8 +228,9 @@ const runPauseExpectedBehavior = {
     { _tag: "TaskClaimAcquired", taskId: "A" },
     { _tag: "TaskClaimAcquired", taskId: "B" },
     { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
+    { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
     { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } }
   ],
   taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }], results: [] }
@@ -377,8 +391,9 @@ export const taskPauseCoversGroupingChildAuthoredCassette = Schema.decodeUnknown
         { _tag: "TaskClaimAcquired", taskId: "A" },
         { _tag: "TaskClaimAcquired", taskId: "B" },
         { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
         { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
         { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Task", taskId: "A" } }
       ]
     }
@@ -840,8 +855,6 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
       { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
       {
         _tag: "ExpectedBehavior",
         orchestration: [
@@ -880,14 +893,10 @@ const candidateScenarioFrom = (
   constructedCommit: string | undefined
 ) => {
   const baseStory = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
-  const finalBlockedGraphIndex = baseStory.findLastIndex(
-    (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision
-  )
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
     name,
-    story: baseStory.flatMap((item, index) => {
-      if (index === finalBlockedGraphIndex - 1 || index === finalBlockedGraphIndex) return []
+    story: baseStory.flatMap((item) => {
       if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
         return [{ ...item, graph: singletonGraph }]
       }
@@ -908,6 +917,8 @@ const candidateScenarioFrom = (
       return [
         { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
         ...candidateStory,
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
         {
           ...item,
           /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */

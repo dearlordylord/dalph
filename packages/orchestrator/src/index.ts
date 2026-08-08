@@ -212,6 +212,8 @@ export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/no
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
   continuePlannedAttemptExecutorWork,
+  plannedAttemptExecutorContinuationDisposition,
+  PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
   requestPlannedAttemptExecutorSuspension
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"

@@ -22,6 +22,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -43,6 +44,27 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 describe("deliveryProposalsOf", () => {
+  it("gives each accepted executor report its own continuation proposal", () => {
+    const proposalAt = (ordinal: number) => {
+      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: {
+          _tag: "ExecutorReportAccepted",
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal)
+        },
+        plannedAttempt
+      })
+      return deliveryProposalsOf({ acceptedOperationIds: new Set(), fresh: [], runId, transitions: [transition] })
+        .ticketDelivery[0]
+    }
+
+    const afterRunning = proposalAt(1)
+    const afterNextRunning = proposalAt(2)
+
+    expect(afterRunning?.id).not.toBe(afterNextRunning?.id)
+    expect(afterRunning?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 1 } } })
+    expect(afterNextRunning?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 2 } } })
+  })
+
   it("derives one stable fresh claim proposal without allocating its operation identity", () => {
     const step = FreshWorkflowStep.AcquireTaskClaim({
       predecessorOperationId: OperationId.make("journaled-graph-read"),
@@ -250,7 +272,10 @@ describe("deliveryProposalsOf", () => {
 
   it("preserves existing A ahead of fresh C without consulting live positions", () => {
     const taskC = TaskId.make("C")
-    const continueA = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+    const continueA = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(2) },
+      plannedAttempt
+    })
     const claimC = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
       taskId: taskC,
       taskRevision: TaskRevision.make("revision-C")

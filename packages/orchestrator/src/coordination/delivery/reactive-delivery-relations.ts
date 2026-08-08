@@ -1,9 +1,11 @@
 import { plannedAttemptExecutorCorrelation, type AttemptId, type RunId, type TaskId } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
 import type { RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
@@ -14,10 +16,10 @@ import {
   journaledIntegrationEvidenceOf
 } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   type CurrentSignal,
-  type DeliveryInvalidation,
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   DeliveryRelationRevision,
@@ -126,6 +128,15 @@ const activeAttemptPositions = (
         ]
   })
 
+const probeWasAcceptedBy = (
+  probe: TrackerGraphActionProposal,
+  journal: Effect.Success<JournalService["state"]["get"]>
+): boolean =>
+  probe.order._tag === "TrackerGraphOrder" &&
+  probe.order.acceptedAt !== null &&
+  journal.graph._tag === "GraphEstablished" &&
+  journal.graph.observation.recordedAt > probe.order.acceptedAt
+
 /**
  * Keeps one effectful reconciliation subscription hot while all exposed
  * delivery signals remain descriptive and safe to observe repeatedly.
@@ -134,11 +145,23 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   runId: RunId,
   target: TrackerTarget,
   journal: JournalService,
-  recovery: RunRecoveryProjectionSource
+  recovery: RunRecoveryProjectionSource,
+  integrationTargets: IntegrationTargetResourceController
 ) {
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
   const probe = yield* Ref.make<Option.Option<TrackerGraphActionProposal>>(Option.none())
   const revision = yield* Ref.make(DeliveryRelationRevision.make(0))
+
+  const activeProbeFor = Effect.fn("DeliveryRelations.activeProbeFor")(function* (
+    journal: Effect.Success<JournalService["state"]["get"]>,
+    runIsPaused: boolean
+  ) {
+    if (runIsPaused) yield* Ref.set(probe, Option.none())
+    const pending = yield* Ref.get(probe)
+    const wasAccepted = Option.isSome(pending) && probeWasAcceptedBy(pending.value, journal)
+    if (wasAccepted) yield* Ref.set(probe, Option.none())
+    return runIsPaused || wasAccepted ? [] : Option.toArray(pending)
+  })
 
   const readCoherentJournalProjection = Effect.fn("DeliveryRelations.readCoherentJournalProjection")(function* () {
     for (;;) {
@@ -182,8 +205,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
-    if (runIsPaused) yield* Ref.set(probe, Option.none())
-    const activeProbe = runIsPaused ? [] : Option.toArray(yield* Ref.get(probe))
+    const activeProbe = yield* activeProbeFor(journal, runIsPaused)
     const trackerGraphProposals = trackerGraphProposalsOf(
       journal,
       recovered.length,
@@ -250,8 +272,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       })
     )
   )
-  const invalidate = Effect.fn("DeliveryRelations.invalidate")(function* (cause: DeliveryInvalidation) {
-    if (cause._tag === "QuiescenceProbeRequested" && Option.isNone(yield* Ref.get(probe))) {
+  const requestStabilizationRead = Effect.fn("DeliveryRelations.requestStabilizationRead")(function* () {
+    if (Option.isNone(yield* Ref.get(probe))) {
       const currentJournal = yield* journal.state.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) =>
@@ -274,20 +296,36 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         )
       )
     }
-    if (cause._tag === "ProposalCompleted") {
-      const currentProbe = yield* Ref.get(probe)
-      if (Option.isSome(currentProbe) && currentProbe.value.id === cause.proposalId) {
-        yield* Ref.set(probe, Option.none())
-      }
-    }
+    return yield* refresh
+  })
+
+  const refreshAfterJournalChange = Effect.fn("DeliveryRelations.refreshAfterJournalChange")(function* (
+    journalPosition: JournalPosition
+  ) {
+    // Intent and its accepted observation are commonly appended back-to-back.
+    // Let the writer finish its current turn, then publish the newest accepted
+    // position once instead of exposing an intermediate planning frontier.
+    yield* Effect.yieldNow
+    const current = yield* SubscriptionRef.get(state)
+    if (current._tag === "ReactiveDeliveryOpen" && current.bundle.legacy.runtimeFacts.acceptedAt === journalPosition)
+      return yield* Ref.get(revision)
     return yield* refresh
   })
 
   yield* journal.state.changes.pipe(
+    Stream.runForEach(({ position }) => refreshAfterJournalChange(position)),
+    Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
+    Effect.forkScoped
+  )
+  const resourceSubscribed = yield* Deferred.make<void>()
+  yield* integrationTargets.changes.pipe(
+    Stream.tap(() => Deferred.succeed(resourceSubscribed, undefined)),
+    Stream.drop(1),
     Stream.runForEach(() => refresh),
     Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
     Effect.forkScoped
   )
+  yield* Deferred.await(resourceSubscribed)
 
   const bundleSignal = <A>(project: (bundle: ReactiveDeliveryBundle) => A) => statusSignal(project)
   return makeDeliveryRelationsLayer({
@@ -295,7 +333,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    invalidate,
+    requestStabilizationRead,
     runtimeFacts: bundleSignal(({ legacy }) => legacy.runtimeFacts),
     coherent: bundleSignal((bundle) => bundle)
   })
@@ -307,4 +345,10 @@ export const reactiveDeliveryRelationsLayer = (
   target: TrackerTarget,
   journal: JournalService,
   recovery: RunRecoveryProjectionSource
-) => Layer.unwrap(makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery))
+) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const resources = yield* DeliveryRuntimeResources
+      return yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources.integrationTargets)
+    })
+  )

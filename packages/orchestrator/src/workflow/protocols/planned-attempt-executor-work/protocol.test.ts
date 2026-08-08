@@ -18,7 +18,7 @@ import {
   controlledFakePlannedAttemptExecutorLayer,
   makeControlledFakePlannedAttemptExecutorLayer
 } from "../../../../test/controlled-planned-attempt-executor.js"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   ControlDirectionApplication,
@@ -45,11 +45,7 @@ import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-ac
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./events.js"
 import { continuePlannedAttemptExecutorWork, requestPlannedAttemptExecutorSuspension } from "./protocol.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
-import {
-  deriveRunnableFrontier,
-  ResponsibilityDisposition,
-  RunnableFrontierTransition
-} from "../../../coordination/frontier/frontier.js"
+import { deriveRunnableFrontier, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
 import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
 import {
@@ -303,6 +299,43 @@ it.effect("continues an exact planned attempt through the executor protocol", ()
   )
 )
 
+it.effect("stops an always-Running executor at the durable continuation limit", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const alwaysRunning = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.none()),
+      requestSuspension: () => Effect.die("unused suspension"),
+      startOrContinue: () =>
+        Ref.update(calls, (count) => count + 1).pipe(
+          Effect.as(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+        )
+    })
+
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.andThen(continuePlannedAttemptExecutorWork(plannedAttempt)),
+      Effect.andThen(continuePlannedAttemptExecutorWork(plannedAttempt)),
+      Effect.provideService(PlannedAttemptExecutor, alwaysRunning)
+    )
+    const exhausted = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(PlannedAttemptExecutor, alwaysRunning),
+      Effect.flip
+    )
+    const retryAfterRestart = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(PlannedAttemptExecutor, alwaysRunning),
+      Effect.flip
+    )
+
+    expect(exhausted).toMatchObject({ _tag: "PlannedAttemptExecutorContinuationLimitReached", correlation, limit: 3 })
+    expect(retryAfterRestart).toEqual(exhausted)
+    expect(yield* Ref.get(calls)).toBe(3)
+    expect(
+      (yield* (yield* JournalStore).read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+      )
+    ).toHaveLength(3)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it("generic executor correlation contains exactly RunId and AttemptId", () => {
   expect(correlation).toEqual({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   expect(Object.keys(correlation).toSorted()).toEqual(["attemptId", "runId"])
@@ -310,7 +343,10 @@ it("generic executor correlation contains exactly RunId and AttemptId", () => {
 
 it("coalesces start, continuation, and suspension ownership by the same pair", () => {
   const start = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt })
-  const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+  const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+    acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+    plannedAttempt
+  })
   const suspension = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
 
   expect(makeSelectedTransitionIdentity(plannedAttempt.runId, start)).toEqual(
@@ -622,10 +658,22 @@ it("reconstructs the same planned attempt after Dalph and the fake executor cras
       freshEligibleTasks: [],
       responsibility: reconstruction.state.responsibility,
       responsibilityFacts: [
-        { _tag: "PlannedAttemptExecutorFreshFacts", disposition: ResponsibilityDisposition.Ready(), responsibility }
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: {
+            _tag: "Ready",
+            acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: responsibility.beganAt }
+          },
+          responsibility
+        }
       ]
     }).transitions
-  ).toEqual([RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })])
+  ).toEqual([
+    RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: responsibility.beganAt },
+      plannedAttempt
+    })
+  ])
 })
 
 it.effect("one recovered transition continues reconstructed work through the controlled fake", () =>

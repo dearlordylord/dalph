@@ -527,7 +527,13 @@ const deriveJournalResponsibilityFacts = (
                         })
                       : paused || runPauseSuspensionOwed || taskPauseSuspensionOwed
                         ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-                        : ResponsibilityDisposition.Ready()
+                        : {
+                            _tag: "Ready" as const,
+                            acceptedProgress:
+                              report?._tag === "PlannedAttemptExecutorWorkReported"
+                                ? { _tag: "ExecutorReportAccepted" as const, ordinal: report.ordinal }
+                                : { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: responsibility.beganAt }
+                          }
     return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
   })
 }

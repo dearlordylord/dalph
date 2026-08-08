@@ -69,6 +69,7 @@ const continuationProposal = {
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
+    consecutiveRunningReports: ITFBigInt,
     positionHeld: Schema.Boolean,
     status: Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
   })
@@ -259,7 +260,27 @@ const executorConformanceDriver = defineDriver(
             latestReport === undefined
               ? undefined
               : { attemptId: BigInt(latestReport.correlation.attemptId), runId: BigInt(latestReport.correlation.runId) }
-          return { claimed, positionHeld: snapshot.positions.has(plannedAttempt.taskId), status }
+          const acceptedReports = records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.runId === correlation.runId &&
+              event.report.correlation.attemptId === correlation.attemptId
+          )
+          const lastSafeSuspension = acceptedReports.findLastIndex(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+          )
+          const consecutiveRunningReports = acceptedReports
+            .slice(lastSafeSuspension + 1)
+            .filter(
+              ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Running"
+            ).length
+          return {
+            claimed,
+            consecutiveRunningReports: BigInt(consecutiveRunningReports),
+            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
+            status
+          }
         }),
       init: () =>
         Effect.gen(function* () {
@@ -310,13 +331,19 @@ quintIt(
         Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
           Effect.flatMap(({ state }) =>
             claimedOf(state.status).pipe(
-              Effect.map((claimed) => ({ claimed, positionHeld: state.positionHeld, status: state.status.tag }))
+              Effect.map((claimed) => ({
+                claimed,
+                consecutiveRunningReports: state.consecutiveRunningReports,
+                positionHeld: state.positionHeld,
+                status: state.status.tag
+              }))
             )
           ),
           Effect.orDie
         ),
       (spec, implementation) =>
         spec.positionHeld === implementation.positionHeld &&
+        spec.consecutiveRunningReports === implementation.consecutiveRunningReports &&
         spec.status === implementation.status &&
         spec.claimed?.runId === implementation.claimed?.runId &&
         spec.claimed?.attemptId === implementation.claimed?.attemptId

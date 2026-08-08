@@ -100,7 +100,10 @@ const exactExecutorEvidence = (taskId: TaskId): ExactExecutorEvidence => ({
   _tag: "ResponsibilityFacts",
   facts: {
     _tag: "PlannedAttemptExecutorFreshFacts",
-    disposition: ResponsibilityDisposition.Ready(),
+    disposition: {
+      _tag: "Ready",
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(4) }
+    },
     responsibility: {
       _tag: "PlannedAttemptExecutorWorkResponsibility",
       beganAt: JournalPosition.make(4),
@@ -305,7 +308,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
     const taskA = TaskId.make("A")
     const responsibility = exactExecutorEvidence(taskA).facts
     const dispositions = [
-      ResponsibilityDisposition.Ready(),
+      responsibility.disposition,
       ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested(),
       ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
         correlation: {

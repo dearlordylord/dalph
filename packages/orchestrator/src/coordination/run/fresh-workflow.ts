@@ -41,7 +41,10 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
       : step._tag === "StartPlannedAttemptExecutorWork" || step._tag === "ContinuePlannedAttemptExecutorWork"
         ? step._tag === "StartPlannedAttemptExecutorWork"
           ? RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt: step.plannedAttempt })
-          : RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt: step.plannedAttempt })
+          : RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+              acceptedProgress: step.acceptedProgress,
+              plannedAttempt: step.plannedAttempt
+            })
         : continued(step.task.id, step.predecessorOperationId)
 })
 
@@ -75,6 +78,7 @@ const journaledStepFor = (
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
     if (report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Running") {
       return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
         plannedAttempt: executorResponsibility.plannedAttempt,
         task
       })
@@ -213,7 +217,11 @@ const syntheticStepFor = (
       return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: fact.plannedAttempt, task })
     case "PlannedAttemptExecutorWorkReported":
       return fact.report._tag === "Running"
-        ? FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({ plannedAttempt: fact.plannedAttempt, task })
+        ? FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
+            acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: fact.ordinal },
+            plannedAttempt: fact.plannedAttempt,
+            task
+          })
         : undefined
   }
 }

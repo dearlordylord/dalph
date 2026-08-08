@@ -16,10 +16,10 @@ const deliverySourcePath = `${orchestratorSource}/coordination/delivery/delivery
 it("runs every mode through one descriptive delivery and one runtime consumer", () => {
   const runSource = readFileSync(runSourcePath, "utf8")
 
-  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
   expect(runSource).toContain("makeJournaledDeliveryRelations")
-  expect(runSource).toContain("makeSyntheticDeliveryRelationsLayer")
+  expect(runSource).toContain("makeSyntheticDeliveryRelations")
 })
 
 /**

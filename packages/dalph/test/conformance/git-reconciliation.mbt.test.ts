@@ -38,6 +38,7 @@ const base = GitCommitSha.make("1".repeat(40))
 const advanced = GitCommitSha.make("2".repeat(40))
 const rewritten = GitCommitSha.make("3".repeat(40))
 const candidate = GitCommitSha.make("4".repeat(40))
+const acceptedProgress = { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(1) }
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("git-reconciliation-model-attempt"),
   baseSha: base,
@@ -86,7 +87,7 @@ const variantTag = (value: unknown): string =>
 const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string => {
   const disposition =
     constraint === "NoGitConstraint"
-      ? ResponsibilityDisposition.Ready()
+      ? { _tag: "Ready" as const, acceptedProgress }
       : status === "Running"
         ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
         : ResponsibilityDisposition.PlannedAttemptGitConstraint({
@@ -222,7 +223,7 @@ const gitReconciliationDriver = defineDriver(
           )
           compatibleAdvanceObserved = true
           decision =
-            responsibilityDispositionForTargetLineage(lineage, false)._tag === "Ready"
+            responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag === "Ready"
               ? "ContinueAttempt"
               : "RequestSafeSuspension"
         }),
@@ -254,7 +255,7 @@ const gitReconciliationDriver = defineDriver(
           applyPreservation(lineage)
           compatibleAdvanceObserved = false
           decision =
-            responsibilityDispositionForTargetLineage(lineage, false)._tag ===
+            responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag ===
             "PlannedAttemptExecutorSuspensionRequested"
               ? "RequestSafeSuspension"
               : "ContinueAttempt"
@@ -289,7 +290,7 @@ const gitReconciliationDriver = defineDriver(
                   ? ResponsibilityDisposition.PlannedAttemptGitConstraint({
                       gitState: "CompetingWorktreeRegistrations"
                     })
-                  : ResponsibilityDisposition.Ready()
+                  : { _tag: "Ready" as const, acceptedProgress }
           independentTaskSelected = deriveRunnableFrontier({
             freshEligibleTasks: [independentTask],
             responsibility: { entries: [responsibility] },

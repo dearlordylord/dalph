@@ -547,6 +547,7 @@ it.effect("composes exact integration start with process-local target acquisitio
     if (started?._tag !== "StartedIntegrationResponsibility") {
       return yield* Effect.die("expected started responsibility")
     }
+    yield* resources.publishAcceptedOwnership(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
 
     const runState = reconstructRunState(
@@ -564,10 +565,12 @@ it.effect("composes exact integration start with process-local target acquisitio
       }).transitions
     ).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started }))
     yield* resources.acquire(started)
+    yield* resources.publishAcceptedOwnership(started)
 
     yield* resources.release(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set())
     yield* resources.acquire(started)
+    yield* resources.publishAcceptedOwnership(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
@@ -816,6 +819,7 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
       return yield* Effect.die("expected restarted integration target acquisition")
     }
     yield* integrationResources.acquire(acquisition.responsibility)
+    yield* integrationResources.publishAcceptedOwnership(acquisition.responsibility)
 
     const lineageRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"

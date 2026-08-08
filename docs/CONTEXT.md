@@ -386,6 +386,15 @@ ordered proposal frontier. It performs no action, admits no resource, allocates
 no identity, and owns no fiber.
 _Avoid_: Delivery runtime relation, action execution, action controller
 
+**Delivery live action ownership**:
+The process-local owner, exact admission reservation, and scoped fiber for one
+admitted delivery action proposal. It prevents a second start for that exact
+proposal while the action runs and, after success, until an ordinary accepted
+fact publication removes the proposal. It is discarded on process loss and is
+never durable evidence that the boundary request did or did not happen.
+_Avoid_: Workflow responsibility, accepted action result, persisted owner,
+relation revision
+
 **Run quiescence**:
 The process-local condition for one Run in which no delivery action is currently
 executable and no admitted delivery action is still running. It does not prove

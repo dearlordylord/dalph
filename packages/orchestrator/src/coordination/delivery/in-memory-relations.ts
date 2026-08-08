@@ -38,7 +38,7 @@ export interface DeliveryRelationsLayerInput {
     readonly currentRevision: Effect.Effect<DeliveryRelationRevision>
     readonly withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   }
-  readonly invalidate: Parameters<typeof makeDeliveryRuntimeRelation>[0]["invalidate"]
+  readonly requestStabilizationRead: Parameters<typeof makeDeliveryRuntimeRelation>[0]["requestStabilizationRead"]
   readonly runtimeFacts: CurrentSignal<DeliveryRuntimeFacts, DeliveryRelationSourceError>
   /** Legacy action-plan contributions are consumed only by the outer runtime adapter. */
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
@@ -96,7 +96,7 @@ export const deterministicDeliveryRuntimeSupport = (policy: RunControlPolicy) =>
     currentRevision: Effect.succeed(DeliveryRelationRevision.make(0)),
     withStableRevision: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
   },
-  invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
+  requestStabilizationRead: () => Effect.succeed(DeliveryRelationRevision.make(0)),
   runtimeFacts: currentSignalOf<DeliveryRuntimeFacts>({
     acceptedAt: null,
     quiescence: { _tag: "QuiescencePassive", reason: "ProbeNotRequired" },
@@ -244,8 +244,8 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         const relation = makeDeliveryRuntimeRelation<E | DeliveryRelationSourceError>({
           delivery,
           facts,
-          invalidate: input.invalidate,
-          proposedActions
+          proposedActions,
+          requestStabilizationRead: input.requestStabilizationRead
         })
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,

@@ -1,10 +1,20 @@
-import { plannedAttemptExecutorCorrelation, type RunId, type TaskId } from "@dalph/contracts"
-import { Effect, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
+import {
+  plannedAttemptExecutorCorrelation,
+  type PlannedAttemptExecutorCorrelation,
+  type RunId,
+  type TaskId
+} from "@dalph/contracts"
+import { Context, Effect, Layer, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { initialRunPolicyRevision, RunControlPolicy, type InitialControlPolicy } from "../../control/policy.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import type { FreshWorkflowActionFact } from "../run/fresh-workflow-fact.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  plannedAttemptExecutorContinuationDisposition,
+  PlannedAttemptExecutorContinuationLimitReached
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import {
   ReconstructedPauseState,
@@ -14,13 +24,13 @@ import {
 } from "../reconstruction/state.js"
 import { ticketDeliveryEvidenceOf } from "./delivery-evidence.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import type { DeliveryActionResult } from "./delivery-action-executor.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { Journal, type JournalService } from "./journal.js"
 import {
   DeliveryRelationRevision,
   type DeliveryRelationInputBundle,
   type CurrentSignal,
-  type DeliveryInvalidation,
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   type DeliveryRuntimeFacts,
@@ -65,39 +75,56 @@ const activeSyntheticAttempts = (
 
 const applySyntheticProposalResult = (
   current: SyntheticDeliveryState,
-  result: Extract<DeliveryInvalidation, { readonly _tag: "ProposalCompleted" }>["result"]
+  result: Exclude<DeliveryActionResult, { readonly _tag: "ActionCompleted" | "IntegrationCandidateAdvanced" }>
 ): SyntheticDeliveryState => {
-  switch (result?._tag) {
+  switch (result._tag) {
     case "TrackerGraphObservationPublished":
       return current
     case "FreshWorkflowActionFactProduced":
       return { ...current, facts: [...current.facts, result.fact] }
     case "ExecutorReportPublished":
+      const ordinal = PlannedAttemptExecutorReportOrdinal.make(
+        current.facts.filter(
+          (fact) =>
+            fact._tag === "PlannedAttemptExecutorWorkReported" &&
+            fact.plannedAttempt.attemptId === result.plannedAttempt.attemptId
+        ).length + 1
+      )
       return {
         ...current,
         facts: [
           ...current.facts,
           {
             _tag: "PlannedAttemptExecutorWorkReported",
+            ordinal,
             plannedAttempt: result.plannedAttempt,
             report: result.report,
             taskId: result.plannedAttempt.taskId
           }
         ]
       }
-    case "ActionCompleted":
-    case "IntegrationCandidateAdvanced":
-    case undefined:
-      return current
   }
 }
+
+/** Controlled accepted-fact publication used by the synthetic interpreter, never by the runtime. */
+export interface SyntheticDeliveryAcceptedFactsService {
+  readonly authorizeExecutorContinuation: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void, PlannedAttemptExecutorContinuationLimitReached>
+  readonly publish: (result: DeliveryActionResult) => Effect.Effect<void>
+}
+
+export class SyntheticDeliveryAcceptedFacts extends Context.Service<
+  SyntheticDeliveryAcceptedFacts,
+  SyntheticDeliveryAcceptedFactsService
+>()("@dalph/SyntheticDeliveryAcceptedFacts") {}
 
 /**
  * Supplies the same flat delivery algebra with process-local journal state.
  * Synthetic executor facts remain process-local; graph observations cross the
  * ordinary journal boundary before they enter the public delivery.
  */
-export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeSyntheticLayer")(function* (
+export const makeSyntheticDeliveryRelations = Effect.fn("DeliveryRelations.makeSynthetic")(function* (
   runId: RunId,
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy
@@ -182,32 +209,45 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
         return nextRevision
       })
     )
-  const invalidate = Effect.fn("DeliveryRelations.invalidateSynthetic")(function* (cause: DeliveryInvalidation) {
-    if (cause._tag === "QuiescenceProbeRequested") {
-      yield* Ref.update(source, (current) =>
-        current.probe !== null
-          ? current
-          : {
-              ...current,
-              probe: trackerGraphReadProposalOf({ acceptedAt: null, purpose: "QuiescenceProbe", runId, target })
-            }
-      )
-    }
-    if (cause._tag === "ProposalCompleted") {
+  const acceptedFacts = SyntheticDeliveryAcceptedFacts.of({
+    authorizeExecutorContinuation: Effect.fn("SyntheticDeliveryAcceptedFacts.authorizeExecutorContinuation")(
+      function* (correlation) {
+        const reports = (yield* Ref.get(source)).facts.flatMap((fact) =>
+          fact._tag === "PlannedAttemptExecutorWorkReported" ? [fact.report] : []
+        )
+        const disposition = plannedAttemptExecutorContinuationDisposition(correlation, reports)
+        if (disposition._tag === "ExecutorContinuationLimitReached") {
+          return yield* new PlannedAttemptExecutorContinuationLimitReached({ correlation, limit: disposition.limit })
+        }
+      }
+    ),
+    publish: Effect.fn("SyntheticDeliveryAcceptedFacts.publish")(function* (result) {
+      if (result._tag === "ActionCompleted" || result._tag === "IntegrationCandidateAdvanced") return
       const journalState = yield* journal.state.get.pipe(
         Effect.matchEffect({
           onFailure: (failure) => publishFailure(failure).pipe(Effect.as(null)),
           onSuccess: (current) => Effect.succeed(current)
         })
       )
-      if (journalState === null) return yield* Ref.get(revision)
+      if (journalState === null) return
       yield* Ref.update(source, (current) => {
-        const next = applySyntheticProposalResult(current, cause.result)
+        const next = applySyntheticProposalResult(current, result)
         const withGraph = { ...next, graph: journalState.graph }
-        return withGraph.probe?.id === cause.proposalId ? { ...withGraph, probe: null } : withGraph
+        return withGraph.probe?.id === result.proposalId ? { ...withGraph, probe: null } : withGraph
       })
-    }
-    return yield* publish(cause._tag === "ProposalCompleted")
+      yield* publish(true)
+    })
+  })
+  const requestStabilizationRead = Effect.fn("DeliveryRelations.requestSyntheticStabilizationRead")(function* () {
+    yield* Ref.update(source, (current) =>
+      current.probe !== null
+        ? current
+        : {
+            ...current,
+            probe: trackerGraphReadProposalOf({ acceptedAt: null, purpose: "QuiescenceProbe", runId, target })
+          }
+    )
+    return yield* publish(false)
   })
 
   const signal = <A>(
@@ -228,13 +268,22 @@ export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.
       )
     )
   })
-  return makeDeliveryRelationsLayer({
+  const relations = makeDeliveryRelationsLayer({
     evaluationConsistency: {
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
-    invalidate,
+    requestStabilizationRead,
     runtimeFacts: signal(({ legacy }) => legacy.runtimeFacts),
     coherent: signal((bundle) => bundle)
   })
+  return { acceptedFacts, layer: Layer.merge(relations, Layer.succeed(SyntheticDeliveryAcceptedFacts, acceptedFacts)) }
+})
+
+export const makeSyntheticDeliveryRelationsLayer = Effect.fn("DeliveryRelations.makeSyntheticLayer")(function* (
+  runId: RunId,
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy
+) {
+  return (yield* makeSyntheticDeliveryRelations(runId, target, initialControlPolicy)).layer
 })

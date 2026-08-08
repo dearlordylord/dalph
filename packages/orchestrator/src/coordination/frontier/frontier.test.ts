@@ -84,7 +84,10 @@ it("orders owned work by earliest outstanding journal position before task ident
     responsibility: WorkflowResponsibilityState.make({ entries: [laterA, earliestA, middleB] }),
     responsibilityFacts: [laterA, earliestA, middleB].map((responsibility) => ({
       _tag: "PlannedAttemptExecutorFreshFacts" as const,
-      disposition: ResponsibilityDisposition.Ready(),
+      disposition: {
+        _tag: "Ready" as const,
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: responsibility.beganAt }
+      },
       responsibility
     }))
   })
@@ -354,7 +357,10 @@ it("reports missing and duplicate fresh facts for operation and executor respons
       responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
         ? {
             _tag: "PlannedAttemptExecutorFreshFacts" as const,
-            disposition: ResponsibilityDisposition.Ready(),
+            disposition: {
+              _tag: "Ready" as const,
+              acceptedProgress: { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: responsibility.beganAt }
+            },
             responsibility
           }
         : {

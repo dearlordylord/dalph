@@ -65,9 +65,13 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
   }
   if (transition._tag === "StartQueuedIntegration") {
     yield* startQueuedIntegration(transition.responsibility)
+    yield* lease.acceptIntegrationTargetOwnership
     return deliveryActionCompleted(action.proposal.id)
   }
-  if (transition._tag === "AcquireStartedIntegrationTarget") return deliveryActionCompleted(action.proposal.id)
+  if (transition._tag === "AcquireStartedIntegrationTarget") {
+    yield* lease.acceptIntegrationTargetOwnership
+    return deliveryActionCompleted(action.proposal.id)
+  }
   if (transition._tag === "ReleaseStartedIntegrationTarget") {
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)

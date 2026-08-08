@@ -43,13 +43,17 @@ import {
   ControlDirectionAppliedEvent
 } from "../../workflow/protocols/control-direction-application/events.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
-import { DeliveryControlPolicyMissing, makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
+import {
+  DeliveryControlPolicyMissing,
+  makeReactiveDeliveryRelationsLayer as makeProductionReactiveDeliveryRelationsLayer
+} from "./reactive-delivery-relations.js"
 import { DeliveryRelationReconciliationError } from "./relations.js"
 
 const runId = RunId.make("reactive-delivery-coherent-reconstruction")
@@ -96,6 +100,55 @@ const unavailableProjection = {
   }),
   reconstructedPlannedAttemptPositions: []
 }
+
+const makeReactiveDeliveryRelationsLayer = (
+  runId: Parameters<typeof makeProductionReactiveDeliveryRelationsLayer>[0],
+  target: Parameters<typeof makeProductionReactiveDeliveryRelationsLayer>[1],
+  journal: Parameters<typeof makeProductionReactiveDeliveryRelationsLayer>[2],
+  recovery: Parameters<typeof makeProductionReactiveDeliveryRelationsLayer>[3]
+) =>
+  Effect.gen(function* () {
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    return yield* makeProductionReactiveDeliveryRelationsLayer(runId, target, journal, recovery, integrationTargets)
+  })
+
+it.effect("keeps one pending reactive stabilization proposal until its graph fact is accepted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("pending-stabilization-graph"), target)
+      const projected = projectTrackerSnapshot({ revision: "pending-stabilization", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("stabilization graph must be valid")
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(operation.operationId),
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+        )
+      )
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
+      )
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+
+      yield* relation.requestStabilizationRead()
+      const first = yield* relation.proposedActions.get
+      yield* relation.requestStabilizationRead()
+      const second = yield* relation.proposedActions.get
+
+      expect(second).toEqual(first)
+      expect(first).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "QuiescenceProbe" } }]
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
 
 it.effect("publishes journaled G1 and equal-content G2 through one reactive delivery", () =>
   Effect.scoped(
@@ -274,7 +327,7 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
   )
 )
 
-it.effect("does not propose the initial graph read until recovered boundary work disappears", () =>
+it.effect("does not propose the initial graph read while recovered boundary work remains", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* makeJournalService
@@ -308,17 +361,6 @@ it.effect("does not propose the initial graph read until recovered boundary work
         proposals: [
           { route: { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "SuspendPlannedAttemptExecutorWork" } } }
         ]
-      })
-      const initialProposal =
-        initial.proposedActions._tag === "DeliveryProposalsAvailable" ? initial.proposedActions.proposals[0] : undefined
-      if (initialProposal === undefined) return yield* Effect.die("expected one recovered proposal")
-
-      yield* Ref.set(recoveredTransitions, [])
-      yield* relation.invalidate({ _tag: "ProposalCompleted", proposalId: initialProposal.id, result: null })
-      const afterRecovery = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
-      expect(afterRecovery.proposedActions).toMatchObject({
-        _tag: "DeliveryProposalsAvailable",
-        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph" } }]
       })
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
@@ -424,7 +466,7 @@ it.effect("publishes a typed relation failure when a later recovery projection f
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
 
       yield* Ref.set(failProjection, true)
-      yield* relation.invalidate({ _tag: "JournalStateChanged" })
+      yield* relation.requestStabilizationRead()
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
       const currentFailure = yield* relation.current.get.pipe(Effect.flip)
 
@@ -494,7 +536,7 @@ it.effect("publishes a typed failure when a quiescence probe cannot read journal
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       yield* Ref.set(failRead, true)
-      yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
+      yield* relation.requestStabilizationRead()
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)

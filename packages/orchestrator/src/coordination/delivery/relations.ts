@@ -23,7 +23,6 @@ import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.j
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type { DeliveryActionResult } from "./delivery-action-executor.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -472,21 +471,12 @@ export interface DeliveryRuntimeEvaluation {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
 }
 
-/** Process-local reason for the runtime to request a fresh evaluation of descriptive relations. */
-export type DeliveryInvalidation =
-  | { readonly _tag: "JournalStateChanged" }
-  | {
-      readonly _tag: "ProposalCompleted"
-      readonly proposalId: DeliveryProposalId
-      readonly result: DeliveryActionResult | null
-    }
-  | { readonly _tag: "QuiescenceProbeRequested" }
-
 export interface DeliveryRuntimeRelation<E = DeliveryReflectionError> {
   readonly current: CurrentSignal<DeliveryRuntimeSnapshot, E>
   readonly evaluations: CurrentSignal<DeliveryRuntimeEvaluation, E>
-  readonly invalidate: (cause: DeliveryInvalidation) => Effect.Effect<DeliveryRelationRevision>
   readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
+  /** Temporary #193 port used only to request the final tracker read; #194 removes it. */
+  readonly requestStabilizationRead: () => Effect.Effect<DeliveryRelationRevision>
 }
 
 const trackerTargetIsSettled = (graph: TrackerGraphState): boolean =>
@@ -577,8 +567,8 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
   /** Canonical descriptive current; runtime snapshots never reconstruct it from action-plan inputs. */
   readonly delivery: CurrentSignal<DeliveryConsequences, E>
   readonly facts: CurrentSignal<DeliveryRuntimeFacts, E>
-  readonly invalidate: DeliveryRuntimeRelation<E>["invalidate"]
   readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
+  readonly requestStabilizationRead: DeliveryRuntimeRelation<E>["requestStabilizationRead"]
 }): DeliveryRuntimeRelation<E | DeliveryRelationSourceError> => {
   const snapshot = mapCurrentSignal(input.delivery, (delivery) => ({
     _tag: "DeliveryRuntimeSnapshot" as const,
@@ -600,7 +590,12 @@ export const makeDeliveryRuntimeRelation = <E>(input: {
       taskWork: facts.taskWork
     })
   )
-  return { current: snapshot, evaluations, invalidate: input.invalidate, proposedActions: input.proposedActions }
+  return {
+    current: snapshot,
+    evaluations,
+    proposedActions: input.proposedActions,
+    requestStabilizationRead: input.requestStabilizationRead
+  }
 }
 
 export interface BoundedParallelTicketsProjectionService {

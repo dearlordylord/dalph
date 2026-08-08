@@ -17,7 +17,6 @@ import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authoriti
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   TrackerGraphState,
   type ExactTicketDeliveryEvidence,
@@ -98,7 +97,10 @@ it("retains an exact planned-attempt obligation across every graph placement and
     _tag: "ResponsibilityFacts",
     facts: {
       _tag: "PlannedAttemptExecutorFreshFacts",
-      disposition: ResponsibilityDisposition.Ready(),
+      disposition: {
+        _tag: "Ready" as const,
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(4) }
+      },
       responsibility: {
         _tag: "PlannedAttemptExecutorWorkResponsibility",
         beganAt: JournalPosition.make(2),

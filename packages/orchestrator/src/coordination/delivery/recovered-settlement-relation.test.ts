@@ -202,7 +202,13 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
     integrationResources
   )
   yield* installFreshTrackerFacts(journalService)
-  const relations = yield* makeReactiveDeliveryRelationsLayer(runId, trackerTarget, journalService, recovery)
+  const relations = yield* makeReactiveDeliveryRelationsLayer(
+    runId,
+    trackerTarget,
+    journalService,
+    recovery,
+    integrationResources
+  )
   const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
   return Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
 })

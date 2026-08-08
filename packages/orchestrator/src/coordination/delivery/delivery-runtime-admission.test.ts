@@ -197,7 +197,9 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       ref: IntegrationTargetRef.make("refs/heads/main")
     })
     const heldAt = JournalPosition.make(10)
-    yield* integrationTargets.acquire({ integrationTarget, queuedAt: heldAt })
+    const heldResponsibility = { integrationTarget, queuedAt: heldAt }
+    yield* integrationTargets.acquire(heldResponsibility)
+    yield* integrationTargets.publishAcceptedOwnership(heldResponsibility)
     const integrationProposal = {
       ...proposalFor("integration-conflict", { _tag: "NoTaskWorkPosition" }),
       admission: {

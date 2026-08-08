@@ -19,7 +19,6 @@ import { Effect, Option, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   currentSignalOf,
   boundedParallelTickets,
@@ -301,8 +300,8 @@ it.effect("evaluates every coherent projection owner from the shared publication
           revision: DeliveryRelationRevision.make(0),
           taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
         }),
-        invalidate: () => Effect.succeed(DeliveryRelationRevision.make(0)),
-        proposedActions: currentSignalOf({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+        proposedActions: currentSignalOf({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }),
+        requestStabilizationRead: () => Effect.succeed(DeliveryRelationRevision.make(0))
       })
       yield* directRuntime.evaluations.changes.pipe(Stream.runCollect)
     }).pipe(Effect.provide(layer))
@@ -317,7 +316,10 @@ it.effect("retains an exact responsibility with its changed graph placement", ()
       _tag: "ResponsibilityFacts" as const,
       facts: {
         _tag: "PlannedAttemptExecutorFreshFacts" as const,
-        disposition: ResponsibilityDisposition.Ready(),
+        disposition: {
+          _tag: "Ready" as const,
+          acceptedProgress: { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(2) }
+        },
         responsibility: {
           _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
           beganAt: JournalPosition.make(2),

@@ -14,7 +14,7 @@ const target = (repository: string) =>
     ref: IntegrationTargetRef.make("refs/heads/master")
   })
 
-it.effect("serializes one exact target while allowing another target and releases only its owner", () =>
+it.effect("publishes only each exact accepted target while serializing and releasing its owner", () =>
   Effect.gen(function* () {
     const controller = yield* makeIntegrationTargetResourceController()
     const a = { integrationTarget: target("/a.git"), queuedAt: JournalPosition.make(1) }
@@ -24,6 +24,9 @@ it.effect("serializes one exact target while allowing another target and release
     yield* controller.acquire(a)
     yield* controller.acquire(a)
     yield* controller.acquire(c)
+    yield* controller.publishAcceptedOwnership(c)
+    expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set([c.queuedAt]))
+    yield* controller.publishAcceptedOwnership(a)
     expect((yield* Effect.exit(controller.withPermit(b, Effect.void)))._tag).toBe("Failure")
     expect(yield* Effect.flip(controller.acquire(b))).toEqual(
       new IntegrationTargetResourceUnavailable({
@@ -38,6 +41,7 @@ it.effect("serializes one exact target while allowing another target and release
     expect((yield* controller.snapshot).heldResponsibilityPositions).toContain(a.queuedAt)
     yield* controller.release(a)
     yield* controller.acquire(b)
+    yield* controller.publishAcceptedOwnership(b)
     expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set([b.queuedAt, c.queuedAt]))
   })
 )

@@ -1,4 +1,4 @@
-import { Option } from "effect"
+import { Option, Schema } from "effect"
 import { type AttemptId, type IntegrationTarget, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
@@ -16,6 +16,7 @@ import {
   RunnableFrontierTransition
 } from "./frontier.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
@@ -23,6 +24,11 @@ import {
   type CandidateCorrectionLimit,
   type CandidateContinuationLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import {
+  IntegrationCandidateConstructionJournalEvent,
+  integrationCandidateConstructionEventCorrelation,
+  integrationCandidateCorrelationEquals
+} from "../../workflow/protocols/integration-candidate-construction/events.js"
 
 /** A region-local reason that accepted integration work cannot advance now. */
 export type IntegrationDeliveryWait =
@@ -39,6 +45,24 @@ export type IntegrationDeliveryWait =
     }
   | { readonly _tag: "IntegrationTrackerFactsWait"; readonly plannedAttempt: PlannedTaskAttempt }
   | { readonly _tag: "IntegrationTargetWait"; readonly plannedAttempt: PlannedTaskAttempt }
+
+const acceptedCandidateProgressAt = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): JournalPosition | null => {
+  const intent = records.findLast(
+    ({ event }) =>
+      event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
+  )?.event
+  if (intent?._tag !== "IntegrationCandidateConstructionIntended") return null
+  const isCandidateEvent = Schema.is(IntegrationCandidateConstructionJournalEvent)
+  const relevant = records.findLast(
+    ({ event }) =>
+      isCandidateEvent(event) &&
+      integrationCandidateCorrelationEquals(integrationCandidateConstructionEventCorrelation(event), intent.correlation)
+  )
+  return relevant?.position ?? null
+}
 
 const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): IntegrationDeliveryWait | undefined => {
   if (explanation._tag === "IntegrationDependencyWait") {
@@ -179,6 +203,7 @@ export const deriveIntegrationFrontier = (
         onNone: () => [],
         onSome: ({ continuationLimit, correctionLimit, lineage }) => [
           RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+            acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
             correctionLimit,
             continuationLimit,
             lineage,

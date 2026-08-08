@@ -24,7 +24,6 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { delivery } from "./delivery.js"
 import { deliveryActionPlanning } from "./delivery-action-planning.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
@@ -52,6 +51,7 @@ import {
 } from "./in-memory-relations.js"
 import {
   DeliveryProposalOrdinal,
+  DeliveryProposalId,
   deliveryProposalsOf,
   trackerGraphReadProposalOf,
   type DeliveryProposalContributions
@@ -82,7 +82,7 @@ const deliveryConsequencesKeyContract: ExactKeys<
 const makeDeliveryRelationsLayer = (
   input: Omit<
     Parameters<typeof makeDeliveryRelationsLayerWithRuntime>[0],
-    "evaluationConsistency" | "invalidate" | "runtimeFacts" | "coherent"
+    "evaluationConsistency" | "requestStabilizationRead" | "runtimeFacts" | "coherent"
   > & {
     readonly graph: CurrentSignal<TrackerGraphState>
     readonly exactEvidence: CurrentSignal<ReadonlyArray<TicketDeliveryEvidence>>
@@ -138,7 +138,10 @@ const exactAttemptEvidence = (taskId: TaskId) => ({
   _tag: "ResponsibilityFacts" as const,
   facts: {
     _tag: "PlannedAttemptExecutorFreshFacts" as const,
-    disposition: ResponsibilityDisposition.Ready(),
+    disposition: {
+      _tag: "Ready" as const,
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(2) }
+    },
     responsibility: {
       _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
       beganAt: JournalPosition.make(2),
@@ -315,6 +318,18 @@ it.effect("keeps a settled journaled graph active while the Run is paused", () =
         { _tag: "QuiescencePassive", reason: "RunPaused" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+    expect(
+      deliveryFinalityOf(
+        current,
+        {
+          _tag: "DeliveryProposalOwnershipConflict",
+          conflicts: [
+            { id: DeliveryProposalId.make("finality-owner-conflict"), owners: ["TrackerGraph", "TicketDelivery"] }
+          ]
+        },
+        { _tag: "QuiescencePassive", reason: "ProbeNotRequired" }
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })
 )
 
@@ -329,8 +344,6 @@ it.effect("keeps every descriptive subscription action-free", () =>
 
     const first = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
     const second = Array.from(yield* Stream.runCollect(relation.proposedActions.changes))
-    yield* relation.invalidate({ _tag: "JournalStateChanged" })
-
     expect(first).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
     expect(second).toEqual(first)
   })
@@ -432,13 +445,15 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
       proposalContributions: currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [lowerProposal] }),
       trackerGraphProposals: currentSignalOf([probe])
     })
-    const { current, first, second } = yield* Effect.gen(function* () {
+    const { current, first, second, trackerProposals } = yield* Effect.gen(function* () {
       const consequences = yield* delivery
       const proposals = yield* deliveryActionPlanning(consequences)
+      const tracker = yield* TrackerGraphRelation
       return {
         current: Option.getOrThrow(yield* consequences.changes.pipe(Stream.runHead)),
         first: yield* proposals.get,
-        second: yield* proposals.get
+        second: yield* proposals.get,
+        trackerProposals: yield* tracker.proposedActions.get
       }
     }).pipe(Effect.provide(layer))
 
@@ -448,7 +463,9 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
     }
     expect(second).toEqual(first)
     expect(first).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
+    expect(trackerProposals).toEqual([])
     expect(lowerProposal.actionIdentity._tag).toBe("FreshOperationIdRequired")
+    expect(yield* deterministicDeliveryRuntimeSupport(policy).requestStabilizationRead()).toBe(0)
   })
 )
 
@@ -599,7 +616,7 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
         policy: currentSignalOf(policy),
         proposalContributions
       })
-      const frontiers = yield* Effect.gen(function* () {
+      const observed = yield* Effect.gen(function* () {
         const consequences = yield* delivery
         const proposals = yield* deliveryActionPlanning(consequences)
         const firstObserved = yield* Deferred.make<void>()
@@ -609,15 +626,25 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
           Stream.runCollect,
           Effect.forkChild
         )
+        const stableCollected = yield* proposals.changesWithinStableRevision.pipe(
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild
+        )
         yield* Deferred.await(firstObserved)
         yield* SubscriptionRef.set(acceptedFacts, acceptedContributions)
-        return Array.from(yield* Fiber.join(collected))
+        return {
+          frontiers: Array.from(yield* Fiber.join(collected)),
+          stableFrontiers: Array.from(yield* Fiber.join(stableCollected))
+        }
       }).pipe(Effect.provide(layer))
 
-      expect(frontiers).toEqual([
+      const expected = [
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [proposal] }
-      ])
+      ]
+      expect(observed.frontiers).toEqual(expected)
+      expect(observed.stableFrontiers).toEqual(expected)
     })
   )
 )
@@ -772,7 +799,7 @@ it("keeps the production delivery Effect flat and free of runtime-coloured coord
   )
   expect(runtimeAdapterSource).toContain("const proposedActions = yield* deliveryActionPlanning(consequences)")
   expect(runtimeAdapterSource).toContain("return assembly.of({ delivery: consequences, proposedActions })")
-  expect(runSource.match(/\bdelivery\.pipe\(/g)).toHaveLength(1)
+  expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
   expect(runSource.match(/\brunDeliveryRuntime\(/g)).toHaveLength(1)
 })
 

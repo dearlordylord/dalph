@@ -224,6 +224,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
       if (current._tag === "Invalid") return yield* Effect.die("current graph must be valid")
       const acquireCalls = yield* Ref.make(0)
       const claimReads = yield* Ref.make(0)
+      const nextOperation = yield* Ref.make(0)
       const trackerLayer = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
@@ -254,7 +255,10 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         Effect.provideService(
           OperationIdAllocator,
           OperationIdAllocator.of({
-            allocate: () => Effect.succeed(OperationId.make("production-lost-claim-current-graph"))
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-lost-claim-operation-${value}`))
+              )
           })
         ),
         Effect.provideService(
@@ -476,6 +480,7 @@ it.effect("records an Operator capacity change through the production compositio
       const initialReadStarted = yield* Deferred.make<void>()
       const returnInitialRead = yield* Deferred.make<void>()
       const reads = yield* Ref.make(0)
+      const nextOperation = yield* Ref.make(0)
       const trackerReaderLayer = Layer.succeed(
         TrackerGraphReader,
         TrackerGraphReader.of({
@@ -512,7 +517,10 @@ it.effect("records an Operator capacity change through the production compositio
           Effect.provideService(
             OperationIdAllocator,
             OperationIdAllocator.of({
-              allocate: () => Effect.succeed(OperationId.make("production-capacity-change-read"))
+              allocate: () =>
+                Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                  Effect.map((value) => OperationId.make(`production-capacity-change-operation-${value}`))
+                )
             })
           ),
           Effect.provideService(
@@ -560,7 +568,7 @@ it.effect("records an Operator capacity change through the production compositio
   )
 )
 
-it.effect("rejects a second fresh production start for the same Run before any tracker read", () =>
+it.effect("performs one final tracker read before rejecting a second fresh start without another read", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -575,6 +583,7 @@ it.effect("rejects a second fresh production start for the same Run before any t
         Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
       )
       const trackerReads = yield* Ref.make(0)
+      const nextOperation = yield* Ref.make(0)
       const trackerReaderLayer = Layer.succeed(
         TrackerGraphReader,
         TrackerGraphReader.of({
@@ -598,7 +607,12 @@ it.effect("rejects a second fresh production start for the same Run before any t
       ).pipe(
         Effect.provideService(
           OperationIdAllocator,
-          OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("production-single-start-read")) })
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-single-start-operation-${value}`))
+              )
+          })
         ),
         Effect.provideService(
           TaskClaimAcquisitionPlanner,
@@ -613,10 +627,12 @@ it.effect("rejects a second fresh production start for the same Run before any t
       )
 
       yield* execute
+      const readsAfterFirstRun = yield* Ref.get(trackerReads)
       const repeated = yield* execute.pipe(Effect.flip)
 
       expect(repeated).toBeInstanceOf(WorkflowRunAlreadyBegan)
-      expect(yield* Ref.get(trackerReads)).toBe(1)
+      expect(readsAfterFirstRun).toBe(2)
+      expect(yield* Ref.get(trackerReads)).toBe(readsAfterFirstRun)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
@@ -626,7 +642,7 @@ it.effect("rejects a second fresh production start for the same Run before any t
   )
 )
 
-it.effect("installs the running-then-terminal coarse fake in the production-shaped composition", () =>
+it.effect("continues after each accepted Running report and stops after Terminal", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -850,6 +866,17 @@ it.effect("installs the running-then-terminal coarse fake in the production-shap
           report: { _tag: "Terminal", correlation, result: { _tag: "Completed" } }
         }
       )
+      expect(
+        records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported"
+            ? [{ ordinal: event.ordinal, report: event.report._tag }]
+            : []
+        )
+      ).toEqual([
+        { ordinal: 1, report: "Running" },
+        { ordinal: 2, report: "Running" },
+        { ordinal: 3, report: "Terminal" }
+      ])
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )

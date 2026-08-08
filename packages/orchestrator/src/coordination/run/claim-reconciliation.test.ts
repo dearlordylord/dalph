@@ -782,6 +782,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     )
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
       _tag: "ContinuePlannedAttemptExecutorWork",
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
       plannedAttempt
     })
   }).pipe(

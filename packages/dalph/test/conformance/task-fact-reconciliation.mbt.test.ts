@@ -40,6 +40,7 @@ const responsibility = {
   beganAt: JournalPosition.make(1),
   plannedAttempt
 }
+const acceptedProgress = { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: responsibility.beganAt }
 const independentTask = {
   taskId: TaskId.make("task-facts-independent-C"),
   taskRevision: TaskRevision.make("independent-fingerprint")
@@ -110,7 +111,7 @@ const decisionFromProductionFrontier = (
             requestId: TaskClaimReacquisitionRequestId.make("task-facts-reacquisition")
           })
         : constraint === "NoConstraint"
-          ? ResponsibilityDisposition.Ready()
+          ? { _tag: "Ready" as const, acceptedProgress }
           : constraint === "MembershipConstraint"
             ? ResponsibilityDisposition.TaskMembershipConstraint()
             : constraint === "LifecycleConstraint"

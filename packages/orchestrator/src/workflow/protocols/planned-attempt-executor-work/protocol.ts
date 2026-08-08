@@ -14,6 +14,8 @@ import {
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorContinuationLimit,
+  defaultPlannedAttemptExecutorContinuationLimit,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./events.js"
@@ -24,12 +26,39 @@ export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErro
   { expected: PlannedAttemptExecutorCorrelation, observed: PlannedAttemptExecutorCorrelation }
 ) {}
 
+/** The exact attempt consumed its durable start-or-continue budget while the executor still reported Running. */
+export class PlannedAttemptExecutorContinuationLimitReached extends Schema.TaggedErrorClass<PlannedAttemptExecutorContinuationLimitReached>()(
+  "PlannedAttemptExecutorContinuationLimitReached",
+  { correlation: PlannedAttemptExecutorCorrelation, limit: PlannedAttemptExecutorContinuationLimit }
+) {}
+
 const sameCorrelation = (left: PlannedAttemptExecutorCorrelation, right: PlannedAttemptExecutorCorrelation): boolean =>
   left.attemptId === right.attemptId && left.runId === right.runId
 
+export type PlannedAttemptExecutorContinuationDisposition =
+  | { readonly _tag: "ExecutorContinuationAvailable" }
+  | { readonly _tag: "ExecutorContinuationLimitReached"; readonly limit: PlannedAttemptExecutorContinuationLimit }
+
+/** Pure durable-budget decision shared by journaled and synthetic interpreters. */
+export const plannedAttemptExecutorContinuationDisposition = (
+  correlation: PlannedAttemptExecutorCorrelation,
+  reports: ReadonlyArray<PlannedAttemptExecutorReport>,
+  continuationLimit = defaultPlannedAttemptExecutorContinuationLimit
+): PlannedAttemptExecutorContinuationDisposition => {
+  const acceptedReports = reports.filter((report) => sameCorrelation(correlation, report.correlation))
+  const lastSafeSuspension = acceptedReports.findLastIndex(({ _tag }) => _tag === "SafelySuspended")
+  const runningSinceSafeSuspension = acceptedReports
+    .slice(lastSafeSuspension + 1)
+    .filter(({ _tag }) => _tag === "Running")
+  return runningSinceSafeSuspension.length >= continuationLimit
+    ? { _tag: "ExecutorContinuationLimitReached", limit: continuationLimit }
+    : { _tag: "ExecutorContinuationAvailable" }
+}
+
 const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
   plannedAttempt: PlannedTaskAttempt,
-  command: "StartOrContinue" | "Suspend"
+  command: "StartOrContinue" | "Suspend",
+  continuationLimit: PlannedAttemptExecutorContinuationLimit
 ) {
   const journal = yield* InRunJournal
   const executor = yield* PlannedAttemptExecutor
@@ -40,6 +69,15 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
   )
+  const acceptedReports = records.flatMap(({ event }) =>
+    event._tag === "PlannedAttemptExecutorWorkReported" && sameCorrelation(correlation, event.report.correlation)
+      ? [event.report]
+      : []
+  )
+  const continuation = plannedAttemptExecutorContinuationDisposition(correlation, acceptedReports, continuationLimit)
+  if (command === "StartOrContinue" && continuation._tag === "ExecutorContinuationLimitReached") {
+    return yield* new PlannedAttemptExecutorContinuationLimitReached({ correlation, limit: continuation.limit })
+  }
   if (!responsibilityBegan) {
     yield* journal.append(
       plannedAttempt.runId,
@@ -56,13 +94,7 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
     return yield* new PlannedAttemptExecutorCorrelationMismatch({ expected: correlation, observed: report.correlation })
   }
 
-  const ordinal = PlannedAttemptExecutorReportOrdinal.make(
-    records.filter(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === plannedAttempt.attemptId
-    ).length + 1
-  )
+  const ordinal = PlannedAttemptExecutorReportOrdinal.make(acceptedReports.length + 1)
   yield* journal.append(
     plannedAttempt.runId,
     plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
@@ -72,9 +104,11 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
 })
 
 /** Starts or resumes all executor work for the exact planned attempt. */
-export const continuePlannedAttemptExecutorWork = (plannedAttempt: PlannedTaskAttempt) =>
-  runCommand(plannedAttempt, "StartOrContinue")
+export const continuePlannedAttemptExecutorWork = (
+  plannedAttempt: PlannedTaskAttempt,
+  continuationLimit = defaultPlannedAttemptExecutorContinuationLimit
+) => runCommand(plannedAttempt, "StartOrContinue", continuationLimit)
 
 /** Asks the executor to stop all work while preserving the exact attempt for resume. */
 export const requestPlannedAttemptExecutorSuspension = (plannedAttempt: PlannedTaskAttempt) =>
-  runCommand(plannedAttempt, "Suspend")
+  runCommand(plannedAttempt, "Suspend", defaultPlannedAttemptExecutorContinuationLimit)

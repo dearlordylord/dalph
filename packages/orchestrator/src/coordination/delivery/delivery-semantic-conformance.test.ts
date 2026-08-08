@@ -26,7 +26,8 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryActionExecutor,
   DeliverySemanticTrace,
-  type DeliverySemanticTraceEvent
+  type DeliverySemanticTraceEvent,
+  type MaterializedDeliveryAction
 } from "./delivery-action-executor.js"
 import { trackerGraphReadProposalOf } from "./delivery-action-proposal.js"
 import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
@@ -94,22 +95,21 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
       publication: { exactEvidence: [], graph, policy }
     })
   )
-  return makeDeliveryRelationsLayer({
+  const layer = makeDeliveryRelationsLayer({
     evaluationConsistency: {
       currentRevision: Ref.get(revision),
       withStableRevision: (effect) => gate.withPermit(effect)
     },
     coherent,
-    invalidate: (cause) =>
+    requestStabilizationRead: () =>
       gate.withPermit(
         Ref.updateAndGet(revision, (current) => DeliveryRelationRevision.make(current + 1)).pipe(
           Effect.flatMap((next) =>
             SubscriptionRef.set(state, {
               revision: next,
-              trackerGraphProposals:
-                cause._tag === "QuiescenceProbeRequested"
-                  ? [trackerGraphReadProposalOf({ acceptedAt, purpose: "QuiescenceProbe", runId, target })]
-                  : []
+              trackerGraphProposals: [
+                trackerGraphReadProposalOf({ acceptedAt, purpose: "QuiescenceProbe", runId, target })
+              ]
             }).pipe(Effect.as(next))
           )
         )
@@ -122,6 +122,15 @@ const makeDryConformanceLayer = Effect.fn("DeliverySemanticConformance.makeDryLa
     })),
     trackerGraphProposals: mapCurrentSignal(signal, ({ trackerGraphProposals }) => trackerGraphProposals)
   })
+  return {
+    acceptProbe: () =>
+      gate.withPermit(
+        Ref.updateAndGet(revision, (current) => DeliveryRelationRevision.make(current + 1)).pipe(
+          Effect.flatMap((next) => SubscriptionRef.set(state, { revision: next, trackerGraphProposals: [] }))
+        )
+      ),
+    layer
+  }
 })
 
 const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.makeLiveFakeLayer")(function* () {
@@ -159,20 +168,42 @@ const makeLiveFakeConformanceLayer = Effect.fn("DeliverySemanticConformance.make
   }
   return {
     acceptedAt: journalState.position,
+    acceptProbe: (operationId: OperationId) => {
+      const acceptedOperation = makeTrackerGraphObservationOperation(operationId, target)
+      return journal
+        .append(runId, intentRecordKey(operationId), taskTrackerReadIntent(acceptedOperation))
+        .pipe(
+          Effect.andThen(
+            journal.append(
+              runId,
+              outcomeRecordKey(operationId),
+              taskTrackerFactsObservedEvent(
+                operationId,
+                makeCompleteTaskTrackerFactsObserved(acceptedOperation, projected.snapshot)
+              )
+            )
+          )
+        )
+    },
     graph: journalState.graph,
-    layer: reactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+    layer: Layer.provideMerge(
+      reactiveDeliveryRelationsLayer(runId, target, journal, recovery),
+      deliveryRuntimeResourcesLayer
+    )
   }
 })
 
 const runMode = Effect.fn("DeliverySemanticConformance.runMode")(function* <E>(
   relation: DeliveryRuntimeRelation<E>,
-  mode: "Dry" | "LiveFake"
+  mode: "Dry" | "LiveFake",
+  acceptProbe: (action: MaterializedDeliveryAction) => Effect.Effect<void>
 ) {
   const events = yield* Ref.make<ReadonlyArray<DeliverySemanticTraceEvent>>([])
   const boundaryCalls = yield* Ref.make(0)
   const executor = DeliveryActionExecutor.of({
     execute: (action) =>
       (mode === "LiveFake" ? Ref.update(boundaryCalls, (count) => count + 1) : Effect.void).pipe(
+        Effect.andThen(acceptProbe(action)),
         Effect.as({ _tag: "ActionCompleted" as const, proposalId: action.proposal.id })
       )
   })
@@ -191,11 +222,19 @@ it.effect("dry and live-fake Layers emit the same DeliverySemanticTrace after eq
   Effect.scoped(
     Effect.gen(function* () {
       const liveSetup = yield* makeLiveFakeConformanceLayer()
-      const dryLayer = yield* makeDryConformanceLayer(liveSetup.graph, liveSetup.acceptedAt)
-      const dryRelation = yield* deliveryRuntime.pipe(Effect.provide(dryLayer))
-      const liveRelation = yield* deliveryRuntime.pipe(Effect.provide(liveSetup.layer))
-      const dry = yield* runMode(dryRelation, "Dry")
-      const liveFake = yield* runMode(liveRelation, "LiveFake")
+      const drySetup = yield* makeDryConformanceLayer(liveSetup.graph, liveSetup.acceptedAt)
+      const dry = yield* Effect.gen(function* () {
+        const relation = yield* deliveryRuntime
+        return yield* runMode(relation, "Dry", () => drySetup.acceptProbe())
+      }).pipe(Effect.provide(drySetup.layer))
+      const liveFake = yield* Effect.gen(function* () {
+        const relation = yield* deliveryRuntime
+        return yield* runMode(relation, "LiveFake", (action) =>
+          action._tag === "FreshOperationAction"
+            ? liveSetup.acceptProbe(action.operationId).pipe(Effect.orDie)
+            : Effect.die("the conformance probe must allocate a fresh operation identity")
+        )
+      }).pipe(Effect.provide(liveSetup.layer))
       const graphProposal = trackerGraphReadProposalOf({
         acceptedAt: liveSetup.acceptedAt,
         purpose: "QuiescenceProbe",

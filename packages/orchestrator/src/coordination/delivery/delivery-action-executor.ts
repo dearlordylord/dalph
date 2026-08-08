@@ -8,7 +8,10 @@ import { Context, type Effect } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
 import type { WorkflowInterpreterService, WorkflowTraceService } from "../../workflow/interpretation/interpreter.js"
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
-import type { PlannedAttemptExecutorCorrelationMismatch } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import type {
+  PlannedAttemptExecutorContinuationLimitReached,
+  PlannedAttemptExecutorCorrelationMismatch
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import type {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
@@ -61,6 +64,7 @@ export type MaterializedDeliveryAction =
 
 /** Process-local capabilities held by the one live owner of an admitted proposal. */
 export interface DeliveryActionExecutionLease {
+  readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
   readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
@@ -112,6 +116,7 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof startQueuedIntegration>
   | IntegrationCandidateBoundaryUnavailable
+  | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCorrelationMismatch
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>

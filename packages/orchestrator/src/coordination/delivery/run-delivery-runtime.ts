@@ -5,8 +5,7 @@ import {
   type PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
-import { OperationId } from "../../workflow/identity.js"
+import type { OperationId } from "../../workflow/identity.js"
 import type { RunFinalityProof } from "../frontier/run-finality.js"
 import {
   DeliveryActionExecutor,
@@ -14,22 +13,22 @@ import {
   DeliverySemanticTrace,
   type DeliveryActionExecutionLease,
   type DeliveryActionResult,
-  type DeliverySemanticTraceEvent,
-  type MaterializedDeliveryAction
+  type DeliverySemanticTraceEvent
 } from "./delivery-action-executor.js"
-import type {
-  AcceptedIdentityDeliveryProposal,
-  DeliveryActionProposal,
-  FreshIdentityDeliveryProposal,
-  IdentityFreeDeliveryProposal
-} from "./delivery-action-proposal.js"
+import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
+import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import {
   makeDeliveryRuntimeAdmissionController,
   type DeliveryAdmissionReservation,
   type DeliveryRuntimeAdmissionController
 } from "./delivery-runtime-admission.js"
-import type { DeliveryRelationRevision, DeliveryRuntimeEvaluation, DeliveryRuntimeRelation } from "./relations.js"
+import {
+  type CurrentSignal,
+  type DeliveryProposalFrontier,
+  type DeliveryRelationRevision,
+  type DeliveryRuntimeEvaluation
+} from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
@@ -38,64 +37,12 @@ export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError
   { proposalIds: Schema.Array(DeliveryProposalId) }
 ) {}
 
-type FreshOperationProposal = Extract<
-  FreshIdentityDeliveryProposal,
-  { readonly actionIdentity: { readonly _tag: "FreshOperationIdRequired" } }
->
-
-const isAcceptedOperationProposal = (proposal: DeliveryActionProposal): proposal is AcceptedIdentityDeliveryProposal =>
-  proposal.actionIdentity._tag === "ExistingOperationId"
-
-const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
-  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
-
-const isFreshOperationProposal = (proposal: DeliveryActionProposal): proposal is FreshOperationProposal =>
-  proposal.actionIdentity._tag === "FreshOperationIdRequired"
-
-const operationIdFor = Effect.fn("DeliveryRuntime.materializeOperationId")(function* (
-  proposal: FreshOperationProposal
-) {
-  const source = proposal.actionIdentity.source
-  if (source._tag === "TaskClaimReacquisitionRequest") {
-    return taskClaimReacquisitionOperationId(source.requestId)
-  }
-  if (source._tag === "ExternalSuccessReleaseClaim") {
-    return OperationId.make(`external-success-release:${source.claimOperationId}`)
-  }
-  const allocator = yield* OperationIdAllocator
-  return yield* allocator.allocate()
-})
-
-/** Allocates a genuinely fresh identity only after the proposal has been admitted. */
-const materializeDeliveryAction = Effect.fn("DeliveryRuntime.materializeAction")(function* (
-  proposal: DeliveryActionProposal
-): Effect.fn.Return<
-  MaterializedDeliveryAction,
-  PlannedTaskAttemptError,
-  OperationIdAllocator | PlannedTaskAttemptPlanner
-> {
-  if (isAcceptedOperationProposal(proposal)) return { _tag: "AcceptedOperationAction", proposal }
-  if (isIdentityFreeProposal(proposal)) return { _tag: "IdentityFreeAction", proposal }
-  if (isFreshOperationProposal(proposal)) {
-    return { _tag: "FreshOperationAction", operationId: yield* operationIdFor(proposal), proposal }
-  }
-  const allocator = yield* OperationIdAllocator
-  const planner = yield* PlannedTaskAttemptPlanner
-  return {
-    _tag: "FreshAttemptAction",
-    operationId: yield* allocator.allocate(),
-    plannedAttempt: yield* planner.plan(proposal.route.step.specification),
-    proposal
-  }
-})
-
 interface LiveOwner {
   readonly intentRecorded: Ref.Ref<boolean>
   readonly operationId: Ref.Ref<OperationId | null>
   readonly proposal: DeliveryActionProposal
   readonly reservation: DeliveryAdmissionReservation
   readonly settled: Ref.Ref<boolean>
-  readonly startedRevision: DeliveryRelationRevision
 }
 
 interface Completion {
@@ -107,6 +54,11 @@ interface Completion {
 type RuntimeEvent<E> =
   | { readonly _tag: "ActionCompleted"; readonly completion: Completion }
   | { readonly _tag: "EvaluationChanged"; readonly evaluation: DeliveryRuntimeEvaluation }
+  | {
+      readonly _tag: "ProposalsChanged"
+      readonly evaluation: DeliveryRuntimeEvaluation
+      readonly proposals: DeliveryProposalFrontier
+    }
   | { readonly _tag: "RelationFailed"; readonly cause: Cause.Cause<E> }
 
 type QuiescenceProbeState =
@@ -117,23 +69,50 @@ type QuiescenceProbeState =
 const isQuiescenceProbe = (proposal: DeliveryActionProposal): boolean =>
   proposal.route._tag === "TrackerGraphReadRoute" && proposal.route.purpose === "QuiescenceProbe"
 
+export const proposalFrontiersAgree = (left: DeliveryProposalFrontier, right: DeliveryProposalFrontier): boolean => {
+  if (left._tag !== right._tag) return false
+  if (left._tag === "DeliveryProposalOwnershipConflict") {
+    /* v8 ignore start -- equal frontier tags already prove this narrowing. */
+    if (right._tag !== "DeliveryProposalOwnershipConflict") return false
+    /* v8 ignore stop */
+    return (
+      left.conflicts.length === right.conflicts.length &&
+      left.conflicts.every(({ id }, index) => right.conflicts[index]?.id === id)
+    )
+  }
+  /* v8 ignore start -- equal frontier tags already prove this narrowing. */
+  if (right._tag !== "DeliveryProposalsAvailable") return false
+  /* v8 ignore stop */
+  return (
+    left.proposals.length === right.proposals.length &&
+    left.proposals.every(({ id }, index) => right.proposals[index]?.id === id)
+  )
+}
+
+export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId: DeliveryProposalId): boolean =>
+  frontier._tag === "DeliveryProposalsAvailable"
+    ? frontier.proposals.some(({ id }) => id === proposalId)
+    : frontier.conflicts.some(({ id }) => id === proposalId)
+
+const completedProbeAllowsFinality = (
+  probe: QuiescenceProbeState,
+  currentRevision: DeliveryRelationRevision
+): boolean => probe._tag === "ProbeCompleted" && currentRevision > probe.startedRevision
+
 const proposalTaskId = (proposal: DeliveryActionProposal) => {
   const requirement = proposal.admission.taskWorkPosition
   return requirement._tag === "TaskWorkPositionRequired" ? requirement.taskId : undefined
 }
-
-const materializedOperationId = (action: MaterializedDeliveryAction): OperationId | null =>
-  action._tag === "AcceptedOperationAction"
-    ? action.proposal.actionIdentity.operationId
-    : action._tag === "FreshOperationAction" || action._tag === "FreshAttemptAction"
-      ? action.operationId
-      : null
 
 const makeLease = (
   admission: DeliveryRuntimeAdmissionController,
   integrationTargets: DeliveryActionExecutionLease["integrationTargets"],
   owner: LiveOwner
 ): DeliveryActionExecutionLease => ({
+  acceptIntegrationTargetOwnership:
+    owner.reservation.acquiredIntegrationResponsibility === null
+      ? Effect.void
+      : integrationTargets.publishAcceptedOwnership(owner.reservation.acquiredIntegrationResponsibility),
   bindPlannedAttemptPosition: (correlation) => {
     const taskId = proposalTaskId(owner.proposal)
     return taskId === undefined ? Effect.void : admission.bindPlannedAttemptPosition(taskId, correlation)
@@ -144,14 +123,26 @@ const makeLease = (
 })
 
 /**
+ * The runtime consumes the ordinary evaluation and proposal signals directly.
+ * The proposal signal is deliberately separate: an authority fact may remove
+ * a proposal before the interpreter has returned its in-memory action result.
+ * Only the stabilization port is allowed to request a new read.
+ */
+export interface DeliveryRuntimeInput<E = never> {
+  readonly evaluations: CurrentSignal<DeliveryRuntimeEvaluation, E>
+  readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E>
+  readonly requestStabilizationRead: () => Effect.Effect<DeliveryRelationRevision>
+}
+
+/**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
  * It owns subscriptions, admission, live actions, completion, and quiescence.
  *
  * TODO: this is the largest unmodelled state machine in the system. Every
  * property the delivery requirements rest on — restart mid-attempt, capacity
  * changed mid-run, operator pause, tickets added to the graph mid-run — is
- * decided in the loop below, across `owners`, `probe`, `awaitingEvaluation`,
- * `deferredCompletions`, the selection semaphore, and forked fibers with
+ * decided in the loop below, across `owners`, `probe`, the selection semaphore,
+ * and forked fibers with
  * interrupt handlers. No model covers any of it.
  * `research/verification-bakeoff/quint/deliveryCore.qnt` is an abstraction of
  * what this loop should do and is bound to no code;
@@ -160,7 +151,7 @@ const makeLease = (
  * single highest-value model in the study.
  */
 export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>(
-  relation: DeliveryRuntimeRelation<E>
+  relation: DeliveryRuntimeInput<E>
 ): Effect.fn.Return<
   RunFinalityProof,
   E | DeliveryActionExecutionError | DeliveryRuntimeProposalOwnershipConflict | PlannedTaskAttemptError,
@@ -180,31 +171,55 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
+      const latestProposals = yield* Ref.make<Option.Option<DeliveryProposalFrontier>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const probe = yield* Ref.make<QuiescenceProbeState>({ _tag: "NoProbe" })
-      const awaitingEvaluation = yield* Ref.make<DeliveryRelationRevision | null>(null)
-      const deferredCompletions = yield* Ref.make<ReadonlyArray<Completion>>([])
-
-      const first = Option.getOrThrow(yield* relation.evaluations.changes.pipe(Stream.runHead))
+      const first = yield* relation.evaluations.get
+      const firstProposals = yield* relation.proposedActions.get
       yield* Ref.set(latest, Option.some(first))
+      yield* Ref.set(latestProposals, Option.some(firstProposals))
       const admission = yield* makeDeliveryRuntimeAdmissionController(first.taskWork, integrationTargets)
+      const evaluationsSubscribed = yield* Deferred.make<void>()
+      const proposalsSubscribed = yield* Deferred.make<void>()
 
       yield* relation.evaluations.changes.pipe(
+        Stream.tap(() => Deferred.succeed(evaluationsSubscribed, undefined)),
+        Stream.drop(1),
         Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
         Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
         Effect.forkIn(scope)
       )
+      yield* relation.proposedActions.changes.pipe(
+        Stream.tap(() => Deferred.succeed(proposalsSubscribed, undefined)),
+        Stream.drop(1),
+        Stream.runForEach((proposals) =>
+          relation.evaluations.get.pipe(
+            Effect.flatMap((evaluation) => Queue.offer(events, { _tag: "ProposalsChanged", evaluation, proposals }))
+          )
+        ),
+        Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
+        Effect.forkIn(scope)
+      )
+      yield* Deferred.await(evaluationsSubscribed)
+      yield* Deferred.await(proposalsSubscribed)
+      // Close the interval between the initial sample and both subscriptions.
+      // A fact accepted in that interval is already the streams' dropped
+      // current value, so sample once more after both subscriptions are live.
+      const subscribedCurrent = yield* relation.evaluations.get
+      const subscribedProposals = yield* relation.proposedActions.get
+      yield* Ref.set(latest, Option.some(subscribedCurrent))
+      yield* Ref.set(latestProposals, Option.some(subscribedProposals))
+      yield* admission.synchronize(subscribedCurrent.taskWork)
 
       const start = Effect.fn("DeliveryRuntime.startProposal")(function* (
         proposal: DeliveryActionProposal,
-        reservation: DeliveryAdmissionReservation,
-        startedRevision: DeliveryRelationRevision
+        reservation: DeliveryAdmissionReservation
       ) {
         const intentRecorded = yield* Ref.make(false)
         const operationId = yield* Ref.make<OperationId | null>(null)
         const settled = yield* Ref.make(false)
-        const owner: LiveOwner = { intentRecorded, operationId, proposal, reservation, settled, startedRevision }
+        const owner: LiveOwner = { intentRecorded, operationId, proposal, reservation, settled }
         yield* Ref.update(owners, (current) => new Map(current).set(proposal.id, owner))
         yield* emit({ _tag: "ProposalAdmitted", proposalId: proposal.id })
         const run = Effect.gen(function* () {
@@ -256,14 +271,13 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
         proposals: ReadonlyArray<DeliveryActionProposal>,
         deferredIndex: number,
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
-        liveOperationIds: ReadonlySet<OperationId>,
-        revision: DeliveryRelationRevision
+        liveOperationIds: ReadonlySet<OperationId>
       ) {
         for (const independent of proposals.slice(deferredIndex + 1)) {
           if (!proposalIsAvailable(independent, live, liveOperationIds)) continue
           const laterReservation = yield* admission.tryReserve(independent)
           if (laterReservation._tag === "Admitted") {
-            return yield* start(independent, laterReservation.reservation, revision)
+            return yield* start(independent, laterReservation.reservation)
           }
           yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
         }
@@ -275,9 +289,10 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
             yield* admission.synchronize(current.taskWork)
-            if (current.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+            const proposedActions = Option.getOrThrow(yield* Ref.get(latestProposals))
+            if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
               return yield* new DeliveryRuntimeProposalOwnershipConflict({
-                proposalIds: current.proposedActions.conflicts.map(({ id }) => id)
+                proposalIds: proposedActions.conflicts.map(({ id }) => id)
               })
             }
             const live = yield* Ref.get(owners)
@@ -286,7 +301,7 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
                 (operationId): operationId is OperationId => operationId !== null
               )
             )
-            const proposal = current.proposedActions.proposals.find((candidate) =>
+            const proposal = proposedActions.proposals.find((candidate) =>
               proposalIsAvailable(candidate, live, liveOperationIds)
             )
             if (proposal === undefined) return false
@@ -294,28 +309,54 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
             if (reservation._tag === "Deferred") {
               yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })
               return yield* admitLaterAvailableProposal(
-                current.proposedActions.proposals,
-                current.proposedActions.proposals.findIndex(({ id }) => id === proposal.id),
+                proposedActions.proposals,
+                proposedActions.proposals.findIndex(({ id }) => id === proposal.id),
                 live,
-                liveOperationIds,
-                current.revision
+                liveOperationIds
               )
             }
-            return yield* start(proposal, reservation.reservation, current.revision)
+            return yield* start(proposal, reservation.reservation)
           })
         )
+      })
+
+      /** Releases a settled owner only after its exact proposal disappeared from the ordinary signal. */
+      const pruneSettledOwners = Effect.fn("DeliveryRuntime.pruneSettledOwners")(function* (
+        frontier: DeliveryProposalFrontier
+      ) {
+        const current = yield* Ref.get(owners)
+        const removable: Array<LiveOwner> = []
+        for (const owner of current.values()) {
+          if ((yield* Ref.get(owner.settled)) && !proposalIsPresent(frontier, owner.proposal.id)) {
+            removable.push(owner)
+          }
+        }
+        if (removable.length === 0) return
+        const removableIds = new Set(removable.map(({ proposal }) => proposal.id))
+        yield* Ref.update(owners, (current) => new Map([...current].filter(([id]) => !removableIds.has(id))))
       })
 
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
+        const prior = yield* Ref.get(latest)
+        if (Option.isSome(prior) && evaluation.revision < prior.value.revision) return false
         yield* Ref.set(latest, Option.some(evaluation))
         yield* admission.synchronize(evaluation.taskWork)
-        if (evaluation.proposedActions._tag === "DeliveryProposalsAvailable") {
-          if (evaluation.proposedActions.proposals.some((proposal) => !isQuiescenceProbe(proposal))) {
-            yield* Ref.set(probe, { _tag: "NoProbe" })
-          }
+        return true
+      })
+
+      const applyProposals = Effect.fn("DeliveryRuntime.applyProposals")(function* (
+        proposedActions: DeliveryProposalFrontier
+      ) {
+        yield* Ref.set(latestProposals, Option.some(proposedActions))
+        if (
+          proposedActions._tag === "DeliveryProposalsAvailable" &&
+          proposedActions.proposals.some((proposal) => !isQuiescenceProbe(proposal))
+        ) {
+          yield* Ref.set(probe, { _tag: "NoProbe" })
         }
+        yield* selectionGate.withPermit(pruneSettledOwners(proposedActions))
       })
 
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
@@ -325,6 +366,11 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
             const intentRecorded = yield* Ref.get(owner.intentRecorded)
             if (Exit.isFailure(completion.exit)) {
               yield* admission.rollback(owner.reservation, intentRecorded)
+              yield* Ref.set(owner.settled, true)
+              yield* Ref.update(
+                owners,
+                (current) => new Map([...current].filter(([id]) => id !== completion.proposalId))
+              )
             } else {
               yield* admission.complete(owner.reservation)
               yield* emit({
@@ -334,85 +380,68 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
               })
               if (isQuiescenceProbe(owner.proposal)) {
                 yield* Ref.update(probe, (current) =>
-                  current._tag === "NoProbe"
-                    ? current
-                    : ({
+                  current._tag === "ProbeRequested"
+                    ? ({
                         _tag: "ProbeCompleted",
-                        startedRevision: owner.startedRevision
+                        startedRevision: current.requestedRevision
                       } satisfies QuiescenceProbeState)
+                    : current
+                )
+              }
+              yield* Ref.set(owner.settled, true)
+              const frontier = Option.getOrThrow(yield* Ref.get(latestProposals))
+              if (!proposalIsPresent(frontier, owner.proposal.id)) {
+                yield* Ref.update(
+                  owners,
+                  (current) => new Map([...current].filter(([id]) => id !== completion.proposalId))
                 )
               }
             }
-            yield* Ref.set(owner.settled, true)
-            yield* Ref.update(owners, (current) => new Map([...current].filter(([id]) => id !== completion.proposalId)))
             return completion.exit
           })
         )
-        const requiredRevision = yield* relation.invalidate({
-          _tag: "ProposalCompleted",
-          proposalId: completion.proposalId,
-          result: Exit.isSuccess(completion.exit) ? completion.exit.value : null
-        })
-        yield* Ref.set(awaitingEvaluation, requiredRevision)
         yield* Deferred.succeed(completion.acknowledged, undefined)
         return result
       })
 
       const finalityAtQuiescence = Effect.fn("DeliveryRuntime.finalityAtQuiescence")(function* (
         current: DeliveryRuntimeEvaluation,
+        proposedActions: DeliveryProposalFrontier,
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>
       ) {
-        if (current.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
-          return yield* new DeliveryRuntimeProposalOwnershipConflict({
-            proposalIds: current.proposedActions.conflicts.map(({ id }) => id)
-          })
+        /* v8 ignore start -- admitPass rejects a conflicting frontier before finality is evaluated. */
+        if (proposedActions._tag === "DeliveryProposalOwnershipConflict") return Option.none<RunFinalityProof>()
+        /* v8 ignore stop */
+        if (live.size !== 0 || proposedActions.proposals.length !== 0) {
+          return Option.none<RunFinalityProof>()
         }
-        if (live.size !== 0 || current.proposedActions.proposals.length !== 0) {
+        if (!proposalFrontiersAgree(current.proposedActions, proposedActions)) {
           return Option.none<RunFinalityProof>()
         }
         if (current.quiescence._tag === "QuiescencePassive") {
           return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
         }
         const currentProbe = yield* Ref.get(probe)
-        if (currentProbe._tag === "ProbeCompleted" && current.revision > currentProbe.startedRevision) {
+        if (completedProbeAllowsFinality(currentProbe, current.revision)) {
           return Option.some({ acceptedAt: current.acceptedAt, decision: current.finality })
         }
         if (currentProbe._tag === "NoProbe") {
-          yield* Ref.set(probe, { _tag: "ProbeRequested", requestedRevision: current.revision })
-          const requiredRevision = yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
-          yield* Ref.set(awaitingEvaluation, requiredRevision)
+          const requestedRevision = yield* relation.requestStabilizationRead()
+          yield* Ref.set(probe, { _tag: "ProbeRequested", requestedRevision })
         }
         return Option.none<RunFinalityProof>()
       })
 
-      const nextRuntimeEvent = Effect.fn("DeliveryRuntime.nextEvent")(function* (
-        waitingForEvaluation: boolean
-      ): Effect.fn.Return<RuntimeEvent<E>> {
-        const deferred = waitingForEvaluation
-          ? Option.none<Completion>()
-          : yield* Ref.modify(deferredCompletions, (current) => {
-              const [first, ...remaining] = current
-              return [Option.fromUndefinedOr(first), remaining] as const
-            })
-        return Option.isSome(deferred)
-          ? { _tag: "ActionCompleted", completion: deferred.value }
-          : yield* Queue.take(events)
-      })
-
-      const applyRuntimeEvent = Effect.fn("DeliveryRuntime.applyEvent")(function* (
-        event: RuntimeEvent<E>,
-        requiredRevision: DeliveryRelationRevision | null
-      ) {
+      const applyRuntimeEvent = Effect.fn("DeliveryRuntime.applyEvent")(function* (event: RuntimeEvent<E>) {
         if (event._tag === "RelationFailed") return yield* Effect.failCause(event.cause)
         if (event._tag === "EvaluationChanged") {
           yield* applyEvaluation(event.evaluation)
-          if (requiredRevision !== null && event.evaluation.revision >= requiredRevision) {
-            yield* Ref.set(awaitingEvaluation, null)
-          }
           return
         }
-        if (requiredRevision !== null) {
-          yield* Ref.update(deferredCompletions, (deferred) => [...deferred, event.completion])
+        if (event._tag === "ProposalsChanged") {
+          if (!proposalFrontiersAgree(event.evaluation.proposedActions, event.proposals)) return
+          if (!(yield* applyEvaluation(event.evaluation))) return
+          yield* applyProposals(event.proposals)
           return
         }
         const exit = yield* applyCompletion(event.completion)
@@ -420,17 +449,15 @@ export const runDeliveryRuntime = Effect.fn("DeliveryRuntime.run")(function* <E>
       })
 
       for (;;) {
-        if ((yield* Ref.get(awaitingEvaluation)) === null) {
-          while (yield* admitPass()) yield* Effect.yieldNow
-        }
+        while (yield* admitPass()) yield* Effect.yieldNow
 
         const current = Option.getOrThrow(yield* Ref.get(latest))
+        const proposedActions = Option.getOrThrow(yield* Ref.get(latestProposals))
         const live = yield* Ref.get(owners)
-        const finality = yield* finalityAtQuiescence(current, live)
+        const finality = yield* finalityAtQuiescence(current, proposedActions, live)
         if (Option.isSome(finality)) return finality.value
 
-        const requiredRevision = yield* Ref.get(awaitingEvaluation)
-        yield* applyRuntimeEvent(yield* nextRuntimeEvent(requiredRevision !== null), requiredRevision)
+        yield* applyRuntimeEvent(yield* Queue.take(events))
       }
     })
   ).pipe(

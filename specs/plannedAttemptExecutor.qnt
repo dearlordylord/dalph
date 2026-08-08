@@ -25,10 +25,12 @@ module plannedAttemptExecutor {
   type State = {
     status: Status,
     positionHeld: bool,
+    consecutiveRunningReports: int,
   }
 
   pure val RUN_ID = 158
   pure val ATTEMPT_ID = 1
+  pure val CONTINUATION_LIMIT = 3
 
   // A correlation an executor report may carry that is not this planned
   // attempt: another run, or an earlier attempt for the same task. Dalph
@@ -126,6 +128,11 @@ module plannedAttemptExecutor {
     | _ => true
   }
 
+  // Restated independently of the start action's guard so mutation can detect
+  // either a missing increment or an incorrectly weakened limit.
+  val continuationCountBounded: bool =
+    state.consecutiveRunningReports >= 0 and state.consecutiveRunningReports <= 3
+
   val responsibilityBeganReached: bool = match state.status {
     | ResponsibilityBegan => true
     | _ => false
@@ -151,10 +158,13 @@ module plannedAttemptExecutor {
     | _ => false
   }
 
+  val continuationLimitReached: bool = state.consecutiveRunningReports == CONTINUATION_LIMIT
+
   action init: bool = all {
     state' = {
       status: ResponsibilityNotBegun,
       positionHeld: false,
+      consecutiveRunningReports: 0,
     }
   }
 
@@ -163,6 +173,7 @@ module plannedAttemptExecutor {
     state' = {
       status: ResponsibilityBegan,
       positionHeld: true,
+      consecutiveRunningReports: state.consecutiveRunningReports,
     },
   }
 
@@ -170,10 +181,12 @@ module plannedAttemptExecutor {
     nondet reported = REPORTED_CORRELATIONS.oneOf()
     all {
       acceptsExecutorStart(state.status),
+      state.consecutiveRunningReports < CONTINUATION_LIMIT,
       isPlannedAttempt(reported),
       state' = {
         status: Running(reported),
         positionHeld: true,
+        consecutiveRunningReports: state.consecutiveRunningReports + 1,
       },
     }
   }
@@ -189,6 +202,7 @@ module plannedAttemptExecutor {
       state' = {
         status: SuspensionRequested(claimed),
         positionHeld: true,
+        consecutiveRunningReports: state.consecutiveRunningReports,
       },
     }
   }
@@ -201,6 +215,7 @@ module plannedAttemptExecutor {
       state' = {
         status: SafelySuspended(reported),
         positionHeld: false,
+        consecutiveRunningReports: 0,
       },
     }
   }
@@ -209,10 +224,12 @@ module plannedAttemptExecutor {
     nondet reported = REPORTED_CORRELATIONS.oneOf()
     all {
       acceptsTerminal(state.status),
+      awaitsSuspensionResult(state.status) or state.consecutiveRunningReports < CONTINUATION_LIMIT,
       isPlannedAttempt(reported),
       state' = {
         status: Terminal(reported),
         positionHeld: false,
+        consecutiveRunningReports: state.consecutiveRunningReports,
       },
     }
   }

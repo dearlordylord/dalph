@@ -1,5 +1,6 @@
 import { GitCommitSha } from "@dalph/contracts"
 import { expect, it } from "vitest"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   decideResultCommitQualification,
   decideGitFactPreservation,
@@ -15,6 +16,7 @@ const base = GitCommitSha.make("1".repeat(40))
 const advanced = GitCommitSha.make("2".repeat(40))
 const rewritten = GitCommitSha.make("3".repeat(40))
 const candidate = GitCommitSha.make("4".repeat(40))
+const acceptedProgress = { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(1) }
 
 it("preserves claim worktree and evidence for every read-only Git constraint", () => {
   expect(decideGitFactPreservation("WorktreeLostConstraint")).toEqual({
@@ -55,10 +57,10 @@ it("isolates the affected attempt after Git proves an incompatible target rewrit
     targetHeadSha: rewritten,
     worktreePreserved: true
   })
-  expect(responsibilityDispositionForTargetLineage(decision, false)._tag).toBe(
+  expect(responsibilityDispositionForTargetLineage(acceptedProgress, decision, false)._tag).toBe(
     "PlannedAttemptExecutorSuspensionRequested"
   )
-  expect(responsibilityDispositionForTargetLineage(decision, true)).toEqual({
+  expect(responsibilityDispositionForTargetLineage(acceptedProgress, decision, true)).toEqual({
     _tag: "PlannedAttemptGitConstraint",
     gitState: "TargetRewrite"
   })

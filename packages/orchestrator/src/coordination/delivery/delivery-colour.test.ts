@@ -5,6 +5,7 @@ import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
@@ -96,11 +97,13 @@ const projectionOf = (stateGet: Effect.Effect<JournalState>) => ({
 it.effect("appends nothing while every descriptive signal is observed", () =>
   Effect.gen(function* () {
     const journal = yield* makeJournalService
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
     const layer = yield* makeReactiveDeliveryRelationsLayer(
       runId,
       target,
       withPoisonedAppend(journal),
-      projectionOf(journal.state.get.pipe(Effect.orDie))
+      projectionOf(journal.state.get.pipe(Effect.orDie)),
+      integrationTargets
     )
 
     const observed = yield* Effect.gen(function* () {

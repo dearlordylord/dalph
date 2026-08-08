@@ -4,6 +4,7 @@ import type { Task } from "../../authorities/task-tracker/task.js"
 import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type { AcceptedPlannedAttemptExecutorProgress } from "../frontier/fresh-facts.js"
 
 /** One fresh ticket's exact next protocol step before any new identity is allocated. */
 export type FreshWorkflowStep = Data.TaggedEnum<{
@@ -26,7 +27,11 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
     readonly task: Task
   }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt; readonly task: Task }
-  ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt; readonly task: Task }
+  ContinuePlannedAttemptExecutorWork: {
+    readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly task: Task
+  }
 }>
 
 export const FreshWorkflowStep = Data.taggedEnum<FreshWorkflowStep>()

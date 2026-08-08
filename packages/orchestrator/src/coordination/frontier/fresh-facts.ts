@@ -8,6 +8,13 @@ import {
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+
+/** Exact accepted executor fact from which one continuation is authorized. */
+export type AcceptedPlannedAttemptExecutorProgress =
+  | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
+  | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
@@ -55,27 +62,32 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
 
 export const ResponsibilityDisposition = Data.taggedEnum<ResponsibilityDisposition>()
 
-export type PlannedAttemptExecutorDisposition = Extract<
-  ResponsibilityDisposition,
-  {
-    readonly _tag:
-      | "PlannedAttemptExecutorWorkSafelySuspended"
-      | "PlannedAttemptExecutorWorkTerminal"
-      | "PlannedAttemptExecutorSuspensionRequested"
-      | "PlannedAttemptGitConstraint"
-      | "TaskExternalSuccessConstraint"
-      | "TaskExternalSuccessReleaseNeeded"
-      | "TaskExternalSuccessSettled"
-      | "TaskClaimMissingConstraint"
-      | "TaskClaimUnreadableWait"
-      | "TaskForeignClaimIsolation"
-      | "AppliedTaskClaimReacquisitionDirection"
-      | "TaskLifecycleConstraint"
-      | "TaskMembershipConstraint"
-      | "TaskSpecificationChangeConstraint"
-      | "Ready"
-  }
->
+type ExecutorReadyDisposition = Extract<ResponsibilityDisposition, { readonly _tag: "Ready" }> & {
+  readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
+}
+
+export type PlannedAttemptExecutorDisposition =
+  | Extract<
+      ResponsibilityDisposition,
+      {
+        readonly _tag:
+          | "PlannedAttemptExecutorWorkSafelySuspended"
+          | "PlannedAttemptExecutorWorkTerminal"
+          | "PlannedAttemptExecutorSuspensionRequested"
+          | "PlannedAttemptGitConstraint"
+          | "TaskExternalSuccessConstraint"
+          | "TaskExternalSuccessReleaseNeeded"
+          | "TaskExternalSuccessSettled"
+          | "TaskClaimMissingConstraint"
+          | "TaskClaimUnreadableWait"
+          | "TaskForeignClaimIsolation"
+          | "AppliedTaskClaimReacquisitionDirection"
+          | "TaskLifecycleConstraint"
+          | "TaskMembershipConstraint"
+          | "TaskSpecificationChangeConstraint"
+      }
+    >
+  | ExecutorReadyDisposition
 
 type WorkflowOperationDisposition = Exclude<
   ResponsibilityDisposition,

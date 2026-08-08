@@ -41,6 +41,7 @@ const SPECS = [
     file: "specs/plannedAttemptExecutor.qnt",
     invariants: [
       "everyReportCarriesPlannedAttempt",
+      "continuationCountBounded",
       "positionHeldUntilSuspensionResult",
       "safeSuspensionReleasesPosition",
       "suspensionRequestRetainsPosition",
@@ -51,7 +52,8 @@ const SPECS = [
       "runningReached",
       "suspensionRequestedReached",
       "safelySuspendedReached",
-      "terminalReached"
+      "terminalReached",
+      "continuationLimitReached"
     ]
   },
   {

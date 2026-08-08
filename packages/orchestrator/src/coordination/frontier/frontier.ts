@@ -16,7 +16,7 @@ import {
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "../reconstruction/state.js"
-import type { ResponsibilityFreshFacts } from "./fresh-facts.js"
+import type { AcceptedPlannedAttemptExecutorProgress, ResponsibilityFreshFacts } from "./fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
   StartedIntegrationResponsibility,
@@ -29,6 +29,7 @@ import type {
   CandidateCorrectionLimit
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -43,7 +44,10 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
   StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
-  ContinuePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ContinuePlannedAttemptExecutorWork: {
+    readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
   ObservePlannedAttemptContinuationGraph: {
     readonly operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
     readonly plannedAttempt: PlannedTaskAttempt
@@ -83,6 +87,8 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   StartQueuedIntegration: { readonly responsibility: QueuedIntegrationResponsibility }
   AcquireStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
   ContinueStartedIntegrationCandidate: {
+    /** Latest durable candidate fact accepted before this exact continuation was proposed. */
+    readonly acceptedCandidateProgressAt: JournalPosition | null
     readonly correctionLimit: CandidateCorrectionLimit
     readonly continuationLimit: CandidateContinuationLimit
     readonly lineage: TargetLineageObservation
@@ -428,8 +434,9 @@ const executorDecisionFor = (
           wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
-      Ready: () => ({
+      Ready: ({ acceptedProgress }) => ({
         transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress,
           plannedAttempt: facts.responsibility.plannedAttempt
         })
       })

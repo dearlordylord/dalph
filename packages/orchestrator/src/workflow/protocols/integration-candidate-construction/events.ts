@@ -171,3 +171,9 @@ export const IntegrationCandidateConstructionJournalEvent = Schema.Union([
   IntegrationCandidateConstructedEvent
 ])
 export type IntegrationCandidateConstructionJournalEvent = typeof IntegrationCandidateConstructionJournalEvent.Type
+
+/** Returns the complete durable correlation carried by every candidate-construction fact. */
+export const integrationCandidateConstructionEventCorrelation = (
+  event: IntegrationCandidateConstructionJournalEvent
+): IntegrationCandidateCorrelation =>
+  event._tag === "IntegrationCandidateAgentReported" ? event.expectedCorrelation : event.correlation

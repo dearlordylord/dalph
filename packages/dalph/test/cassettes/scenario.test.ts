@@ -887,7 +887,10 @@ it.effect("round-trips every non-submitting integration-agent report", () =>
             if (item._tag === "IntegrationCandidateAgentReported") {
               if (replacedReport) return []
               replacedReport = true
-              return [{ ...item, report: { _tag: reportTag } }]
+              return [
+                { ...item, report: { _tag: reportTag } },
+                { ...item, report: { _tag: reportTag } }
+              ]
             }
             if (item._tag === "ExpectedBehavior") {
               return [
@@ -983,7 +986,8 @@ it.effect("starts a queued accepted result in the same live coordinator process"
       name: "accepted result starts without coordinator restart",
       story: [
         ...source.slice(0, deathAt),
-        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 3),
+        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1),
+        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1),
         withoutCandidateExpectation
       ]
     })

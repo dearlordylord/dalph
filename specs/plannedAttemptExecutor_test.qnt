@@ -32,4 +32,25 @@ module plannedAttemptExecutorTest {
       .then(beginResponsibility)
       .expect(responsibilityBeganReached and positionHeldUntilSuspensionResult)
   }
+
+  run consecutiveRunningReportsReachBoundTest = {
+    init
+      .then(beginResponsibility)
+      .then(startOrContinueRunning)
+      .then(startOrContinueRunning)
+      .then(startOrContinueRunning)
+      .expect(continuationLimitReached and continuationCountBounded)
+  }
+
+  run safeSuspensionResetsContinuationBoundTest = {
+    init
+      .then(beginResponsibility)
+      .then(startOrContinueRunning)
+      .then(startOrContinueRunning)
+      .then(startOrContinueRunning)
+      .then(requestSafeSuspension)
+      .then(reportSafelySuspended)
+      .then(startOrContinueRunning)
+      .expect(state.consecutiveRunningReports == 1)
+  }
 }

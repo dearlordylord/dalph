@@ -6,10 +6,11 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { OperationId } from "../../workflow/identity.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
 import { DeliveryRelationReconciliationError, DeliveryRelationRevision } from "./relations.js"
-import { makeSyntheticDeliveryRelationsLayer } from "./synthetic-delivery-relations.js"
+import { makeSyntheticDeliveryRelationsLayer, SyntheticDeliveryAcceptedFacts } from "./synthetic-delivery-relations.js"
 import { Journal, makeJournal } from "./journal.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -34,28 +35,17 @@ it.effect("keeps synthetic quiescence and non-fact action outcomes process-local
       expect(current.trackerGraph._tag).toBe("GraphNotEstablished")
       const proposalId = DeliveryProposalId.make("synthetic-invalidation-proposal")
 
-      const revisions = [
-        yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" }),
-        yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" }),
-        yield* relation.invalidate({
-          _tag: "ProposalCompleted",
-          proposalId,
-          result: { _tag: "ActionCompleted", proposalId }
-        }),
-        yield* relation.invalidate({
-          _tag: "ProposalCompleted",
-          proposalId,
-          result: {
-            _tag: "IntegrationCandidateAdvanced",
-            proposalId,
-            resourceDisposition: "Retain",
-            state: {} as IntegrationCandidateConstructionState
-          }
-        }),
-        yield* relation.invalidate({ _tag: "ProposalCompleted", proposalId, result: null })
-      ]
+      const acceptedFacts = yield* SyntheticDeliveryAcceptedFacts.pipe(Effect.provide(layer))
+      const revisions = [yield* relation.requestStabilizationRead(), yield* relation.requestStabilizationRead()]
+      yield* acceptedFacts.publish({ _tag: "ActionCompleted", proposalId })
+      yield* acceptedFacts.publish({
+        _tag: "IntegrationCandidateAdvanced",
+        proposalId,
+        resourceDisposition: "Retain",
+        state: {} as IntegrationCandidateConstructionState
+      })
 
-      expect(revisions).toEqual([1, 2, 3, 4, 5].map((revision) => DeliveryRelationRevision.make(revision)))
+      expect(revisions).toEqual([1, 2].map((revision) => DeliveryRelationRevision.make(revision)))
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
 )
@@ -91,13 +81,17 @@ it.effect("publishes a typed failure when journal state cannot be reread after a
         Effect.provideService(Journal, failingJournal)
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const acceptedFacts = yield* SyntheticDeliveryAcceptedFacts.pipe(Effect.provide(layer))
+      const proposalId = DeliveryProposalId.make("synthetic-publication-failure-proposal")
+      const graphResult = {
+        _tag: "TrackerGraphObservationPublished" as const,
+        operationId: OperationId.make("synthetic-publication-operation"),
+        proposalId,
+        snapshot: {} as never
+      }
 
       yield* Ref.set(failRead, true)
-      yield* relation.invalidate({
-        _tag: "ProposalCompleted",
-        proposalId: DeliveryProposalId.make("synthetic-publication-failure-proposal"),
-        result: null
-      })
+      yield* acceptedFacts.publish(graphResult)
       const failure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
       const currentFailure = yield* relation.current.get.pipe(Effect.flip)
 
@@ -107,16 +101,12 @@ it.effect("publishes a typed failure when journal state cannot be reread after a
       expect(Cause.hasDies(failure.cause)).toBe(false)
       expect(Cause.squash(failure.cause)).toEqual(journalFailure)
 
-      yield* relation.invalidate({ _tag: "QuiescenceProbeRequested" })
+      yield* relation.requestStabilizationRead()
       const stickyFailure = yield* relation.current.changes.pipe(Stream.runHead, Effect.flip)
       expect(stickyFailure).toBeInstanceOf(DeliveryRelationReconciliationError)
 
       yield* Ref.set(failRead, false)
-      yield* relation.invalidate({
-        _tag: "ProposalCompleted",
-        proposalId: DeliveryProposalId.make("synthetic-publication-recovery-proposal"),
-        result: null
-      })
+      yield* acceptedFacts.publish(graphResult)
       const recovered = yield* relation.current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
       expect(recovered.trackerGraph._tag).toBe("GraphNotEstablished")
     })

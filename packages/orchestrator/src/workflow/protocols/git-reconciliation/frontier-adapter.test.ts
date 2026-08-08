@@ -34,6 +34,7 @@ const independentTask = {
   taskId: TaskId.make("lineage-frontier-C"),
   taskRevision: TaskRevision.make("lineage-frontier-C-revision")
 }
+const acceptedProgress = { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: responsibility.beganAt }
 
 const frontierFor = (plannedBaseIsAncestorOfTargetHead: boolean) => {
   const decision = decideTargetLineage(
@@ -49,7 +50,11 @@ const frontierFor = (plannedBaseIsAncestorOfTargetHead: boolean) => {
     responsibilityFacts: [
       {
         _tag: "PlannedAttemptExecutorFreshFacts",
-        disposition: responsibilityDispositionForTargetLineage(decision, !plannedBaseIsAncestorOfTargetHead),
+        disposition: responsibilityDispositionForTargetLineage(
+          acceptedProgress,
+          decision,
+          !plannedBaseIsAncestorOfTargetHead
+        ),
         responsibility
       }
     ]
@@ -58,7 +63,7 @@ const frontierFor = (plannedBaseIsAncestorOfTargetHead: boolean) => {
 
 it("continues A and keeps independent C eligible after compatible target advancement", () => {
   expect(frontierFor(true).transitions).toEqual([
-    { _tag: "ContinuePlannedAttemptExecutorWork", plannedAttempt },
+    { _tag: "ContinuePlannedAttemptExecutorWork", acceptedProgress, plannedAttempt },
     { _tag: "CommitFreshTaskClaimIntent", ...independentTask }
   ])
 })

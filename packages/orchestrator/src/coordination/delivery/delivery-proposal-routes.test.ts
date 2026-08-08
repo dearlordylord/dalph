@@ -17,7 +17,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Effect, Option, Ref } from "effect"
+import { Effect, Option, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -151,9 +151,12 @@ const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<
 }
 
 const inertLease: DeliveryActionExecutionLease = {
+  acceptIntegrationTargetOwnership: Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
   integrationTargets: {
     acquire: () => Effect.void,
+    changes: Stream.empty,
+    publishAcceptedOwnership: () => Effect.void,
     release: () => Effect.void,
     releaseAll: Effect.void,
     snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
@@ -370,7 +373,10 @@ describe("delivery proposal route matrix", () => {
         access: "NoIntegrationTargetResource",
         owner: "TicketDelivery",
         position: "ReserveOrReuse",
-        transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+        transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+          plannedAttempt
+        })
       },
       {
         access: "NoIntegrationTargetResource",
@@ -404,6 +410,7 @@ describe("delivery proposal route matrix", () => {
         owner: "DeliverySettlement",
         position: null,
         transition: RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+          acceptedCandidateProgressAt: null,
           continuationLimit: CandidateContinuationLimit.make(2),
           correctionLimit: CandidateCorrectionLimit.make(2),
           lineage,
@@ -498,6 +505,7 @@ describe("delivery proposal route matrix", () => {
         targetHeadSha: GitCommitSha.make("4".repeat(40))
       })
       const continuation = RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+        acceptedCandidateProgressAt: null,
         continuationLimit: CandidateContinuationLimit.make(2),
         correctionLimit: CandidateCorrectionLimit.make(2),
         lineage,
@@ -651,7 +659,10 @@ describe("delivery proposal route matrix", () => {
 
   effectIt.effect("retains the task position while a continued executor still reports running", () =>
     Effect.gen(function* () {
-      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({ plannedAttempt })
+      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt
+      })
       const proposal = proposalsFor(transition).proposals[0]
       if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
         return yield* Effect.die("missing continued executor proposal")

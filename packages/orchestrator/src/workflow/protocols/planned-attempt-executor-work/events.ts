@@ -9,6 +9,18 @@ export const PlannedAttemptExecutorReportOrdinal = Schema.Int.pipe(
 )
 export type PlannedAttemptExecutorReportOrdinal = typeof PlannedAttemptExecutorReportOrdinal.Type
 
+/** Maximum accepted executor reports that may authorize start-or-continue calls for one exact attempt. */
+export const PlannedAttemptExecutorContinuationLimit = Schema.Int.pipe(
+  Schema.check(Schema.isGreaterThan(0)),
+  Schema.brand("PlannedAttemptExecutorContinuationLimit")
+)
+export type PlannedAttemptExecutorContinuationLimit = typeof PlannedAttemptExecutorContinuationLimit.Type
+
+const defaultPlannedAttemptExecutorContinuationLimitValue = 3
+export const defaultPlannedAttemptExecutorContinuationLimit = PlannedAttemptExecutorContinuationLimit.make(
+  defaultPlannedAttemptExecutorContinuationLimitValue
+)
+
 /**
  * Records that Dalph assumed responsibility for the exact attempt before it
  * first asks the executor to work. It does not prove executor activity.

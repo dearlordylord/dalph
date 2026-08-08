@@ -280,6 +280,7 @@ const missingAcceptedOperation = (
   }
 })
 
+/* v8 ignore start -- the closed transition route policy makes this typed diagnostic unreachable. */
 const routePolicyContradiction = (
   transition: RunnableFrontierTransition
 ): Extract<DerivedProposal, { readonly _tag: "ProposalIssue" }> => ({
@@ -290,6 +291,7 @@ const routePolicyContradiction = (
     transition: transition._tag
   }
 })
+/* v8 ignore stop */
 
 type AcceptedOperationTransition = Extract<
   RunnableFrontierTransition,
