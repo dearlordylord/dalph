@@ -149,6 +149,28 @@ Verified independently: `agda L2.agda` clean after `rm -rf _build *.agdai`, no
 `postulate`, no `TERMINATING`/`trustMe` pragmas, no imports, and the
 definitions and type signatures unchanged.
 
+## Journal fold: the two-task proof
+
+Run `./run.sh`; it checks `Journal.agda` under `--safe` and requires all three
+journal mutants to fail. The file uses no standard library.
+
+P1 comes from coverage and termination checking. P2 is the two-clause
+`foldl-append` induction. P3 proves equality of the entire `Regions` record
+between a full shared-valid fold and the local-only fold. Factoring
+`step-active`, `step-task`, and `local-only-task` was necessary because nested
+`with` abstraction otherwise hid definitionally equal branches—the proof
+pressure improved the program seam.
+
+`concrete-local` and `concrete-shared` port every reference guard and effect,
+and `concrete-regional` instantiates the generic theorem with them. The shared
+function may inspect regions for captured-head checks but its result type
+cannot rewrite them; this is the exact separation P3 needs.
+
+Unlike Lean, this arm names exactly two tasks (`a`, `b`). Payloads and journal
+length remain unbounded. The specialization and the absence of a
+machine-checked translation from the JavaScript source are recorded in
+`../LEARNING.md`.
+
 ## Liveness: not attempted, and the reason is not Agda
 
 I17–I19 are as statable here as in Lean — a coinductive record or `Nat → St`

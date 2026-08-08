@@ -19,6 +19,14 @@ directory, not a paraphrase.
 | Lean 4 | `lean/L1.lean` | `lean/L2.lean` | statable, not attempted |
 | Agda | `agda/L1.agda` | `agda/L2.agda` | statable, not attempted |
 
+The recovery fold is a fourth comparison axis rather than another protocol
+level. Read `JOURNAL-EVENTS.md` and `LEARNING.md`, then compare
+`lean/Journal.lean`, `agda/Journal.agda`, `dafny/Journal.dfy`, and
+`fastcheck/journal-run.mjs`. Those files separate two claims that are easy to
+blur: the provers establish universal fold algebra for a typed local/shared
+kernel, while fast-check exercises the concrete event guards. No artifact yet
+proves refinement between those two semantics.
+
 ## Proposition 1 — the bound (I1)
 
 *Selection never exceeds the configured ceiling.*

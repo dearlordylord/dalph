@@ -17,7 +17,10 @@ than on a dining-philosophers example.
 6. `GATED-SPECS-MUTATION.md` — the same protocol applied back to this
    repository's own gated models under `specs/`.
 7. `JOURNAL-EVENTS.md` — the event alphabet I15 folds over, and the four
-   reconstruction propositions worth proving. Design only; nothing built.
+   reconstruction propositions.
+8. `LEARNING.md` — the completed Lean/Agda/Dafny journal-law comparison,
+   including proof strength, specializations, mutations, and reproduction.
+9. `PROVER-SOURCES.md` — primary-source support for what each checker supplies.
 
 ## Run
 
@@ -43,7 +46,8 @@ alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
 alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~131s
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
-agda L1.agda && agda L2.agda          # from agda/, proofs check or they do not
+agda/run.sh                           # --safe proofs + journal mutants, seconds
+node prover-mutants.mjs               # P1/P2/P3 negative controls for all three provers
 ~/.elan/bin/lean L2.lean               # from lean/, the protocol proof
 ```
 

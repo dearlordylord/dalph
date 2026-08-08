@@ -159,6 +159,30 @@ most readable of the four.
 `docs/OPERATIONAL-SCENARIOS.md`: crash, recover, and assert the attempt count
 is still 1.
 
+### Journal fold: total arrows and SMT-assisted induction
+
+`Journal.dfy` is included in `run.sh` with a 30-second verification limit; it
+currently discharges 24 obligations in about eight seconds. P1 is scoped
+carefully: `Fold` and `FoldFrom` have no precondition and decrease by the event
+sequence length. P2 is `FoldFromAppend`; P3 is `StepRegions` plus the recursive
+`RegionalFrom` lemma. `ConcreteLocal` and `ConcreteShared` port all guards and
+effects and `ConcreteRegional` instantiates that generic proof.
+
+The first concrete draft used one transparent 23-way transition and one
+23-way regional lemma. Its step obligations verified, but the regional lemma
+still had no verdict after 220 seconds. Moving the same semantics behind the
+local/shared result types reduced the completed file to about two seconds.
+
+The arm retains the benchmark's two named tasks; its JavaScript correspondence
+is a reviewed port, not a machine-checked translation.
+`prover-mutants.mjs dafny` separately requires
+missing classification, swapped replay, and shared-region reset mutants to be
+rejected.
+
+The journal work also repaired the Linux arm64 launcher: `run.sh` now prefers
+the known arm64 wrapper even if a stale executable macOS binary exists at the
+default cache path. Executable permission is not a compatibility check.
+
 ### Liveness: the one hard "cannot"
 
 I17–I19 are not expressible in Dafny. There are no temporal operators, so

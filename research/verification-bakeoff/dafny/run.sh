@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the faithful L1 encoding, then confirms every seeded defect is
+# Verifies the faithful L1, L2, and journal-law encodings, then confirms every seeded defect is
 # rejected. Both halves matter: a verifier that accepts the mutants has proved
 # nothing about the faithful file.
 #
@@ -11,8 +11,9 @@ cd "$(dirname "$0")"
 DAFNY=${DAFNY:-$HOME/.cache/dalph-bakeoff/dafny/dafny}
 # On Linux aarch64 there is no prebuilt Dafny; NOTES.md's "Linux aarch64
 # workaround" installs a self-contained wrapper next to the cache. Prefer it
-# over the fetch path, which has nothing to offer this platform.
-if [[ ! -x $DAFNY && $(uname -sm) == "Linux aarch64" ]]; then
+# even when a stale executable for another operating system occupies the
+# default path; executable permission alone does not prove host compatibility.
+if [[ $(uname -sm) == "Linux aarch64" ]]; then
   candidate=$HOME/.cache/dalph-bakeoff/dafny-arm64/dafny
   [[ -x $candidate ]] && DAFNY=$candidate
 fi
@@ -44,12 +45,13 @@ echo "|---|---|---|---|"
 FAIL=0
 
 faithful() { # $1 file, $2 extra Dafny flags (optional)
-  local start=$SECONDS out count errors verdict
-  out=$("$DAFNY" verify $2 "$1" 2>&1)
+  local start=$SECONDS out count errors verdict exit_code
+  exit_code=0
+  out=$("$DAFNY" verify ${2:-} "$1" 2>&1) || exit_code=$?
   count=$(grep -oE '[0-9]+ verified' <<<"$out" | grep -oE '^[0-9]+')
   errors=$(grep -oE '[0-9]+ errors?' <<<"$out" | grep -oE '^[0-9]+')
-  verdict=$([[ ${errors:-1} == 0 ]] && echo "${count:-?} verified" || echo "**unexpected ${errors} errors**")
-  [[ ${errors:-1} == 0 ]] || FAIL=1
+  verdict=$([[ $exit_code == 0 && ${errors:-1} == 0 && -n $count ]] && echo "$count verified" || echo "**missing or unsuccessful verifier summary**")
+  [[ $exit_code == 0 && ${errors:-1} == 0 && -n $count ]] || FAIL=1
   echo "| $1 | verifies | $verdict | $((SECONDS - start)) |"
 }
 
@@ -68,8 +70,12 @@ faithful Delivery.dfy
 mutants DeliveryMutants.dfy 3
 faithful DeliveryL2.dfy
 mutants DeliveryL2Mutants.dfy 3
+faithful Journal.dfy "--verification-time-limit 30"
 
 echo ""
 grep -E 'Error: a (postcondition|precondition)' <<<"$LAST_OUT" | sed 's/^/    /'
+
+echo ""
+DAFNY="$DAFNY" node ../prover-mutants.mjs dafny || FAIL=1
 
 exit $FAIL

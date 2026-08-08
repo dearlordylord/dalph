@@ -4,8 +4,11 @@ The alphabet I15 folds over, at the abstraction of `MODEL.md`. Propositions
 1–4 below are built in fast-check: `fastcheck/journal.mjs` (alphabet and
 fold), `fastcheck/journal-run.mjs` (properties, witnesses, negative
 controls), with the interpretation decisions recorded in
-`fastcheck/NOTES.md`. The Lean, Agda and Dafny developments remain unbuilt;
-this is still the design they start from.
+`fastcheck/NOTES.md`. `lean/Journal.lean`, `agda/Journal.agda`, and
+`dafny/Journal.dfy` now port the concrete guards/effects and prove the fold
+laws, with checker-rejected negative controls in `prover-mutants.mjs`.
+`LEARNING.md` states their exact strength and the remaining absence of a
+machine-checked translation between the separately authored sources.
 
 ## Three constraints from the domain
 

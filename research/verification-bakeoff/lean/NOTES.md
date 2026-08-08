@@ -155,6 +155,24 @@ invariant, and it did not discover that `attemptsBounded` needs
 division every essay in this area predicts: the mechanical proof labour is
 collapsing, and deciding what to prove is not.
 
+## Journal fold: concrete interpreter, factored proof
+
+`Journal.lean` checks as part of `run.sh`. It keeps the complete 23-event
+classification and proves P2 (`fold_homomorphism`) and P3
+(`regional_contradiction`) for the concrete guards and effects over arbitrary
+natural task identifiers. P1 and P4 are structural consequences of ordinary
+total, pure definitions.
+
+The useful Lean affordance is `List.foldl_append`: P2 is one theorem
+application. P3 is where the authored proof lives—one exhaustive live-step
+projection followed by induction over `SharedValid`. `prover-mutants.mjs lean`
+removes an event case, swaps prefix/suffix, and corrupts unrelated-region
+handling; all three must be rejected.
+
+The transition is a separately authored port of `fastcheck/journal.mjs`, not a
+machine-checked translation. `../LEARNING.md` keeps that correspondence
+boundary explicit.
+
 ## Liveness: statable, and a different development
 
 I17–I19 are expressible here, unlike in Dafny, but nothing in `L2.lean` is
