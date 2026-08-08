@@ -111,6 +111,7 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
       target: "cassette-target",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -320,6 +321,7 @@ export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(A
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
       target: "cassette-target",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes"
     },
     { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
@@ -827,6 +829,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
       target: "pipeline-cassette-target",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/pipeline"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
@@ -910,6 +913,7 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
         executor: "executor:cassette",
         integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
         target: "cassette-target",
+        verificationPlanId: null,
         worktreeRoot: "/dalph/cassettes/integration"
       },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -976,43 +980,108 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
   }
 )
 
+type CandidateVerificationResult = {
+  readonly _tag: "CorrelationContradiction" | "Passed" | "Failed" | "Killed" | "Partial" | "TimedOut"
+  readonly artifacts?: ReadonlyArray<unknown>
+}
+
+const candidateScenarioRunCoordinatorFrom = (
+  item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "RunCoordinator" }>,
+  verificationResult: CandidateVerificationResult | undefined
+): ReadonlyArray<unknown> => [
+  { ...item, verificationPlanId: verificationResult === undefined ? item.verificationPlanId : "public-checks-v1" }
+]
+
+const candidateConstructedEvidenceFrom = (constructedCommit: string | undefined): ReadonlyArray<unknown> =>
+  constructedCommit === undefined
+    ? []
+    : [
+        {
+          _tag: "IntegrationCandidateConstructed",
+          acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          attemptId: "attempt:A:0",
+          candidateCommit: constructedCommit,
+          expectedTargetHead: "1111111111111111111111111111111111111111",
+          taskId: "A"
+        }
+      ]
+
+const candidateVerificationStoryFrom = (verificationResult: CandidateVerificationResult | undefined) =>
+  verificationResult === undefined ? [] : [{ _tag: "TargetVerificationReturned", result: verificationResult }]
+
+const candidateVerificationEvidenceFrom = (
+  constructedCommit: string | undefined,
+  verificationResult: CandidateVerificationResult | undefined
+): ReadonlyArray<unknown> => {
+  if (verificationResult === undefined || verificationResult._tag === "CorrelationContradiction") return []
+  return [
+    verificationResult._tag === "Passed"
+      ? {
+          _tag: "TargetVerificationPassed" as const,
+          candidateCommit: constructedCommit ?? "",
+          planId: "public-checks-v1",
+          taskId: "A"
+        }
+      : {
+          _tag: "TargetVerificationStopped" as const,
+          candidateCommit: constructedCommit ?? "",
+          outcome: verificationResult._tag,
+          planId: "public-checks-v1",
+          taskId: "A"
+        }
+  ]
+}
+
+const candidateScenarioExpectedBehaviorFrom = (
+  item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>,
+  candidateStory: ReadonlyArray<unknown>,
+  constructedCommit: string | undefined,
+  verificationResult: CandidateVerificationResult | undefined
+): ReadonlyArray<unknown> => [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+  ...candidateStory,
+  ...candidateVerificationStoryFrom(verificationResult),
+  {
+    ...item,
+    /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */
+    orchestration:
+      item.orchestration === null
+        ? null
+        : [
+            ...item.orchestration,
+            ...candidateConstructedEvidenceFrom(constructedCommit),
+            ...candidateVerificationEvidenceFrom(constructedCommit, verificationResult)
+          ]
+  }
+]
+
+const candidateScenarioStoryItemsFrom = (
+  item: AuthoredCassetteStoryItem,
+  candidateStory: ReadonlyArray<unknown>,
+  constructedCommit: string | undefined,
+  verificationResult: CandidateVerificationResult | undefined
+): ReadonlyArray<unknown> => {
+  if (item._tag === "RunCoordinator") return candidateScenarioRunCoordinatorFrom(item, verificationResult)
+  if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
+    return [{ ...item, graph: singletonGraph }]
+  }
+  if (item._tag !== "ExpectedBehavior") return [item]
+  return candidateScenarioExpectedBehaviorFrom(item, candidateStory, constructedCommit, verificationResult)
+}
+
 const candidateScenarioFrom = (
   name: string,
   candidateStory: ReadonlyArray<unknown>,
-  constructedCommit: string | undefined
+  constructedCommit: string | undefined,
+  verificationResult?: CandidateVerificationResult
 ) => {
   const baseStory = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
     name,
-    story: baseStory.flatMap((item) => {
-      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
-        return [{ ...item, graph: singletonGraph }]
-      }
-      if (item._tag !== "ExpectedBehavior") return [item]
-      const constructedEvidence =
-        constructedCommit === undefined
-          ? []
-          : [
-              {
-                _tag: "IntegrationCandidateConstructed",
-                acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                attemptId: "attempt:A:0",
-                candidateCommit: constructedCommit,
-                expectedTargetHead: "1111111111111111111111111111111111111111",
-                taskId: "A"
-              }
-            ]
-      return [
-        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
-        ...candidateStory,
-        {
-          ...item,
-          /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */
-          orchestration: item.orchestration === null ? null : [...item.orchestration, ...constructedEvidence]
-        }
-      ]
-    })
+    story: baseStory.flatMap((item) =>
+      candidateScenarioStoryItemsFrom(item, candidateStory, constructedCommit, verificationResult)
+    )
   })
 }
 
@@ -1077,7 +1146,60 @@ export const candidateCorrectionAfterUnreadableGitAuthoredCassette = candidateSc
       }
     }
   ],
-  "cccccccccccccccccccccccccccccccccccccccc"
+  "cccccccccccccccccccccccccccccccccccccccc",
+  { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
+)
+
+/** A selected public verification plan reports failure and leaves the exact candidate unpromoted. */
+export const candidateVerificationFailureAuthoredCassette = candidateScenarioFrom(
+  "selected public verification fails without promotion",
+  [
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    { _tag: "IntegrationCandidateGitValidationReturned", observation: { _tag: "Missing" } },
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }
+    },
+    { _tag: "IntegrationCandidateGitValidationFailed", detail: "repository temporarily unreadable" },
+    {
+      _tag: "IntegrationCandidateGitValidationReturned",
+      observation: {
+        _tag: "Commit",
+        directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      }
+    }
+  ],
+  "cccccccccccccccccccccccccccccccccccccccc",
+  { _tag: "Failed", artifacts: [{ name: "verification-report", content: "one selected check failed" }] }
+)
+
+/** A foreign wrapper correlation is durably contradicted before any evidence can authorize M. */
+export const candidateVerificationContradictionAuthoredCassette = candidateScenarioFrom(
+  "foreign public verification correlation fails closed",
+  [
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    { _tag: "IntegrationCandidateGitValidationReturned", observation: { _tag: "Missing" } },
+    {
+      _tag: "IntegrationCandidateAgentReported",
+      report: { _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }
+    },
+    { _tag: "IntegrationCandidateGitValidationFailed", detail: "repository temporarily unreadable" },
+    {
+      _tag: "IntegrationCandidateGitValidationReturned",
+      observation: {
+        _tag: "Commit",
+        directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      }
+    }
+  ],
+  "cccccccccccccccccccccccccccccccccccccccc",
+  { _tag: "CorrelationContradiction" }
 )
 
 /** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
@@ -1112,6 +1234,9 @@ export const maintainedAuthoredCassetteCatalog = {
   candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
   candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
   candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
+  candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
+  candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
+  candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

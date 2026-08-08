@@ -22,6 +22,8 @@ import {
   TaskClaimObservation,
   TaskClaimReacquisitionRequestId,
   TargetLineageObservation,
+  TargetVerificationArtifactName,
+  TargetVerificationPlanId,
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
@@ -104,6 +106,13 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
     expectedTargetHead: GitCommitSha,
     taskId: TaskId
   },
+  TargetVerificationPassed: { candidateCommit: GitCommitSha, planId: TargetVerificationPlanId, taskId: TaskId },
+  TargetVerificationStopped: {
+    candidateCommit: GitCommitSha,
+    outcome: Schema.Literals(["Failed", "Killed", "Partial", "TimedOut"]),
+    planId: TargetVerificationPlanId,
+    taskId: TaskId
+  },
   PlannedAttemptExecutorWorkReported: {
     attemptId: AttemptId,
     report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
@@ -172,8 +181,25 @@ const RunCoordinatorFields = {
   executor: TaskExecutorLocator,
   integrationTarget: IntegrationTarget,
   target: TrackerTarget,
+  verificationPlanId: Schema.NullOr(TargetVerificationPlanId),
   worktreeRoot: WorktreeLocator
 }
+
+/** One byte object returned by the authored public verification wrapper. */
+const AuthoredTargetVerificationArtifact = Schema.Struct({
+  content: Schema.String,
+  name: TargetVerificationArtifactName
+})
+
+/** A terminal public-wrapper result; correlation is supplied by Dalph's request. */
+const AuthoredTargetVerificationResult = Schema.TaggedUnion({
+  CorrelationContradiction: {},
+  Failed: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
+  Killed: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
+  Partial: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
+  Passed: { artifacts: Schema.NonEmptyArray(AuthoredTargetVerificationArtifact) },
+  TimedOut: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) }
+})
 
 /**
  * One chronological authored story. Schema version 1 is provisional until the
@@ -200,6 +226,8 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   },
   IntegrationCandidateGitValidationFailed: { detail: Schema.String },
   IntegrationCandidateGitValidationReturned: { observation: IntegrationCandidateGitObservation },
+  /** The repository's public wrapper returns one terminal result for the selected plan. */
+  TargetVerificationReturned: { result: AuthoredTargetVerificationResult },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
@@ -264,6 +292,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "IntegrationCandidateGitValidationFailed",
     "IntegrationCandidateGitValidationReturned"
   ],
+  TargetVerification: ["TargetVerificationReturned"],
   PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
   TaskTracker: [
     "TaskClaimReadFailed",

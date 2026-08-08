@@ -11,4 +11,4 @@ export const JournalEventKind = Schema.NonEmptyString.pipe(Schema.brand("Journal
 export type JournalEventKind = typeof JournalEventKind.Type
 
 /** Current immutable semantic version shared by every workflow journal event. */
-export const workflowJournalEventVersion = 8 as const // eslint-disable-line no-magic-numbers
+export const workflowJournalEventVersion = 9 as const // eslint-disable-line no-magic-numbers

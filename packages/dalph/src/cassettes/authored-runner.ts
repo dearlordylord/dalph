@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { type RunId } from "@dalph/contracts"
+import { GitCommitSha, type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   controlDirectionApplicationLayer,
@@ -41,6 +41,15 @@ import {
   validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
   TargetLineageObservation,
+  TargetVerificationArtifact,
+  TargetVerificationBoundary,
+  TargetVerificationBoundaryFailure,
+  TargetVerificationCorrelation,
+  TargetVerificationPlan,
+  TargetVerificationRequestId,
+  TargetVerificationTerminal,
+  memoryEvidenceStoreLayer,
+  EvidenceStore,
   TestGitWorktree,
   TrackerMutation,
   TrackerAdapterReadError,
@@ -74,6 +83,7 @@ export interface AuthoredScenarioCassetteRun {
 
 const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
+const gitCommitHexLength = 40
 const authoredSettlementYieldTurns = 10
 
 const operatorControlFailureMatches = (
@@ -89,6 +99,63 @@ const operatorControlFailureMatches = (
   return failure.reason._tag === "IncompleteSnapshot"
 }
 
+type TargetVerificationStoryResult = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "TargetVerificationReturned" }
+>["result"]
+
+const targetVerificationArtifactsFrom = (
+  result: TargetVerificationStoryResult
+): ReadonlyArray<TargetVerificationArtifact> =>
+  result._tag === "CorrelationContradiction"
+    ? []
+    : result.artifacts.map(({ content, name }) =>
+        TargetVerificationArtifact.make({ bytes: new TextEncoder().encode(content), name })
+      )
+
+const foreignTargetVerificationTerminalFrom = (
+  correlation: TargetVerificationCorrelation
+): TargetVerificationTerminal =>
+  TargetVerificationTerminal.cases.Failed.make({
+    artifacts: [],
+    correlation: TargetVerificationCorrelation.make({
+      ...correlation,
+      candidateCommit: GitCommitSha.make("f".repeat(gitCommitHexLength)),
+      requestId: TargetVerificationRequestId.make(`${correlation.requestId}:foreign`)
+    })
+  })
+
+const passedTargetVerificationTerminalFrom = (
+  artifacts: ReadonlyArray<TargetVerificationArtifact>,
+  correlation: TargetVerificationCorrelation
+): TargetVerificationTerminal => {
+  const [first, ...rest] = artifacts
+  return first === undefined
+    ? TargetVerificationTerminal.cases.Failed.make({ artifacts: [], correlation })
+    : TargetVerificationTerminal.cases.Passed.make({ artifacts: [first, ...rest], correlation })
+}
+
+const targetVerificationTerminalFrom = (
+  result: TargetVerificationStoryResult,
+  correlation: TargetVerificationCorrelation
+): TargetVerificationTerminal => {
+  const artifacts = targetVerificationArtifactsFrom(result)
+  if (result._tag === "CorrelationContradiction") return foreignTargetVerificationTerminalFrom(correlation)
+  switch (result._tag) {
+    case "Failed":
+      return TargetVerificationTerminal.cases.Failed.make({ artifacts, correlation })
+    case "Killed":
+      return TargetVerificationTerminal.cases.Killed.make({ artifacts, correlation })
+    case "Partial":
+      return TargetVerificationTerminal.cases.Partial.make({ artifacts, correlation })
+    case "Passed": {
+      return passedTargetVerificationTerminalFrom(artifacts, correlation)
+    }
+    case "TimedOut":
+      return TargetVerificationTerminal.cases.TimedOut.make({ artifacts, correlation })
+  }
+}
+
 /** Decodes and drives one story through the ordinary production delivery program. */
 const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
   return yield* Effect.scoped(
@@ -100,26 +167,34 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       })
       const cursor = yield* makeStoryCursor(cassette.story)
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
-      const candidateTerminalEventTag = cassette.story.some(
-        (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "CorrelationContradiction"
-      )
-        ? "IntegrationCandidateAgentReported"
+      const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
+      const candidateTerminalEventTag = targetVerificationStory
+        ? cassette.story.some(
+            (item) => item._tag === "TargetVerificationReturned" && item.result._tag === "CorrelationContradiction"
+          )
+          ? "TargetVerificationCorrelationContradicted"
+          : "TargetVerificationEvidenceSealed"
         : cassette.story.some(
               (item) =>
-                item._tag === "ExpectedBehavior" &&
-                item.orchestration?.some((evidence) => evidence._tag === "IntegrationCandidateConstructed")
+                item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "CorrelationContradiction"
             )
-          ? "IntegrationCandidateConstructed"
-          : cassette.story.filter((item) => item._tag === "IntegrationCandidateGitValidationReturned").length >=
-              minimumCorrectionExhaustionValidationCount
-            ? "IntegrationCandidateCorrectionLimitReached"
-            : cassette.story.filter(
-                  (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag !== "Submitted"
-                ).length >= authoredCandidateContinuationLimit
-              ? "IntegrationCandidateContinuationLimitReached"
-              : cassette.story.some((item) => item._tag === "IntegrationCandidateAgentReported")
-                ? "IntegrationCandidateAgentReported"
-                : undefined
+          ? "IntegrationCandidateAgentReported"
+          : cassette.story.some(
+                (item) =>
+                  item._tag === "ExpectedBehavior" &&
+                  item.orchestration?.some((evidence) => evidence._tag === "IntegrationCandidateConstructed")
+              )
+            ? "IntegrationCandidateConstructed"
+            : cassette.story.filter((item) => item._tag === "IntegrationCandidateGitValidationReturned").length >=
+                minimumCorrectionExhaustionValidationCount
+              ? "IntegrationCandidateCorrectionLimitReached"
+              : cassette.story.filter(
+                    (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag !== "Submitted"
+                  ).length >= authoredCandidateContinuationLimit
+                ? "IntegrationCandidateContinuationLimitReached"
+                : cassette.story.some((item) => item._tag === "IntegrationCandidateAgentReported")
+                  ? "IntegrationCandidateAgentReported"
+                  : undefined
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -141,6 +216,36 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
+      const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
+      const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
+      const verificationPlan =
+        command.verificationPlanId === null
+          ? undefined
+          : TargetVerificationPlan.make({ planId: command.verificationPlanId, target: command.integrationTarget })
+      const verificationReports = yield* Ref.make<ReadonlyMap<string, TargetVerificationTerminal>>(new Map())
+      const targetVerificationBoundary = TargetVerificationBoundary.of({
+        runOrResume: (request) =>
+          Ref.get(verificationReports).pipe(
+            Effect.flatMap((reports) => {
+              const existing = reports.get(request.requestId)
+              return existing === undefined
+                ? cursor.consumeTargetVerificationReturned.pipe(
+                    Effect.mapError(
+                      (failure) =>
+                        new TargetVerificationBoundaryFailure({
+                          detail: `${failure._tag} at story position ${failure.storyPosition}`,
+                          requestId: request.requestId
+                        })
+                    ),
+                    Effect.map((item) => targetVerificationTerminalFrom(item.result, request)),
+                    Effect.tap((terminal) =>
+                      Ref.update(verificationReports, (current) => new Map(current).set(request.requestId, terminal))
+                    )
+                  )
+                : Effect.succeed(existing)
+            })
+          )
+      })
       const journalLayer = journalStoreCapabilities(
         Layer.succeed(
           JournalStore,
@@ -314,7 +419,10 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           command.integrationTarget,
           startup,
           CandidateCorrectionLimit.make(1),
-          CandidateContinuationLimit.make(authoredCandidateContinuationLimit)
+          CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
+          verificationPlan === undefined
+            ? undefined
+            : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan }
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),

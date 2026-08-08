@@ -25,6 +25,10 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
       return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
     case "IntegrationCandidateConstructed":
       return `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
+    case "TargetVerificationPassed":
+      return `The story expects public verification plan ${evidence.planId} to pass candidate ${evidence.candidateCommit} for task ${evidence.taskId}.`
+    case "TargetVerificationStopped":
+      return `The story expects public verification plan ${evidence.planId} to stop candidate ${evidence.candidateCommit} with ${evidence.outcome} for task ${evidence.taskId}.`
     case "PlannedAttemptExecutorWorkResponsibilityBegan":
       return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "PlannedAttemptExecutorWorkReported":
@@ -165,6 +169,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       return `Git cannot validate the explicitly submitted candidate: ${item.detail}`
     case "IntegrationCandidateGitValidationReturned":
       return `Git returns ${item.observation._tag} for the explicitly submitted candidate.`
+    case "TargetVerificationReturned":
+      return `The target repository's public verification wrapper returns ${item.result._tag}.`
     case "TaskWorkSpecificationReadReturned":
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":

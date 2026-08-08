@@ -109,10 +109,18 @@ const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId => {
     case "QueuedIntegration":
     case "StartedIntegration":
     case "IntegrationCandidate":
+    case "TargetVerification":
       return evidence.responsibility.plannedAttempt.taskId
     case "IntegrationWait":
       return integrationWaitTaskId(evidence.wait)
   }
+}
+
+const targetVerificationIdentity = (
+  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
+): string => {
+  const requestId = "correlation" in state ? state.correlation.requestId : state.expected.requestId
+  return JSON.stringify(["target-verification", state._tag, requestId])
 }
 
 const evidenceIdentity = (evidence: TicketDeliveryEvidence): string => {
@@ -130,6 +138,8 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string => {
         exactAttemptIdentity(evidence.responsibility.plannedAttempt),
         evidence.responsibility.startedAt
       ])
+    case "TargetVerification":
+      return targetVerificationIdentity(evidence.state)
     case "IntegrationWait":
       return JSON.stringify(["integration-wait", evidenceTaskId(evidence), evidence.wait._tag])
   }
@@ -172,6 +182,7 @@ const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWo
     case "StartedIntegration":
       return [{ _tag: "StartedIntegration", responsibility: evidence.responsibility }]
     case "IntegrationCandidate":
+    case "TargetVerification":
     case "IntegrationWait":
       return []
   }
@@ -183,6 +194,21 @@ const candidateStandingFrom = (state: IntegrationCandidateConstructionState): Re
     return [{ _tag: "IntegrationNonConvergencePreserved", state }]
   }
   return [{ _tag: "CandidateWorkActive", state }]
+}
+
+const targetVerificationStandingFrom = (
+  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
+): ReadonlyArray<TicketDeliveryStanding> => {
+  switch (state._tag) {
+    case "VerificationPending":
+      return [{ _tag: "TargetVerificationPending", state }]
+    case "VerificationPassed":
+      return [{ _tag: "TargetVerificationPassed", state }]
+    case "VerificationStopped":
+      return [{ _tag: "TargetVerificationStopped", state }]
+    case "VerificationContradicted":
+      return [{ _tag: "TargetVerificationContradicted", state }]
+  }
 }
 
 const responsibilityStandingFrom = (
@@ -208,6 +234,8 @@ const standingFrom = (
       return [{ _tag: "StartedIntegration", responsibility: evidence.responsibility }]
     case "IntegrationCandidate":
       return candidateStandingFrom(evidence.state)
+    case "TargetVerification":
+      return targetVerificationStandingFrom(evidence.state)
     case "IntegrationWait":
       return [{ _tag: "IntegrationWait", wait: evidence.wait }]
   }

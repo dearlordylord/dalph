@@ -35,6 +35,11 @@ import {
   integrationCandidateConstructionEventCorrelation,
   integrationCandidateCorrelationEquals
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
+import {
+  type TargetVerificationCandidate,
+  type TargetVerificationPlan
+} from "../../workflow/protocols/target-verification/events.js"
+import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 
 /** A region-local reason that accepted integration work cannot advance now. */
 export type IntegrationDeliveryWait =
@@ -51,6 +56,7 @@ export type IntegrationDeliveryWait =
     }
   | { readonly _tag: "IntegrationTrackerFactsWait"; readonly plannedAttempt: PlannedTaskAttempt }
   | { readonly _tag: "IntegrationTargetWait"; readonly plannedAttempt: PlannedTaskAttempt }
+  | { readonly _tag: "TargetVerificationConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
 
 const acceptedCandidateProgressAt = (
   records: ReadonlyArray<JournalRecord>,
@@ -67,7 +73,7 @@ const acceptedCandidateProgressAt = (
       isCandidateEvent(event) &&
       integrationCandidateCorrelationEquals(integrationCandidateConstructionEventCorrelation(event), intent.correlation)
   )
-  return relevant?.position ?? null
+  return Option.getOrThrow(Option.fromUndefinedOr(relevant)).position
 }
 
 const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): IntegrationDeliveryWait | undefined => {
@@ -84,7 +90,8 @@ const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): Integrat
   if (
     explanation._tag === "IntegrationConfigurationWait" ||
     explanation._tag === "IntegrationTrackerFactsWait" ||
-    explanation._tag === "IntegrationTargetWait"
+    explanation._tag === "IntegrationTargetWait" ||
+    explanation._tag === "TargetVerificationConfigurationWait"
   ) {
     return { _tag: explanation._tag, plannedAttempt: explanation.plannedAttempt }
   }
@@ -107,6 +114,7 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly candidateCorrectionLimit?: Option.Option<CandidateCorrectionLimit>
   readonly candidateContinuationLimit?: Option.Option<CandidateContinuationLimit>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
+  readonly targetVerificationPlan?: Option.Option<TargetVerificationPlan>
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
 }
 
@@ -118,6 +126,7 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   candidateCorrectionLimit: Option.none(),
   candidateContinuationLimit: Option.none(),
   targetLineageByAttemptId: new Map(),
+  targetVerificationPlan: Option.none(),
   taskClaimAuthorityByAttemptId: new Map()
 }
 
@@ -168,6 +177,33 @@ export const deriveIntegrationFrontier = (
     candidateIntentFor(responsibility) === undefined &&
     runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
       ?.plannedBaseIsAncestorOfTargetHead === false
+  const constructedCandidateFor = (
+    responsibility: StartedIntegrationResponsibility
+  ): TargetVerificationCandidate | undefined => {
+    const constructed = runState.workflowHistory.records.findLast(
+      ({ event }) =>
+        event._tag === "IntegrationCandidateConstructed" &&
+        event.correlation.attemptId === responsibility.plannedAttempt.attemptId &&
+        event.correlation.runId === responsibility.plannedAttempt.runId
+    )
+    return constructed?.event._tag === "IntegrationCandidateConstructed"
+      ? {
+          candidateCommit: constructed.event.candidateCommit,
+          correlation: constructed.event.correlation,
+          constructedAt: constructed.position
+        }
+      : undefined
+  }
+  const verificationTargetWasRewritten = (responsibility: StartedIntegrationResponsibility): boolean => {
+    const candidate = constructedCandidateFor(responsibility)
+    const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+    return (
+      candidate !== undefined &&
+      lineage !== undefined &&
+      (lineage.plannedBaseIsAncestorOfTargetHead === false ||
+        lineage.targetHeadSha !== candidate.correlation.expectedTargetHead)
+    )
+  }
   const startable = selectStartableIntegrationResponsibilities({ responsibilities }).filter(
     (responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility)
   )
@@ -182,8 +218,28 @@ export const deriveIntegrationFrontier = (
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
     const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
+    if (existing?._tag === "CandidateConstructed") {
+      const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
+      const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
+      if (
+        verification?._tag === "VerificationPassed" ||
+        verification?._tag === "VerificationStopped" ||
+        verification?._tag === "VerificationContradicted"
+      ) {
+        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      }
+      if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+      const plan = runtimeFacts.targetVerificationPlan ?? Option.none()
+      if (Option.isNone(plan))
+        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      if (verificationTargetWasRewritten(responsibility))
+        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+      if (!runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)) return []
+      return [RunnableFrontierTransition.RunTargetVerification({ candidate, plan: plan.value, responsibility })]
+    }
     if (
-      existing?._tag === "CandidateConstructed" ||
       existing?._tag === "CandidateCorrelationContradiction" ||
       existing?._tag === "CandidateCorrectionLimitReached" ||
       existing?._tag === "CandidateContinuationLimitReached"
@@ -313,7 +369,16 @@ export const deriveIntegrationFrontier = (
               wakeCondition: "TaskTrackerFactsObserved"
             })
           }
-          return hasPreIntentTargetRewrite(responsibility)
+          const candidateAwaitingPlan =
+            constructedCandidateFor(responsibility) !== undefined &&
+            Option.isNone(runtimeFacts.targetVerificationPlan ?? Option.none())
+          if (candidateAwaitingPlan) {
+            return FrontierExplanation.TargetVerificationConfigurationWait({
+              plannedAttempt: responsibility.plannedAttempt,
+              wakeCondition: "TargetVerificationPlanConfigured"
+            })
+          }
+          return hasPreIntentTargetRewrite(responsibility) || verificationTargetWasRewritten(responsibility)
             ? FrontierExplanation.PlannedAttemptGitConstraint({
                 correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
                 gitState: "TargetRewrite",

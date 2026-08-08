@@ -10,6 +10,10 @@ import {
 import { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import { deliveryActionCompleted } from "./delivery-action-adapter-common.js"
+import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
+import { TargetVerificationBoundary } from "../../workflow/protocols/target-verification/events.js"
+import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
+import { TargetVerificationBoundaryUnavailable } from "./target-verification-boundary.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
 
@@ -22,6 +26,29 @@ type ContinueIntegrationCandidate = Extract<
   IntegrationTransition,
   { readonly _tag: "ContinueStartedIntegrationCandidate" }
 >
+type RunTargetVerification = Extract<IntegrationTransition, { readonly _tag: "RunTargetVerification" }>
+
+const executeTargetVerification = Effect.fn("DeliveryAction.runTargetVerification")(function* (
+  action: IdentityFreeAction,
+  transition: RunTargetVerification,
+  lease: DeliveryActionExecutionLease
+) {
+  const context = yield* Effect.context<never>()
+  const boundary = Context.getOption(context, TargetVerificationBoundary)
+  /* v8 ignore next -- @preserve A RunTargetVerification proposal exists only when coherent startup input installed the wrapper and store together. */
+  if (Option.isNone(boundary)) return yield* new TargetVerificationBoundaryUnavailable({ boundary: "PublicWrapper" })
+  const evidence = Context.getOption(context, EvidenceStore)
+  /* v8 ignore next -- @preserve Coherent target-verification startup input cannot install the wrapper without its evidence store. */
+  if (Option.isNone(evidence)) return yield* new TargetVerificationBoundaryUnavailable({ boundary: "EvidenceStore" })
+  yield* lease.integrationTargets.withPermit(
+    transition.responsibility,
+    runTargetVerification(transition.candidate, transition.plan).pipe(
+      Effect.provideService(TargetVerificationBoundary, boundary.value),
+      Effect.provideService(EvidenceStore, evidence.value)
+    )
+  )
+  return deliveryActionCompleted(action.proposal.id)
+})
 
 const continueIntegrationCandidate = Effect.fn("DeliveryAction.continueIntegrationCandidate")(function* (
   action: IdentityFreeAction,
@@ -76,5 +103,6 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
+  if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
   return yield* continueIntegrationCandidate(action, transition, lease)
 })

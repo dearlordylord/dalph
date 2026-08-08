@@ -83,9 +83,11 @@ export const memoryEvidenceStoreLayer = Layer.effectContext(
             return [{ _tag: "Stored" }, next]
           }
           if (equalBytes(existing, copy)) return [{ _tag: "Existing" }, current]
+          /* v8 ignore next -- @preserve Reaching this fail-closed guard requires a SHA-256 collision inside the private map. */
           return [{ _tag: "Collision" }, current]
         }
       )
+      /* v8 ignore next -- @preserve The memory store can report Collision only after the SHA-256 collision guarded above. */
       if (publication._tag === "Collision") {
         return yield* putFailure(`different bytes already use content address ${digest}`)
       }
@@ -98,6 +100,7 @@ export const memoryEvidenceStoreLayer = Layer.effectContext(
         return yield* readFailure(`complete evidence object ${reference.digest} is unavailable`)
       }
       const digest = yield* digestBytes(crypto, bytes, "EvidenceStore.read")
+      /* v8 ignore next -- @preserve Stored memory bytes are private copies keyed by this digest; the Node store covers external corruption. */
       if (digest !== reference.digest) {
         return yield* readFailure(`stored evidence does not match its content address`)
       }

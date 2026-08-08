@@ -41,6 +41,12 @@ import {
   type IntegrationCandidateId,
   type IntegrationCandidateResourceLocator,
   type IntegrationSessionId,
+  type JournalPosition,
+  type EvidenceReference,
+  type EvidenceDigest,
+  type TargetVerificationPlanId,
+  type TargetVerificationCorrelation,
+  targetVerificationRequestIdForCandidate,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -109,6 +115,10 @@ type PreservedCassetteBrand =
   | IntegrationCandidateGitValidationAttemptOrdinal
   | CandidateCorrectionLimit
   | CandidateContinuationLimit
+  | JournalPosition
+  | EvidenceReference
+  | EvidenceDigest
+  | TargetVerificationPlanId
   | RunPolicyRevision
   | TaskWorkCapacity
   | TaskClaimReacquisitionRequestId
@@ -183,6 +193,20 @@ const renameCandidateCorrelation = (
     }),
     runId: renamed(correlation.runId, maps.runIds)
   })
+
+const renameTargetVerificationCorrelation = (
+  correlation: TargetVerificationCorrelation,
+  maps: IdentityRenamingMaps
+): TargetVerificationCorrelation => {
+  const candidateCorrelation = renameCandidateCorrelation(correlation.candidateCorrelation, maps)
+  return completeFields<TargetVerificationCorrelation>({
+    candidateCommit: preserveCassetteValue(correlation.candidateCommit),
+    candidateCorrelation,
+    candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
+    planId: preserveCassetteValue(correlation.planId),
+    requestId: targetVerificationRequestIdForCandidate(candidateCorrelation.candidateId)
+  })
+}
 
 const renameCandidateAgentReport = (
   report: IntegrationCandidateAgentReport,
@@ -462,6 +486,31 @@ const renameRecordedCassetteEntry = (
           continuationLimit: preserveCassetteValue(candidateEntry.continuationLimit),
           correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+        }),
+      TargetVerificationIntended: (verificationEntry) =>
+        completeFields<typeof verificationEntry>({
+          _tag: "TargetVerificationIntended",
+          correlation: renameTargetVerificationCorrelation(verificationEntry.correlation, maps),
+          initiatedBy: preserveCassetteValue(verificationEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification)
+        }),
+      TargetVerificationEvidenceSealed: (verificationEntry) =>
+        completeFields<typeof verificationEntry>({
+          _tag: "TargetVerificationEvidenceSealed",
+          correlation: renameTargetVerificationCorrelation(verificationEntry.correlation, maps),
+          manifest: {
+            byteLength: verificationEntry.manifest.byteLength,
+            digest: preserveCassetteValue(verificationEntry.manifest.digest)
+          },
+          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification),
+          terminal: preserveCassetteValue(verificationEntry.terminal)
+        }),
+      TargetVerificationCorrelationContradicted: (verificationEntry) =>
+        completeFields<typeof verificationEntry>({
+          _tag: "TargetVerificationCorrelationContradicted",
+          expected: renameTargetVerificationCorrelation(verificationEntry.expected, maps),
+          received: renameTargetVerificationCorrelation(verificationEntry.received, maps),
+          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification)
         }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({

@@ -23,13 +23,15 @@ import {
 import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { IntegrationCandidateConstructionJournalEvent } from "../protocols/integration-candidate-construction/events.js"
+import { TargetVerificationJournalEvent } from "../protocols/target-verification/events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
-  IntegrationCandidateConstructionJournalEvent
+  IntegrationCandidateConstructionJournalEvent,
+  TargetVerificationJournalEvent
 ])
 
 /**

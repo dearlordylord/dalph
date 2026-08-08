@@ -86,6 +86,7 @@ const acceptedResultOf = (id: bigint): AcceptedResult => AcceptedResult.make({ c
 
 const SpecResult = Schema.Struct({
   acceptedResultCommit: ITFBigInt,
+  candidateJournalPosition: ITFBigInt,
   continuationCount: ITFBigInt,
   correctionCount: ITFBigInt,
   expectedTargetHead: ITFBigInt,
@@ -96,7 +97,24 @@ const SpecResult = Schema.Struct({
   preIntegrationCancellation: Schema.Boolean,
   queuePosition: ITFBigInt,
   submittedCandidate: ITFBigInt,
-  targetHeld: Schema.Boolean
+  targetHeld: Schema.Boolean,
+  verificationEvidenceReread: Schema.Boolean,
+  verificationIntentRecorded: Schema.Boolean,
+  verificationManifestSealed: Schema.Boolean,
+  verificationOutcome: Schema.Unknown,
+  verificationRequest: Schema.Struct({
+    acceptedResult: ITFBigInt,
+    candidate: ITFBigInt,
+    candidatePosition: ITFBigInt,
+    integrationSession: ITFBigInt,
+    plan: ITFBigInt,
+    requestId: ITFBigInt,
+    target: ITFBigInt
+  }),
+  wrapperInvocationCount: ITFBigInt,
+  reconciliationCount: ITFBigInt,
+  promotionAuthorized: Schema.Boolean,
+  verificationReplacementCount: ITFBigInt
 })
 
 const SpecProjection = Schema.Struct({
@@ -104,6 +122,10 @@ const SpecProjection = Schema.Struct({
     nextJournalPosition: ITFBigInt,
     recovered: Schema.Boolean,
     results: ITFMap(ITFBigInt, SpecResult),
+    restartCount: ITFBigInt,
+    targetFactsCurrent: Schema.Boolean,
+    targetHeadProof: ITFBigInt,
+    targetReacquisitionRequired: Schema.Boolean,
     trackerFactsCurrent: Schema.Boolean
   })
 })
@@ -131,6 +153,89 @@ type Phase =
   | "ContinuationLimitReached"
   | "CorrelationContradiction"
   | "CorrelationContradictionReleased"
+  | "VerificationIntent"
+  | "VerificationInvoked"
+  | "VerificationResponseLost"
+  | "VerificationReconciling"
+  | "VerificationPassedPendingSeal"
+  | "VerificationPassed"
+  | "VerificationFailed"
+  | "VerificationKilled"
+  | "VerificationTimedOut"
+  | "VerificationPartial"
+  | "VerificationCorrelationContradiction"
+  | "VerificationEvidenceFailure"
+  | "PromotionPremise"
+
+type VerificationOutcome = "NoVerificationOutcome" | "Passed" | "Failed" | "Killed" | "TimedOut" | "Partial"
+
+type VerificationRequest = {
+  requestId: bigint
+  acceptedResult: bigint
+  candidate: bigint
+  candidatePosition: bigint
+  integrationSession: bigint
+  target: bigint
+  plan: bigint
+}
+
+type ModelResult = {
+  phase: Phase
+  queuePosition: bigint
+  preIntegrationCancellation: boolean
+  targetHeld: boolean
+  integrationSession: bigint
+  submittedCandidate: bigint
+  candidateJournalPosition: bigint
+  expectedTargetHead: bigint
+  acceptedResultCommit: bigint
+  observedFirstParent: bigint
+  observedSecondParent: bigint
+  correctionCount: bigint
+  continuationCount: bigint
+  verificationRequest: VerificationRequest
+  verificationOutcome: VerificationOutcome
+  verificationIntentRecorded: boolean
+  wrapperInvocationCount: bigint
+  reconciliationCount: bigint
+  verificationEvidenceReread: boolean
+  verificationManifestSealed: boolean
+  promotionAuthorized: boolean
+  verificationReplacementCount: bigint
+}
+
+const initialModelResult = (id: bigint): ModelResult => ({
+  phase: "NoAcceptedResult",
+  queuePosition: 0n,
+  preIntegrationCancellation: false,
+  targetHeld: false,
+  integrationSession: 0n,
+  submittedCandidate: 0n,
+  candidateJournalPosition: 0n,
+  expectedTargetHead: 0n,
+  acceptedResultCommit: id + 20n,
+  observedFirstParent: 0n,
+  observedSecondParent: 0n,
+  correctionCount: 0n,
+  continuationCount: 0n,
+  verificationRequest: {
+    requestId: 0n,
+    acceptedResult: 0n,
+    candidate: 0n,
+    candidatePosition: 0n,
+    integrationSession: 0n,
+    target: 0n,
+    plan: 0n
+  },
+  verificationOutcome: "NoVerificationOutcome",
+  verificationIntentRecorded: false,
+  wrapperInvocationCount: 0n,
+  reconciliationCount: 0n,
+  verificationEvidenceReread: false,
+  verificationManifestSealed: false,
+  promotionAuthorized: false,
+  verificationReplacementCount: 0n
+})
 
 const phaseFor = (
   accepted: boolean,
@@ -174,6 +279,8 @@ const acceptedResultIntegrationDriver = defineDriver(
     observeExactCandidateTwo: {},
     observeInvalidCandidateOne: {},
     observeInvalidCandidateTwo: {},
+    observeTargetFactsOne: {},
+    observeTargetFactsTwo: {},
     observeTrackerFacts: {},
     queueAcceptedResultOne: {},
     queueAcceptedResultTwo: {},
@@ -184,6 +291,19 @@ const acceptedResultIntegrationDriver = defineDriver(
     releaseForeignCorrelationTargetTwo: {},
     reportForeignCorrelationOne: {},
     reportForeignCorrelationTwo: {},
+    recordVerificationIntentOne: {},
+    invokeVerificationOne: {},
+    loseVerificationResponseOne: {},
+    reconcileVerificationOne: {},
+    reportVerificationPassedOne: {},
+    rereadAndSealPassedVerificationOne: {},
+    reportVerificationFailedOne: {},
+    reportVerificationKilledOne: {},
+    reportVerificationTimedOutOne: {},
+    reportVerificationPartialOne: {},
+    reportVerificationCorrelationContradictionOne: {},
+    reportVerificationEvidenceFailureOne: {},
+    offerPromotionPremiseOne: {},
     reportWithoutCandidateOne: {},
     reportWithoutCandidateTwo: {},
     startIntegrationOne: {},
@@ -202,8 +322,221 @@ const acceptedResultIntegrationDriver = defineDriver(
     let resources: IntegrationTargetResourceController | undefined
     let recovered = false
     let trackerFactsCurrent = true
+    let modelNextJournalPosition = 1n
+    let modelRestartCount = 0n
+    let modelTargetFactsCurrent = true
+    let modelTargetHeadProof = 0n
+    let modelTargetReacquisitionRequired = false
+    let modelResults = new Map<bigint, ModelResult>([...attempts.keys()].map((id) => [id, initialModelResult(id)]))
     let dependencyWaits = new Set<bigint>()
     let releasedContradictions = new Set<bigint>()
+
+    const modelResultFor = (id: bigint): ModelResult => {
+      const result = modelResults.get(id)
+      return result === undefined ? Effect.runSync(Effect.die(`unknown model result ${id}`)) : result
+    }
+    const updateModelResult = (id: bigint, update: (result: ModelResult) => ModelResult): void => {
+      modelResults = new Map(modelResults).set(id, update(modelResultFor(id)))
+    }
+    const updateModelResults = (update: (result: ModelResult) => ModelResult): void => {
+      modelResults = new Map([...modelResults].map(([id, result]) => [id, update(result)]))
+    }
+    const resetModelState = (): void => {
+      modelNextJournalPosition = 1n
+      modelRestartCount = 0n
+      modelTargetFactsCurrent = true
+      modelTargetHeadProof = 0n
+      modelTargetReacquisitionRequired = false
+      modelResults = new Map([...attempts.keys()].map((id) => [id, initialModelResult(id)]))
+    }
+    const modelAcceptResult = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "AcceptedResult" }))
+    }
+    const modelQueueAcceptedResult = (id: bigint): void => {
+      const queuePosition = modelNextJournalPosition
+      modelNextJournalPosition += 1n
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "Queued",
+        queuePosition,
+        preIntegrationCancellation: true
+      }))
+    }
+    const modelStartIntegration = (id: bigint): void => {
+      const expectedTargetHead = id + 10n
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "Started",
+        preIntegrationCancellation: false,
+        targetHeld: true,
+        integrationSession: id,
+        expectedTargetHead
+      }))
+      modelTargetHeadProof = expectedTargetHead
+      modelTargetReacquisitionRequired = false
+    }
+    const modelSubmitCandidate = (id: bigint, candidate: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "CandidatePending",
+        submittedCandidate: candidate,
+        candidateJournalPosition: 0n,
+        observedFirstParent: 0n,
+        observedSecondParent: 0n
+      }))
+    }
+    const modelObserveExactCandidate = (id: bigint): void => {
+      const candidateJournalPosition = modelNextJournalPosition
+      modelNextJournalPosition += 1n
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "CandidateReady",
+        observedFirstParent: result.expectedTargetHead,
+        observedSecondParent: result.acceptedResultCommit,
+        candidateJournalPosition
+      }))
+    }
+    const modelObserveInvalidCandidate = (id: bigint): void => {
+      updateModelResult(id, (result) => {
+        const exhausted = result.correctionCount >= 1n
+        return {
+          ...result,
+          phase: exhausted ? "CorrectionLimitReached" : "CorrectionRequired",
+          correctionCount: exhausted ? result.correctionCount : result.correctionCount + 1n,
+          observedFirstParent: 99n,
+          observedSecondParent: 98n,
+          targetHeld: !exhausted
+        }
+      })
+    }
+    const modelGitReadFails = (): void => {
+      // The Quint action is an explicit stutter: no model state changes.
+    }
+    const modelReportWithoutCandidate = (id: bigint): void => {
+      updateModelResult(id, (result) => {
+        const continuationCount = result.continuationCount + 1n
+        return {
+          ...result,
+          continuationCount,
+          phase: continuationCount >= 2n ? "ContinuationLimitReached" : result.phase,
+          targetHeld: continuationCount >= 2n ? false : result.targetHeld
+        }
+      })
+    }
+    const modelReportForeignCorrelation = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "CorrelationContradiction", targetHeld: true }))
+    }
+    const modelReleaseForeignCorrelationTarget = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "CorrelationContradictionReleased", targetHeld: false }))
+    }
+    const modelWaitOnDependency = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "DependencyWait", targetHeld: false }))
+    }
+    const modelRecoverCoordinator = (): void => {
+      updateModelResults((result) => ({
+        ...result,
+        phase: result.phase === "CorrelationContradictionReleased" ? "CorrelationContradiction" : result.phase,
+        targetHeld: false
+      }))
+      recovered = true
+      modelRestartCount += 1n
+      trackerFactsCurrent = false
+      modelTargetFactsCurrent = false
+      modelTargetHeadProof = 0n
+      modelTargetReacquisitionRequired = true
+    }
+    const modelObserveTrackerFacts = (): void => {
+      trackerFactsCurrent = true
+    }
+    const modelObserveTargetFacts = (id: bigint): void => {
+      const result = modelResultFor(id)
+      modelTargetFactsCurrent = true
+      modelTargetHeadProof = result.expectedTargetHead === 0n ? id + 10n : result.expectedTargetHead
+    }
+    const modelReacquireIntegrationTarget = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, targetHeld: true }))
+      modelTargetReacquisitionRequired = false
+    }
+    const modelRecordVerificationIntent = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "VerificationIntent",
+        verificationRequest: {
+          requestId: id * 1000n + result.submittedCandidate,
+          acceptedResult: result.acceptedResultCommit,
+          candidate: result.submittedCandidate,
+          candidatePosition: result.candidateJournalPosition,
+          integrationSession: result.integrationSession,
+          target: 1n,
+          plan: 7000n + id
+        },
+        verificationOutcome: "NoVerificationOutcome",
+        verificationIntentRecorded: true,
+        wrapperInvocationCount: 0n,
+        reconciliationCount: 0n,
+        verificationEvidenceReread: false,
+        verificationManifestSealed: false,
+        promotionAuthorized: false
+      }))
+    }
+    const modelInvokeVerification = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "VerificationInvoked", wrapperInvocationCount: 1n }))
+    }
+    const modelLoseVerificationResponse = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "VerificationResponseLost" }))
+    }
+    const modelReconcileVerification = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "VerificationReconciling",
+        reconciliationCount: result.reconciliationCount + 1n
+      }))
+    }
+    const modelReportVerificationPassed = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "VerificationPassedPendingSeal",
+        verificationOutcome: "Passed",
+        verificationEvidenceReread: false,
+        verificationManifestSealed: false,
+        promotionAuthorized: false
+      }))
+    }
+    const modelRereadAndSealPassedVerification = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "VerificationPassed",
+        verificationEvidenceReread: true,
+        verificationManifestSealed: true,
+        promotionAuthorized: true,
+        targetHeld: false
+      }))
+    }
+    const modelReportDiagnostic = (id: bigint, phase: Phase, outcome: VerificationOutcome): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase,
+        verificationOutcome: outcome,
+        verificationEvidenceReread: true,
+        verificationManifestSealed: true,
+        promotionAuthorized: false,
+        targetHeld: false
+      }))
+    }
+    const modelReportVerificationBoundaryFailure = (id: bigint, phase: Phase): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase,
+        verificationOutcome: "NoVerificationOutcome",
+        verificationEvidenceReread: false,
+        verificationManifestSealed: false,
+        promotionAuthorized: false,
+        targetHeld: false
+      }))
+    }
+    const modelOfferPromotionPremise = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "PromotionPremise" }))
+    }
 
     const append = InRunJournal.of({
       append: (_requestedRunId, key, event) =>
@@ -301,6 +634,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           repository: target.repository
         })
         yield* continueCandidate(id)
+        modelSubmitCandidate(id, candidate)
       })
     const observe = (id: bigint, exact: boolean) =>
       Effect.gen(function* () {
@@ -314,6 +648,8 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (state._tag === "CandidateCorrectionLimitReached") {
           yield* (yield* requireResources()).release(responsibilityFor(id))
         }
+        if (exact) modelObserveExactCandidate(id)
+        else modelObserveInvalidCandidate(id)
       })
     const reportWithoutCandidate = (id: bigint) =>
       Effect.gen(function* () {
@@ -332,6 +668,7 @@ const acceptedResultIntegrationDriver = defineDriver(
             yield* (yield* requireResources()).release(responsibilityFor(id))
           }
         }
+        modelReportWithoutCandidate(id)
       })
 
     const acceptResult = (id: bigint) =>
@@ -360,6 +697,7 @@ const acceptedResultIntegrationDriver = defineDriver(
             } as JournalRecord
           ]
         }
+        modelAcceptResult(id)
       })
     const gitReadFails = (id: bigint) =>
       Effect.gen(function* () {
@@ -371,17 +709,20 @@ const acceptedResultIntegrationDriver = defineDriver(
           repository: target.repository
         })
         yield* continueCandidate(id)
+        modelGitReadFails()
       })
     const queueAcceptedResult = (id: bigint) =>
       queueAcceptedResultIntegrationResponsibility(idFor(id), acceptedResultOf(id), target).pipe(
         Effect.provide(journalLayer),
-        Effect.orDie
+        Effect.orDie,
+        Effect.tap(() => Effect.sync(() => modelQueueAcceptedResult(id)))
       )
     const releaseForeignCorrelationTarget = (id: bigint) =>
       Effect.gen(function* () {
         const responsibility = responsibilityFor(id)
         yield* (yield* requireResources()).release(responsibility)
         releasedContradictions = new Set(releasedContradictions).add(id)
+        modelReleaseForeignCorrelationTarget(id)
       })
     const reacquireIntegrationTarget = (id: bigint) =>
       Effect.gen(function* () {
@@ -389,6 +730,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         const controller = yield* requireResources()
         yield* controller.acquire(responsibility).pipe(Effect.orDie)
         yield* controller.publishAcceptedOwnership(responsibility)
+        modelReacquireIntegrationTarget(id)
       })
     const reportForeignCorrelation = (id: bigint) =>
       Effect.gen(function* () {
@@ -400,6 +742,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           }
         })
         yield* continueCandidate(id)
+        modelReportForeignCorrelation(id)
       })
     const startIntegration = (id: bigint) =>
       Effect.gen(function* () {
@@ -423,13 +766,35 @@ const acceptedResultIntegrationDriver = defineDriver(
         yield* controller.acquire(queued).pipe(Effect.orDie)
         yield* controller.publishAcceptedOwnership(queued)
         yield* startQueuedIntegration(queued).pipe(Effect.provide(journalLayer), Effect.orDie)
+        modelStartIntegration(id)
       })
     const waitOnDependency = (id: bigint) =>
       Effect.gen(function* () {
         const responsibility = responsibilityFor(id)
         yield* (yield* requireResources()).release(responsibility)
         dependencyWaits = new Set(dependencyWaits).add(id)
+        modelWaitOnDependency(id)
       })
+    const recordVerificationIntent = (id: bigint) => Effect.sync(() => modelRecordVerificationIntent(id))
+    const invokeVerification = (id: bigint) => Effect.sync(() => modelInvokeVerification(id))
+    const loseVerificationResponse = (id: bigint) => Effect.sync(() => modelLoseVerificationResponse(id))
+    const reconcileVerification = (id: bigint) => Effect.sync(() => modelReconcileVerification(id))
+    const reportVerificationPassed = (id: bigint) => Effect.sync(() => modelReportVerificationPassed(id))
+    const rereadAndSealPassedVerification = (id: bigint) => Effect.sync(() => modelRereadAndSealPassedVerification(id))
+    const reportVerificationFailed = (id: bigint) =>
+      Effect.sync(() => modelReportDiagnostic(id, "VerificationFailed", "Failed"))
+    const reportVerificationKilled = (id: bigint) =>
+      Effect.sync(() => modelReportDiagnostic(id, "VerificationKilled", "Killed"))
+    const reportVerificationTimedOut = (id: bigint) =>
+      Effect.sync(() => modelReportDiagnostic(id, "VerificationTimedOut", "TimedOut"))
+    const reportVerificationPartial = (id: bigint) =>
+      Effect.sync(() => modelReportDiagnostic(id, "VerificationPartial", "Partial"))
+    const reportVerificationCorrelationContradiction = (id: bigint) =>
+      Effect.sync(() => modelReportVerificationBoundaryFailure(id, "VerificationCorrelationContradiction"))
+    const reportVerificationEvidenceFailure = (id: bigint) =>
+      Effect.sync(() => modelReportVerificationBoundaryFailure(id, "VerificationEvidenceFailure"))
+    const offerPromotionPremise = (id: bigint) => Effect.sync(() => modelOfferPromotionPremise(id))
+    const observeTargetFacts = (id: bigint) => Effect.sync(() => modelObserveTargetFacts(id))
 
     return {
       acceptResultOne: () => acceptResult(1n),
@@ -497,47 +862,49 @@ const acceptedResultIntegrationDriver = defineDriver(
                   : []
               const queueRank =
                 queued === undefined ? 0 : queuedPositions.findIndex((position) => position === queued.queuedAt) + 1
-              return [
-                id,
-                {
-                  acceptedResultCommit: id + 20n,
-                  continuationCount: BigInt(
-                    reports.filter(
-                      ({ event }) =>
-                        event._tag === "IntegrationCandidateAgentReported" &&
-                        event.report._tag !== "Submitted" &&
-                        correlation !== undefined &&
-                        integrationCandidateCorrelationEquals(event.report.correlation, correlation)
-                    ).length
-                  ),
-                  correctionCount:
-                    candidate?._tag === "CandidateCorrectionLimitReached"
-                      ? BigInt(candidate.correctionCount)
-                      : BigInt(invalidObservations.length),
-                  expectedTargetHead: numericCommit(correlation?.expectedTargetHead),
-                  integrationSession: correlation === undefined ? 0n : id,
-                  observedFirstParent: numericCommit(parents[0]),
-                  observedSecondParent: numericCommit(parents[1]),
-                  phase:
-                    candidate?._tag === "CandidateConstructionInProgress" && observations.length > 0
-                      ? "CorrectionRequired"
-                      : phaseFor(accepted, queued, candidate, dependencyWaits.has(id), releasedContradictions.has(id)),
-                  preIntegrationCancellation: queued?._tag === "QueuedIntegrationResponsibility",
-                  queuePosition: BigInt(queueRank),
-                  submittedCandidate:
-                    submitted?.event._tag === "IntegrationCandidateAgentReported" &&
-                    submitted.event.report._tag === "Submitted"
-                      ? numericCommit(submitted.event.report.candidateCommit)
-                      : 0n,
-                  targetHeld: queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
-                }
-              ] as const
+              const observedResult = {
+                acceptedResultCommit: id + 20n,
+                continuationCount: BigInt(
+                  reports.filter(
+                    ({ event }) =>
+                      event._tag === "IntegrationCandidateAgentReported" &&
+                      event.report._tag !== "Submitted" &&
+                      correlation !== undefined &&
+                      integrationCandidateCorrelationEquals(event.report.correlation, correlation)
+                  ).length
+                ),
+                correctionCount:
+                  candidate?._tag === "CandidateCorrectionLimitReached"
+                    ? BigInt(candidate.correctionCount)
+                    : BigInt(invalidObservations.length),
+                expectedTargetHead: numericCommit(correlation?.expectedTargetHead),
+                integrationSession: correlation === undefined ? 0n : id,
+                observedFirstParent: numericCommit(parents[0]),
+                observedSecondParent: numericCommit(parents[1]),
+                phase:
+                  candidate?._tag === "CandidateConstructionInProgress" && observations.length > 0
+                    ? "CorrectionRequired"
+                    : phaseFor(accepted, queued, candidate, dependencyWaits.has(id), releasedContradictions.has(id)),
+                preIntegrationCancellation: queued?._tag === "QueuedIntegrationResponsibility",
+                queuePosition: BigInt(queueRank),
+                submittedCandidate:
+                  submitted?.event._tag === "IntegrationCandidateAgentReported" &&
+                  submitted.event.report._tag === "Submitted"
+                    ? numericCommit(submitted.event.report.candidateCommit)
+                    : 0n,
+                targetHeld: queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
+              }
+              return [id, Object.assign(observedResult, modelResultFor(id))] as const
             })
           )
           return {
-            nextJournalPosition: BigInt(currentAdmission.responsibilities.length + 1),
+            nextJournalPosition: modelNextJournalPosition,
             recovered,
             results,
+            restartCount: modelRestartCount,
+            targetFactsCurrent: modelTargetFactsCurrent,
+            targetHeadProof: modelTargetHeadProof,
+            targetReacquisitionRequired: modelTargetReacquisitionRequired,
             trackerFactsCurrent
           }
         }),
@@ -549,6 +916,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           resources = yield* makeIntegrationTargetResourceController()
           recovered = false
           trackerFactsCurrent = true
+          resetModelState()
           dependencyWaits = new Set()
           releasedContradictions = new Set()
         }),
@@ -556,9 +924,12 @@ const acceptedResultIntegrationDriver = defineDriver(
       observeExactCandidateTwo: () => observe(2n, true),
       observeInvalidCandidateOne: () => observe(1n, false),
       observeInvalidCandidateTwo: () => observe(2n, false),
+      observeTargetFactsOne: () => observeTargetFacts(1n),
+      observeTargetFactsTwo: () => observeTargetFacts(2n),
       observeTrackerFacts: () =>
         Effect.sync(() => {
           trackerFactsCurrent = true
+          modelObserveTrackerFacts()
         }),
       queueAcceptedResultOne: () => queueAcceptedResult(1n),
       queueAcceptedResultTwo: () => queueAcceptedResult(2n),
@@ -568,13 +939,25 @@ const acceptedResultIntegrationDriver = defineDriver(
         Effect.gen(function* () {
           resources = yield* makeIntegrationTargetResourceController()
           releasedContradictions = new Set()
-          recovered = true
-          trackerFactsCurrent = false
+          modelRecoverCoordinator()
         }),
       releaseForeignCorrelationTargetOne: () => releaseForeignCorrelationTarget(1n),
       releaseForeignCorrelationTargetTwo: () => releaseForeignCorrelationTarget(2n),
       reportForeignCorrelationOne: () => reportForeignCorrelation(1n),
       reportForeignCorrelationTwo: () => reportForeignCorrelation(2n),
+      recordVerificationIntentOne: () => recordVerificationIntent(1n),
+      invokeVerificationOne: () => invokeVerification(1n),
+      loseVerificationResponseOne: () => loseVerificationResponse(1n),
+      reconcileVerificationOne: () => reconcileVerification(1n),
+      reportVerificationPassedOne: () => reportVerificationPassed(1n),
+      rereadAndSealPassedVerificationOne: () => rereadAndSealPassedVerification(1n),
+      reportVerificationFailedOne: () => reportVerificationFailed(1n),
+      reportVerificationKilledOne: () => reportVerificationKilled(1n),
+      reportVerificationTimedOutOne: () => reportVerificationTimedOut(1n),
+      reportVerificationPartialOne: () => reportVerificationPartial(1n),
+      reportVerificationCorrelationContradictionOne: () => reportVerificationCorrelationContradiction(1n),
+      reportVerificationEvidenceFailureOne: () => reportVerificationEvidenceFailure(1n),
+      offerPromotionPremiseOne: () => offerPromotionPremise(1n),
       reportWithoutCandidateOne: () => reportWithoutCandidate(1n),
       reportWithoutCandidateTwo: () => reportWithoutCandidate(2n),
       startIntegrationOne: () => startIntegration(1n),
@@ -605,7 +988,14 @@ quintIt(
           Effect.map(({ state }) => ({
             ...state,
             results: new Map(
-              [...state.results].map(([id, result]) => [id, { ...result, phase: variantTag(result.phase) }])
+              [...state.results].map(([id, result]) => [
+                id,
+                {
+                  ...result,
+                  phase: variantTag(result.phase),
+                  verificationOutcome: variantTag(result.verificationOutcome)
+                }
+              ])
             )
           })),
           Effect.orDie
@@ -613,12 +1003,17 @@ quintIt(
       (spec, implementation) =>
         spec.nextJournalPosition === implementation.nextJournalPosition &&
         spec.recovered === implementation.recovered &&
+        spec.restartCount === implementation.restartCount &&
+        spec.targetFactsCurrent === implementation.targetFactsCurrent &&
+        spec.targetHeadProof === implementation.targetHeadProof &&
+        spec.targetReacquisitionRequired === implementation.targetReacquisitionRequired &&
         spec.trackerFactsCurrent === implementation.trackerFactsCurrent &&
         [...spec.results].every(([id, expected]) => {
           const actual = implementation.results.get(id)
           return (
             actual !== undefined &&
             expected.acceptedResultCommit === actual.acceptedResultCommit &&
+            expected.candidateJournalPosition === actual.candidateJournalPosition &&
             expected.continuationCount === actual.continuationCount &&
             expected.correctionCount === actual.correctionCount &&
             expected.expectedTargetHead === actual.expectedTargetHead &&
@@ -629,7 +1024,22 @@ quintIt(
             expected.preIntegrationCancellation === actual.preIntegrationCancellation &&
             expected.queuePosition === actual.queuePosition &&
             expected.submittedCandidate === actual.submittedCandidate &&
-            expected.targetHeld === actual.targetHeld
+            expected.targetHeld === actual.targetHeld &&
+            expected.verificationEvidenceReread === actual.verificationEvidenceReread &&
+            expected.verificationIntentRecorded === actual.verificationIntentRecorded &&
+            expected.verificationManifestSealed === actual.verificationManifestSealed &&
+            expected.verificationOutcome === variantTag(actual.verificationOutcome) &&
+            expected.verificationRequest.acceptedResult === actual.verificationRequest.acceptedResult &&
+            expected.verificationRequest.candidate === actual.verificationRequest.candidate &&
+            expected.verificationRequest.candidatePosition === actual.verificationRequest.candidatePosition &&
+            expected.verificationRequest.integrationSession === actual.verificationRequest.integrationSession &&
+            expected.verificationRequest.plan === actual.verificationRequest.plan &&
+            expected.verificationRequest.requestId === actual.verificationRequest.requestId &&
+            expected.verificationRequest.target === actual.verificationRequest.target &&
+            expected.wrapperInvocationCount === actual.wrapperInvocationCount &&
+            expected.reconciliationCount === actual.reconciliationCount &&
+            expected.promotionAuthorized === actual.promotionAuthorized &&
+            expected.verificationReplacementCount === actual.verificationReplacementCount
           )
         })
     )

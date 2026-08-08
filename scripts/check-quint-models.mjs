@@ -263,7 +263,22 @@ const acceptedResultIntegrationInvariants = [
   "startedPrecedesRemainingQueue",
   "dependencyWaitPreservesQueueOrder",
   "candidateReadyHasExactOrderedParents",
-  "sessionIdentityFixedAfterStart"
+  "sessionIdentityFixedAfterStart",
+  "verificationRequestIdentityIsStable",
+  "verificationIntentPrecedesWrapper",
+  "verificationInvocationAndReconciliationAreBounded",
+  "activeVerificationRetainsTargetUnlessRestarted",
+  "terminalVerificationReleasesTarget",
+  "verificationOutcomeMatchesPhase",
+  "onlySealedPassedAuthorizesPromotion",
+  "promotionPremiseRequiresSealedPassedEvidence",
+  "diagnosticOutcomesNeverAuthorizePromotion",
+  "contradictoryVerificationNeverAuthorizesPromotion",
+  "logicalIntegrationResponsibilityBlocksLaterQueue",
+  "noAutomaticVerificationReplacement",
+  "restartCountBounded",
+  "staleTargetProofIsNeverCurrent",
+  "reacquiredVerificationUsesFreshExpectedHead"
 ]
 
 await run("accepted-result integration model typecheck", [
@@ -276,6 +291,12 @@ await run("accepted-result integration deterministic tests", [
   "--main",
   "acceptedResultIntegrationTest"
 ])
+await run("accepted-result integration negative mutation profile", [
+  "test",
+  "specs/acceptedResultIntegration_negative_test.qnt",
+  "--main",
+  "acceptedResultIntegrationNegativeTest"
+])
 await run("accepted-result integration sampled model", [
   "run",
   "specs/acceptedResultIntegration.qnt",
@@ -287,6 +308,7 @@ await run("accepted-result integration sampled model", [
   "startedReached",
   "dependencyWaitReached",
   "restartReached",
+  "targetHeadProofReached",
   "dependencyWaitReleasedTarget",
   "candidateReadyReached",
   "correctionRequiredReached",
@@ -294,18 +316,29 @@ await run("accepted-result integration sampled model", [
   "continuationLimitReached",
   "correlationContradictionReached",
   "correlationContradictionReleasedReached",
+  "verificationIntentReached",
+  "verificationInvokedReached",
+  "verificationResponseLostReached",
+  "verificationReconcilingReached",
+  "verificationPassedPendingSealReached",
+  "verificationPassedReached",
+  "verificationFailedReached",
+  "verificationKilledReached",
+  "verificationTimedOutReached",
+  "verificationPartialReached",
+  "verificationCorrelationContradictionReached",
+  "verificationEvidenceFailureReached",
+  "promotionPremiseReached",
+  "releasedLogicalBlockerReached",
   "--max-steps",
-  "12",
+  "35",
   "--max-samples",
   "10000",
   "--verbosity",
   "1"
 ])
-// TLC checks the complete state graph: 8701 generated / 4158 distinct states,
-// diameter 19, ~0.9s (Quint 0.32.0, linux-aarch64). A previous --max-steps 12
-// truncated the check four levels short of the diameter; with no bound the
-// whole graph is covered against all eight invariants and future growth shows
-// up as a diameter change rather than silent truncation.
+// TLC checks the complete finite state graph. No --max-steps is used: future
+// growth shows up as a diameter change rather than silent truncation.
 await run("accepted-result integration exhaustive model", [
   "verify",
   "specs/acceptedResultIntegration.qnt",

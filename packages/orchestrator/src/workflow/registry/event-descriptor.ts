@@ -27,7 +27,10 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey,
-  taskWorkCapacityPolicyRecordKey
+  taskWorkCapacityPolicyRecordKey,
+  targetVerificationCorrelationContradictedRecordKey,
+  targetVerificationEvidenceSealedRecordKey,
+  targetVerificationIntentRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
@@ -237,6 +240,21 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return {
         _tag: "GenericEventDescriptor",
         expectedKey: integrationCandidateContinuationLimitReachedRecordKey(event.correlation)
+      }
+    case "TargetVerificationIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetVerificationIntentRecordKey(event.correlation.requestId)
+      }
+    case "TargetVerificationEvidenceSealed":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetVerificationEvidenceSealedRecordKey(event.correlation.requestId)
+      }
+    case "TargetVerificationCorrelationContradicted":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: targetVerificationCorrelationContradictedRecordKey(event.expected.requestId)
       }
     case "TaskTrackerReadIntentRecorded":
       return operationEvent({

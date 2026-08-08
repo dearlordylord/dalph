@@ -582,6 +582,30 @@ result second. Construction does not verify the contents, update the target
 ref, or complete the tracker task.
 _Avoid_: Worktree HEAD, agent success, verified candidate, promoted result
 
+**Target verification request**:
+The deterministic initial request derived from one exact constructed-candidate
+journal occurrence and one configured public verification plan. Every wrapper
+result carries its complete candidate, session, target, plan, and request
+correlation. Recovery reuses this request; it does not allocate a replacement
+to escape an ambiguous response.
+_Avoid_: Verification process, command invocation, retry attempt, OperationId
+
+**Target verification evidence manifest**:
+The immutable content-addressed envelope for one exact terminal target
+verification result. It names the constructed-candidate occurrence, complete
+request correlation, terminal outcome, and separately content-addressed
+artifacts. Dalph rereads every object and the manifest before recording the
+sealed result. Only a sealed `Passed` manifest can become a later promotion
+premise.
+_Avoid_: Process exit, log file, verification success flag, promoted candidate
+
+**Public target-verification wrapper**:
+The repository-selected boundary that runs or resumes one target verification
+request and owns any heavy-verification lock needed by its commands. Dalph
+does not acquire that lock separately, inspect private commands, or nest a
+guarded invocation.
+_Avoid_: Dalph lock controller, package script, internal verification command
+
 **Pending candidate submission**:
 One explicit candidate commit awaiting a readable Git object-type and parent
 observation. An unreadable Git call preserves this submission for a later

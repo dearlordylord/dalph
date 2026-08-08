@@ -40,6 +40,31 @@ const orchestrationReportEvidence = (
       : report._tag
 })
 
+const targetVerificationEvidenceFor = (
+  event: Extract<JournalRecord["event"], { readonly _tag: "TargetVerificationEvidenceSealed" }>,
+  taskByAttempt: ReadonlyMap<AttemptId, TaskId>
+): ReadonlyArray<OrchestrationEvidence> => {
+  const taskId = Option.getOrThrow(
+    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.candidateCorrelation.attemptId))
+  )
+  return [
+    event.terminal === "Passed"
+      ? {
+          _tag: "TargetVerificationPassed",
+          candidateCommit: event.correlation.candidateCommit,
+          planId: event.correlation.planId,
+          taskId
+        }
+      : {
+          _tag: "TargetVerificationStopped",
+          candidateCommit: event.correlation.candidateCommit,
+          outcome: event.terminal,
+          planId: event.correlation.planId,
+          taskId
+        }
+  ]
+}
+
 const worktreeEvidence = (
   event: Extract<JournalRecord["event"], { readonly _tag: "TaskWorktreeReady" }>,
   worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
@@ -166,6 +191,9 @@ const orchestrationEvidenceFor = (
         taskId: event.plannedAttempt.taskId
       }
     ]
+  }
+  if (event._tag === "TargetVerificationEvidenceSealed") {
+    return targetVerificationEvidenceFor(event, taskByAttempt)
   }
   if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     return [

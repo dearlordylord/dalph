@@ -114,7 +114,22 @@ const SPECS = [
       "startedPrecedesRemainingQueue",
       "dependencyWaitPreservesQueueOrder",
       "candidateReadyHasExactOrderedParents",
-      "sessionIdentityFixedAfterStart"
+      "sessionIdentityFixedAfterStart",
+      "verificationRequestIdentityIsStable",
+      "verificationIntentPrecedesWrapper",
+      "verificationInvocationAndReconciliationAreBounded",
+      "activeVerificationRetainsTargetUnlessRestarted",
+      "terminalVerificationReleasesTarget",
+      "verificationOutcomeMatchesPhase",
+      "onlySealedPassedAuthorizesPromotion",
+      "promotionPremiseRequiresSealedPassedEvidence",
+      "diagnosticOutcomesNeverAuthorizePromotion",
+      "contradictoryVerificationNeverAuthorizesPromotion",
+      "logicalIntegrationResponsibilityBlocksLaterQueue",
+      "noAutomaticVerificationReplacement",
+      "restartCountBounded",
+      "staleTargetProofIsNeverCurrent",
+      "reacquiredVerificationUsesFreshExpectedHead"
     ],
     witnesses: [
       "acceptedReached",
@@ -122,13 +137,28 @@ const SPECS = [
       "startedReached",
       "dependencyWaitReached",
       "restartReached",
+      "targetHeadProofReached",
       "dependencyWaitReleasedTarget",
       "candidateReadyReached",
       "correctionRequiredReached",
       "correctionLimitReached",
       "continuationLimitReached",
       "correlationContradictionReached",
-      "correlationContradictionReleasedReached"
+      "correlationContradictionReleasedReached",
+      "verificationIntentReached",
+      "verificationInvokedReached",
+      "verificationResponseLostReached",
+      "verificationReconcilingReached",
+      "verificationPassedPendingSealReached",
+      "verificationPassedReached",
+      "verificationFailedReached",
+      "verificationKilledReached",
+      "verificationTimedOutReached",
+      "verificationPartialReached",
+      "verificationCorrelationContradictionReached",
+      "verificationEvidenceFailureReached",
+      "promotionPremiseReached",
+      "releasedLogicalBlockerReached"
     ]
   }
 ]

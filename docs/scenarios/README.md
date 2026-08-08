@@ -53,6 +53,7 @@ today.
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
+| `issue-59-run-target-verification.md` | 59 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
 | `issue-136-reconcile-changed-task-facts.md` | 136 |
 | `issue-137-reconcile-task-claims.md` | 137 |

@@ -129,6 +129,8 @@ interfaces.
 | Dalph executor | complete work for one planned attempt and its normalized running, safely suspended, or terminal report | exact planned-attempt correlation and journaled responsibility/report facts |
 | Execution substrate | agent session/context and process observations used internally by an executor | only observations exposed through an accepted executor protocol; no copied session state as authority |
 | Integration-candidate agent | its separately identified candidate-construction session and reports | journaled candidate intent, exact session correlation, and submitted candidate evidence |
+| Target repository verification wrapper | one exact request's guarded checks, terminal result, diagnostics, and heavy-lock lifecycle | journaled request intent plus content-addressed artifacts and the sealed manifest after complete rereads |
+| Evidence store | immutable bytes addressed by their content digest | exact references in workflow-journal verification events; never copied derived frontier or lock state |
 | Dalph Journal | ordered workflow occurrences recorded by Dalph | the workflow history itself |
 
 Dalph does not turn a copied external fact into authority. After an ambiguous
@@ -310,12 +312,20 @@ establishes a durable integration obligation. Runtime serializes work for the
 same repository/ref target separately from task-work capacity. Integration
 uses a candidate resource distinct from the task worktree and must establish
 the exact accepted-head protocol before tracker completion or cleanup can be
-settled.
+settled. After Git proves the exact two-parent candidate, Dalph reacquires the
+same-target process-local position, obtains current tracker and target-lineage
+facts, and invokes only the configured public verification wrapper. The
+wrapper owns its heavy lock. Dalph records one deterministic request intent,
+stores and rereads immutable evidence, and records a sealed terminal manifest.
+A non-passing terminal preserves the candidate and blocks promotion; a sealed
+passing manifest is only a premise for the later promotion protocol.
 
 See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md),
 [issue-56-queue-accepted-integration.md](scenarios/issue-56-queue-accepted-integration.md),
 and
 [issue-57-build-two-parent-integration-candidate.md](scenarios/issue-57-build-two-parent-integration-candidate.md).
+The verification continuation is specified by
+[issue-59-run-target-verification.md](scenarios/issue-59-run-target-verification.md).
 
 ## Formal Model and Executable Scenarios
 

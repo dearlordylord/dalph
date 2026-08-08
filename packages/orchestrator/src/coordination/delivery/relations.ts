@@ -18,6 +18,7 @@ import type {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
@@ -170,6 +171,10 @@ export type TicketDeliveryStanding =
       readonly _tag: "CandidateConstructedUnsettled"
       readonly state: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>
     }
+  | { readonly _tag: "TargetVerificationPending"; readonly state: TargetVerificationState }
+  | { readonly _tag: "TargetVerificationPassed"; readonly state: TargetVerificationState }
+  | { readonly _tag: "TargetVerificationStopped"; readonly state: TargetVerificationState }
+  | { readonly _tag: "TargetVerificationContradicted"; readonly state: TargetVerificationState }
   | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
 
@@ -189,6 +194,11 @@ export type ExactTicketDeliveryEvidence =
       readonly _tag: "IntegrationCandidate"
       readonly responsibility: StartedIntegrationResponsibility
       readonly state: IntegrationCandidateConstructionState
+    }
+  | {
+      readonly _tag: "TargetVerification"
+      readonly responsibility: StartedIntegrationResponsibility
+      readonly state: TargetVerificationState
     }
 
 /** Exact accepted evidence plus non-authoritative regional observations. */

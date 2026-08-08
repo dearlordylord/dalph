@@ -199,6 +199,7 @@ export type IdentityFreeWorkflowTransition = Extract<
       | "AcquireStartedIntegrationTarget"
       | "ContinuePlannedAttemptExecutorWork"
       | "ContinueStartedIntegrationCandidate"
+      | "RunTargetVerification"
       | "QueueAcceptedResultIntegrationResponsibility"
       | "ReleaseStartedIntegrationTarget"
       | "StartQueuedIntegration"

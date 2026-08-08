@@ -63,6 +63,10 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type,
     CursorFailure | AuthoredIntegrationCandidateGitValidationFailure
   >
+  readonly consumeTargetVerificationReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.TargetVerificationReturned.Type,
+    CursorFailure
+  >
   readonly consumeControlDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
   >
@@ -197,6 +201,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     return claimed.item
   })
+  const consumeTargetVerificationReturned = consume("TargetVerificationReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TargetVerificationReturned)(item).pipe(Effect.orDie)
+    )
+  )
   const atTerminalAssertions = SubscriptionRef.get(position).pipe(
     Effect.map((index) => story[index]?._tag === "ExpectedBehavior")
   )
@@ -339,6 +348,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeInitialPolicy,
     consumeIntegrationCandidateAgentReport,
     consumeIntegrationCandidateGitValidation,
+    consumeTargetVerificationReturned,
     consumeRunCoordinator,
     consumeTaskClaimRead,
     consumeTaskWorkSpecification,

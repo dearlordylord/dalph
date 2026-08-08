@@ -13,6 +13,7 @@ export const transitionRoutePolicy = {
   ContinueFreshWorkflowOperation: "FreshProvenance",
   ContinuePlannedAttemptExecutorWork: "IdentityFree",
   ContinueStartedIntegrationCandidate: "IdentityFree",
+  RunTargetVerification: "IdentityFree",
   ObservePlannedAttemptContinuationClaim: "Observation",
   ObservePlannedAttemptContinuationGraph: "Observation",
   ObservePlannedAttemptContinuationSpecification: "Observation",

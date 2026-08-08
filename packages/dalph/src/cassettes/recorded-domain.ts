@@ -40,7 +40,10 @@ import {
   IntegrationCandidateGitValidationAttemptOrdinal,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
-  IntegrationSessionId
+  IntegrationSessionId,
+  EvidenceReference,
+  TargetVerificationCorrelation,
+  TargetVerificationOutcome
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -121,6 +124,18 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     correlation: IntegrationCandidateCorrelation,
     ...nonActionOccurrence
   },
+  TargetVerificationIntended: { correlation: TargetVerificationCorrelation, ...initiatedByCoordinator },
+  TargetVerificationEvidenceSealed: {
+    correlation: TargetVerificationCorrelation,
+    manifest: EvidenceReference,
+    ...nonActionOccurrence,
+    terminal: TargetVerificationOutcome
+  },
+  TargetVerificationCorrelationContradicted: {
+    expected: TargetVerificationCorrelation,
+    received: TargetVerificationCorrelation,
+    ...nonActionOccurrence
+  },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
     ordinal: PlannedAttemptExecutorReportOrdinal,
@@ -185,7 +200,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 5
+const currentRecordedCassetteVersion = 6
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

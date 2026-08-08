@@ -14,6 +14,9 @@ import {
   IntegrationCandidateContinuationLimitReachedEvent,
   integrationCandidateCorrelationEquals,
   JournalPosition,
+  TargetVerificationCorrelationContradictedEvent,
+  TargetVerificationEvidenceSealedEvent,
+  TargetVerificationIntendedEvent,
   type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -235,6 +238,58 @@ const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): Re
   }
 }
 
+type TargetVerificationEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "TargetVerificationIntended"
+      | "TargetVerificationEvidenceSealed"
+      | "TargetVerificationCorrelationContradicted"
+  }
+>
+
+type RecordedTargetVerificationEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: TargetVerificationEvent["_tag"] }
+>
+
+const isTargetVerificationEvent = (event: WorkflowJournalEvent): event is TargetVerificationEvent =>
+  event._tag === "TargetVerificationIntended" ||
+  event._tag === "TargetVerificationEvidenceSealed" ||
+  event._tag === "TargetVerificationCorrelationContradicted"
+
+const isRecordedTargetVerificationEntry = (entry: RecordedCassetteEntry): entry is RecordedTargetVerificationEntry =>
+  entry._tag === "TargetVerificationIntended" ||
+  entry._tag === "TargetVerificationEvidenceSealed" ||
+  entry._tag === "TargetVerificationCorrelationContradicted"
+
+const recordTargetVerificationEntry = (event: TargetVerificationEvent): RecordedTargetVerificationEntry => {
+  switch (event._tag) {
+    case "TargetVerificationIntended":
+      return {
+        _tag: event._tag,
+        correlation: event.correlation,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction"
+      }
+    case "TargetVerificationEvidenceSealed":
+      return {
+        _tag: event._tag,
+        correlation: event.correlation,
+        manifest: event.manifest,
+        occurrenceClassification: "NonActionOccurrence",
+        terminal: event.terminal
+      }
+    case "TargetVerificationCorrelationContradicted":
+      return {
+        _tag: event._tag,
+        expected: event.expected,
+        occurrenceClassification: "NonActionOccurrence",
+        received: event.received
+      }
+  }
+}
+
 const recordTaskBoundaryEntry = (
   event: Exclude<
     WorkflowJournalEvent,
@@ -254,6 +309,9 @@ const recordTaskBoundaryEntry = (
         | "IntegrationCandidateGitValidationFailed"
         | "IntegrationCandidateCorrectionLimitReached"
         | "IntegrationCandidateContinuationLimitReached"
+        | "TargetVerificationIntended"
+        | "TargetVerificationEvidenceSealed"
+        | "TargetVerificationCorrelationContradicted"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
         | "TaskWorkCapacityChanged"
@@ -315,6 +373,7 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
+  if (isTargetVerificationEvent(event)) return recordTargetVerificationEntry(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
     event._tag === "PlannedAttemptWorktreeObserved" ||
@@ -606,6 +665,29 @@ const eventForCandidateConstructionEntry = (
   }
 }
 
+const eventForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): WorkflowJournalEvent => {
+  switch (entry._tag) {
+    case "TargetVerificationIntended":
+      return TargetVerificationIntendedEvent.make({
+        correlation: entry.correlation,
+        version: workflowJournalEventVersion
+      })
+    case "TargetVerificationEvidenceSealed":
+      return TargetVerificationEvidenceSealedEvent.make({
+        correlation: entry.correlation,
+        manifest: entry.manifest,
+        terminal: entry.terminal,
+        version: workflowJournalEventVersion
+      })
+    case "TargetVerificationCorrelationContradicted":
+      return TargetVerificationCorrelationContradictedEvent.make({
+        expected: entry.expected,
+        received: entry.received,
+        version: workflowJournalEventVersion
+      })
+  }
+}
+
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -617,6 +699,7 @@ const eventForRecordedEntry = (
   if (isRecordedCandidateConstructionEntry(entry)) {
     return eventForCandidateConstructionEntry(entry, entries, index)
   }
+  if (isRecordedTargetVerificationEntry(entry)) return eventForTargetVerificationEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
@@ -736,6 +819,17 @@ const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstruction
   }
 }
 
+const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): string => {
+  switch (entry._tag) {
+    case "TargetVerificationIntended":
+      return `Dalph coordinator fixed verification request ${entry.correlation.requestId} to plan ${entry.correlation.planId}.`
+    case "TargetVerificationEvidenceSealed":
+      return `The target repository's public verification wrapper returned ${entry.terminal} for candidate ${entry.correlation.candidateCommit}.`
+    case "TargetVerificationCorrelationContradicted":
+      return `Dalph stopped verification request ${entry.expected.requestId} after the wrapper returned a foreign correlation.`
+  }
+}
+
 type RecordedClaimAcquisitionEntry = Extract<
   RecordedCassetteEntry,
   { readonly _tag: "TaskClaimAcquired" | "TaskClaimAcquisitionIntended" | "TaskClaimAcquisitionRejected" }
@@ -765,6 +859,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedGitObservationEntry
     | RecordedRunEntry
     | RecordedTrackerEntry
+    | RecordedTargetVerificationEntry
     | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
@@ -789,6 +884,7 @@ const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirection
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
   if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
+  if (isRecordedTargetVerificationEntry(entry)) return lyricForTargetVerificationEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)

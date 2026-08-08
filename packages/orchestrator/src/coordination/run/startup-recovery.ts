@@ -29,6 +29,12 @@ import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import {
+  TargetVerificationBoundary,
+  type TargetVerificationPlan
+} from "../../workflow/protocols/target-verification/events.js"
+import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
+import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/target-verification/runtime.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -82,6 +88,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   integrationTarget: IntegrationTarget | undefined,
   candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
+  targetVerification: TargetVerificationRuntimeInput | undefined,
   startup: "Fresh" | "Recovered"
 ) {
   yield* CoordinatorOwnership
@@ -101,22 +108,15 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     ? deliveryRuntimeResources.value
     : DeliveryRuntimeResources.of({ integrationTargets: yield* makeIntegrationTargetResourceController() })
   const integrationResources = runtimeResources.integrationTargets
-  const recovery =
-    startup === "Fresh"
-      ? yield* makeJournaledFreshRunRecoveryProjection(
-          runId,
-          integrationTarget,
-          candidateCorrectionLimit,
-          candidateContinuationLimit,
-          integrationResources
-        )
-      : yield* makeRunRecoveryProjection(
-          runId,
-          integrationTarget,
-          candidateCorrectionLimit,
-          candidateContinuationLimit,
-          integrationResources
-        )
+  const recovery = yield* makeRecoveryProjection(
+    runId,
+    integrationTarget,
+    candidateCorrectionLimit,
+    candidateContinuationLimit,
+    integrationResources,
+    targetVerification?.plan,
+    startup
+  )
   let context = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
@@ -131,8 +131,44 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   )
   if (candidateAgent._tag === "Some") context = Context.add(context, IntegrationCandidateAgent, candidateAgent.value)
   if (candidateGit._tag === "Some") context = Context.add(context, IntegrationCandidateGit, candidateGit.value)
+  if (targetVerification !== undefined) {
+    context = Context.add(
+      context,
+      TargetVerificationBoundary,
+      TargetVerificationBoundary.of(targetVerification.boundary)
+    )
+    context = Context.add(context, EvidenceStore, EvidenceStore.of(targetVerification.evidenceStore))
+  }
   /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
+})
+
+const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(function* (
+  runId: RunId,
+  integrationTarget: IntegrationTarget | undefined,
+  candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
+  candidateContinuationLimit: CandidateContinuationLimit | undefined,
+  integrationResources: ReturnType<typeof DeliveryRuntimeResources.of>["integrationTargets"],
+  targetVerificationPlan: TargetVerificationPlan | undefined,
+  startup: "Fresh" | "Recovered"
+) {
+  return startup === "Fresh"
+    ? yield* makeJournaledFreshRunRecoveryProjection(
+        runId,
+        integrationTarget,
+        candidateCorrectionLimit,
+        candidateContinuationLimit,
+        integrationResources,
+        targetVerificationPlan
+      )
+    : yield* makeRunRecoveryProjection(
+        runId,
+        integrationTarget,
+        candidateCorrectionLimit,
+        candidateContinuationLimit,
+        integrationResources,
+        targetVerificationPlan
+      )
 })
 
 /** Builds ordinary in-Run services after bootstrap has already validated the complete accepted prefix. */
@@ -141,8 +177,16 @@ export const validatedStartupRecoveryLayer = (
   integrationTarget: IntegrationTarget | undefined,
   startup: "Fresh" | "Recovered",
   candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit
+  candidateContinuationLimit?: CandidateContinuationLimit,
+  targetVerification?: TargetVerificationRuntimeInput
 ) =>
   Layer.effectContext(
-    makeStartupRecoveryContext(runId, integrationTarget, candidateCorrectionLimit, candidateContinuationLimit, startup)
+    makeStartupRecoveryContext(
+      runId,
+      integrationTarget,
+      candidateCorrectionLimit,
+      candidateContinuationLimit,
+      targetVerification,
+      startup
+    )
   )

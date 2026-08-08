@@ -10,6 +10,7 @@ import type {
   IntegrationCandidateCorrelation,
   IntegrationCandidateGitValidationAttemptOrdinal
 } from "../workflow/protocols/integration-candidate-construction/events.js"
+import type { TargetVerificationRequestId } from "../workflow/protocols/target-verification/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -94,3 +95,17 @@ export const integrationCandidateContinuationLimitReachedRecordKey = (
   correlation: IntegrationCandidateCorrelation
 ): JournalRecordKey =>
   JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:continuation-limit`)
+
+const targetVerificationRecordKeyPrefix = (requestId: TargetVerificationRequestId): string =>
+  `target-verification:${requestId}`
+
+export const targetVerificationIntentRecordKey = (requestId: TargetVerificationRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:intent`)
+
+export const targetVerificationEvidenceSealedRecordKey = (requestId: TargetVerificationRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:evidence-sealed`)
+
+export const targetVerificationCorrelationContradictedRecordKey = (
+  requestId: TargetVerificationRequestId
+): JournalRecordKey =>
+  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:correlation-contradiction`)

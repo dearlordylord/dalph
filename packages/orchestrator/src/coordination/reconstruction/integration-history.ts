@@ -14,6 +14,11 @@ import {
   integrationCandidateHasExactParents,
   type IntegrationCandidateCorrelation
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
+import {
+  targetVerificationCorrelationEquals,
+  targetVerificationRequestIdForCandidate,
+  type TargetVerificationRequestId
+} from "../../workflow/protocols/target-verification/events.js"
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -45,6 +50,15 @@ export interface IntegrationHistoryIndexes {
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateGitObserved" }>
   >
+  readonly integrationCandidatesConstructed: Map<
+    JournalPosition,
+    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructed" }>
+  >
+  readonly targetVerificationIntents: Map<
+    TargetVerificationRequestId,
+    Extract<WorkflowJournalEvent, { readonly _tag: "TargetVerificationIntended" }>
+  >
+  readonly targetVerificationTerminals: Set<TargetVerificationRequestId>
 }
 
 const sameAcceptedResult = (left: AcceptedResult, right: AcceptedResult): boolean => left.commit === right.commit
@@ -147,6 +161,7 @@ const invalidCandidateGitResult = (
 }
 
 const invalidConstructedCandidate = (
+  position: JournalPosition,
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructed" }>,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
@@ -156,7 +171,49 @@ const invalidConstructedCandidate = (
     observed.candidateCommit === event.candidateCommit &&
     integrationCandidateCorrelationEquals(observed.correlation, event.correlation) &&
     integrationCandidateHasExactParents(observed.observation, event.correlation)
+  indexes.integrationCandidatesConstructed.set(position, event)
   return exact ? undefined : `constructed candidate has no exact Git observation at ${event.gitObservationAt}`
+}
+
+const invalidTargetVerificationIntent = (
+  record: JournalRecord,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetVerificationIntended" }>,
+  indexes: IntegrationHistoryIndexes
+): string | undefined => {
+  const correlation = event.correlation
+  const constructed = indexes.integrationCandidatesConstructed.get(correlation.candidateConstructedAt)
+  const existing = indexes.targetVerificationIntents.get(correlation.requestId)
+  indexes.targetVerificationIntents.set(correlation.requestId, event)
+  const exact =
+    constructed !== undefined &&
+    correlation.candidateConstructedAt < record.position &&
+    constructed.candidateCommit === correlation.candidateCommit &&
+    integrationCandidateCorrelationEquals(constructed.correlation, correlation.candidateCorrelation) &&
+    correlation.requestId === targetVerificationRequestIdForCandidate(constructed.correlation.candidateId) &&
+    (existing === undefined || targetVerificationCorrelationEquals(existing.correlation, correlation))
+  return exact
+    ? undefined
+    : `target verification intent has no exact constructed candidate at ${correlation.candidateConstructedAt}`
+}
+
+const invalidTargetVerificationTerminal = (
+  event: Extract<
+    WorkflowJournalEvent,
+    { readonly _tag: "TargetVerificationCorrelationContradicted" | "TargetVerificationEvidenceSealed" }
+  >,
+  indexes: IntegrationHistoryIndexes
+): string | undefined => {
+  const expected = event._tag === "TargetVerificationEvidenceSealed" ? event.correlation : event.expected
+  const intent = indexes.targetVerificationIntents.get(expected.requestId)
+  const alreadyTerminal = indexes.targetVerificationTerminals.has(expected.requestId)
+  indexes.targetVerificationTerminals.add(expected.requestId)
+  const exactIntent = intent !== undefined && targetVerificationCorrelationEquals(intent.correlation, expected)
+  const genuineContradiction =
+    event._tag !== "TargetVerificationCorrelationContradicted" ||
+    !targetVerificationCorrelationEquals(event.expected, event.received)
+  return exactIntent && !alreadyTerminal && genuineContradiction
+    ? undefined
+    : `target verification terminal has no one exact earlier intent for request ${expected.requestId}`
 }
 
 const invalidCorrectionLimitReachedCandidate = (
@@ -205,19 +262,40 @@ const invalidContinuationLimitReachedCandidate = (
     : `candidate continuation limit has no exact final non-submitting report at ${event.lastReportAt}`
 }
 
+const invalidTargetVerificationHistory = (
+  record: JournalRecord,
+  indexes: IntegrationHistoryIndexes
+): string | undefined => {
+  const event = record.event
+  if (event._tag === "TargetVerificationIntended") {
+    return invalidTargetVerificationIntent(record, event, indexes)
+  }
+  return event._tag === "TargetVerificationEvidenceSealed" || event._tag === "TargetVerificationCorrelationContradicted"
+    ? invalidTargetVerificationTerminal(event, indexes)
+    : undefined
+}
+
 const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHistoryIndexes): string | undefined => {
   const event = record.event
-  if (event._tag === "IntegrationCandidateConstructionIntended") return invalidCandidateIntent(event, indexes)
-  if (event._tag === "IntegrationCandidateAgentReported") return invalidCandidateAgentReport(record, event, indexes)
+  if (event._tag === "IntegrationCandidateConstructionIntended") {
+    return invalidCandidateIntent(event, indexes)
+  }
+  if (event._tag === "IntegrationCandidateAgentReported") {
+    return invalidCandidateAgentReport(record, event, indexes)
+  }
   if (event._tag === "IntegrationCandidateGitObserved" || event._tag === "IntegrationCandidateGitValidationFailed") {
     return invalidCandidateGitResult(record, event, indexes)
   }
-  if (event._tag === "IntegrationCandidateConstructed") return invalidConstructedCandidate(event, indexes)
-  if (event._tag === "IntegrationCandidateCorrectionLimitReached")
+  if (event._tag === "IntegrationCandidateConstructed") {
+    return invalidConstructedCandidate(record.position, event, indexes)
+  }
+  if (event._tag === "IntegrationCandidateCorrectionLimitReached") {
     return invalidCorrectionLimitReachedCandidate(event, indexes)
-  if (event._tag === "IntegrationCandidateContinuationLimitReached")
+  }
+  if (event._tag === "IntegrationCandidateContinuationLimitReached") {
     return invalidContinuationLimitReachedCandidate(event, indexes)
-  return undefined
+  }
+  return invalidTargetVerificationHistory(record, indexes)
 }
 
 /** Validates causal integration links while advancing the fold's private index. */
@@ -241,6 +319,16 @@ export const invalidIntegrationHistoryEvent = (
 
 // eslint-disable-next-line complexity -- Each closed candidate event variant carries its run binding in a deliberately distinct shape.
 const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
+  if (event._tag === "TargetVerificationCorrelationContradicted") {
+    return event.expected.candidateCorrelation.runId === runId
+      ? undefined
+      : "target verification contradiction expectation binds a foreign run"
+  }
+  if (event._tag === "TargetVerificationIntended" || event._tag === "TargetVerificationEvidenceSealed") {
+    return event.correlation.candidateCorrelation.runId === runId
+      ? undefined
+      : `target verification binds run ${event.correlation.candidateCorrelation.runId}`
+  }
   if (event._tag === "IntegrationCandidateConstructionIntended") {
     return event.plannedAttempt.runId === runId && event.correlation.runId === runId
       ? undefined

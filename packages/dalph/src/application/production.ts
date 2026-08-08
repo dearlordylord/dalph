@@ -24,7 +24,8 @@ import {
   taskClaimReacquisitionControlLayer,
   workflowInterpreterLayer,
   WorkflowInterpreter,
-  WorkflowTrace
+  WorkflowTrace,
+  type TargetVerificationRuntimeInput
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
@@ -46,7 +47,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   runId: RunId,
   target: GitCommonDirectoryTarget,
   integrationTarget: IntegrationTarget,
-  trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>
+  trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
+  targetVerification?: TargetVerificationRuntimeInput
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -83,7 +85,14 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
-        return validatedStartupRecoveryLayer(activeRunId, integrationTarget, startup).pipe(
+        return validatedStartupRecoveryLayer(
+          activeRunId,
+          integrationTarget,
+          startup,
+          undefined,
+          undefined,
+          targetVerification
+        ).pipe(
           Layer.provide(interpreterLayer),
           Layer.provide(operatorControlLayer),
           Layer.provide(freshOperationIdAllocatorLayer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))),

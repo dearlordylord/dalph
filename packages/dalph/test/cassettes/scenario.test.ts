@@ -100,6 +100,12 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 
+it("renders every maintained authored cassette from its structured story", () => {
+  for (const cassette of Object.values(maintainedAuthoredCassetteCatalog)) {
+    expect(renderAuthoredCassetteLyrics(cassette)).toContain(`Scenario: ${cassette.name}.`)
+  }
+})
+
 const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
   new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
@@ -966,6 +972,123 @@ it.effect("runs maintained conflict, unreadable-Git, correction, exhaustion, and
   })
 )
 
+it.effect("runs only the selected public wrapper and seals passing evidence for exact M", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed)
+    const tags = run.records.map(({ event }) => event._tag)
+    expect(tags).toContain("TargetVerificationIntended")
+    expect(tags).toContain("TargetVerificationEvidenceSealed")
+    expect(run.records.some(({ event }) => event._tag === "TargetVerificationCorrelationContradicted")).toBe(false)
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual({
+      _tag: "TargetVerificationPassed",
+      candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+      planId: "public-checks-v1",
+      taskId: "A"
+    })
+    const authoredLyrics = renderAuthoredCassetteLyrics(run.cassette)
+    expect(authoredLyrics).toContain("integration agent reports")
+    expect(authoredLyrics).toContain("Git cannot validate")
+    expect(authoredLyrics).toContain("Git returns Commit")
+    expect(authoredLyrics).toContain("public verification wrapper returns Passed")
+    expect(authoredLyrics).toContain("candidate cccccccccccccccccccccccccccccccccccccccc")
+    expect(authoredLyrics).toContain("public verification plan public-checks-v1 to pass")
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("returned Passed for candidate")
+  })
+)
+
+it.effect("preserves exact M and stops before promotion when selected checks fail", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationFailure)
+    const sealed = run.records.find(({ event }) => event._tag === "TargetVerificationEvidenceSealed")
+    if (sealed?.event._tag !== "TargetVerificationEvidenceSealed") {
+      return yield* Effect.die("failed verification cassette must seal its diagnostic manifest")
+    }
+    expect(sealed.event.terminal).toBe("Failed")
+    expect(run.records.some(({ event }) => event._tag === "TargetVerificationCorrelationContradicted")).toBe(false)
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual({
+      _tag: "TargetVerificationStopped",
+      candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+      outcome: "Failed",
+      planId: "public-checks-v1",
+      taskId: "A"
+    })
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("public verification plan public-checks-v1 to stop")
+    expect(run.records.some(({ event }) => event._tag.includes("Promot"))).toBe(false)
+  })
+)
+
+it.effect("seals every non-passing public-wrapper terminal without promoting M", () =>
+  Effect.forEach(["Killed", "Partial", "TimedOut"] as const, (outcome) =>
+    Effect.gen(function* () {
+      const source = maintainedAuthoredCassetteCatalog.candidateVerificationFailure
+      const input = {
+        ...source,
+        name: `selected public verification returns ${outcome}`,
+        story: source.story.map((item) => {
+          if (item._tag === "TargetVerificationReturned") {
+            return { _tag: "TargetVerificationReturned", result: { _tag: outcome, artifacts: [] } }
+          }
+          if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return item
+          return {
+            ...item,
+            orchestration: item.orchestration.map((evidence) =>
+              evidence._tag === "TargetVerificationStopped" ? { ...evidence, outcome } : evidence
+            )
+          }
+        })
+      }
+      const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(input)
+      const run = yield* runAuthoredScenarioCassette(cassette)
+      const sealed = run.records.find(({ event }) => event._tag === "TargetVerificationEvidenceSealed")
+      expect(sealed?.event).toEqual(expect.objectContaining({ terminal: outcome }))
+      expect(run.records.some(({ event }) => event._tag.includes("Promot"))).toBe(false)
+    })
+  ).pipe(Effect.asVoid)
+)
+
+it.effect("records and alpha-renames verification terminal and contradiction occurrences", () =>
+  Effect.gen(function* () {
+    const passed = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed)
+    const recorded = yield* projectRecordedCassette(passed.records)
+    expect(recorded.entries.map(({ _tag }) => _tag)).toContain("TargetVerificationIntended")
+    expect(recorded.entries.map(({ _tag }) => _tag)).toContain("TargetVerificationEvidenceSealed")
+    const intent = recorded.entries.find(({ _tag }) => _tag === "TargetVerificationIntended")
+    if (intent?._tag !== "TargetVerificationIntended") return yield* Effect.die("verification intent is required")
+    const renamed = yield* renameRecordedCassette(
+      recorded,
+      yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+        attemptIds: [],
+        claimTokens: [],
+        integrationCandidateIds: [
+          { from: intent.correlation.candidateCorrelation.candidateId, to: "renamed-candidate" }
+        ],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
+        operationIds: [],
+        runIds: [],
+        taskBranchRefs: [],
+        worktreeLocators: []
+      })
+    )
+    expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(
+      verifyRecordedCassetteRoundTrip(passed.records, recorded).every(
+        ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
+      )
+    ).toBe(true)
+
+    const contradiction = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.candidateVerificationContradiction
+    )
+    const contradictoryRecorded = yield* projectRecordedCassette(contradiction.records)
+    expect(contradictoryRecorded.entries.some(({ _tag }) => _tag === "TargetVerificationCorrelationContradicted")).toBe(
+      true
+    )
+    expect(renderRecordedCassetteLyrics(contradictoryRecorded)).toContain("foreign correlation")
+  })
+)
+
 it.effect("round-trips every non-submitting integration-agent report", () =>
   Effect.gen(function* () {
     for (const reportTag of ["Conflict", "ExitedWithoutCandidate", "Working"] as const) {
@@ -1257,6 +1380,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           executor: "executor:controlled-fake",
           integrationTarget: { repository: "/dalph/cassettes/changed-membership.git", ref: "refs/heads/master" },
           target,
+          verificationPlanId: null,
           worktreeRoot: "/dalph/cassettes/changed-membership"
         },
         ...read(initialGraph),
@@ -1773,6 +1897,7 @@ it.effect(
             executor: "executor:controlled-fake",
             integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
             target,
+            verificationPlanId: null,
             worktreeRoot: "/dalph/cassettes/localized-constraint"
           },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
@@ -3084,6 +3209,9 @@ it.effect(
         IntegrationCandidateGitValidationFailed: true,
         IntegrationCandidateCorrectionLimitReached: true,
         IntegrationCandidateContinuationLimitReached: true,
+        TargetVerificationIntended: true,
+        TargetVerificationEvidenceSealed: true,
+        TargetVerificationCorrelationContradicted: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
@@ -3128,7 +3256,11 @@ it.effect(
         expect(encodedAfter).toContain(`"${to}"`)
       }
       expect(new Set(recorded.entries.map(({ _tag }) => _tag))).toEqual(
-        new Set(Object.keys(entryVariants).filter((tag) => !tag.startsWith("IntegrationCandidate")))
+        new Set(
+          Object.keys(entryVariants).filter(
+            (tag) => !tag.startsWith("IntegrationCandidate") && !tag.startsWith("TargetVerification")
+          )
+        )
       )
       expect(
         new Set(recorded.entries.flatMap((entry) => ("operation" in entry ? [entry.operation._tag] : [])))
@@ -3182,7 +3314,7 @@ it.effect("renames and renders every contradictory planned-worktree observation 
         originatingActionOperationId: operationId
       })),
       runId: RunId.make("recorded-worktree-variant-run"),
-      schemaVersion: 5
+      schemaVersion: 6
     })
     const renamed = yield* renameRecordedCassette(
       cassette,

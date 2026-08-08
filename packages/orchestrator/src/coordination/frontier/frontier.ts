@@ -30,6 +30,10 @@ import type {
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type {
+  TargetVerificationCandidate,
+  TargetVerificationPlan
+} from "../../workflow/protocols/target-verification/events.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -94,6 +98,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly lineage: TargetLineageObservation
     readonly responsibility: StartedIntegrationResponsibility
   }
+  RunTargetVerification: {
+    readonly candidate: TargetVerificationCandidate
+    readonly plan: TargetVerificationPlan
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   ReleaseStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
 }>
 
@@ -127,6 +136,7 @@ const transitionTrackerGraphRequirements = {
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
+  RunTargetVerification: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
@@ -179,6 +189,10 @@ export type FrontierExplanation = Data.TaggedEnum<{
   IntegrationTargetWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "IntegrationTargetReleased"
+  }
+  TargetVerificationConfigurationWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "TargetVerificationPlanConfigured"
   }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
