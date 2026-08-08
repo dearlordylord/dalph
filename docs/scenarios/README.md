@@ -38,6 +38,7 @@ on the issue while later dependent work proceeds.
 | File | Issue |
 |---|---|
 | `issue-57-build-two-parent-integration-candidate.md` | 57 |
+| `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
 | `issue-194-stabilize-each-run.md` | 194 |

@@ -15,6 +15,7 @@ import {
   nodeGitCommandLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
+  freshOperationIdAllocatorLayer,
   productionCoordinatorOwnershipLayer,
   productionJournalStoreLayer,
   type TrackerMutation,
@@ -26,7 +27,7 @@ import {
   WorkflowTrace
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
-import { Effect, Layer } from "effect"
+import { Crypto, Effect, Layer } from "effect"
 
 /**
  * Composes the production-shaped milestone with live tracker/Git boundaries
@@ -38,7 +39,7 @@ type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
   | Layer.Error<ReturnType<typeof productionCoordinatorOwnershipLayer>>,
-  FileSystem.FileSystem | TrackerGraphReader | TrackerRequirements | WorkflowTrace
+  Crypto.Crypto | FileSystem.FileSystem | TrackerGraphReader | TrackerRequirements | WorkflowTrace
 >
 
 export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
@@ -69,6 +70,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   return Layer.unwrap(
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
+      const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
@@ -84,6 +86,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
         return validatedStartupRecoveryLayer(activeRunId, integrationTarget, startup).pipe(
           Layer.provide(interpreterLayer),
           Layer.provide(operatorControlLayer),
+          Layer.provide(freshOperationIdAllocatorLayer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))),
           Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )

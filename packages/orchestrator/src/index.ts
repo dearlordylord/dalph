@@ -5,6 +5,7 @@ export {
   ControlDirectionAppliedEvent,
   ControlDirectionSubject
 } from "./workflow/protocols/control-direction-application/events.js"
+export { TaskControlSubjectOutsideRun } from "./workflow/protocols/control-direction-application/task-subject.js"
 export { ApplyControlDirectionRequest } from "./workflow/protocols/control-direction-application/request.js"
 export {
   ControlDirectionApplication,

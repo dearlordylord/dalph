@@ -8,14 +8,14 @@ flowchart LR
   end
 
   subgraph reconciliation["Reconciliation"]
-    i138["#138 Blocker reconciliation"]
+    i138["#138 Blocker reconciliation ✓"]
     i141["#141 Integration finality"]
   end
 
   subgraph controls["Pause, drain, and dispositions"]
-    i134["#134 Whole-run pause"]
-    i135["#135 Task/group pause"]
-    i156["#156 Reject stale pause"]
+    i134["#134 Whole-run pause ✓"]
+    i135["#135 Task/group pause ✓"]
+    i156["#156 Reject stale pause ✓"]
     i63["#63 Drain to quiescence"]
     i65["#65 Cancel or continue"]
     i66["#66 Clean restart"]

@@ -62,9 +62,10 @@ const SPECS = [
     invariants: [
       "appliedDirectionIsOperatorInitiated",
       "applicationClaimsNoLaterEffects",
+      "rejectedTaskControlPreservesPauseState",
       "typeOk"
     ],
-    witnesses: []
+    witnesses: ["staleTaskRejectedReached", "unreadableMembershipReached"]
   },
   {
     name: "taskFactReconciliation",

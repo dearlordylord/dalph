@@ -120,6 +120,7 @@ type OperatorStoryItem = Extract<
     readonly _tag:
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+      | "OperatorControlDirectionFailed"
       | "OperatorDirectsTaskClaimReacquisition"
       | "SetTaskExecutionCapacity"
   }
@@ -128,12 +129,16 @@ type OperatorStoryItem = Extract<
 const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is OperatorStoryItem =>
   item._tag === "OperatorAppliesControlDirection" ||
   item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
+  item._tag === "OperatorControlDirectionFailed" ||
   item._tag === "OperatorDirectsTaskClaimReacquisition" ||
   item._tag === "SetTaskExecutionCapacity"
 
 const operatorLyric = (item: OperatorStoryItem): string => {
   if (item._tag === "SetTaskExecutionCapacity") {
     return `Operator applies task-execution capacity ${item.capacity} to the Run.`
+  }
+  if (item._tag === "OperatorControlDirectionFailed") {
+    return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
   }
   if (
     item._tag === "OperatorAppliesControlDirection" ||

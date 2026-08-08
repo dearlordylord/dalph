@@ -94,6 +94,8 @@ import {
   taskUnpauseDuringSuspensionRestartsAuthoredCassette,
   runAuthoredScenarioCassette as runAuthoredScenarioCassetteWithCrypto,
   singletonTaskCompletesAuthoredCassette,
+  staleTaskPauseRejectedAuthoredCassette,
+  unreadableTaskUnpauseRejectedAuthoredCassette,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
@@ -104,6 +106,40 @@ const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
 const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (input: unknown) =>
   runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+
+it.effect("rejects a stale task after a fresh read without selecting task work", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(staleTaskPauseRejectedAuthoredCassette)
+    const tags = run.records.map(({ event }) => event._tag)
+
+    expect(tags).toContain("TaskTrackerReadIntentRecorded")
+    expect(tags).toContain("TaskTrackerFactsObserved")
+    expect(tags).not.toContain("ControlDirectionApplied")
+    expect(tags).not.toContain("TaskClaimAcquisitionIntended")
+    expect(tags).not.toContain("PlannedAttemptExecutorWorkResponsibilityBegan")
+    expect(renderAuthoredCassetteLyrics(staleTaskPauseRejectedAuthoredCassette)).toContain(
+      "Dalph rejects Operator Pause for task A: OutsideCurrentTargetClosure."
+    )
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries.some(({ _tag }) => _tag === "ControlDirectionApplied")).toBe(false)
+    expect(recorded.entries.some(({ _tag }) => _tag === "TaskTrackerFactsObserved")).toBe(true)
+  })
+)
+
+it.effect("shows an incomplete control read without recording a direction", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(unreadableTaskUnpauseRejectedAuthoredCassette)
+    const tags = run.records.map(({ event }) => event._tag)
+
+    expect(tags.filter((tag) => tag === "TaskTrackerReadIntentRecorded")).toHaveLength(3)
+    expect(tags.filter((tag) => tag === "TaskTrackerFactsObserved")).toHaveLength(2)
+    expect(tags).not.toContain("ControlDirectionApplied")
+    expect(renderAuthoredCassetteLyrics(unreadableTaskUnpauseRejectedAuthoredCassette)).toContain(
+      "Dalph rejects Operator Unpause for task A: IncompleteSnapshot."
+    )
+  })
+)
 
 it.effect("pauses A and its grouping child while recording only A's direction", () =>
   Effect.gen(function* () {
@@ -153,8 +189,8 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     const constructedAt = tags.indexOf("IntegrationCandidateConstructed")
 
     expect(pauseAt).toBeGreaterThan(0)
-    expect(intentAt).toBeGreaterThan(pauseAt)
-    expect(constructedAt).toBeGreaterThan(intentAt)
+    expect(pauseAt).toBeGreaterThan(intentAt)
+    expect(constructedAt).toBeGreaterThan(pauseAt)
     expect(tags.slice(pauseAt + 1)).not.toContain("TaskClaimReleaseIntended")
     if (run.history._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("held-integration pause cassette must retain valid journal history")
@@ -405,7 +441,18 @@ it.effect("applies an authored operator direction through the production control
         return [
           withExpectedProtocol,
           ...(index === firstRunning
-            ? [{ _tag: "OperatorAppliesControlDirection" as const, direction: "Unpause" as const, subject }]
+            ? [
+                { _tag: "OperatorAppliesControlDirection" as const, direction: "Unpause" as const, subject },
+                ...(subject._tag === "Task"
+                  ? [
+                      {
+                        _tag: "DalphSelects" as const,
+                        operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+                      },
+                      { _tag: "TrackerGraphReadReturned" as const, graph: singleton.startingFacts.trackerGraph }
+                    ]
+                  : [])
+              ]
             : [])
         ]
       })

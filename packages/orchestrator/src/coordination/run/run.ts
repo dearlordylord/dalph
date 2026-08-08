@@ -4,7 +4,9 @@ import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
   JournalError,
   InRunJournal,
@@ -36,6 +38,7 @@ export type JournaledRunServices =
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal
+  | OperationIdAllocator
   | PlannedAttemptExecutor
   | RunRecoveryProjection
   | TaskWorkCapacityControl
@@ -88,7 +91,11 @@ export interface JournaledRunBootstrapService {
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<ControlDirectionApplication["Service"]["apply"]>>,
-      Effect.Error<ReturnType<ControlDirectionApplication["Service"]["apply"]>> | JournaledRunNotActive
+      | Effect.Error<ReturnType<ControlDirectionApplication["Service"]["apply"]>>
+      | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
+      | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>
+      | JournaledRunNotActive
+      | TaskControlSubjectOutsideRun
     >
     readonly applyTaskClaimReacquisition: (
       input: unknown

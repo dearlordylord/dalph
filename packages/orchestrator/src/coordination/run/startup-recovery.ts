@@ -6,6 +6,7 @@ import { InRunJournal, type RunLifecycleJournalService } from "../../workflow-jo
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   hasUnfinishedRunResponsibility,
   makeJournaledFreshRunRecoveryProjection,
@@ -87,6 +88,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const inRunJournal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const executor = yield* PlannedAttemptExecutor
+  const operationIdAllocator = yield* OperationIdAllocator
   const trace = yield* WorkflowTrace
   const taskWorkCapacityControl = yield* TaskWorkCapacityControl
   const controlDirectionApplication = yield* ControlDirectionApplication
@@ -118,6 +120,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   let context = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
+    Context.add(OperationIdAllocator, operationIdAllocator),
     Context.add(PlannedAttemptExecutor, executor),
     Context.add(InRunJournal, inRunJournal),
     Context.add(ControlDirectionApplication, controlDirectionApplication),

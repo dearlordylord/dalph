@@ -74,6 +74,7 @@ await run("planned-attempt executor exhaustive model", [
 const controlDirectionApplicationInvariants = [
   "appliedDirectionIsOperatorInitiated",
   "applicationClaimsNoLaterEffects",
+  "rejectedTaskControlPreservesPauseState",
   "typeOk"
 ]
 
@@ -87,6 +88,12 @@ await run("control-direction application deterministic tests", [
   "--main",
   "controlDirectionApplicationTest"
 ])
+await run("control-direction application negative mutation profile", [
+  "test",
+  "specs/controlDirectionApplication_negative_test.qnt",
+  "--main",
+  "controlDirectionApplicationNegativeTest"
+])
 await run("control-direction application sampled model", [
   "run",
   "specs/controlDirectionApplication.qnt",
@@ -96,6 +103,8 @@ await run("control-direction application sampled model", [
   "runPauseAppliedReached",
   "taskPauseAppliedReached",
   "taskUnpauseAppliedReached",
+  "staleTaskRejectedReached",
+  "unreadableMembershipReached",
   "--max-steps",
   "8",
   "--max-samples",

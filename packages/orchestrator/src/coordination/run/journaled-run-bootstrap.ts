@@ -1,8 +1,15 @@
 import { type RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Semaphore } from "effect"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import { applyOperatorControlDirection } from "../../workflow/protocols/control-direction-application/operator-control.js"
+import {
+  OperationIdAllocator,
+  type OperationIdAllocatorService
+} from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { Journal, journalLayer } from "../delivery/journal.js"
 import {
@@ -40,8 +47,13 @@ export type JournaledRuntimeLayer = Layer.Layer<
 
 interface RuntimeControls {
   readonly controlDirection: ControlDirectionApplication["Service"]
+  readonly operationIdAllocator: OperationIdAllocatorService
+  readonly runId: RunId
+  readonly target: TrackerTarget
   readonly taskClaimReacquisition: TaskClaimReacquisitionControl["Service"]
   readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
+  readonly workflowInterpreter: WorkflowInterpreter["Service"]
+  readonly workflowTrace: WorkflowTrace["Service"]
 }
 
 type RuntimeControlState =
@@ -153,8 +165,13 @@ export const journaledRunBootstrapLayer = (
               const journal = Context.get(context, Journal)
               const controls: RuntimeControls = {
                 controlDirection: Context.get(context, ControlDirectionApplication),
+                operationIdAllocator: Context.get(context, OperationIdAllocator),
+                runId,
+                target,
                 taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
-                taskWorkCapacity: Context.get(context, TaskWorkCapacityControl)
+                taskWorkCapacity: Context.get(context, TaskWorkCapacityControl),
+                workflowInterpreter: Context.get(context, WorkflowInterpreter),
+                workflowTrace: Context.get(context, WorkflowTrace)
               }
               const drained = yield* Deferred.make<void>()
               yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
@@ -214,7 +231,16 @@ export const journaledRunBootstrapLayer = (
         )
 
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
-        applyControlDirection: (input) => withRuntimeControls(({ controlDirection }) => controlDirection.apply(input)),
+        applyControlDirection: (input) =>
+          withRuntimeControls(
+            ({ controlDirection, operationIdAllocator, runId, target, workflowInterpreter, workflowTrace }) =>
+              applyOperatorControlDirection(runId, target, input, {
+                allocator: operationIdAllocator,
+                application: controlDirection,
+                interpreter: workflowInterpreter,
+                trace: workflowTrace
+              })
+          ),
         applyTaskClaimReacquisition: (input) =>
           withRuntimeControls(({ taskClaimReacquisition }) => taskClaimReacquisition.apply(input)),
         readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),

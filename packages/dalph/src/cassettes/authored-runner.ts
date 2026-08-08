@@ -1,11 +1,11 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import { type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
-  ControlDirectionApplication,
   controlDirectionApplicationLayer,
   taskClaimReacquisitionControlLayer,
+  TaskControlSubjectOutsideRun,
   CoordinatorOwnership,
   controlledTrackerMutationLayerFrom,
   deterministicOperationIdAllocatorLayer,
@@ -43,6 +43,7 @@ import {
   TargetLineageObservation,
   TestGitWorktree,
   TrackerMutation,
+  TrackerAdapterReadError,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
@@ -74,6 +75,19 @@ export interface AuthoredScenarioCassetteRun {
 const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
 const authoredSettlementYieldTurns = 10
+
+const operatorControlFailureMatches = (
+  failure: unknown,
+  expectedReason: "IncompleteSnapshot" | "OutsideCurrentTargetClosure"
+): boolean => {
+  if (expectedReason === "OutsideCurrentTargetClosure") {
+    return Schema.is(TaskControlSubjectOutsideRun)(failure)
+  }
+  /* v8 ignore next -- @preserve The only authored tracker-control failure reason is decoded as IncompleteSnapshot. */
+  if (!Schema.is(TrackerAdapterReadError)(failure)) return false
+  /* v8 ignore next -- @preserve The authored failure schema cannot name another tracker-read reason. */
+  return failure.reason._tag === "IncompleteSnapshot"
+}
 
 /** Decodes and drives one story through the ordinary production delivery program. */
 const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
@@ -145,20 +159,20 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           })
         )
       )
-      const applyNextControlDirection = (executorControlDirection: ControlDirectionApplication["Service"]) =>
-        Effect.gen(function* () {
-          const direction = yield* cursor.consumeInFlightExecutorControlDirection
-          if (Option.isNone(direction)) return
-          yield* executorControlDirection
-            .apply({
-              direction: direction.value.direction,
-              subject:
-                direction.value.subject._tag === "Run"
-                  ? { _tag: "Run", runId }
-                  : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
-            })
-            .pipe(Effect.orDie)
-        })
+      const activeOperatorControl = yield* Ref.make<
+        JournaledRunBootstrap["Service"]["operatorControl"]["applyControlDirection"]
+      >(() => Effect.die("operator control is not installed"))
+      const applyNextControlDirection = Effect.gen(function* () {
+        const direction = yield* cursor.consumeInFlightExecutorControlDirection
+        if (Option.isNone(direction)) return
+        yield* (yield* Ref.get(activeOperatorControl))({
+          direction: direction.value.direction,
+          subject:
+            direction.value.subject._tag === "Run"
+              ? { _tag: "Run", runId }
+              : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
+        }).pipe(Effect.orDie)
+      })
       const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
@@ -292,12 +306,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const runtimeLayer = ({ startup }: JournaledRuntimeLayerInput) => {
         const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery")
-        const executorLayer = Layer.unwrap(
-          Effect.gen(function* () {
-            const controlDirection = yield* ControlDirectionApplication
-            return controlledExecutorLayer(cursor, runId, applyNextControlDirection(controlDirection))
-          })
-        ).pipe(Layer.provide(controlPolicyLayer))
+        const executorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection).pipe(
+          Layer.provide(controlPolicyLayer)
+        )
         const startupLayer = validatedStartupRecoveryLayer(
           runId,
           command.integrationTarget,
@@ -323,6 +334,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         Effect.scoped(
           Effect.gen(function* () {
             const bootstrap = yield* JournaledRunBootstrap
+            yield* Ref.set(activeOperatorControl, bootstrap.operatorControl.applyControlDirection)
             const driveCapacityChange = Effect.gen(function* () {
               const change = yield* cursor.consumeCapacityChange
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
@@ -340,13 +352,38 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
               if (Option.isNone(direction)) return
               /* v8 ignore stop */
-              yield* bootstrap.operatorControl.applyControlDirection({
+              const result = bootstrap.operatorControl.applyControlDirection({
                 direction: direction.value.direction,
                 subject:
                   direction.value.subject._tag === "Run"
                     ? { _tag: "Run", runId }
                     : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
               })
+              yield* result.pipe(
+                Effect.matchEffect({
+                  onSuccess: () => Effect.void,
+                  onFailure: (failure) =>
+                    Effect.gen(function* () {
+                      const expected = yield* cursor.consumeControlDirectionFailure
+                      /* v8 ignore next -- @preserve Maintained failed-control stories carry the immediately following visible result. */
+                      if (Option.isNone(expected)) return yield* failure
+                      const expectedFailure = expected.value
+                      /* v8 ignore next -- @preserve Both maintained failure variants exercise the matching path; this guard diagnoses malformed authored stories. */
+                      if (
+                        !operatorControlFailureMatches(failure, expectedFailure.reason) ||
+                        direction.value.direction !== expectedFailure.direction ||
+                        direction.value.subject._tag !== "Task" ||
+                        direction.value.subject.taskId !== expectedFailure.subject.taskId
+                      ) {
+                        return yield* Effect.die(
+                          new Error(
+                            `authored control failure mismatch: expected ${expectedFailure.reason}, received ${failure._tag}`
+                          )
+                        )
+                      }
+                    })
+                })
+              )
             }).pipe(Effect.orDie)
             const driveClaimReacquisition = Effect.gen(function* () {
               const direction = yield* cursor.consumeClaimReacquisitionDirection

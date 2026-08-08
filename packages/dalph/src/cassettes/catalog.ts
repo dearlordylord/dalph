@@ -1,11 +1,16 @@
 /* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette } from "./authored.js"
+import { AuthoredCassetteStoryItem } from "./authored-domain.js"
+
+const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 
 const singletonGraph = {
   revision: "singleton-revision",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
+
+const emptyTaskControlGraph = { revision: "stale-task-control-revision", tasks: [] }
 
 const twoEligibleTasksGraph = {
   revision: "two-eligible-tasks-revision",
@@ -62,6 +67,11 @@ const releasedPipelineGraph = {
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
   ]
 }
+
+const taskControlMembershipRead = (graph: unknown): ReadonlyArray<AuthoredCassetteStoryItem> => [
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph })
+]
 
 const singletonExpectedBehavior = {
   _tag: "ExpectedBehavior",
@@ -287,6 +297,78 @@ export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSyn
   ]
 })
 
+/** Alice's stale task Pause is rejected after a complete fresh target-closure read. */
+export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  _tag: "AuthoredScenarioCassette",
+  name: "Alice's stale task Pause is rejected visibly after a fresh read",
+  schemaVersion: 1,
+  startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
+    taskWorkSpecifications: [],
+    trackerGraph: emptyTaskControlGraph,
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+  },
+  story: [
+    { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 1 } },
+    {
+      _tag: "RunCoordinator",
+      baseSha: "1111111111111111111111111111111111111111",
+      claimOwner: "cassette-owner",
+      claimTokenPrefix: "cassette-claim",
+      executor: "executor:cassette",
+      integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
+      target: "cassette-target",
+      worktreeRoot: "/dalph/cassettes"
+    },
+    { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+    ...taskControlMembershipRead(emptyTaskControlGraph),
+    {
+      _tag: "OperatorControlDirectionFailed",
+      direction: "Pause",
+      reason: "OutsideCurrentTargetClosure",
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: emptyTaskControlGraph },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: [],
+      protocol: [],
+      taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "A" }], results: [] }
+    }
+  ]
+})
+
+/** An incomplete current read remains a tracker failure and cannot prove that Alice's task is stale. */
+const staleTaskMembershipReturnedAt = staleTaskPauseRejectedAuthoredCassette.story.findIndex(
+  (item, index) =>
+    index >
+      staleTaskPauseRejectedAuthoredCassette.story.findIndex(
+        (candidate) => candidate._tag === "OperatorAppliesControlDirection"
+      ) && item._tag === "TrackerGraphReadReturned"
+)
+export const unreadableTaskUnpauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...staleTaskPauseRejectedAuthoredCassette,
+  name: "Alice's task Unpause remains unapplied when the fresh read is incomplete",
+  story: staleTaskPauseRejectedAuthoredCassette.story.flatMap((item, index) => {
+    if (item._tag === "OperatorAppliesControlDirection") {
+      return [decodeStoryItem({ ...item, direction: "Unpause" })]
+    }
+    if (index === staleTaskMembershipReturnedAt) {
+      return [decodeStoryItem({ _tag: "TrackerGraphReadFailed", reason: "IncompleteSnapshot" })]
+    }
+    if (item._tag === "OperatorControlDirectionFailed") {
+      return [decodeStoryItem({ ...item, direction: "Unpause", reason: "IncompleteSnapshot" })]
+    }
+    if (item._tag === "ExpectedBehavior") {
+      return [...taskControlMembershipRead(emptyTaskControlGraph), item]
+    }
+    return [item]
+  })
+})
+
 /** Pausing A suspends its running attempt, then independent B uses the released task-work position. */
 export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
@@ -305,6 +387,7 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decod
       direction: "Pause",
       subject: { _tag: "Task", taskId: "A" }
     },
+    ...taskControlMembershipRead(twoEligibleTasksGraph),
     singletonRunningExecutorReport,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -375,6 +458,7 @@ export const taskPauseCoversGroupingChildAuthoredCassette = Schema.decodeUnknown
       direction: "Pause",
       subject: { _tag: "Task", taskId: "A" }
     },
+    ...taskControlMembershipRead(groupingChildTasksGraph),
     singletonRunningExecutorReport,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -551,31 +635,42 @@ export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeU
 export const taskUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A while its exact executor suspension is in flight",
-  story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.map((item) => {
-    if (item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight") {
-      return { ...item, subject: { _tag: "Task" as const, taskId: "A" } }
+  story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap(
+    (item): ReadonlyArray<AuthoredCassetteStoryItem> => {
+      if (item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight") {
+        return [
+          decodeStoryItem({ ...item, subject: { _tag: "Task", taskId: "A" } }),
+          ...taskControlMembershipRead(singletonGraph)
+        ]
+      }
+      if (item._tag !== "ExpectedBehavior" || item.protocol === null) return [item]
+      return [
+        decodeStoryItem({
+          ...item,
+          protocol: item.protocol.map((evidence) =>
+            evidence._tag === "ControlDirectionApplied"
+              ? { ...evidence, subject: { _tag: "Task", taskId: "A" } }
+              : evidence
+          )
+        })
+      ]
     }
-    if (item._tag !== "ExpectedBehavior" || item.protocol === null) return item
-    return {
-      ...item,
-      protocol: item.protocol.map((evidence) =>
-        evidence._tag === "ControlDirectionApplied"
-          ? { ...evidence, subject: { _tag: "Task" as const, taskId: "A" } }
-          : evidence
-      )
-    }
-  })
+  )
 })
 
 /** Recovery preserves task Unpause while the exact suspension result remains unresolved. */
+const taskUnpauseRequestAt = taskUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
+  (item) => item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
+)
+const taskUnpauseMembershipReturnedAt = taskUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
+  (item, index) => index > taskUnpauseRequestAt && item._tag === "TrackerGraphReadReturned"
+)
 export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...taskUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A during exact suspension before the coordinator restarts",
-  story: taskUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap((item) => [
+  story: taskUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap((item, index) => [
     item,
-    ...(item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
-      ? [{ _tag: "CoordinatorProcessDies" as const }]
-      : [])
+    ...(index === taskUnpauseMembershipReturnedAt ? [{ _tag: "CoordinatorProcessDies" as const }] : [])
   ])
 })
 
@@ -941,22 +1036,20 @@ export const candidateConflictRecoveryAuthoredCassette = candidateScenarioFrom(
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-/** A task paused after target acquisition finishes the already-started candidate boundary without later cleanup. */
-const encodedCandidateConflictRecovery = Schema.encodeSync(AuthoredScenarioCassette)(
-  candidateConflictRecoveryAuthoredCassette
-)
+/** A task paused after a recoverable candidate conflict finishes the held integration boundary without cleanup. */
 export const taskPauseFinishesHeldIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-  ...encodedCandidateConflictRecovery,
+  ...candidateConflictRecoveryAuthoredCassette,
   name: "Alice pauses task A after its integration target is held",
-  story: encodedCandidateConflictRecovery.story.flatMap((item) =>
-    item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+  story: candidateConflictRecoveryAuthoredCassette.story.flatMap((item) =>
+    item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "Conflict"
       ? [
+          item,
           {
             _tag: "OperatorAppliesControlDirection" as const,
             direction: "Pause" as const,
             subject: { _tag: "Task" as const, taskId: "A" }
           },
-          item
+          ...taskControlMembershipRead(singletonGraph)
         ]
       : [item]
   )
@@ -1027,6 +1120,8 @@ export const maintainedAuthoredCassetteCatalog = {
   runPauseSafelySuspends: runPauseSafelySuspendsAuthoredCassette,
   runUnpauseAfterSafeSuspension: runUnpauseAfterSafeSuspensionAuthoredCassette,
   runUnpauseDuringSuspensionRestarts: runUnpauseDuringSuspensionRestartsAuthoredCassette,
+  staleTaskPauseRejected: staleTaskPauseRejectedAuthoredCassette,
+  unreadableTaskUnpauseRejected: unreadableTaskUnpauseRejectedAuthoredCassette,
   taskPauseCoversGroupingChild: taskPauseCoversGroupingChildAuthoredCassette,
   taskPauseFinishesHeldIntegration: taskPauseFinishesHeldIntegrationAuthoredCassette,
   taskPauseLetsIndependentTaskContinue: taskPauseLetsIndependentTaskContinueAuthoredCassette,

@@ -66,6 +66,9 @@ export interface StoryCursor {
   readonly consumeControlDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
   >
+  readonly consumeControlDirectionFailure: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorControlDirectionFailed.Type>
+  >
   readonly consumeInFlightExecutorControlDirection: Effect.Effect<
     Option.Option<
       typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
@@ -221,6 +224,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
+  const consumeControlDirectionFailure = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorControlDirectionFailed.Type =>
+        item?._tag === "OperatorControlDirectionFailed"
+    )
+    /* v8 ignore next -- @preserve A maintained failed-control chronology always follows its request with the visible failure item. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorControlDirectionFailed)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const consumeInFlightExecutorControlDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (
@@ -314,6 +330,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
     consumeCapacityChange,
     consumeControlDirection,
+    consumeControlDirectionFailure,
     consumeInFlightExecutorControlDirection,
     consumeClaimReacquisitionDirection,
     consumeDalphSelection,

@@ -9,6 +9,7 @@ import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
 import { AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
 import { runWorkflow } from "./run.js"
@@ -25,6 +26,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
+      const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
@@ -38,6 +40,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
             journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),
           Layer.provide(controls),
+          Layer.provide(Layer.succeed(OperationIdAllocator, operationIdAllocator)),
           Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )

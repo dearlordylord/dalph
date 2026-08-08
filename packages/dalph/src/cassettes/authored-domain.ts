@@ -214,6 +214,12 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     direction: ControlDirection,
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
+  /** The visible non-durable result returned after an authored Operator control request fails. */
+  OperatorControlDirectionFailed: {
+    direction: ControlDirection,
+    reason: Schema.Literals(["IncompleteSnapshot", "OutsideCurrentTargetClosure"]),
+    subject: Schema.TaggedUnion({ Task: { taskId: TaskId } })
+  },
   OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
@@ -245,6 +251,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "InitialControlPolicy",
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    "OperatorControlDirectionFailed",
     "OperatorDirectsTaskClaimReacquisition",
     "RunCoordinator",
     "SetTaskExecutionCapacity"
