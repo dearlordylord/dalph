@@ -159,6 +159,13 @@ module plannedAttemptExecutorNegativeTest {
     },
   }
 
+  action consumeReadOnlyRecoveryAfterThirdRunningSuspend: bool = all {
+    state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
+    isNoCommand(state.commandState),
+    state.reconciliationProjectionsThisActivation == 1,
+    state' = { ...state, postSuspendLimitReadOnlyRecoveryAvailable: false },
+  }
+
   run callWithoutIntentViolatesDurabilityTest = {
     init
       .then(beginResponsibility)
@@ -285,5 +292,33 @@ module plannedAttemptExecutorNegativeTest {
       .then(settleCommandResponse)
       .then(recordFourthSuspendCommand)
       .expect(not(commandBudgetsAreBounded))
+  }
+
+  run suspendLimitCannotBecomePermanentReadOnlyDeadEndTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordStartOrContinueIntent)
+      .then(callStartOrContinue)
+      .then(receiveCommandResponse(ReportRunning))
+      .then(settleCommandResponse)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .then(recoverActivation)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .then(recoverActivation)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .then(consumeReadOnlyRecoveryAfterThirdRunningSuspend)
+      .expect(not(suspendLimitPreservesReadOnlyRecovery))
   }
 }

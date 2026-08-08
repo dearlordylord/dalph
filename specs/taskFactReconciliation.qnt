@@ -112,6 +112,7 @@ module taskFactReconciliation {
     | StoppageResponseLostAction
     | StoppageRunningProjectedAction
     | StoppageSafeProjectedAction
+    | StoppageReadOnlySafeProjectedAction
     | StopRecoveryActivatedAction
     | ImplementationAbandonedAction
     | ExactClaimObservedAction
@@ -216,7 +217,7 @@ module taskFactReconciliation {
   pure val TASK_A = 1
   pure val ATTEMPT_P = 1
   pure val STOP_COMMAND_LIMIT = 3
-  pure val RECOVERY_LIMIT = 2
+  pure val RECOVERY_LIMIT = 3
 
   pure val SUBJECT_F2: ChoiceSubject = {
     runId: RUN_R,
@@ -320,6 +321,13 @@ module taskFactReconciliation {
     state.stopProjectionsThisActivation <= 1,
     state.stopRecoveryCount <= RECOVERY_LIMIT,
   }
+
+  val stoppageLimitPreservesReadOnlyRecovery: bool =
+    state.stopCommandIntentCount != STOP_COMMAND_LIMIT
+      or stopCommandActive(state)
+      or state.executorEvidence != ExactRunning
+      or state.stopProjectionsThisActivation != 1
+      or state.stopRecoveryCount < RECOVERY_LIMIT
 
   val abandonmentRequiresExactUnbrokenQuiescence: bool =
     not(state.implementationResponsibilityRetained) implies and {
@@ -450,6 +458,8 @@ module taskFactReconciliation {
   val stoppageResponseLostReached: bool = state.lastAction == StoppageResponseLostAction
   val stoppageRunningProjectedReached: bool = state.lastAction == StoppageRunningProjectedAction
   val stoppageSafeProjectedReached: bool = state.lastAction == StoppageSafeProjectedAction
+  val stoppageReadOnlySafeProjectedReached: bool =
+    state.lastAction == StoppageReadOnlySafeProjectedAction
   val stopRecoveryActivatedReached: bool = state.lastAction == StopRecoveryActivatedAction
   val implementationAbandonedReached: bool = state.lastAction == ImplementationAbandonedAction
   val exactClaimObservedReached: bool = state.lastAction == ExactClaimObservedAction
@@ -874,6 +884,24 @@ module taskFactReconciliation {
       stopProjectionsThisActivation: 0,
       stopRecoveryCount: state.stopRecoveryCount + 1,
       lastAction: StopRecoveryActivatedAction,
+    },
+  }
+
+  action projectReadOnlyExactSafeAfterStoppageLimit: bool = all {
+    state.stopStage == NeedQuiescence,
+    state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+    not(stopCommandActive(state)),
+    not(state.stopCommandCalled),
+    state.stopProjectionsThisActivation == 0,
+    state.executorEvidence == ExactRunning,
+    state' = {
+      ...state,
+      executorEvidence: ExactSafelySuspended,
+      quiescenceUnbroken: true,
+      runningProjectionSettledStopIntent: false,
+      stopProjectionsThisActivation: 1,
+      positionHeld: false,
+      lastAction: StoppageReadOnlySafeProjectedAction,
     },
   }
 
@@ -1308,6 +1336,7 @@ module taskFactReconciliation {
     projectExactRunningForStoppage,
     projectExactSafeForStoppage,
     recoverStopActivation,
+    projectReadOnlyExactSafeAfterStoppageLimit,
     abandonImplementation,
     observeExactClaim,
     observeAbsentClaim,

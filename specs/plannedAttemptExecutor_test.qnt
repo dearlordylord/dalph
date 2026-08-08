@@ -181,6 +181,45 @@ module plannedAttemptExecutorTest {
       .expect(suspendCommandLimitReached and commandBudgetsAreBounded)
   }
 
+  run threeRunningSuspendSettlementsStillAllowReadOnlySafeRecoveryTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordStartOrContinueIntent)
+      .then(callStartOrContinue)
+      .then(receiveCommandResponse(ReportRunning))
+      .then(settleCommandResponse)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .then(recoverActivation)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .then(recoverActivation)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactRunning))
+      .then(settleCommandProjection)
+      .expect(and {
+        not(canRecordSuspendIntent(state)),
+        suspendCommandLimitReached,
+        suspendLimitPreservesReadOnlyRecovery,
+      })
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateSafelySuspended))
+      .then(acceptFreshStateProjectionProof)
+      .expect(and {
+        safelySuspendedReached,
+        not(state.positionHeld),
+        state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
+      })
+  }
+
   run responsibilityPrecedesFirstExecutorCommandTest = {
     init
       .expect(not(canRecordStartIntent(state)))

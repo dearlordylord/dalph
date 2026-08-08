@@ -106,6 +106,13 @@ module taskFactReconciliationNegativeTest {
     state' = { ...state, stopProjectionsThisActivation: 2 },
   }
 
+  action consumePostLimitReadOnlyStoppageRecovery: bool = all {
+    state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+    not(stopCommandActive(state)),
+    state.stopProjectionsThisActivation == 1,
+    state' = { ...state, stopRecoveryCount: RECOVERY_LIMIT },
+  }
+
   action makeFourthClaimReleaseCall: bool = all {
     state.claimReleaseCallCount == 3,
     state' = { ...state, claimReleaseCallCount: 4 },
@@ -267,6 +274,28 @@ module taskFactReconciliationNegativeTest {
       .then(projectExactRunningForStoppage)
       .then(takeSecondStopProjectionInActivation)
       .expect(not(stoppageIsBounded))
+  }
+
+  run stoppageLimitCannotBecomePermanentReadOnlyDeadEndTest = {
+    init
+      .then(applyStopF2)
+      .then(requireStoppageReconciliation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(recoverStopActivation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(recoverStopActivation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(consumePostLimitReadOnlyStoppageRecovery)
+      .expect(not(stoppageLimitPreservesReadOnlyRecovery))
   }
 
   run fourthClaimReleaseCallViolatesBoundTest = {

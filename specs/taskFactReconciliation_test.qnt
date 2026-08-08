@@ -257,6 +257,39 @@ module taskFactReconciliationTest {
       })
   }
 
+  run threeRunningStoppageCallsStillAllowLaterReadOnlySafeProofTest = {
+    init
+      .then(applyStopF2)
+      .then(requireStoppageReconciliation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(recoverStopActivation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(recoverStopActivation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .expect(and {
+        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        state.stopCommandSettlementCount == STOP_COMMAND_LIMIT,
+        stoppageLimitPreservesReadOnlyRecovery,
+      })
+      .then(recoverStopActivation)
+      .then(projectReadOnlyExactSafeAfterStoppageLimit)
+      .then(abandonImplementation)
+      .expect(and {
+        not(state.implementationResponsibilityRetained),
+        not(state.positionHeld),
+        abandonmentRequiresExactUnbrokenQuiescence,
+      })
+  }
+
   run stopReleasesOnlyFreshlyConfirmedExactClaimTest = {
     init
       .then(applyStopF2)
