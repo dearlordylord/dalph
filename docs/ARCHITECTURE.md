@@ -326,6 +326,10 @@ Current model boundaries include
 [`plannedAttemptExecutor.qnt`](../specs/plannedAttemptExecutor.qnt) and
 [`acceptedResultIntegration.qnt`](../specs/acceptedResultIntegration.qnt).
 
+[QUINT-GUIDE.md](QUINT-GUIDE.md) covers how to write a model here: guard and
+invariant conventions, the places Quint fails silently, and where these models
+depart from the community knowledge base.
+
 ## Detailed Architecture Index
 
 | Group | Owns |

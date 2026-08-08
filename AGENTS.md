@@ -67,6 +67,10 @@
   integration. During development, run it only when changing a Quint model,
   its executable conformance adapter, or behavior governed by that model;
   `pnpm check:all` intentionally does not repeat exhaustive model checking.
+- Read `docs/QUINT-GUIDE.md` before writing or changing a Quint model. Quint
+  fails silently: uncollected tests, undefined behavior, and unreachable
+  actions all read as a passing gate, so treat a green model result as a claim
+  needing a negative control.
 - Every implementation ticket must preserve its declared acceptance scenarios
   and blocking edges.
 - After significant changes, repeat domain/spec, architecture/connascence, and
